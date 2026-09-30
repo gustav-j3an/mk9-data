@@ -414,7 +414,7 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
                   : 'bg-[#131722] text-slate-300 hover:text-white border border-[#1e2433]'
               }`}
             >
-              Todos (1.428)
+              Todos ({promoters.length})
             </button>
             <button
               onClick={() => setChipFilter('ativo')}
@@ -424,7 +424,7 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
                   : 'bg-[#131722] text-emerald-400 hover:text-white border border-[#1e2433]'
               }`}
             >
-              Ativos (1.385)
+              Ativos ({promoters.filter((p) => p.status === 'ativo').length})
             </button>
             <button
               onClick={() => setChipFilter('alerta')}
@@ -435,7 +435,7 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
               }`}
             >
               <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
-              ⚠️ Sem Equipe / Supervisor (32)
+              ⚠️ Sem Equipe / Supervisor ({promoters.filter((p) => !p.supervisor || !p.squad || p.supervisor === 'Nenhum' || p.squad === 'Nenhum').length})
             </button>
             <button
               onClick={() => setChipFilter('ferias')}
@@ -445,7 +445,7 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
                   : 'bg-[#131722] text-slate-300 hover:text-white border border-[#1e2433]'
               }`}
             >
-              Em Férias / Afastados (31)
+              Em Férias / Afastados ({promoters.filter((p) => p.status === 'ferias' || p.status === 'afastado').length})
             </button>
             <button
               onClick={() => setChipFilter('arquivado')}
@@ -455,7 +455,7 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
                   : 'bg-[#131722] text-slate-400 hover:text-white border border-[#1e2433]'
               }`}
             >
-              Arquivados (12)
+              Arquivados ({promoters.filter((p) => p.status === 'arquivado').length})
             </button>
           </div>
 
