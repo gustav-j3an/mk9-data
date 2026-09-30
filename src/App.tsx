@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { BrowserRouter, Route, Routes } from 'react-router-dom';
 import { ScreenId, ToastMessage } from './types';
 import { AppShell } from './components/AppShell';
 import { CockpitView } from './views/CockpitView';
@@ -9,8 +10,11 @@ import { FreelancersView } from './views/FreelancersView';
 import { DailiesControlView } from './views/DailiesControlView';
 import { PromotersView } from './views/PromotersView';
 import { DesignSystemView } from './views/DesignSystemView';
+import { AuthProvider } from './auth/AuthProvider';
+import { LoginPage } from './auth/LoginPage';
+import { ProtectedRoute } from './auth/ProtectedRoute';
 
-export default function App() {
+function Dashboard() {
   const [currentScreen, setCurrentScreen] = useState<ScreenId>('cockpit');
   const [toasts, setToasts] = useState<ToastMessage[]>([
     {
@@ -84,5 +88,20 @@ export default function App() {
         <DesignSystemView onShowToast={addToast} />
       )}
     </AppShell>
+  );
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <BrowserRouter>
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
+          <Route element={<ProtectedRoute />}>
+            <Route path="/*" element={<Dashboard />} />
+          </Route>
+        </Routes>
+      </BrowserRouter>
+    </AuthProvider>
   );
 }
