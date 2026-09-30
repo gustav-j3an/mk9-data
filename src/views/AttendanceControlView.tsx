@@ -105,7 +105,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
               Sincronizado há 1 min
             </span>
             <span className="inline-flex items-center px-2.5 py-0.5 rounded-full bg-purple-600/20 text-purple-300 border border-purple-500/30 font-mono text-[11px] font-bold uppercase">
-              1.428 promotores escalados
+              {items.length} promotores escalados
             </span>
           </div>
           <p className="text-xs sm:text-sm text-slate-400">
@@ -133,91 +133,106 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
       </div>
 
       {/* Metric KPI Tiles */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-        {/* Presentes */}
-        <div className="relative overflow-hidden rounded-xl bg-[#171b26] border border-[#1e2433] p-5 shadow-lg hover:border-emerald-500/40 transition-all">
-          <div className="absolute top-0 left-0 right-0 h-1 bg-emerald-500" />
-          <div className="flex items-start justify-between">
-            <div className="space-y-1">
-              <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono">Presentes</span>
-              <div className="flex items-baseline gap-2">
-                <span className="text-3xl font-extrabold text-white font-mono">1.342</span>
-                <span className="font-mono text-xs text-emerald-400 font-semibold">(94.0%)</span>
-              </div>
-            </div>
-            <div className="p-2 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-              <span className="material-symbols-outlined text-2xl">check_circle</span>
-            </div>
-          </div>
-          <div className="mt-3 pt-2 border-t border-[#1e2433] flex items-center justify-between text-xs text-slate-400 font-mono">
-            <span>1.280 no horário • 62 c/ tolerância</span>
-            <span className="text-emerald-400 font-semibold">+1.8% vs ontem</span>
-          </div>
-        </div>
+      {(() => {
+        const total = items.length;
+        const presentes = items.filter((i) => i.status === 'presente').length;
+        const faltas = items.filter((i) => i.status === 'falta').length;
+        const atestados = items.filter((i) => i.status === 'atestado').length;
+        const semRegistro = items.filter((i) => i.status === 'sem_registro').length;
 
-        {/* Faltas */}
-        <div className="relative overflow-hidden rounded-xl bg-[#171b26] border border-[#1e2433] p-5 shadow-lg hover:border-rose-500/40 transition-all">
-          <div className="absolute top-0 left-0 right-0 h-1 bg-rose-500" />
-          <div className="flex items-start justify-between">
-            <div className="space-y-1">
-              <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono">Faltas</span>
-              <div className="flex items-baseline gap-2">
-                <span className="text-3xl font-extrabold text-white font-mono">34</span>
-                <span className="font-mono text-xs text-rose-400 font-semibold">(2.4%)</span>
-              </div>
-            </div>
-            <div className="p-2 rounded-lg bg-rose-500/10 text-rose-400 border border-rose-500/20">
-              <span className="material-symbols-outlined text-2xl">cancel</span>
-            </div>
-          </div>
-          <div className="mt-3 pt-2 border-t border-[#1e2433] flex items-center justify-between text-xs text-slate-400 font-mono">
-            <span>12 justificadas • 22 sem justif.</span>
-            <span className="text-rose-400 font-semibold">-0.5% vs média</span>
-          </div>
-        </div>
+        const pPct = total > 0 ? ((presentes / total) * 100).toFixed(1) : '0';
+        const fPct = total > 0 ? ((faltas / total) * 100).toFixed(1) : '0';
+        const aPct = total > 0 ? ((atestados / total) * 100).toFixed(1) : '0';
+        const sPct = total > 0 ? ((semRegistro / total) * 100).toFixed(1) : '0';
 
-        {/* Atestados */}
-        <div className="relative overflow-hidden rounded-xl bg-[#171b26] border border-[#1e2433] p-5 shadow-lg hover:border-cyan-500/40 transition-all">
-          <div className="absolute top-0 left-0 right-0 h-1 bg-cyan-400" />
-          <div className="flex items-start justify-between">
-            <div className="space-y-1">
-              <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono">Atestados</span>
-              <div className="flex items-baseline gap-2">
-                <span className="text-3xl font-extrabold text-white font-mono">28</span>
-                <span className="font-mono text-xs text-cyan-300 font-semibold">(2.0%)</span>
+        return (
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+            {/* Presentes */}
+            <div className="relative overflow-hidden rounded-xl bg-[#171b26] border border-[#1e2433] p-5 shadow-lg hover:border-emerald-500/40 transition-all">
+              <div className="absolute top-0 left-0 right-0 h-1 bg-emerald-500" />
+              <div className="flex items-start justify-between">
+                <div className="space-y-1">
+                  <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono">Presentes</span>
+                  <div className="flex items-baseline gap-2">
+                    <span className="text-3xl font-extrabold text-white font-mono">{presentes}</span>
+                    <span className="font-mono text-xs text-emerald-400 font-semibold">({pPct}%)</span>
+                  </div>
+                </div>
+                <div className="p-2 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                  <span className="material-symbols-outlined text-2xl">check_circle</span>
+                </div>
+              </div>
+              <div className="mt-3 pt-2 border-t border-[#1e2433] flex items-center justify-between text-xs text-slate-400 font-mono">
+                <span>{presentes} confirmados</span>
+                <span className="text-emerald-400 font-semibold">0% vs ontem</span>
               </div>
             </div>
-            <div className="p-2 rounded-lg bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
-              <span className="material-symbols-outlined text-2xl">clinical_notes</span>
-            </div>
-          </div>
-          <div className="mt-3 pt-2 border-t border-[#1e2433] flex items-center justify-between text-xs text-slate-400 font-mono">
-            <span>18 pelo RH • 10 em análise</span>
-            <span className="text-slate-300 font-medium">Estável</span>
-          </div>
-        </div>
 
-        {/* Sem Registro */}
-        <div className="relative overflow-hidden rounded-xl bg-[#171b26] border border-[#1e2433] p-5 shadow-lg hover:border-purple-500/40 transition-all">
-          <div className="absolute top-0 left-0 right-0 h-1 bg-slate-500" />
-          <div className="flex items-start justify-between">
-            <div className="space-y-1">
-              <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono">Sem Registro</span>
-              <div className="flex items-baseline gap-2">
-                <span className="text-3xl font-extrabold text-white font-mono">24</span>
-                <span className="font-mono text-xs text-slate-400">(1.6%)</span>
+            {/* Faltas */}
+            <div className="relative overflow-hidden rounded-xl bg-[#171b26] border border-[#1e2433] p-5 shadow-lg hover:border-rose-500/40 transition-all">
+              <div className="absolute top-0 left-0 right-0 h-1 bg-rose-500" />
+              <div className="flex items-start justify-between">
+                <div className="space-y-1">
+                  <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono">Faltas</span>
+                  <div className="flex items-baseline gap-2">
+                    <span className="text-3xl font-extrabold text-white font-mono">{faltas}</span>
+                    <span className="font-mono text-xs text-rose-400 font-semibold">({fPct}%)</span>
+                  </div>
+                </div>
+                <div className="p-2 rounded-lg bg-rose-500/10 text-rose-400 border border-rose-500/20">
+                  <span className="material-symbols-outlined text-2xl">cancel</span>
+                </div>
+              </div>
+              <div className="mt-3 pt-2 border-t border-[#1e2433] flex items-center justify-between text-xs text-slate-400 font-mono">
+                <span>{faltas} registradas</span>
+                <span className="text-rose-400 font-semibold">0% vs média</span>
               </div>
             </div>
-            <div className="p-2 rounded-lg bg-slate-800 text-slate-400 border border-slate-700">
-              <span className="material-symbols-outlined text-2xl">pending_actions</span>
+
+            {/* Atestados */}
+            <div className="relative overflow-hidden rounded-xl bg-[#171b26] border border-[#1e2433] p-5 shadow-lg hover:border-cyan-500/40 transition-all">
+              <div className="absolute top-0 left-0 right-0 h-1 bg-cyan-400" />
+              <div className="flex items-start justify-between">
+                <div className="space-y-1">
+                  <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono">Atestados</span>
+                  <div className="flex items-baseline gap-2">
+                    <span className="text-3xl font-extrabold text-white font-mono">{atestados}</span>
+                    <span className="font-mono text-xs text-cyan-300 font-semibold">({aPct}%)</span>
+                  </div>
+                </div>
+                <div className="p-2 rounded-lg bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
+                  <span className="material-symbols-outlined text-2xl">clinical_notes</span>
+                </div>
+              </div>
+              <div className="mt-3 pt-2 border-t border-[#1e2433] flex items-center justify-between text-xs text-slate-400 font-mono">
+                <span>{atestados} anexados</span>
+                <span className="text-slate-300 font-medium">Sem variação</span>
+              </div>
+            </div>
+
+            {/* Sem Registro */}
+            <div className="relative overflow-hidden rounded-xl bg-[#171b26] border border-[#1e2433] p-5 shadow-lg hover:border-purple-500/40 transition-all">
+              <div className="absolute top-0 left-0 right-0 h-1 bg-slate-500" />
+              <div className="flex items-start justify-between">
+                <div className="space-y-1">
+                  <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono">Sem Registro</span>
+                  <div className="flex items-baseline gap-2">
+                    <span className="text-3xl font-extrabold text-white font-mono">{semRegistro}</span>
+                    <span className="font-mono text-xs text-slate-400">({sPct}%)</span>
+                  </div>
+                </div>
+                <div className="p-2 rounded-lg bg-slate-800 text-slate-400 border border-slate-700">
+                  <span className="material-symbols-outlined text-2xl">pending_actions</span>
+                </div>
+              </div>
+              <div className="mt-3 pt-2 border-t border-[#1e2433] flex items-center justify-between text-xs text-slate-400 font-mono">
+                <span>Pendente de registro</span>
+                <span className="text-purple-400 font-semibold">Sem dados</span>
+              </div>
             </div>
           </div>
-          <div className="mt-3 pt-2 border-t border-[#1e2433] flex items-center justify-between text-xs text-slate-400 font-mono">
-            <span>Aguardando check-in até 09:30</span>
-            <span className="text-purple-400 font-semibold">Em janela</span>
-          </div>
-        </div>
-      </div>
+        );
+      })()}
 
       {/* Filter & Search Bar */}
       <div className="rounded-xl bg-[#171b26] border border-[#1e2433] p-4 shadow-md space-y-3">
@@ -247,9 +262,9 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                 className="bg-transparent text-xs text-slate-200 focus:outline-none cursor-pointer"
               >
                 <option value="" className="bg-[#171b26]">Todos os Supervisores</option>
-                <option value="Carlos" className="bg-[#171b26]">Carlos Silveira (428)</option>
-                <option value="Renata" className="bg-[#171b26]">Renata Vasconcelos (510)</option>
-                <option value="Eduardo" className="bg-[#171b26]">Eduardo Mendes (490)</option>
+                {Array.from(new Set(items.map((i) => i.supervisor).filter(Boolean))).map((sup) => (
+                  <option key={sup} value={sup} className="bg-[#171b26]">{sup}</option>
+                ))}
               </select>
             </div>
           </div>
@@ -265,10 +280,9 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                 className="bg-transparent text-xs text-slate-200 focus:outline-none cursor-pointer"
               >
                 <option value="" className="bg-[#171b26]">Todas as Equipes</option>
-                <option value="SP Capital" className="bg-[#171b26]">Equipe SP Capital Norte</option>
-                <option value="RJ" className="bg-[#171b26]">Equipe RJ Metropolitana</option>
-                <option value="Minas" className="bg-[#171b26]">Equipe Minas Trade</option>
-                <option value="Curitiba" className="bg-[#171b26]">Equipe Sul Curitiba</option>
+                {Array.from(new Set(items.map((i) => i.squad).filter(Boolean))).map((sq) => (
+                  <option key={sq} value={sq} className="bg-[#171b26]">{sq}</option>
+                ))}
               </select>
             </div>
           </div>
@@ -305,7 +319,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                   : 'bg-[#131722] text-slate-300 hover:text-white border border-[#1e2433]'
               }`}
             >
-              Todos (1.428)
+              Todos ({items.length})
             </button>
             <button
               onClick={() => setQuickFilter('falta')}
@@ -315,7 +329,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                   : 'bg-[#131722] text-rose-300 hover:text-white border border-[#1e2433]'
               }`}
             >
-              Somente Faltas (34)
+              Somente Faltas ({items.filter((i) => i.status === 'falta').length})
             </button>
             <button
               onClick={() => setQuickFilter('atestado')}
@@ -325,7 +339,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                   : 'bg-[#131722] text-cyan-300 hover:text-white border border-[#1e2433]'
               }`}
             >
-              Atestados Pendentes (10)
+              Atestados Pendentes ({items.filter((i) => i.status === 'atestado').length})
             </button>
             <button
               onClick={() => setQuickFilter('sem_registro')}
@@ -335,7 +349,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                   : 'bg-[#131722] text-slate-300 hover:text-white border border-[#1e2433]'
               }`}
             >
-              Sem Registro (24)
+              Sem Registro ({items.filter((i) => i.status === 'sem_registro').length})
             </button>
           </div>
 
@@ -359,7 +373,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
               <span className="material-symbols-outlined text-4xl">person_search</span>
             </div>
             <div className="space-y-1">
-              <h3 className="text-base font-bold text-white">Não há dados cadastrados ainda.</h3>
+              <h3 className="text-base font-bold text-white">Não há dados de presença cadastrados ainda.</h3>
               <p className="text-xs text-slate-400">
                 Nenhum registro de presença ou telemetria operacional foi cadastrado ou encontrado com os filtros aplicados.
               </p>
@@ -475,15 +489,17 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                         >
                           <span className="material-symbols-outlined text-base">history</span>
                         </button>
-                        <a
-                          href="https://wa.me/5511987213344"
-                          target="_blank"
-                          rel="noreferrer"
-                          className="p-1.5 rounded-lg text-slate-400 hover:text-emerald-400 hover:bg-[#131722]"
-                          title="Conversar no WhatsApp"
-                        >
-                          <span className="material-symbols-outlined text-base">chat</span>
-                        </a>
+                        {item.phone && (
+                          <a
+                            href={`https://wa.me/${item.phone.replace(/\D/g, '')}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-emerald-400 hover:bg-[#131722]"
+                            title="Conversar no WhatsApp"
+                          >
+                            <span className="material-symbols-outlined text-base">chat</span>
+                          </a>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -496,9 +512,9 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
           <div className="p-3 bg-[#10141f] border-t border-[#1e2433] flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
             <div className="flex items-center gap-1.5 font-mono text-slate-400">
               <span>Exibindo</span>
-              <strong className="text-white">1-{filteredItems.length}</strong>
+              <strong className="text-white">{filteredItems.length > 0 ? `1-${filteredItems.length}` : '0'}</strong>
               <span>de</span>
-              <strong className="text-white">1.428</strong>
+              <strong className="text-white">{items.length}</strong>
               <span>promotores</span>
             </div>
 
@@ -510,14 +526,10 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                 <span className="material-symbols-outlined text-sm">chevron_left</span>
               </button>
               <button className="w-7 h-7 rounded bg-purple-600 text-white font-bold neon-purple-glow flex items-center justify-center">1</button>
-              <button className="w-7 h-7 rounded bg-[#171b26] border border-[#1e2433] text-slate-300 hover:bg-[#1f2433] flex items-center justify-center">2</button>
-              <button className="w-7 h-7 rounded bg-[#171b26] border border-[#1e2433] text-slate-300 hover:bg-[#1f2433] flex items-center justify-center">3</button>
-              <span className="px-1 text-slate-500">...</span>
-              <button className="w-7 h-7 rounded bg-[#171b26] border border-[#1e2433] text-slate-300 hover:bg-[#1f2433] flex items-center justify-center">179</button>
-              <button className="w-7 h-7 rounded bg-[#171b26] border border-[#1e2433] text-slate-300 hover:bg-[#1f2433] flex items-center justify-center">
+              <button disabled className="w-7 h-7 rounded bg-[#171b26] border border-[#1e2433] text-slate-600 cursor-not-allowed flex items-center justify-center">
                 <span className="material-symbols-outlined text-sm">chevron_right</span>
               </button>
-              <button className="w-7 h-7 rounded bg-[#171b26] border border-[#1e2433] text-slate-300 hover:bg-[#1f2433] flex items-center justify-center">
+              <button disabled className="w-7 h-7 rounded bg-[#171b26] border border-[#1e2433] text-slate-600 cursor-not-allowed flex items-center justify-center">
                 <span className="material-symbols-outlined text-sm">last_page</span>
               </button>
             </div>

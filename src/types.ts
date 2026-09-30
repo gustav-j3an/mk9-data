@@ -108,6 +108,7 @@ export interface AttendanceItem {
   supervisor: string;
   city: string;
   state: string;
+  phone?: string;
   status: 'presente' | 'falta' | 'atestado' | 'sem_registro';
   telemetryTime: string;
   telemetryDetail: string;
