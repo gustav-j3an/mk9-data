@@ -223,9 +223,6 @@ export const AppShell: React.FC<AppShellProps> = ({
               title="Notificações Operacionais"
             >
               <span className="material-symbols-outlined text-[20px]">notifications</span>
-              <span className="absolute top-1 right-1 flex h-4 w-4 items-center justify-center rounded-full bg-rose-600 text-[10px] font-bold text-white shadow-sm">
-                3
-              </span>
             </button>
 
             {notificationsOpen && (
@@ -233,33 +230,13 @@ export const AppShell: React.FC<AppShellProps> = ({
                 <div className="flex items-center justify-between pb-2 border-b border-[#1e2433]">
                   <span className="text-xs font-bold text-white flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse"></span>
-                    Alertas Críticos
+                    Notificações Operacionais
                   </span>
-                  <span className="text-[10px] text-slate-400 font-mono">3 pendentes</span>
+                  <span className="text-[10px] text-slate-400 font-mono">0 pendentes</span>
                 </div>
-                <div className="space-y-2 py-2 text-xs">
-                  <div className="p-2 rounded-lg bg-[#131722] border border-rose-500/20 text-slate-300">
-                    <p className="font-bold text-rose-400 text-[11px]">Ruptura Crítica • 4 SKUs</p>
-                    <p className="text-[11px] text-slate-400 mt-0.5">Pão de Açúcar Morumbi - L'Oréal Elseve</p>
-                  </div>
-                  <div className="p-2 rounded-lg bg-[#131722] border border-amber-500/20 text-slate-300">
-                    <p className="font-bold text-amber-400 text-[11px]">Geofence Inválido (&gt;350m)</p>
-                    <p className="text-[11px] text-slate-400 mt-0.5">Atacadão Santo Amaro - Carlos Eduardo</p>
-                  </div>
-                  <div className="p-2 rounded-lg bg-[#131722] border border-purple-500/20 text-slate-300">
-                    <p className="font-bold text-purple-400 text-[11px]">Diária Sem Pré-Aprovação</p>
-                    <p className="text-[11px] text-slate-400 mt-0.5">R$ 180,00 - Roberto Mendonça</p>
-                  </div>
+                <div className="py-6 text-center text-[11px] text-slate-400">
+                  Não há notificações operacionais cadastradas.
                 </div>
-                <button
-                  onClick={() => {
-                    onNavigate('cockpit');
-                    setNotificationsOpen(false);
-                  }}
-                  className="w-full py-1.5 rounded-lg bg-purple-600/20 text-purple-300 hover:bg-purple-600/30 text-[11px] font-bold transition-colors"
-                >
-                  Resolver no Cockpit →
-                </button>
               </div>
             )}
           </div>
