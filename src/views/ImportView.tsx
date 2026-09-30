@@ -160,7 +160,7 @@ export const ImportView: React.FC<ImportViewProps> = ({ onShowToast }) => {
 
       // Detecção Automática pelo Cabeçalho
       let detectedType: ImportType = selectedType;
-      if (headers.includes('codigo_rota') || headers.includes('promotor_matricula')) {
+      if (headers.includes('industria') && headers.includes('loja') && headers.includes('promotor') && headers.includes('frequencia')) {
         detectedType = 'rotas';
       } else if (headers.includes('matricula') || headers.includes('supervisor')) {
         detectedType = 'promotores';
@@ -183,6 +183,13 @@ export const ImportView: React.FC<ImportViewProps> = ({ onShowToast }) => {
     } finally {
       setParsing(false);
     }
+  };
+
+  // Helper para converter marcações de dia em boolean
+  const isDayMarked = (val?: string): boolean => {
+    if (!val) return false;
+    const clean = val.trim().toUpperCase();
+    return ['SIM', 'X', '1', '✓', 'TRUE', 'S', 'V'].includes(clean);
   };
 
   // Validação Estrita de Colunas e Formatos
@@ -241,11 +248,37 @@ export const ImportView: React.FC<ImportViewProps> = ({ onShowToast }) => {
           }
         }
       } else if (type === 'rotas') {
-        if (!row.codigo_rota?.trim()) rowErrors.push({ rowNumber: rowNum, column: 'codigo_rota', value: '', message: 'Campo obrigatório.' });
-        if (!row.data?.trim() || !validateDate(row.data)) rowErrors.push({ rowNumber: rowNum, column: 'data', value: row.data || '', message: 'Data inválida (formato AAAA-MM-DD).' });
-        if (!row.promotor_matricula?.trim()) rowErrors.push({ rowNumber: rowNum, column: 'promotor_matricula', value: '', message: 'Campo obrigatório.' });
-        if (!row.loja_codigo?.trim()) rowErrors.push({ rowNumber: rowNum, column: 'loja_codigo', value: '', message: 'Campo obrigatório.' });
-        if (!row.industria_codigo?.trim()) rowErrors.push({ rowNumber: rowNum, column: 'industria_codigo', value: '', message: 'Campo obrigatório.' });
+        const ind = row.industria?.trim() || row.industria_codigo?.trim();
+        const loj = row.loja?.trim() || row.loja_codigo?.trim();
+        const prm = row.promotor?.trim() || row.promotor_matricula?.trim();
+        const freq = row.frequencia?.trim()?.toUpperCase();
+
+        if (!ind) rowErrors.push({ rowNumber: rowNum, column: 'industria', value: '', message: 'Campo obrigatório (código da indústria).' });
+        if (!loj) rowErrors.push({ rowNumber: rowNum, column: 'loja', value: '', message: 'Campo obrigatório (código da loja).' });
+        if (!prm) rowErrors.push({ rowNumber: rowNum, column: 'promotor', value: '', message: 'Campo obrigatório (matrícula do promotor).' });
+
+        if (!freq || !['SEMANAL', 'QUINZENAL'].includes(freq)) {
+          rowErrors.push({ rowNumber: rowNum, column: 'frequencia', value: row.frequencia || '', message: 'Frequência inválida. Permitidos: SEMANAL ou QUINZENAL.' });
+        }
+
+        const seg = isDayMarked(row.segunda);
+        const ter = isDayMarked(row.terca);
+        const qua = isDayMarked(row.quarta);
+        const qui = isDayMarked(row.quinta);
+        const sex = isDayMarked(row.sexta);
+        const sab = isDayMarked(row.sabado);
+        const dom = isDayMarked(row.domingo);
+
+        if (!seg && !ter && !qua && !qui && !sex && !sab && !dom) {
+          rowErrors.push({ rowNumber: rowNum, column: 'dias_semana', value: 'NENHUM', message: 'Exigido marcar pelo menos 1 dia da semana (segunda..domingo).' });
+        }
+
+        const uniqueKey = `${prm}_${loj}_${ind}`;
+        if (seenKeys.has(uniqueKey)) {
+          rowErrors.push({ rowNumber: rowNum, column: 'promotor', value: `${prm}/${loj}/${ind}`, message: 'Combinação duplicada de Promotor, Loja e Indústria na mesma planilha.' });
+        } else {
+          seenKeys.add(uniqueKey);
+        }
       }
 
       if (rowErrors.length > 0) {
@@ -276,22 +309,45 @@ export const ImportView: React.FC<ImportViewProps> = ({ onShowToast }) => {
 
     try {
       if (supabase) {
+        // Formatação final para inserção no banco de dados conforme esquema
+        const dbPayload = acceptedRows.map((r) => {
+          if (selectedType === 'rotas') {
+            return {
+              codigo_rota: r.codigo_rota?.trim() || `ROT-${(r.promotor || r.promotor_matricula || 'GERAL').trim()}`,
+              industria_codigo: (r.industria || r.industria_codigo || '').trim(),
+              loja_codigo: (r.loja || r.loja_codigo || '').trim(),
+              promotor_matricula: (r.promotor || r.promotor_matricula || '').trim(),
+              uf: r.uf?.trim() || null,
+              frequencia: (r.frequencia || 'SEMANAL').trim().toUpperCase(),
+              segunda: isDayMarked(r.segunda),
+              terca: isDayMarked(r.terca),
+              quarta: isDayMarked(r.quarta),
+              quinta: isDayMarked(r.quinta),
+              sexta: isDayMarked(r.sexta),
+              sabado: isDayMarked(r.sabado),
+              domingo: isDayMarked(r.domingo),
+              observacao: r.observacao?.trim() || null
+            };
+          }
+          return r;
+        });
+
         // Gravar Registros Aceitos na Tabela Destino
         if (allowUpsert) {
           const onConflictKey =
             selectedType === 'industrias' ? 'codigo' :
             selectedType === 'lojas' ? 'codigo' :
-            selectedType === 'promotores' ? 'matricula' : 'codigo_rota,data,promotor_matricula,loja_codigo,industria_codigo';
+            selectedType === 'promotores' ? 'matricula' : 'promotor_matricula,loja_codigo,industria_codigo';
 
           const { error: upsertErr } = await supabase
             .from(selectedType)
-            .upsert(acceptedRows, { onConflict: onConflictKey });
+            .upsert(dbPayload, { onConflict: onConflictKey });
 
           if (upsertErr) throw upsertErr;
         } else {
           const { error: insertErr } = await supabase
             .from(selectedType)
-            .insert(acceptedRows);
+            .insert(dbPayload);
 
           if (insertErr) throw insertErr;
         }

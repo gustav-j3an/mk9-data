@@ -85,21 +85,21 @@ export const TEMPLATE_SPECS: Record<ImportType, TemplateSpec> = {
   },
   rotas: {
     type: 'rotas',
-    title: 'Modelo de Importação - Rotas Operacionais',
-    columns: ['codigo_rota', 'data', 'promotor_matricula', 'loja_codigo', 'industria_codigo', 'sequencia', 'observacao'],
-    requiredColumns: ['codigo_rota', 'data', 'promotor_matricula', 'loja_codigo', 'industria_codigo'],
+    title: 'Modelo de Importação - Rotas Semanais Fixas',
+    columns: ['industria', 'loja', 'uf', 'promotor', 'frequencia', 'segunda', 'terca', 'quarta', 'quinta', 'sexta', 'sabado', 'domingo'],
+    requiredColumns: ['industria', 'loja', 'promotor', 'frequencia'],
     instructions: {
-      finalidade: 'Vincular e agendar as visitas do promotor aos PDVs e indústrias por data.',
-      obrigatorios: 'Colunas [codigo_rota], [data], [promotor_matricula], [loja_codigo] e [industria_codigo] são OBRIGATÓRIAS.',
-      formatos: 'Data: formato ISO AAAA-MM-DD (ex: 2026-10-01). Sequencia: número inteiro (1, 2, 3...).',
-      exemplos: 'codigo_rota: ROT-001 | data: 2026-10-01 | promotor_matricula: PRM-001 | loja_codigo: LOJ-101 | industria_codigo: IND-001',
-      ordem: '4º PASSO (ÚLTIMO): Importe Rotas APÓS cadastrar Promotores, Lojas e Indústrias.',
-      duplicidade: 'A combinação de (codigo_rota, data, promotor_matricula, loja_codigo, industria_codigo) é única.',
-      unicidade: 'Não repita o mesmo vínculo de rota para a mesma loja/indústria na mesma data.',
-      relacionamentos: 'DEPENDÊNCIAS CRÍTICAS: promotor_matricula deve existir em Promotores, loja_codigo deve existir em Lojas e industria_codigo deve existir em Indústrias.'
+      finalidade: 'Definir a escala fixa de visitas semanais do promotor às lojas e indústrias.',
+      obrigatorios: 'Colunas [industria], [loja], [promotor] e [frequencia] são OBRIGATÓRIAS, além de marcar pelo menos um dia da semana.',
+      formatos: 'Frequência permitida: SEMANAL ou QUINZENAL. Dias da semana (segunda..domingo): use "SIM", "X", "1", "✓" para marcado, ou deixe em branco / "NÃO" / "0" para desmarcado.',
+      exemplos: 'industria: IND-001 | loja: LOJ-101 | uf: SP | promotor: PRM-001 | frequencia: SEMANAL | segunda: SIM | quarta: SIM | sexta: SIM',
+      ordem: '4º PASSO (ÚLTIMO): Importe Rotas APÓS cadastrar Indústrias (código), Lojas (código) e Promotores (matrícula).',
+      duplicidade: 'A combinação de (industria, loja, promotor) é única na escala fixa.',
+      unicidade: 'Não repita o mesmo vínculo de atendimento de promotor para a mesma loja/indústria.',
+      relacionamentos: 'O campo industria é o código da indústria, loja é o código da loja, e promotor é a matrícula do promotor.'
     },
     auxiliaryLists: {
-      statusPermitidos: ['ativo', 'inativo'],
+      statusPermitidos: ['SEMANAL', 'QUINZENAL'],
       ufsValidas: ['AC', 'AL', 'AP', 'AM', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MT', 'MS', 'MG', 'PA', 'PB', 'PR', 'PE', 'PI', 'RJ', 'RN', 'RS', 'RO', 'RR', 'SC', 'SP', 'SE', 'TO']
     }
   }
