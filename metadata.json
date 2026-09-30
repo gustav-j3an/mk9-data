@@ -1,0 +1,6 @@
+{
+  "name": "MK9 Command Center - Trade Marketing Ops",
+  "description": "Plataforma completa de operações de trade marketing: Cockpit analítico, Painel Operacional, Controle de Presença, Gestão de Equipes, Gestão de Freelancers, Controle de Diárias, Promotores e Design System.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
