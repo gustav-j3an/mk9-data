@@ -18,6 +18,7 @@ export interface UserProfile {
   role: UserRole;
   avatar_url?: string;
   department?: string;
+  status?: 'ativo' | 'inativo';
   created_at?: string;
   updated_at?: string;
 }

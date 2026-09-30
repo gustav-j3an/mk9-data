@@ -15,6 +15,8 @@ interface AuthContextValue {
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
   updateProfileRole: (userId: string, newRole: UserRole) => Promise<{ error: Error | null }>;
+  updateUserProfile: (userId: string, updates: { role?: UserRole; department?: string; status?: 'ativo' | 'inativo' }) => Promise<{ error: Error | null }>;
+  inviteUser: (data: { email: string; name: string; department: string; role: UserRole }) => Promise<{ error: Error | null }>;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -128,6 +130,72 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return { error: null };
   }, [role, session]);
 
+  const updateUserProfile = useCallback(async (userId: string, updates: { role?: UserRole; department?: string; status?: 'ativo' | 'inativo' }) => {
+    if (!supabase) return { error: new Error('Supabase não configurado.') };
+    if (role !== 'admin') return { error: new Error('Apenas administradores podem alterar permissões de usuários.') };
+
+    const { error: updateErr } = await supabase
+      .from('profiles')
+      .update({ ...updates, updated_at: new Date().toISOString() })
+      .eq('id', userId);
+
+    if (updateErr) {
+      return { error: new Error(updateErr.message) };
+    }
+
+    if (session?.user?.id === userId) {
+      setProfile((prev) => prev ? { ...prev, ...updates } : null);
+    }
+    return { error: null };
+  }, [role, session]);
+
+  const inviteUser = useCallback(async ({ email, name, department, role: initialRole }: { email: string; name: string; department: string; role: UserRole }) => {
+    if (!supabase) return { error: new Error('Supabase não configurado.') };
+    if (role !== 'admin') return { error: new Error('Apenas administradores podem convidar usuários.') };
+
+    // Standard client invitation flow: trigger a password reset/magic link email from Supabase Auth
+    // and pre-insert or upsert profile in public.profiles.
+    const { data: authData, error: authError } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: `${window.location.origin}/login`
+    });
+
+    if (authError) {
+      console.warn('Erro no envio de e-mail Supabase Auth:', authError.message);
+    }
+
+    // Insert pending/active invited profile into profiles table
+    // Generates a deterministically unique UUID for initial tracking if auth user record trigger hasn't fired yet
+    const tempId = crypto.randomUUID();
+    const { error: profileErr } = await supabase.from('profiles').insert([
+      {
+        id: tempId,
+        email,
+        name,
+        department,
+        role: initialRole,
+        status: 'ativo'
+      }
+    ]);
+
+    if (profileErr) {
+      // If profile with email already exists, update it
+      const { error: upsertErr } = await supabase.from('profiles').upsert([
+        {
+          email,
+          name,
+          department,
+          role: initialRole,
+          status: 'ativo'
+        }
+      ], { onConflict: 'email' });
+      if (upsertErr) {
+        return { error: new Error(upsertErr.message) };
+      }
+    }
+
+    return { error: null };
+  }, [role]);
+
   const value = useMemo<AuthContextValue>(() => ({
     session,
     profile,
@@ -153,8 +221,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     refreshProfile: async () => {
       await fetchProfile(session);
     },
-    updateProfileRole
-  }), [error, fetchProfile, hasPermission, loading, profile, role, session, updateProfileRole]);
+    updateProfileRole,
+    updateUserProfile,
+    inviteUser
+  }), [error, fetchProfile, hasPermission, inviteUser, loading, profile, role, session, updateProfileRole, updateUserProfile]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
