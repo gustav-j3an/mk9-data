@@ -6,7 +6,21 @@ export type ScreenId =
   | 'freelancers'
   | 'controle-diarias'
   | 'promotores'
-  | 'design-system';
+  | 'design-system'
+  | 'usuarios';
+
+export type UserRole = 'admin' | 'gestor' | 'operador';
+
+export interface UserProfile {
+  id: string;
+  email: string;
+  name: string;
+  role: UserRole;
+  avatar_url?: string;
+  department?: string;
+  created_at?: string;
+  updated_at?: string;
+}
 
 export interface Freelancer {
   id: string;

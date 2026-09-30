@@ -1,22 +1,86 @@
-import { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState, useCallback } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
+import type { UserProfile, UserRole } from '../types';
 
 interface AuthContextValue {
   session: Session | null;
+  profile: UserProfile | null;
+  role: UserRole;
   loading: boolean;
   configured: boolean;
   error: string | null;
+  hasPermission: (requiredRoles: UserRole[]) => boolean;
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>;
   signOut: () => Promise<void>;
+  refreshProfile: () => Promise<void>;
+  updateProfileRole: (userId: string, newRole: UserRole) => Promise<{ error: Error | null }>;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
+  const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const fetchProfile = useCallback(async (currentSession: Session | null) => {
+    if (!currentSession?.user) {
+      setProfile(null);
+      return;
+    }
+
+    const user = currentSession.user;
+    const defaultProfile: UserProfile = {
+      id: user.id,
+      email: user.email ?? '',
+      name: user.user_metadata?.full_name || user.email?.split('@')[0] || 'Usuário MK9',
+      role: 'operador',
+      department: 'Operações'
+    };
+
+    if (!supabase) {
+      setProfile(defaultProfile);
+      return;
+    }
+
+    try {
+      const { data, error: profileErr } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', user.id)
+        .maybeSingle();
+
+      if (profileErr) {
+        console.warn('Profile fetch warning (fallback to session metadata):', profileErr.message);
+        setProfile(defaultProfile);
+      } else if (data) {
+        setProfile({
+          id: data.id,
+          email: data.email || defaultProfile.email,
+          name: data.name || defaultProfile.name,
+          role: (data.role as UserRole) || defaultProfile.role,
+          avatar_url: data.avatar_url,
+          department: data.department || defaultProfile.department,
+          created_at: data.created_at,
+          updated_at: data.updated_at
+        });
+      } else {
+        // Upsert default profile into profiles table
+        const { data: inserted } = await supabase
+          .from('profiles')
+          .upsert([defaultProfile], { onConflict: 'id' })
+          .select()
+          .single();
+
+        setProfile(inserted ? (inserted as UserProfile) : defaultProfile);
+      }
+    } catch (e) {
+      console.warn('Profile load error, using default fallback:', e);
+      setProfile(defaultProfile);
+    }
+  }, []);
 
   useEffect(() => {
     if (!supabase) {
@@ -27,31 +91,70 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     supabase.auth.getSession().then(({ data, error: sessionError }) => {
       if (sessionError) setError(sessionError.message);
       setSession(data.session);
-      setLoading(false);
+      fetchProfile(data.session).finally(() => setLoading(false));
     });
 
     const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       setSession(nextSession);
-      setLoading(false);
+      fetchProfile(nextSession).finally(() => setLoading(false));
     });
 
     return () => data.subscription.unsubscribe();
-  }, []);
+  }, [fetchProfile]);
+
+  const role: UserRole = profile?.role ?? 'operador';
+
+  const hasPermission = useCallback((requiredRoles: UserRole[]) => {
+    if (!requiredRoles || requiredRoles.length === 0) return true;
+    return requiredRoles.includes(role);
+  }, [role]);
+
+  const updateProfileRole = useCallback(async (userId: string, newRole: UserRole) => {
+    if (!supabase) return { error: new Error('Supabase não configurado.') };
+    if (role !== 'admin') return { error: new Error('Apenas administradores podem alterar permissões.') };
+
+    const { error: updateErr } = await supabase
+      .from('profiles')
+      .update({ role: newRole, updated_at: new Date().toISOString() })
+      .eq('id', userId);
+
+    if (updateErr) {
+      return { error: new Error(updateErr.message) };
+    }
+
+    if (session?.user?.id === userId) {
+      setProfile((prev) => prev ? { ...prev, role: newRole } : null);
+    }
+    return { error: null };
+  }, [role, session]);
 
   const value = useMemo<AuthContextValue>(() => ({
     session,
+    profile,
+    role,
     loading,
     configured: isSupabaseConfigured,
     error,
+    hasPermission,
     signIn: async (email, password) => {
       if (!supabase) return { error: new Error('Supabase ainda não foi configurado.') };
       const result = await supabase.auth.signInWithPassword({ email, password });
+      if (result.data.session) {
+        setSession(result.data.session);
+        await fetchProfile(result.data.session);
+      }
       return { error: result.error ? new Error(result.error.message) : null };
     },
     signOut: async () => {
+      setSession(null);
+      setProfile(null);
       if (supabase) await supabase.auth.signOut();
-    }
-  }), [error, loading, session]);
+    },
+    refreshProfile: async () => {
+      await fetchProfile(session);
+    },
+    updateProfileRole
+  }), [error, fetchProfile, hasPermission, loading, profile, role, session, updateProfileRole]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

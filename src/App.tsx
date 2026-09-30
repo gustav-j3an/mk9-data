@@ -10,6 +10,7 @@ import { FreelancersView } from './views/FreelancersView';
 import { DailiesControlView } from './views/DailiesControlView';
 import { PromotersView } from './views/PromotersView';
 import { DesignSystemView } from './views/DesignSystemView';
+import { UsersPermissionsView } from './views/UsersPermissionsView';
 import { AuthProvider } from './auth/AuthProvider';
 import { LoginPage } from './auth/LoginPage';
 import { ProtectedRoute } from './auth/ProtectedRoute';
@@ -86,6 +87,9 @@ function Dashboard() {
       )}
       {currentScreen === 'design-system' && (
         <DesignSystemView onShowToast={addToast} />
+      )}
+      {currentScreen === 'usuarios' && (
+        <UsersPermissionsView onShowToast={addToast} />
       )}
     </AppShell>
   );

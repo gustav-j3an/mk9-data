@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { ScreenId, ToastMessage } from '../types';
+import { ScreenId, ToastMessage, UserRole } from '../types';
+import { useAuth } from '../auth/AuthProvider';
 
 interface AppShellProps {
   currentScreen: ScreenId;
@@ -16,6 +17,7 @@ export const AppShell: React.FC<AppShellProps> = ({
   toasts,
   onDismissToast
 }) => {
+  const { session, profile, role, signOut, hasPermission } = useAuth();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [globalSearch, setGlobalSearch] = useState('');
   const [notificationsOpen, setNotificationsOpen] = useState(false);
@@ -49,12 +51,26 @@ export const AppShell: React.FC<AppShellProps> = ({
       ]
     },
     {
-      group: 'IDENTIDADE & GUIA',
+      group: 'CONFIGURAÇÕES & SEGURANÇA',
       items: [
+        { id: 'usuarios' as ScreenId, label: 'Perfis & Permissões', icon: 'admin_panel_settings', roles: ['admin', 'gestor'] as UserRole[] },
         { id: 'design-system' as ScreenId, label: 'Logo & Design System', icon: 'palette' }
       ]
     }
   ];
+
+  const getRoleLabel = (r: UserRole) => {
+    switch (r) {
+      case 'admin':
+        return { text: 'Admin', color: 'text-purple-400 border-purple-500/40 bg-purple-950/60' };
+      case 'gestor':
+        return { text: 'Gestor', color: 'text-cyan-400 border-cyan-500/40 bg-cyan-950/60' };
+      case 'operador':
+        return { text: 'Operador', color: 'text-emerald-400 border-emerald-500/40 bg-emerald-950/60' };
+    }
+  };
+
+  const roleInfo = getRoleLabel(role);
 
   return (
     <div className="bg-[#0f131d] text-slate-100 min-h-screen flex flex-col font-sans">
@@ -93,42 +109,47 @@ export const AppShell: React.FC<AppShellProps> = ({
 
           {/* Navigation Links */}
           <div className="py-4 px-3 space-y-5">
-            {navItems.map((section) => (
-              <div key={section.group}>
-                <div className="px-2 pb-1.5 text-[10px] font-bold text-slate-500 tracking-wider uppercase font-mono">
-                  {section.group}
+            {navItems.map((section) => {
+              const visibleItems = section.items.filter((item) => !item.roles || hasPermission(item.roles));
+              if (visibleItems.length === 0) return null;
+
+              return (
+                <div key={section.group}>
+                  <div className="px-2 pb-1.5 text-[10px] font-bold text-slate-500 tracking-wider uppercase font-mono">
+                    {section.group}
+                  </div>
+                  <nav className="space-y-0.5">
+                    {visibleItems.map((item) => {
+                      const isActive = currentScreen === item.id;
+                      return (
+                        <button
+                          key={item.id}
+                          onClick={() => {
+                            onNavigate(item.id);
+                            setMobileMenuOpen(false);
+                          }}
+                          className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-semibold transition-all ${
+                            isActive
+                              ? 'bg-purple-600 text-white font-bold neon-purple-glow shadow-md'
+                              : 'text-slate-400 hover:text-slate-100 hover:bg-[#171b26]'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5">
+                            <span className={`material-symbols-outlined text-[18px] ${isActive ? 'text-white' : 'text-slate-400'}`}>
+                              {item.icon}
+                            </span>
+                            <span>{item.label}</span>
+                          </div>
+                          {isActive && (
+                            <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+                          )}
+                        </button>
+                      );
+                    })}
+                  </nav>
                 </div>
-                <nav className="space-y-0.5">
-                  {section.items.map((item) => {
-                    const isActive = currentScreen === item.id;
-                    return (
-                      <button
-                        key={item.id}
-                        onClick={() => {
-                          onNavigate(item.id);
-                          setMobileMenuOpen(false);
-                        }}
-                        className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-semibold transition-all ${
-                          isActive
-                            ? 'bg-purple-600 text-white font-bold neon-purple-glow shadow-md'
-                            : 'text-slate-400 hover:text-slate-100 hover:bg-[#171b26]'
-                        }`}
-                      >
-                        <div className="flex items-center gap-2.5">
-                          <span className={`material-symbols-outlined text-[18px] ${isActive ? 'text-white' : 'text-slate-400'}`}>
-                            {item.icon}
-                          </span>
-                          <span>{item.label}</span>
-                        </div>
-                        {isActive && (
-                          <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
-                        )}
-                      </button>
-                    );
-                  })}
-                </nav>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
 
@@ -245,28 +266,31 @@ export const AppShell: React.FC<AppShellProps> = ({
 
           <div className="h-6 w-px bg-[#1e2433] hidden sm:block" />
 
-          {/* Profile Badge */}
+          {/* Profile Badge & Logout Action */}
           <div className="flex items-center gap-3">
             <div className="flex flex-col text-right hidden sm:flex">
               <span className="text-xs font-bold text-slate-200 leading-tight">
-                Mariana Vasconcellos
+                {profile?.name || (session?.user?.email ? session.user.email.split('@')[0] : 'Usuário MK9')}
               </span>
-              <span className="text-[10px] font-bold text-purple-400 uppercase tracking-wider font-mono">
-                Dir. de Operações
+              <div className="flex items-center justify-end gap-1 mt-0.5">
+                <span className={`px-1.5 py-0.2 rounded border font-mono font-bold text-[9px] uppercase tracking-wider ${roleInfo.color}`}>
+                  {roleInfo.text}
+                </span>
+              </div>
+            </div>
+            <div className="w-9 h-9 rounded-full overflow-hidden ring-2 ring-purple-500/40 shadow-[0_0_12px_rgba(147,51,234,0.3)] bg-purple-900/40 flex items-center justify-center shrink-0">
+              <span className="font-bold text-xs text-purple-200 uppercase">
+                {(profile?.name || session?.user?.email || 'MK').substring(0, 2).toUpperCase()}
               </span>
             </div>
-            <div className="w-9 h-9 rounded-full overflow-hidden ring-2 ring-purple-500/40 shadow-[0_0_12px_rgba(147,51,234,0.3)] bg-purple-900/40 flex items-center justify-center">
-              <img
-                src="https://lh3.googleusercontent.com/aida-public/AB6AXuDhklQTbUDloVOwaY8p_xRbPbqLmBb_M53KeGEjgPeIFFsxSsNPBXXEe2B2i-lCkIZT-V01KIsYFpY3xWYBB6aansYXEHT-D7A5M6j6y4QRWMc4MsNdMZ0q93x2QpVlaTefKBYIJHwTX0RO6VX-DeGWEJFRttXBxA1U5TdrjZOeMs-tW4KBxDcgS10mZvjNE8AuMkJPirTkIuEsUJgCDmrqIGqtyvYXECkQEqx0OOiH5f3kmUhDCmhzzA"
-                alt="Mariana Vasconcellos"
-                className="w-full h-full object-cover"
-                onError={(e) => {
-                  // Fallback in case of external image blocking
-                  (e.target as HTMLElement).style.display = 'none';
-                }}
-              />
-              <span className="font-bold text-xs text-purple-200">MV</span>
-            </div>
+
+            <button
+              onClick={() => signOut()}
+              className="p-2 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 border border-transparent hover:border-rose-500/20 transition-all flex items-center gap-1 text-xs"
+              title="Sair da Conta (Logout)"
+            >
+              <span className="material-symbols-outlined text-[18px]">logout</span>
+            </button>
           </div>
         </div>
       </header>
