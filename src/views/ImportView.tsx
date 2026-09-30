@@ -2,34 +2,11 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../auth/AuthProvider';
 import { supabase } from '../lib/supabase';
 import type { ToastMessage, ImportType, ImportRowError, ImportHistoryRecord } from '../types';
+import { generateXLSXTemplate, generateCSVTemplate, TEMPLATE_SPECS } from '../utils/templateGenerator';
 
 interface ImportViewProps {
   onShowToast: (toast: Omit<ToastMessage, 'id'>) => void;
 }
-
-// Templates de Exemplo para Download em CSV
-const TEMPLATES: Record<ImportType, { filename: string; headers: string[]; sample: string }> = {
-  industrias: {
-    filename: 'modelo_industrias.csv',
-    headers: ['codigo', 'nome', 'cnpj', 'status', 'observacao'],
-    sample: 'codigo,nome,cnpj,status,observacao\nIND-001,Unilever Brasil,12345678000195,ativo,Fornecedor de Higiene\nIND-002,Nestle Brasil,98765432000188,ativo,Alimentos e Bebidas'
-  },
-  lojas: {
-    filename: 'modelo_lojas.csv',
-    headers: ['codigo', 'nome', 'cnpj', 'cidade', 'uf', 'endereco', 'rede', 'status'],
-    sample: 'codigo,nome,cnpj,cidade,uf,endereco,rede,status\nLOJ-101,Carrefour Pinheiros,11222333000144,São Paulo,SP,Av. das Nações Unidas 1515,Carrefour,ativo\nLOJ-102,Pão de Açúcar Jardins,44555666000177,São Paulo,SP,Alameda Santos 800,GPA,ativo'
-  },
-  promotores: {
-    filename: 'modelo_promotores.csv',
-    headers: ['matricula', 'nome', 'cpf', 'telefone', 'email', 'cidade', 'uf', 'supervisor', 'equipe', 'status'],
-    sample: 'matricula,nome,cpf,telefone,email,cidade,uf,supervisor,equipe,status\nPRM-501,Carlos Eduardo Silva,12345678901,11988887777,carlos.silva@mk9.com.br,São Paulo,SP,Mariana Vasconcellos,Equipe SP Norte,ativo\nPRM-502,Ana Paula Santos,98765432100,11977776666,ana.santos@mk9.com.br,Campinas,SP,Carlos Silveira,Equipe Interior,ativo'
-  },
-  rotas: {
-    filename: 'modelo_rotas.csv',
-    headers: ['codigo_rota', 'data', 'promotor_matricula', 'loja_codigo', 'industria_codigo', 'sequencia', 'observacao'],
-    sample: 'codigo_rota,data,promotor_matricula,loja_codigo,industria_codigo,sequencia,observacao\nROT-2026-01,2026-10-01,PRM-501,LOJ-101,IND-001,1,Visita matinal para abastecimento\nROT-2026-01,2026-10-01,PRM-501,LOJ-102,IND-002,2,Auditoria de gôndola e contagem'
-  }
-};
 
 // Funções de Validação de Formato
 const validateCPF = (cpf: string) => {
@@ -61,6 +38,11 @@ const validateDate = (dateStr: string) => {
   if (!regex.test(dateStr)) return false;
   const d = new Date(dateStr);
   return !isNaN(d.getTime());
+};
+
+const validateStatus = (status: string) => {
+  const allowed = ['ativo', 'inativo', 'ferias', 'afastado', 'arquivado'];
+  return allowed.includes(status.toLowerCase().trim());
 };
 
 // Helper simples de conversão CSV em Array de Objetos
@@ -135,21 +117,21 @@ export const ImportView: React.FC<ImportViewProps> = ({ onShowToast }) => {
     }
   }, [step]);
 
-  // Download do Modelo CSV
-  const handleDownloadTemplate = (type: ImportType) => {
-    const tmpl = TEMPLATES[type];
-    const blob = new Blob([tmpl.sample], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.setAttribute('download', tmpl.filename);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-
+  // Handlers para Download dos Novos Modelos
+  const handleDownloadXLSX = (type: ImportType) => {
+    generateXLSXTemplate(type);
     onShowToast({
-      title: 'Modelo Baixado',
-      message: `Arquivo ${tmpl.filename} baixado com sucesso.`,
+      title: 'Modelo XLSX Gerado',
+      message: `Modelo modelo_${type}.xlsx baixado com abas LEIA-ME, DADOS e LISTAS_AUXILIARES.`,
+      type: 'info'
+    });
+  };
+
+  const handleDownloadCSV = (type: ImportType) => {
+    generateCSVTemplate(type);
+    onShowToast({
+      title: 'Modelo CSV Limpo Gerado',
+      message: `Modelo modelo_${type}.csv baixado com cabeçalho limpo.`,
       type: 'info'
     });
   };
@@ -168,8 +150,8 @@ export const ImportView: React.FC<ImportViewProps> = ({ onShowToast }) => {
 
       if (rows.length === 0) {
         onShowToast({
-          title: 'Arquivo Vazio',
-          message: 'A planilha fornecida não contém registros de dados.',
+          title: 'Planilha Sem Registros',
+          message: 'A planilha fornecida contém apenas o cabeçalho ou está vazia.',
           type: 'warning'
         });
         setParsing(false);
@@ -218,6 +200,7 @@ export const ImportView: React.FC<ImportViewProps> = ({ onShowToast }) => {
         if (!row.codigo?.trim()) rowErrors.push({ rowNumber: rowNum, column: 'codigo', value: '', message: 'Campo obrigatório.' });
         if (!row.nome?.trim()) rowErrors.push({ rowNumber: rowNum, column: 'nome', value: '', message: 'Campo obrigatório.' });
         if (row.cnpj?.trim() && !validateCNPJ(row.cnpj)) rowErrors.push({ rowNumber: rowNum, column: 'cnpj', value: row.cnpj, message: 'CNPJ inválido (deve ter 14 dígitos).' });
+        if (row.status?.trim() && !validateStatus(row.status)) rowErrors.push({ rowNumber: rowNum, column: 'status', value: row.status, message: 'Status inválido. Permitidos: ativo, inativo.' });
 
         if (row.codigo?.trim()) {
           if (seenKeys.has(row.codigo.trim())) {
@@ -232,6 +215,7 @@ export const ImportView: React.FC<ImportViewProps> = ({ onShowToast }) => {
         if (!row.cidade?.trim()) rowErrors.push({ rowNumber: rowNum, column: 'cidade', value: '', message: 'Campo obrigatório.' });
         if (!row.uf?.trim() || !validateUF(row.uf)) rowErrors.push({ rowNumber: rowNum, column: 'uf', value: row.uf || '', message: 'UF inválida (ex: SP, RJ, MG).' });
         if (row.cnpj?.trim() && !validateCNPJ(row.cnpj)) rowErrors.push({ rowNumber: rowNum, column: 'cnpj', value: row.cnpj, message: 'CNPJ inválido.' });
+        if (row.status?.trim() && !validateStatus(row.status)) rowErrors.push({ rowNumber: rowNum, column: 'status', value: row.status, message: 'Status inválido. Permitidos: ativo, inativo.' });
 
         if (row.codigo?.trim()) {
           if (seenKeys.has(row.codigo.trim())) {
@@ -247,6 +231,7 @@ export const ImportView: React.FC<ImportViewProps> = ({ onShowToast }) => {
         if (!row.uf?.trim() || !validateUF(row.uf)) rowErrors.push({ rowNumber: rowNum, column: 'uf', value: row.uf || '', message: 'UF inválida.' });
         if (row.cpf?.trim() && !validateCPF(row.cpf)) rowErrors.push({ rowNumber: rowNum, column: 'cpf', value: row.cpf, message: 'CPF inválido (deve ter 11 dígitos).' });
         if (row.telefone?.trim() && !validatePhone(row.telefone)) rowErrors.push({ rowNumber: rowNum, column: 'telefone', value: row.telefone, message: 'Telefone inválido (10 a 11 dígitos).' });
+        if (row.status?.trim() && !validateStatus(row.status)) rowErrors.push({ rowNumber: rowNum, column: 'status', value: row.status, message: 'Status inválido. Permitidos: ativo, inativo, ferias, afastado, arquivado.' });
 
         if (row.matricula?.trim()) {
           if (seenKeys.has(row.matricula.trim())) {
@@ -351,6 +336,8 @@ export const ImportView: React.FC<ImportViewProps> = ({ onShowToast }) => {
     }
   };
 
+  const currentSpec = TEMPLATE_SPECS[selectedType];
+
   return (
     <div className="w-full px-4 lg:px-8 py-6 max-w-[1720px] mx-auto space-y-8 font-sans">
       {/* Top Header */}
@@ -385,42 +372,95 @@ export const ImportView: React.FC<ImportViewProps> = ({ onShowToast }) => {
       {/* VIEW: UPLOAD */}
       {step === 'upload' && (
         <section className="space-y-6">
-          {/* Configuração de Tipo & Upsert */}
+          {/* Configuração de Tipo & Download de Modelos */}
           <div className="bg-[#171b26] border border-[#1e2433] rounded-2xl p-6 shadow-2xl space-y-6">
             <h3 className="text-sm font-bold text-white uppercase tracking-wider font-mono flex items-center gap-2">
               <span className="material-symbols-outlined text-purple-400">tune</span>
-              1. Selecione o Tipo de Cadastro &amp; Regra de Gravação
+              1. Selecione o Tipo de Cadastro &amp; Baixe o Modelo Limpo
             </h3>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              {(['industrias', 'lojas', 'promotores', 'rotas'] as ImportType[]).map((type) => (
-                <button
-                  key={type}
-                  onClick={() => setSelectedType(type)}
-                  className={`p-4 rounded-xl border text-left transition-all cursor-pointer ${
-                    selectedType === type
-                      ? 'bg-purple-950/40 border-purple-500 text-white shadow-[0_0_15px_rgba(147,51,234,0.3)]'
-                      : 'bg-[#131722] border-[#1e2433] text-slate-400 hover:border-slate-700 hover:text-slate-200'
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="font-bold text-sm uppercase tracking-wider font-mono">{type}</span>
-                    <span className="material-symbols-outlined text-xl">
-                      {type === 'industrias' ? 'factory' : type === 'lojas' ? 'store' : type === 'promotores' ? 'badge' : 'alt_route'}
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-slate-400 mt-2">
-                    {type === 'industrias' && 'Cadastro de marcas e fabricantes parceiros.'}
-                    {type === 'lojas' && 'PDVs, redes e endereços atendidos.'}
-                    {type === 'promotores' && 'Matrículas, contatos e equipes de campo.'}
-                    {type === 'rotas' && 'Vínculos diários entre promotor, loja e indústria.'}
-                  </p>
-                  <div className="mt-3 text-[10px] font-mono text-cyan-400 hover:underline flex items-center gap-1" onClick={(e) => { e.stopPropagation(); handleDownloadTemplate(type); }}>
-                    <span className="material-symbols-outlined text-[12px]">download</span>
-                    <span>Baixar modelo CSV</span>
-                  </div>
-                </button>
-              ))}
+              {(['industrias', 'lojas', 'promotores', 'rotas'] as ImportType[]).map((type) => {
+                const spec = TEMPLATE_SPECS[type];
+                return (
+                  <button
+                    key={type}
+                    onClick={() => setSelectedType(type)}
+                    className={`p-4 rounded-xl border text-left transition-all cursor-pointer ${
+                      selectedType === type
+                        ? 'bg-purple-950/40 border-purple-500 text-white shadow-[0_0_15px_rgba(147,51,234,0.3)]'
+                        : 'bg-[#131722] border-[#1e2433] text-slate-400 hover:border-slate-700 hover:text-slate-200'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-sm uppercase tracking-wider font-mono">{type}</span>
+                      <span className="material-symbols-outlined text-xl">
+                        {type === 'industrias' ? 'factory' : type === 'lojas' ? 'store' : type === 'promotores' ? 'badge' : 'alt_route'}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 mt-2">
+                      {type === 'industrias' && 'Marcas e indústrias parceiras.'}
+                      {type === 'lojas' && 'PDVs, redes e endereços.'}
+                      {type === 'promotores' && 'Matrículas e equipes.'}
+                      {type === 'rotas' && 'Vínculos diários de visitas.'}
+                    </p>
+
+                    <div className="mt-4 pt-3 border-t border-[#1e2433] flex items-center justify-between gap-2">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDownloadXLSX(type);
+                        }}
+                        className="px-2 py-1 rounded bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 text-[10px] font-mono font-bold flex items-center gap-1 border border-emerald-500/40 transition-colors"
+                        title="Baixar Modelo Completo XLSX com Abas e Filtros"
+                      >
+                        <span className="material-symbols-outlined text-[12px]">grid_on</span>
+                        <span>XLSX</span>
+                      </button>
+
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDownloadCSV(type);
+                        }}
+                        className="px-2 py-1 rounded bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 text-[10px] font-mono font-bold flex items-center gap-1 border border-cyan-500/40 transition-colors"
+                        title="Baixar Modelo CSV Limpo com Cabeçalho UTF-8"
+                      >
+                        <span className="material-symbols-outlined text-[12px]">csv</span>
+                        <span>CSV Limpo</span>
+                      </button>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Painel de Instruções e Orientações do Tipo Selecionado */}
+            <div className="p-5 rounded-xl bg-[#131722] border border-[#1e2433] space-y-3">
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-purple-400 text-lg">info</span>
+                <h4 className="text-xs font-bold text-white uppercase tracking-wider font-mono">
+                  Instruções &amp; Relacionamentos: {currentSpec.title}
+                </h4>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs text-slate-300">
+                <div>
+                  <span className="font-bold text-slate-400 font-mono block">FINALIDADE:</span>
+                  <p className="mt-0.5 text-slate-300">{currentSpec.instructions.finalidade}</p>
+                </div>
+                <div>
+                  <span className="font-bold text-slate-400 font-mono block">CAMPOS OBRIGATÓRIOS:</span>
+                  <p className="mt-0.5 text-amber-300 font-mono">{currentSpec.instructions.obrigatorios}</p>
+                </div>
+                <div>
+                  <span className="font-bold text-slate-400 font-mono block">ORDEM DE IMPORTAÇÃO:</span>
+                  <p className="mt-0.5 text-purple-300 font-mono">{currentSpec.instructions.ordem}</p>
+                </div>
+                <div>
+                  <span className="font-bold text-slate-400 font-mono block">DEPENDÊNCIAS &amp; RELACIONAMENTOS:</span>
+                  <p className="mt-0.5 text-cyan-300 font-mono">{currentSpec.instructions.relacionamentos}</p>
+                </div>
+              </div>
             </div>
 
             {/* Configuração de Preservação vs Upsert */}
@@ -459,13 +499,13 @@ export const ImportView: React.FC<ImportViewProps> = ({ onShowToast }) => {
                 <span className="material-symbols-outlined text-4xl">cloud_upload</span>
               </div>
               <div className="space-y-1">
-                <h3 className="text-base font-bold text-white">Arraste ou selecione a planilha CSV/XLSX</h3>
+                <h3 className="text-base font-bold text-white">Arraste ou selecione a planilha preenchida (CSV ou XLSX)</h3>
                 <p className="text-xs text-slate-400">
                   Suporta arquivos formatados para <strong>{selectedType.toUpperCase()}</strong>.
                 </p>
               </div>
               <button className="px-5 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs neon-purple-glow transition-all">
-                Selecionar Arquivo
+                Selecionar Arquivo Preenchido
               </button>
             </div>
           </div>
