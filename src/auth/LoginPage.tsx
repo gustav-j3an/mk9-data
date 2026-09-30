@@ -13,7 +13,11 @@ export function LoginPage() {
     setMessage(null);
     setSubmitting(true);
     const { error } = await signIn(email, password);
-    if (error) setMessage(error.message);
+    if (error) {
+      setMessage(error.message);
+    } else {
+      window.location.assign('/');
+    }
     setSubmitting(false);
   }
 
