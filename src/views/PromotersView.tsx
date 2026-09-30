@@ -212,19 +212,19 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
         <div className="relative overflow-hidden rounded-xl bg-[#171b26] border border-[#1e2433] p-4 shadow-md flex flex-col justify-between">
           <div className="flex items-start justify-between">
             <span className="text-[11px] font-bold uppercase font-mono text-slate-400">Total de Promotores</span>
-            <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 font-mono text-[11px] font-bold border border-emerald-500/20">
-              +28 este mês
+            <span className="px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-400 font-mono text-[11px] font-bold border border-purple-500/20">
+              Quadro CLT
             </span>
           </div>
           <div className="my-2">
-            <div className="text-3xl font-extrabold text-white font-mono tracking-tight">1.428</div>
+            <div className="text-3xl font-extrabold text-white font-mono tracking-tight">{promoters.length}</div>
             <div className="flex items-center gap-1.5 mt-1 text-slate-400 text-xs">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-              <span>1.385 CLT Ativos em folha</span>
+              <span>{promoters.filter((p) => p.status === 'ativo').length} CLT Ativos em folha</span>
             </div>
           </div>
           <div className="h-1 w-full bg-[#10141f] rounded-full overflow-hidden">
-            <div className="h-full bg-purple-600 w-[97%] rounded-full shadow-[0_0_8px_rgba(147,51,234,0.8)]" />
+            <div className="h-full bg-purple-600 rounded-full shadow-[0_0_8px_rgba(147,51,234,0.8)]" style={{ width: promoters.length ? '100%' : '0%' }} />
           </div>
         </div>
 
@@ -232,17 +232,19 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
         <div className="relative overflow-hidden rounded-xl bg-[#171b26] border border-[#1e2433] p-4 shadow-md flex flex-col justify-between">
           <div className="flex items-start justify-between">
             <span className="text-[11px] font-bold uppercase font-mono text-slate-400">Promotores Alocados</span>
-            <span className="font-mono text-xs text-cyan-300 font-bold">97.8% Cobertura</span>
+            <span className="font-mono text-xs text-cyan-300 font-bold">Cobertura</span>
           </div>
           <div className="my-2">
-            <div className="text-3xl font-extrabold text-white font-mono tracking-tight">1.396</div>
+            <div className="text-3xl font-extrabold text-white font-mono tracking-tight">
+              {promoters.filter((p) => p.squad && p.squad !== 'Nenhum').length}
+            </div>
             <div className="flex items-center gap-1.5 mt-1 text-slate-400 text-xs">
               <span className="material-symbols-outlined text-cyan-400 text-sm">groups</span>
-              <span>Em 18 squads regionais ativos</span>
+              <span>Squads regionais ativos</span>
             </div>
           </div>
           <div className="h-1 w-full bg-[#10141f] rounded-full overflow-hidden">
-            <div className="h-full bg-cyan-400 w-[97.8%] rounded-full shadow-[0_0_8px_rgba(56,189,248,0.8)]" />
+            <div className="h-full bg-cyan-400 rounded-full shadow-[0_0_8px_rgba(56,189,248,0.8)]" style={{ width: promoters.length ? `${Math.round((promoters.filter((p) => p.squad && p.squad !== 'Nenhum').length / promoters.length) * 100)}%` : '0%' }} />
           </div>
         </div>
 
@@ -480,7 +482,17 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-[#1e2433] text-slate-200">
-              {filteredPromoters.map((p) => {
+              {filteredPromoters.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="py-12 text-center">
+                    <div className="flex flex-col items-center justify-center space-y-2">
+                      <span className="material-symbols-outlined text-4xl text-slate-600">badge</span>
+                      <p className="text-sm font-semibold text-slate-300">Não há dados cadastrados ainda.</p>
+                    </div>
+                  </td>
+                </tr>
+              ) : (
+                filteredPromoters.map((p) => {
                 const hasNoSupervisor = !p.supervisor || p.supervisor === 'Nenhum';
                 const hasNoSquad = !p.squad || p.squad === 'Nenhum';
                 const isSelected = selectedIds.includes(p.id);
@@ -617,7 +629,7 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
                     </td>
                   </tr>
                 );
-              })}
+              }))}
             </tbody>
           </table>
         </div>
@@ -625,7 +637,7 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
         {/* Footer */}
         <div className="p-4 bg-[#10141f] border-t border-[#1e2433] flex flex-col md:flex-row items-center justify-between gap-3 font-mono text-xs text-slate-400">
           <div>
-            Exibindo <strong className="text-white">1-{filteredPromoters.length}</strong> de <strong className="text-white">1.428</strong> promotores cadastrados
+            Exibindo <strong className="text-white">{filteredPromoters.length}</strong> de <strong className="text-white">{promoters.length}</strong> promotores cadastrados
           </div>
           <div className="flex items-center gap-1">
             <button disabled className="p-1.5 rounded bg-[#171b26] border border-[#1e2433] text-slate-600 cursor-not-allowed">

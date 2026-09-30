@@ -359,9 +359,9 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
               <span className="material-symbols-outlined text-4xl">person_search</span>
             </div>
             <div className="space-y-1">
-              <h3 className="text-base font-bold text-white">Nenhum promotor encontrado</h3>
+              <h3 className="text-base font-bold text-white">Não há dados cadastrados ainda.</h3>
               <p className="text-xs text-slate-400">
-                Nenhum registro coincide com os filtros selecionados de supervisor, equipe regional ou termo de busca informado.
+                Nenhum registro de presença ou telemetria operacional foi cadastrado ou encontrado com os filtros aplicados.
               </p>
             </div>
             <div className="flex items-center gap-2 pt-2">
@@ -377,12 +377,6 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
               >
                 <span className="material-symbols-outlined text-base">restart_alt</span>
                 <span>Limpar Filtros</span>
-              </button>
-              <button
-                onClick={() => setSimulateEmpty(false)}
-                className="px-4 py-2 rounded-xl bg-[#131722] hover:bg-[#1f2433] text-slate-300 border border-[#1e2433] text-xs font-semibold"
-              >
-                Restaurar Lista
               </button>
             </div>
           </div>

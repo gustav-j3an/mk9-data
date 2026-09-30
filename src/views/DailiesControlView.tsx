@@ -501,7 +501,17 @@ export const DailiesControlView: React.FC<DailiesControlViewProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-[#1e2433] text-slate-200">
-              {filteredDailies.map((daily) => (
+              {filteredDailies.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="text-center py-12 text-slate-400 font-sans">
+                    <div className="flex flex-col items-center justify-center space-y-2">
+                      <span className="material-symbols-outlined text-4xl text-slate-600">receipt_long</span>
+                      <p className="text-sm font-semibold text-slate-300">Não há dados cadastrados ainda.</p>
+                    </div>
+                  </td>
+                </tr>
+              ) : (
+                filteredDailies.map((daily) => (
                 <tr key={daily.id} className="hover:bg-[#1c2230] transition-colors group">
                   <td className="py-3 px-4 font-mono whitespace-nowrap">
                     <div className="text-white font-bold">{daily.date}</div>
@@ -579,7 +589,8 @@ export const DailiesControlView: React.FC<DailiesControlViewProps> = ({
                     </div>
                   </td>
                 </tr>
-              ))}
+              ))
+              )}
             </tbody>
           </table>
         </div>

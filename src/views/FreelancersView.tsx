@@ -479,8 +479,11 @@ export const FreelancersView: React.FC<FreelancersViewProps> = ({
             <tbody className="divide-y divide-[#1e2433] text-slate-200">
               {filteredFreelancers.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="text-center py-10 text-slate-400">
-                    Nenhum freelancer encontrado com os filtros aplicados.
+                  <td colSpan={9} className="text-center py-12 text-slate-400 font-sans">
+                    <div className="flex flex-col items-center justify-center space-y-2">
+                      <span className="material-symbols-outlined text-4xl text-slate-600">person_off</span>
+                      <p className="text-sm font-semibold text-slate-300">Não há dados cadastrados ainda.</p>
+                    </div>
                   </td>
                 </tr>
               ) : (
@@ -604,8 +607,8 @@ export const FreelancersView: React.FC<FreelancersViewProps> = ({
         {/* Table Footer */}
         <div className="px-4 py-3 bg-[#10141f] border-t border-[#1e2433] flex flex-wrap items-center justify-between gap-3 text-xs">
           <span className="text-slate-400 font-mono">
-            Exibindo <strong className="text-slate-200">1-{filteredFreelancers.length}</strong> de{' '}
-            <strong className="text-slate-200">312</strong> freelancers cadastrados
+            Exibindo <strong className="text-slate-200">{filteredFreelancers.length}</strong> de{' '}
+            <strong className="text-slate-200">{freelancers.length}</strong> freelancers cadastrados
           </span>
           <div className="flex items-center gap-1.5 font-mono">
             <button disabled className="w-7 h-7 rounded flex items-center justify-center bg-[#171b26] border border-[#1e2433] text-slate-600 cursor-not-allowed">

@@ -22,73 +22,19 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
   const [alertType, setAlertType] = useState('Ruptura Crítica');
   const [alertNotes, setAlertNotes] = useState('');
 
-  const tableRows = [
-    {
-      id: 'row-1',
-      promoter: 'Rodrigo Soares',
-      promoterInitials: 'RS',
-      matricula: 'MAT-89210 • Sênior',
-      store: 'Pão de Açúcar - Jardins',
-      address: 'Av. Brig. Luís Antônio, SP',
-      regional: 'SP-CAPITAL',
-      checkIn: '08:14 • Geofence OK',
-      status: 'Conforme',
-      statusType: 'conforme',
-      photos: '4/4 Fotos Validadas'
-    },
-    {
-      id: 'row-2',
-      promoter: 'Aline Menezes',
-      promoterInitials: 'AM',
-      matricula: 'MAT-44109 • Pleno',
-      store: 'Carrefour Hipermercado',
-      address: 'Barra da Tijuca, RJ',
-      regional: 'RJ-LESTE',
-      checkIn: '08:32 • Atendimento',
-      status: 'Em Execução',
-      statusType: 'execucao',
-      photos: '2/5 Sincronizando...'
-    },
-    {
-      id: 'row-3',
-      promoter: 'Carlos Prado',
-      promoterInitials: 'CP',
-      matricula: 'MAT-99214 • Líder',
-      store: 'Assaí Atacadista',
-      address: 'Radial Leste, SP',
-      regional: 'SP-LESTE',
-      checkIn: '08:45 • Alerta Disparado',
-      status: 'Ruptura Detectada',
-      statusType: 'ruptura',
-      photos: 'Gôndola Vazia'
-    },
-    {
-      id: 'row-4',
-      promoter: 'Daniela Freitas',
-      promoterInitials: 'DF',
-      matricula: 'MAT-10293 • Promotora',
-      store: "Sam's Club",
-      address: 'Alphaville, Barueri, SP',
-      regional: 'SP-OESTE',
-      checkIn: '07:58 • Concluído',
-      status: 'Ponto Extra Validado',
-      statusType: 'extra',
-      photos: 'Checklist 100%'
-    },
-    {
-      id: 'row-5',
-      promoter: 'Thiago Barbosa',
-      promoterInitials: 'TB',
-      matricula: 'MAT-77341 • Promotor',
-      store: 'St. Marche Empório',
-      address: 'Itaim Bibi, SP',
-      regional: 'SP-SUL',
-      checkIn: '08:05 • Geofence OK',
-      status: 'Conforme',
-      statusType: 'conforme',
-      photos: '3/3 Fotos Validadas'
-    }
-  ];
+  const tableRows: Array<{
+    id: string;
+    promoter: string;
+    promoterInitials: string;
+    matricula: string;
+    store: string;
+    address: string;
+    regional: string;
+    checkIn: string;
+    status: string;
+    statusType: string;
+    photos: string;
+  }> = [];
 
   const filteredRows = tableRows.filter((row) => {
     const matchesSearch =
@@ -554,7 +500,17 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
               </tr>
             </thead>
             <tbody className="divide-y divide-[#1e2433] text-slate-200">
-              {filteredRows.map((r) => (
+              {filteredRows.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="text-center py-12 text-slate-400 font-sans">
+                    <div className="flex flex-col items-center justify-center space-y-2">
+                      <span className="material-symbols-outlined text-4xl text-slate-600">monitoring</span>
+                      <p className="text-sm font-semibold text-slate-300">Não há dados cadastrados ainda.</p>
+                    </div>
+                  </td>
+                </tr>
+              ) : (
+                filteredRows.map((r) => (
                 <tr key={r.id} className="hover:bg-[#1c2230] transition-colors group">
                   <td className="py-3 px-4">
                     <div className="flex items-center gap-3">
@@ -628,14 +584,15 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
                     </div>
                   </td>
                 </tr>
-              ))}
+              ))
+              )}
             </tbody>
-          </table>
-        </div>
+        </table>
+      </div>
 
-        {/* Pagination */}
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pt-3 border-t border-[#1e2433] text-xs font-mono text-slate-400">
-          <span>Mostrando <strong>1 - 5</strong> de <strong>4.820</strong> registros de campo</span>
+      {/* Pagination */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pt-3 border-t border-[#1e2433] text-xs font-mono text-slate-400">
+        <span>Mostrando <strong>{filteredRows.length}</strong> de <strong>{tableRows.length}</strong> registros de campo</span>
           <div className="flex items-center gap-1">
             <button disabled className="px-2.5 py-1 rounded bg-[#131722] border border-[#1e2433] text-slate-600 cursor-not-allowed">Anterior</button>
             <button className="px-2.5 py-1 rounded bg-purple-600 text-white font-bold neon-purple-glow">1</button>

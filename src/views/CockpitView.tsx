@@ -45,78 +45,20 @@ export const CockpitView: React.FC<CockpitViewProps> = ({ onNavigate, onShowToas
     });
   };
 
-  const recentActivities = [
-    {
-      id: 'act-1',
-      promoter: 'Lucas Albuquerque',
-      promoterInitials: 'LA',
-      type: 'CLT • #4829',
-      store: 'Pão de Açúcar - Morumbi',
-      city: 'São Paulo, SP',
-      client: "L'Oréal Brasil",
-      activity: 'Alerta de Ruptura de SKU',
-      time: 'Há 2 min',
-      category: 'ruptura',
-      status: 'Inconforme',
-      statusColor: 'bg-rose-500/20 text-rose-300 border-rose-500/30'
-    },
-    {
-      id: 'act-2',
-      promoter: 'Camila Santoro',
-      promoterInitials: 'CS',
-      type: 'CLT • #3194',
-      store: 'Carrefour Hiper - Barra',
-      city: 'Rio de Janeiro, RJ',
-      client: 'Nestlé Brasil',
-      activity: 'Auditoria de Gôndola & Share',
-      time: 'Há 7 min',
-      category: 'auditoria',
-      status: 'Concluído',
-      statusColor: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
-    },
-    {
-      id: 'act-3',
-      promoter: 'Carlos Eduardo',
-      promoterInitials: 'CE',
-      type: 'Freelancer • #F-082',
-      store: 'Atacadão Santo Amaro',
-      city: 'São Paulo, SP',
-      client: 'Ambev',
-      activity: 'Check-in Geofence (Exceção)',
-      time: 'Há 14 min',
-      category: 'checkin',
-      status: 'Em Auditoria',
-      statusColor: 'bg-amber-500/20 text-amber-300 border-amber-500/30'
-    },
-    {
-      id: 'act-4',
-      promoter: 'Juliana Costa',
-      promoterInitials: 'JC',
-      type: 'CLT • #2241',
-      store: 'Carrefour Anchieta',
-      city: 'São Bernardo, SP',
-      client: 'Unilever',
-      activity: 'Conferência de Ponta Extra',
-      time: 'Há 22 min',
-      category: 'auditoria',
-      status: 'Pendente IA',
-      statusColor: 'bg-purple-500/20 text-purple-300 border-purple-500/30'
-    },
-    {
-      id: 'act-5',
-      promoter: 'Marcos Faria',
-      promoterInitials: 'MF',
-      type: 'CLT • #1980',
-      store: 'Assaí Radial Leste',
-      city: 'São Paulo, SP',
-      client: 'Mondelez',
-      activity: 'Check-in Geofence Validado',
-      time: 'Há 35 min',
-      category: 'checkin',
-      status: 'Concluído',
-      statusColor: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
-    }
-  ];
+  const recentActivities: Array<{
+    id: string;
+    promoter: string;
+    promoterInitials: string;
+    type: string;
+    store: string;
+    city: string;
+    client: string;
+    activity: string;
+    time: string;
+    category: string;
+    status: string;
+    statusColor: string;
+  }> = [];
 
   const filteredActivities = recentActivities.filter((act) => {
     const matchesCategory =
@@ -651,8 +593,11 @@ export const CockpitView: React.FC<CockpitViewProps> = ({ onNavigate, onShowToas
               <tbody className="divide-y divide-[#1e2433] text-slate-200">
                 {filteredActivities.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="text-center py-8 text-slate-400">
-                      Nenhuma atividade encontrada com o termo "{searchActivity}".
+                    <td colSpan={7} className="text-center py-12 text-slate-400 font-sans">
+                      <div className="flex flex-col items-center justify-center space-y-2">
+                        <span className="material-symbols-outlined text-4xl text-slate-600">monitor_heart</span>
+                        <p className="text-sm font-semibold text-slate-300">Não há dados cadastrados ainda.</p>
+                      </div>
                     </td>
                   </tr>
                 ) : (

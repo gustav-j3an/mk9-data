@@ -152,22 +152,15 @@ export const TeamsManagementView: React.FC<TeamsManagementViewProps> = ({
           <div className="flex flex-wrap items-center gap-2 pt-1 font-mono text-xs">
             <div className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-[#171b26] border border-[#1e2433] text-slate-200">
               <span className="w-2 h-2 rounded-full bg-emerald-400" />
-              <span>18 Equipes Ativas</span>
+              <span>{squads.filter((s) => s.status === 'ativa').length} Equipes Ativas</span>
             </div>
             <div className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-[#171b26] border border-[#1e2433] text-slate-200">
               <span className="material-symbols-outlined text-cyan-400 text-sm">map</span>
-              <span>6 Regionais</span>
+              <span>{squads.length} Estruturas</span>
             </div>
             <div className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-[#171b26] border border-[#1e2433] text-slate-200">
               <span className="material-symbols-outlined text-purple-400 text-sm">groups</span>
-              <span>1.428 Promotores Alocados</span>
-            </div>
-            <div
-              onClick={() => onNavigate('promotores')}
-              className="cursor-pointer flex items-center gap-1.5 px-3 py-1 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-300 hover:bg-rose-500/20 transition-colors"
-            >
-              <span className="material-symbols-outlined text-rose-400 text-sm">warning</span>
-              <span>12 Sem Equipe</span>
+              <span>{squads.reduce((acc, s) => acc + (s.promotersClt || 0) + (s.promotersFree || 0), 0)} Promotores Alocados</span>
             </div>
           </div>
         </div>
@@ -298,7 +291,14 @@ export const TeamsManagementView: React.FC<TeamsManagementViewProps> = ({
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
         {/* Teams Cards Grid (7 cols) */}
         <section className="xl:col-span-7 flex flex-col gap-4">
-          {filteredSquads.map((squad) => {
+          {filteredSquads.length === 0 ? (
+            <div className="bg-[#171b26] border border-[#1e2433] rounded-xl p-12 text-center flex flex-col items-center justify-center space-y-3">
+              <span className="material-symbols-outlined text-4xl text-slate-600">groups</span>
+              <h3 className="text-base font-bold text-slate-200">Não há dados cadastrados ainda.</h3>
+              <p className="text-xs text-slate-400">Cadastre uma nova equipe operacional para iniciar o gerenciamento.</p>
+            </div>
+          ) : (
+            filteredSquads.map((squad) => {
             const isSelected = selectedSquad.id === squad.id;
             return (
               <div
@@ -439,7 +439,7 @@ export const TeamsManagementView: React.FC<TeamsManagementViewProps> = ({
                 </div>
               </div>
             );
-          })}
+          }))}
         </section>
 
         {/* Interactive Drawer / Slide-Over: Gestão & Movimentação Operacional (5 cols) */}
