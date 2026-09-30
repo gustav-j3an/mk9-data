@@ -11,6 +11,7 @@ import { DailiesControlView } from './views/DailiesControlView';
 import { PromotersView } from './views/PromotersView';
 import { DesignSystemView } from './views/DesignSystemView';
 import { UsersPermissionsView } from './views/UsersPermissionsView';
+import { ImportView } from './views/ImportView';
 import { AuthProvider } from './auth/AuthProvider';
 import { LoginPage } from './auth/LoginPage';
 import { ProtectedRoute } from './auth/ProtectedRoute';
@@ -84,6 +85,9 @@ function Dashboard() {
       )}
       {currentScreen === 'promotores' && (
         <PromotersView onNavigate={setCurrentScreen} onShowToast={addToast} />
+      )}
+      {currentScreen === 'importacao' && (
+        <ImportView onShowToast={addToast} />
       )}
       {currentScreen === 'design-system' && (
         <DesignSystemView onShowToast={addToast} />

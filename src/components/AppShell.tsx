@@ -41,7 +41,8 @@ export const AppShell: React.FC<AppShellProps> = ({
       group: 'CADASTROS',
       items: [
         { id: 'promotores' as ScreenId, label: 'Promotores', icon: 'badge' },
-        { id: 'freelancers' as ScreenId, label: 'Freelancers', icon: 'engineering' }
+        { id: 'freelancers' as ScreenId, label: 'Freelancers', icon: 'engineering' },
+        { id: 'importacao' as ScreenId, label: 'Importação de Planilhas', icon: 'upload_file', roles: ['admin', 'gestor'] as UserRole[] }
       ]
     },
     {

@@ -6,8 +6,33 @@ export type ScreenId =
   | 'freelancers'
   | 'controle-diarias'
   | 'promotores'
+  | 'importacao'
   | 'design-system'
   | 'usuarios';
+
+export type ImportType = 'industrias' | 'lojas' | 'promotores' | 'rotas';
+
+export interface ImportRowError {
+  rowNumber: number;
+  column: string;
+  value: string;
+  message: string;
+}
+
+export interface ImportHistoryRecord {
+  id: string;
+  tipo: ImportType;
+  filename: string;
+  imported_by_id?: string;
+  imported_by_email: string;
+  imported_by_name?: string;
+  rows_total: number;
+  rows_accepted: number;
+  rows_rejected: number;
+  is_upsert: boolean;
+  errors_summary: ImportRowError[];
+  created_at: string;
+}
 
 export type UserRole = 'admin' | 'gestor' | 'operador';
 
