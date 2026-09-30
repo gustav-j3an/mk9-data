@@ -217,105 +217,118 @@ export const FreelancersView: React.FC<FreelancersViewProps> = ({
       </div>
 
       {/* KPI HUD Cards (4 Columns) */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-        {/* Card 1 */}
-        <div className="bg-[#171b26] border border-[#1e2433] hover:border-emerald-500/40 p-4 rounded-xl shadow-lg relative overflow-hidden transition-all group">
-          <div className="absolute top-0 left-0 right-0 h-[2px] bg-emerald-500" />
-          <div className="flex items-start justify-between">
-            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono">
-              FREELANCERS ATIVOS
-            </span>
-            <div className="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-              <span className="material-symbols-outlined text-[18px]">engineering</span>
-            </div>
-          </div>
-          <div className="mt-2 flex items-baseline gap-2">
-            <span className="text-3xl font-extrabold text-white font-mono tracking-tight">248</span>
-            <span className="inline-flex items-center text-emerald-400 font-mono text-[11px] font-bold bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded">
-              +14 este mês
-            </span>
-          </div>
-          <div className="mt-2 pt-2 border-t border-[#1e2433] flex items-center justify-between text-xs text-slate-400">
-            <span className="flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-emerald-400" />
-              42 em campo hoje
-            </span>
-            <span className="font-mono text-[11px] text-cyan-400 font-semibold">79.5% ocupação</span>
-          </div>
-        </div>
+      {(() => {
+        const total = freelancers.length;
+        const active = freelancers.filter((f) => f.status === 'ativo').length;
+        const inactive = freelancers.filter((f) => f.status === 'inativo').length;
+        const activeToday = freelancers.filter((f) => f.activeToday).length;
+        const activePct = total > 0 ? ((active / total) * 100).toFixed(1) : '0';
+        const inactivePct = total > 0 ? ((inactive / total) * 100).toFixed(1) : '0';
+        const occupancy = total > 0 ? ((activeToday / total) * 100).toFixed(1) : '0';
 
-        {/* Card 2 */}
-        <div className="bg-[#171b26] border border-[#1e2433] hover:border-slate-600 p-4 rounded-xl shadow-lg relative overflow-hidden transition-all group">
-          <div className="absolute top-0 left-0 right-0 h-[2px] bg-slate-600" />
-          <div className="flex items-start justify-between">
-            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono">
-              FREELANCERS INATIVOS
-            </span>
-            <div className="p-1.5 rounded-lg bg-slate-800/80 text-slate-400 border border-slate-700/40">
-              <span className="material-symbols-outlined text-[18px]">person_off</span>
-            </div>
-          </div>
-          <div className="mt-2 flex items-baseline gap-2">
-            <span className="text-3xl font-extrabold text-slate-300 font-mono tracking-tight">64</span>
-            <span className="inline-flex items-center text-slate-400 font-mono text-[11px] bg-slate-800/60 border border-slate-700/50 px-2 py-0.5 rounded">
-              20.5% da base
-            </span>
-          </div>
-          <div className="mt-2 pt-2 border-t border-[#1e2433] flex items-center justify-between text-xs text-slate-400">
-            <span>Disponíveis para reativação</span>
-            <span className="font-mono text-[11px] text-amber-400">12 em pausa &gt; 60d</span>
-          </div>
-        </div>
+        const activeList = freelancers.filter((f) => f.status === 'ativo');
+        const avgFeeVal = activeList.length > 0 ? activeList.reduce((acc, f) => acc + (f.defaultFee || 0), 0) / activeList.length : 0;
+        const avgFeeStr = avgFeeVal > 0 ? `R$ ${avgFeeVal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : 'R$ 0,00';
 
-        {/* Card 3 */}
-        <div className="bg-[#171b26] border border-[#1e2433] hover:border-cyan-500/40 p-4 rounded-xl shadow-lg relative overflow-hidden transition-all group">
-          <div className="absolute top-0 left-0 right-0 h-[2px] bg-cyan-400" />
-          <div className="flex items-start justify-between">
-            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono">
-              VALOR MÉDIO DA DIÁRIA
-            </span>
-            <div className="p-1.5 rounded-lg bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
-              <span className="material-symbols-outlined text-[18px]">payments</span>
+        return (
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+            {/* Card 1 */}
+            <div className="bg-[#171b26] border border-[#1e2433] hover:border-emerald-500/40 p-4 rounded-xl shadow-lg relative overflow-hidden transition-all group">
+              <div className="absolute top-0 left-0 right-0 h-[2px] bg-emerald-500" />
+              <div className="flex items-start justify-between">
+                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono">
+                  FREELANCERS ATIVOS
+                </span>
+                <div className="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                  <span className="material-symbols-outlined text-[18px]">engineering</span>
+                </div>
+              </div>
+              <div className="mt-2 flex items-baseline gap-2">
+                <span className="text-3xl font-extrabold text-white font-mono tracking-tight">{active}</span>
+                <span className="inline-flex items-center text-emerald-400 font-mono text-[11px] font-bold bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded">
+                  {activePct}% da base
+                </span>
+              </div>
+              <div className="mt-2 pt-2 border-t border-[#1e2433] flex items-center justify-between text-xs text-slate-400">
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                  {activeToday} em campo hoje
+                </span>
+                <span className="font-mono text-[11px] text-cyan-400 font-semibold">{occupancy}% ocupação</span>
+              </div>
             </div>
-          </div>
-          <div className="mt-2 flex items-baseline gap-2">
-            <span className="text-3xl font-extrabold text-white font-mono tracking-tight">R$ 185,40</span>
-            <span className="inline-flex items-center text-cyan-400 font-mono text-[11px] font-bold bg-cyan-500/10 border border-cyan-500/20 px-2 py-0.5 rounded">
-              +2.1% trim
-            </span>
-          </div>
-          <div className="mt-2 pt-2 border-t border-[#1e2433] flex items-center justify-between text-xs text-slate-400">
-            <span>Faixa operacional R$ 160 - R$ 220</span>
-            <span className="font-mono text-[11px] text-emerald-400 font-semibold">Dentro do Budget</span>
-          </div>
-        </div>
 
-        {/* Card 4 */}
-        <div className="bg-[#171b26] border border-[#1e2433] hover:border-purple-500/40 p-4 rounded-xl shadow-lg relative overflow-hidden transition-all group">
-          <div className="absolute top-0 left-0 right-0 h-[2px] bg-purple-600" />
-          <div className="flex items-start justify-between">
-            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono">
-              DIÁRIAS NO PERÍODO
-            </span>
-            <div className="p-1.5 rounded-lg bg-purple-500/10 text-purple-400 border border-purple-500/20">
-              <span className="material-symbols-outlined text-[18px]">calendar_view_week</span>
+            {/* Card 2 */}
+            <div className="bg-[#171b26] border border-[#1e2433] hover:border-slate-600 p-4 rounded-xl shadow-lg relative overflow-hidden transition-all group">
+              <div className="absolute top-0 left-0 right-0 h-[2px] bg-slate-600" />
+              <div className="flex items-start justify-between">
+                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono">
+                  FREELANCERS INATIVOS
+                </span>
+                <div className="p-1.5 rounded-lg bg-slate-800/80 text-slate-400 border border-slate-700/40">
+                  <span className="material-symbols-outlined text-[18px]">person_off</span>
+                </div>
+              </div>
+              <div className="mt-2 flex items-baseline gap-2">
+                <span className="text-3xl font-extrabold text-slate-300 font-mono tracking-tight">{inactive}</span>
+                <span className="inline-flex items-center text-slate-400 font-mono text-[11px] bg-slate-800/60 border border-slate-700/50 px-2 py-0.5 rounded">
+                  {inactivePct}% da base
+                </span>
+              </div>
+              <div className="mt-2 pt-2 border-t border-[#1e2433] flex items-center justify-between text-xs text-slate-400">
+                <span>Disponíveis para reativação</span>
+                <span className="font-mono text-[11px] text-amber-400">{inactive} em pausa</span>
+              </div>
+            </div>
+
+            {/* Card 3 */}
+            <div className="bg-[#171b26] border border-[#1e2433] hover:border-cyan-500/40 p-4 rounded-xl shadow-lg relative overflow-hidden transition-all group">
+              <div className="absolute top-0 left-0 right-0 h-[2px] bg-cyan-400" />
+              <div className="flex items-start justify-between">
+                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono">
+                  VALOR MÉDIO DA DIÁRIA
+                </span>
+                <div className="p-1.5 rounded-lg bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
+                  <span className="material-symbols-outlined text-[18px]">payments</span>
+                </div>
+              </div>
+              <div className="mt-2 flex items-baseline gap-2">
+                <span className="text-3xl font-extrabold text-white font-mono tracking-tight">{avgFeeStr}</span>
+              </div>
+              <div className="mt-2 pt-2 border-t border-[#1e2433] flex items-center justify-between text-xs text-slate-400">
+                <span>Base cadastrada</span>
+                <span className="font-mono text-[11px] text-emerald-400 font-semibold">Dentro do Budget</span>
+              </div>
+            </div>
+
+            {/* Card 4 */}
+            <div className="bg-[#171b26] border border-[#1e2433] hover:border-purple-500/40 p-4 rounded-xl shadow-lg relative overflow-hidden transition-all group">
+              <div className="absolute top-0 left-0 right-0 h-[2px] bg-purple-600" />
+              <div className="flex items-start justify-between">
+                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono">
+                  DIÁRIAS NO PERÍODO
+                </span>
+                <div className="p-1.5 rounded-lg bg-purple-500/10 text-purple-400 border border-purple-500/20">
+                  <span className="material-symbols-outlined text-[18px]">calendar_view_week</span>
+                </div>
+              </div>
+              <div className="mt-2 flex items-baseline gap-2">
+                <span className="text-3xl font-extrabold text-white font-mono tracking-tight">0</span>
+                <span className="inline-flex items-center text-cyan-300 font-mono text-[11px] font-bold bg-cyan-500/15 border border-cyan-500/30 px-2 py-0.5 rounded">
+                  R$ 0,00
+                </span>
+              </div>
+              <div className="mt-2 pt-2 border-t border-[#1e2433] flex items-center justify-between text-xs text-slate-400">
+                <span className="flex items-center gap-1 text-slate-300">
+                  <span className="material-symbols-outlined text-[14px] text-emerald-400">sync</span>
+                  Sincronizado com Diárias
+                </span>
+                <span className="font-mono text-[11px] text-emerald-400">0% auditado</span>
+              </div>
             </div>
           </div>
-          <div className="mt-2 flex items-baseline gap-2">
-            <span className="text-3xl font-extrabold text-white font-mono tracking-tight">1.284</span>
-            <span className="inline-flex items-center text-cyan-300 font-mono text-[11px] font-bold bg-cyan-500/15 border border-cyan-500/30 px-2 py-0.5 rounded">
-              R$ 238.053,60
-            </span>
-          </div>
-          <div className="mt-2 pt-2 border-t border-[#1e2433] flex items-center justify-between text-xs text-slate-400">
-            <span className="flex items-center gap-1 text-slate-300">
-              <span className="material-symbols-outlined text-[14px] text-emerald-400">sync</span>
-              Sincronizado com Diárias
-            </span>
-            <span className="font-mono text-[11px] text-emerald-400">100% auditado</span>
-          </div>
-        </div>
-      </div>
+        );
+      })()}
 
       {/* Filter & Operational Controls Bar */}
       <div className="bg-[#171b26] border border-[#1e2433] p-4 rounded-xl shadow-md space-y-3">
@@ -617,17 +630,7 @@ export const FreelancersView: React.FC<FreelancersViewProps> = ({
             <button className="w-7 h-7 rounded flex items-center justify-center bg-purple-600 text-white font-bold neon-purple-glow">
               1
             </button>
-            <button className="w-7 h-7 rounded flex items-center justify-center bg-[#171b26] border border-[#1e2433] text-slate-300 hover:bg-[#1f2433]">
-              2
-            </button>
-            <button className="w-7 h-7 rounded flex items-center justify-center bg-[#171b26] border border-[#1e2433] text-slate-300 hover:bg-[#1f2433]">
-              3
-            </button>
-            <span className="px-1 text-slate-500">...</span>
-            <button className="w-7 h-7 rounded flex items-center justify-center bg-[#171b26] border border-[#1e2433] text-slate-300 hover:bg-[#1f2433]">
-              45
-            </button>
-            <button className="w-7 h-7 rounded flex items-center justify-center bg-[#171b26] border border-[#1e2433] text-slate-300 hover:bg-[#1f2433]">
+            <button disabled className="w-7 h-7 rounded flex items-center justify-center bg-[#171b26] border border-[#1e2433] text-slate-600 cursor-not-allowed">
               <span className="material-symbols-outlined text-[16px]">chevron_right</span>
             </button>
           </div>

@@ -69,17 +69,16 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
         <div className="absolute -right-16 -top-16 w-80 h-80 rounded-full bg-gradient-to-br from-purple-600/15 via-cyan-500/10 to-transparent blur-3xl pointer-events-none" />
         <div className="flex flex-col space-y-1.5 z-10">
           <div className="flex items-center gap-2">
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 font-mono text-[11px] font-bold">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-              TELEMETRIA ATIVA (4.820 PDVs)
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-slate-800 border border-slate-700 text-slate-400 font-mono text-[11px] font-bold">
+              <span className="w-1.5 h-1.5 rounded-full bg-slate-500" />
+              TELEMETRIA ATIVA (0 PDVs)
             </span>
-            <span className="font-mono text-xs text-slate-400">• CICLO BR-OUT24</span>
           </div>
           <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
             Painel Operacional de Trade Marketing
           </h1>
           <p className="text-xs sm:text-sm text-slate-400 max-w-3xl">
-            Monitoramento em tempo real de execução de campo, cumprimento de rotas, índice de ruptura e conformidade de gôndola em 4.820 PDVs de redes estratégicas.
+            Monitoramento em tempo real de execução de campo, cumprimento de rotas e índice de ruptura em PDVs cadastrados.
           </p>
         </div>
 
@@ -87,7 +86,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
         <div className="flex flex-wrap items-center gap-3 z-10">
           <div className="flex items-center gap-2 bg-[#131722] border border-[#1e2433] px-3 py-2 rounded-xl text-slate-200 text-xs shadow-sm">
             <span className="material-symbols-outlined text-[18px] text-cyan-400">calendar_today</span>
-            <span>Hoje, 24 de Outubro • Turno Manhã/Tarde</span>
+            <span>Hoje • Turno Ativo</span>
           </div>
 
           <div className="relative">
@@ -96,11 +95,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
               onChange={(e) => setSelectedRegional(e.target.value)}
               className="bg-[#131722] border border-[#1e2433] text-slate-200 text-xs rounded-xl px-3 py-2 pr-8 focus:outline-none focus:border-purple-500 cursor-pointer appearance-none shadow-sm"
             >
-              <option value="all">Todas as Regionais (SP, RJ, Sul, NE)</option>
-              <option value="sp">SP Metropolitana &amp; Interior</option>
-              <option value="rj">Rio de Janeiro &amp; Litoral</option>
-              <option value="sul">Sul (PR / SC / RS)</option>
-              <option value="ne">Nordeste (BA / PE / CE)</option>
+              <option value="all">Todas as Regionais</option>
             </select>
             <span className="material-symbols-outlined absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none text-base">
               expand_more
@@ -135,23 +130,17 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
               <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono">
                 Índice de Ruptura de Estoque
               </span>
-              <span className="flex items-center gap-1 font-mono text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                <span className="material-symbols-outlined text-[12px]">trending_down</span> -1.2%
+              <span className="flex items-center gap-1 font-mono text-[10px] font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700">
+                0.0%
               </span>
             </div>
             <div className="flex items-baseline gap-2 mt-2">
-              <span className="text-3xl font-extrabold text-white tracking-tight font-mono">3.4%</span>
-              <span className="text-xs text-slate-500">Meta &lt; 5.0%</span>
+              <span className="text-3xl font-extrabold text-white tracking-tight font-mono">0.0%</span>
+              <span className="text-xs text-slate-500">Sem dados</span>
             </div>
           </div>
           <div className="mt-4 pt-3 border-t border-[#1e2433] flex items-center justify-between text-xs text-slate-400">
-            <span>48 alertas críticos resolvidos</span>
-            <div className="w-16 h-6 flex-shrink-0">
-              <svg className="w-full h-full overflow-visible" viewBox="0 0 64 24" fill="none">
-                <path d="M0 18 L12 14 L24 16 L36 10 L48 11 L64 3" stroke="#4edea3" strokeWidth="2" strokeLinecap="round" />
-                <path d="M0 18 L12 14 L24 16 L36 10 L48 11 L64 3 L64 24 L0 24 Z" fill="#4edea3" fillOpacity="0.1" />
-              </svg>
-            </div>
+            <span>0 alertas resolvidos</span>
           </div>
         </div>
 
@@ -163,22 +152,22 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
               <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono">
                 Conformidade de Roteiro
               </span>
-              <span className="flex items-center gap-1 font-mono text-[10px] font-bold px-2 py-0.5 rounded bg-purple-500/10 text-purple-400 border border-purple-500/20">
-                <span className="material-symbols-outlined text-[12px]">trending_up</span> +2.6%
+              <span className="flex items-center gap-1 font-mono text-[10px] font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700">
+                0%
               </span>
             </div>
             <div className="flex items-baseline gap-2 mt-2">
-              <span className="text-3xl font-extrabold text-white tracking-tight font-mono">94.8%</span>
-              <span className="text-xs text-emerald-400 font-semibold font-mono">98.4% Conectados</span>
+              <span className="text-3xl font-extrabold text-white tracking-tight font-mono">0%</span>
+              <span className="text-xs text-slate-400 font-mono">0 Conectados</span>
             </div>
           </div>
           <div className="mt-4 pt-3 border-t border-[#1e2433]">
             <div className="flex items-center justify-between text-xs text-slate-400 mb-1 font-mono">
-              <span>1.346 / 1.420 em loja</span>
-              <span className="text-purple-400 font-bold">94.8%</span>
+              <span>0 / 0 em loja</span>
+              <span className="text-purple-400 font-bold">0%</span>
             </div>
             <div className="w-full h-1.5 bg-[#10141f] rounded-full overflow-hidden">
-              <div className="h-full bg-purple-600 rounded-full shadow-[0_0_8px_rgba(147,51,234,0.8)]" style={{ width: '94.8%' }} />
+              <div className="h-full bg-purple-600 rounded-full" style={{ width: '0%' }} />
             </div>
           </div>
         </div>
@@ -191,24 +180,18 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
               <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono">
                 Share of Shelf Médio
               </span>
-              <span className="flex items-center gap-1 font-mono text-[10px] font-bold px-2 py-0.5 rounded bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
-                <span className="material-symbols-outlined text-[12px]">check</span> Target 40%
+              <span className="flex items-center gap-1 font-mono text-[10px] font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700">
+                Target 0%
               </span>
             </div>
             <div className="flex items-baseline gap-2 mt-2">
-              <span className="text-3xl font-extrabold text-white tracking-tight font-mono">42.1%</span>
-              <span className="text-xs text-cyan-300 font-mono">+1.8% vs planograma</span>
+              <span className="text-3xl font-extrabold text-white tracking-tight font-mono">0.0%</span>
+              <span className="text-xs text-slate-400 font-mono">0% planograma</span>
             </div>
           </div>
           <div className="mt-4 pt-3 border-t border-[#1e2433] flex items-center justify-between text-xs text-slate-400">
-            <span>Alimentos &amp; Bebidas Premium</span>
-            <div className="relative w-8 h-8 flex items-center justify-center">
-              <svg className="w-full h-full -rotate-90" viewBox="0 0 36 36">
-                <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="#282e40" strokeWidth="3" />
-                <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="#89ceff" strokeDasharray="42.1, 100" strokeWidth="3" strokeLinecap="round" />
-              </svg>
-              <span className="absolute text-[9px] font-mono font-bold text-white">42%</span>
-            </div>
+            <span>Mercadorias &amp; Categorias</span>
+            <span className="text-xs font-mono text-slate-400">0%</span>
           </div>
         </div>
 
@@ -220,18 +203,18 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
               <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono">
                 Conformidade de Preço
               </span>
-              <span className="flex items-center gap-1 font-mono text-[10px] font-bold px-2 py-0.5 rounded bg-rose-500/10 text-rose-400 border border-rose-500/20">
-                <span className="material-symbols-outlined text-[12px]">warning</span> 12 Pendências
+              <span className="flex items-center gap-1 font-mono text-[10px] font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700">
+                0 Pendências
               </span>
             </div>
             <div className="flex items-baseline gap-2 mt-2">
-              <span className="text-3xl font-extrabold text-white tracking-tight font-mono">98.2%</span>
-              <span className="text-xs text-slate-500">4.733 checados</span>
+              <span className="text-3xl font-extrabold text-white tracking-tight font-mono">0%</span>
+              <span className="text-xs text-slate-500">0 checados</span>
             </div>
           </div>
           <div className="mt-4 pt-3 border-t border-[#1e2433] flex items-center justify-between text-xs text-slate-400 font-mono">
-            <span>R$ 48.2k sell-out protegido</span>
-            <span className="text-emerald-400 font-semibold">Audit 100% OK</span>
+            <span>R$ 0,00 sell-out</span>
+            <span className="text-slate-400 font-semibold">Audit --</span>
           </div>
         </div>
       </section>
@@ -244,10 +227,10 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
               <div>
                 <div className="flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-purple-500 animate-pulse" />
+                  <span className="w-2 h-2 rounded-full bg-purple-500" />
                   <h2 className="text-base font-bold text-white">Performance de Execução por Regional</h2>
                 </div>
-                <p className="text-xs text-slate-400 mt-0.5">Share de linear executado vs índice de ruptura em 7 dias</p>
+                <p className="text-xs text-slate-400 mt-0.5">Share de linear executado vs índice de ruptura</p>
               </div>
 
               {/* Segmented Controls */}
@@ -269,51 +252,11 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
             </div>
 
             {/* Tactical SVG Chart */}
-            <div className="relative w-full h-64 mt-2">
-              <svg className="w-full h-full overflow-visible" preserveAspectRatio="none" viewBox="0 0 700 240">
-                <defs>
-                  <linearGradient id="opPurpleGrad" x1="0%" x2="0%" y1="0%" y2="100%">
-                    <stop offset="0%" stopColor="#9333ea" stopOpacity="0.35" />
-                    <stop offset="100%" stopColor="#9333ea" stopOpacity="0" />
-                  </linearGradient>
-                  <linearGradient id="opCyanGrad" x1="0%" x2="0%" y1="0%" y2="100%">
-                    <stop offset="0%" stopColor="#00a2e6" stopOpacity="0.25" />
-                    <stop offset="100%" stopColor="#00a2e6" stopOpacity="0" />
-                  </linearGradient>
-                </defs>
-                <line x1="0" x2="700" y1="40" y2="40" stroke="#282e40" strokeDasharray="3 3" opacity="0.4" />
-                <line x1="0" x2="700" y1="100" y2="100" stroke="#282e40" strokeDasharray="3 3" opacity="0.4" />
-                <line x1="0" x2="700" y1="160" y2="160" stroke="#282e40" strokeDasharray="3 3" opacity="0.4" />
-                <line x1="0" x2="700" y1="220" y2="220" stroke="#282e40" opacity="0.6" />
-
-                <path d="M0 160 Q 110 130, 200 80 T 400 90 T 560 50 T 700 35 L 700 220 L 0 220 Z" fill="url(#opPurpleGrad)" />
-                <path d="M0 180 Q 120 170, 200 150 T 400 130 T 560 140 T 700 120 L 700 220 L 0 220 Z" fill="url(#opCyanGrad)" />
-
-                <path d="M0 160 Q 110 130, 200 80 T 400 90 T 560 50 T 700 35" fill="none" stroke="#ddb8ff" strokeWidth="3" strokeLinecap="round" />
-                <path d="M0 180 Q 120 170, 200 150 T 400 130 T 560 140 T 700 120" fill="none" stroke="#89ceff" strokeWidth="2" strokeDasharray="5 3" strokeLinecap="round" />
-
-                <circle cx="200" cy="80" r="4" fill="#ddb8ff" stroke="#0a0e18" strokeWidth="2" />
-                <circle cx="560" cy="50" r="4" fill="#ddb8ff" stroke="#0a0e18" strokeWidth="2" />
-                <circle cx="700" cy="35" r="5" fill="#4edea3" stroke="#0a0e18" strokeWidth="2" />
-              </svg>
-
-              <div className="absolute right-4 top-2 bg-[#131722]/90 border border-cyan-500/30 px-3 py-1.5 rounded-xl shadow-lg flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-emerald-400" />
-                <div className="flex flex-col">
-                  <span className="text-[10px] font-mono font-bold text-slate-400">SP METROPOLITANA</span>
-                  <span className="text-xs font-mono font-bold text-white">48.6% SOS (+4.2%)</span>
-                </div>
+            <div className="relative w-full h-64 mt-2 flex items-center justify-center bg-[#131722]/30 rounded-xl border border-[#1e2433]">
+              <div className="text-center text-slate-500 text-xs font-mono">
+                <span className="material-symbols-outlined text-3xl mb-1 text-slate-600 block">show_chart</span>
+                Nenhum dado de execução cadastrado ainda.
               </div>
-            </div>
-
-            <div className="flex justify-between items-center text-slate-400 font-mono text-[11px] pt-3 px-1">
-              <span>18/Out (Sex)</span>
-              <span>19/Out (Sáb)</span>
-              <span>20/Out (Dom)</span>
-              <span>21/Out (Seg)</span>
-              <span>22/Out (Ter)</span>
-              <span>23/Out (Qua)</span>
-              <span className="text-purple-400 font-bold">Hoje (Qui)</span>
             </div>
           </div>
 
@@ -325,7 +268,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
               </div>
               <div>
                 <span className="text-[10px] font-mono text-slate-400 block uppercase">Gôndola Regular</span>
-                <span className="text-xs font-bold text-white">96.2% Conforme</span>
+                <span className="text-xs font-bold text-white">0% Conforme</span>
               </div>
             </div>
             <div className="flex items-center gap-3">
@@ -334,7 +277,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
               </div>
               <div>
                 <span className="text-[10px] font-mono text-slate-400 block uppercase">Pontos Extras / Ilhas</span>
-                <span className="text-xs font-bold text-white">84.0% Ocupação</span>
+                <span className="text-xs font-bold text-white">0% Ocupação</span>
               </div>
             </div>
             <div className="flex items-center gap-3">
@@ -343,7 +286,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
               </div>
               <div>
                 <span className="text-[10px] font-mono text-slate-400 block uppercase">Material POP Ativo</span>
-                <span className="text-xs font-bold text-white">91.4% Presença</span>
+                <span className="text-xs font-bold text-white">0% Presença</span>
               </div>
             </div>
           </div>
@@ -355,81 +298,19 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
             <div className="flex items-center justify-between pb-3 mb-3 border-b border-[#1e2433]">
               <div className="flex items-center gap-2">
                 <span className="relative flex h-2.5 w-2.5">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-500 opacity-75" />
-                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-rose-500" />
+                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-slate-500" />
                 </span>
                 <h2 className="text-base font-bold text-white">Alertas Críticos de Campo</h2>
               </div>
-              <span className="font-mono text-[11px] text-cyan-300 bg-[#131722] border border-[#1e2433] px-2 py-0.5 rounded-lg">
-                Auto-refresh 3s
+              <span className="font-mono text-[11px] text-slate-400 bg-[#131722] border border-[#1e2433] px-2 py-0.5 rounded-lg">
+                Telemetria
               </span>
             </div>
 
             <div className="space-y-3">
-              <div className="p-3 rounded-xl bg-[#131722] border border-[#1e2433] hover:border-rose-500/40 transition-colors shadow-sm">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-bold font-mono px-2 py-0.5 rounded bg-rose-500/20 text-rose-400 border border-rose-500/30">
-                    RUPTURA DETECTADA
-                  </span>
-                  <span className="font-mono text-[10px] text-slate-500">Há 4 min</span>
-                </div>
-                <p className="text-xs font-bold text-white mt-1">Pão de Açúcar Morumbi</p>
-                <p className="text-[11px] text-slate-400">SKU Café Especial Moído 500g zerado no linear. Estoque virtual acusa 120 un.</p>
-                <div className="flex items-center justify-between mt-3 pt-2 border-t border-[#1e2433]">
-                  <span className="text-[11px] text-slate-400 flex items-center gap-1">
-                    <span className="material-symbols-outlined text-[14px]">person</span> Marcos R.
-                  </span>
-                  <button
-                    onClick={() => onShowToast({ title: 'Notificação Enviada', message: 'Promotor Marcos R. acionado via push.', type: 'info' })}
-                    className="text-cyan-300 hover:text-white text-xs font-semibold flex items-center gap-1"
-                  >
-                    Notificar Promotor <span className="material-symbols-outlined text-[14px]">arrow_forward</span>
-                  </button>
-                </div>
-              </div>
-
-              <div className="p-3 rounded-xl bg-[#131722] border border-[#1e2433] hover:border-cyan-500/40 transition-colors shadow-sm">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-bold font-mono px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
-                    PONTO EXTRA OCUPADO
-                  </span>
-                  <span className="font-mono text-[10px] text-slate-500">Há 16 min</span>
-                </div>
-                <p className="text-xs font-bold text-white mt-1">Carrefour Barra da Tijuca</p>
-                <p className="text-[11px] text-slate-400">Ponta de gôndola contratada ocupada indevidamente por concorrente nacional.</p>
-                <div className="flex items-center justify-between mt-3 pt-2 border-t border-[#1e2433]">
-                  <span className="text-[11px] text-emerald-400 flex items-center gap-1">
-                    <span className="material-symbols-outlined text-[14px]">photo_camera</span> Foto anexada
-                  </span>
-                  <button
-                    onClick={() => onShowToast({ title: 'Reclamação Aberta', message: 'Notificação formal despachada à gerência do Carrefour.', type: 'warning' })}
-                    className="text-purple-400 hover:text-white text-xs font-semibold flex items-center gap-1"
-                  >
-                    Reclamar Espaço <span className="material-symbols-outlined text-[14px]">gavel</span>
-                  </button>
-                </div>
-              </div>
-
-              <div className="p-3 rounded-xl bg-[#131722] border border-[#1e2433] hover:border-amber-500/40 transition-colors shadow-sm">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-bold font-mono px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                    DESVIO DE ROTA
-                  </span>
-                  <span className="font-mono text-[10px] text-slate-500">Há 28 min</span>
-                </div>
-                <p className="text-xs font-bold text-white mt-1">Assaí Atacadista Aricanduva</p>
-                <p className="text-[11px] text-slate-400">Lucas Silva - Check-in atrasado em 42 min decorrente de pane mecânica na rota.</p>
-                <div className="flex items-center justify-between mt-3 pt-2 border-t border-[#1e2433]">
-                  <span className="text-[11px] text-slate-400 flex items-center gap-1">
-                    <span className="material-symbols-outlined text-[14px]">near_me</span> Telemetria GPS
-                  </span>
-                  <button
-                    onClick={() => onShowToast({ title: 'Backfill Alocado', message: 'Promotor freelancer acionado para cobrir o roteiro.', type: 'success' })}
-                    className="text-slate-300 hover:text-purple-400 text-xs font-semibold flex items-center gap-1"
-                  >
-                    Redirecionar Backfill
-                  </button>
-                </div>
+              <div className="p-8 text-center rounded-xl bg-[#131722] border border-[#1e2433]">
+                <span className="material-symbols-outlined text-3xl text-slate-600 mb-2">notifications_off</span>
+                <p className="text-xs font-semibold text-slate-300">Não há dados cadastrados ainda.</p>
               </div>
             </div>
           </div>
@@ -437,7 +318,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
           <div className="mt-4 pt-3 border-t border-[#1e2433] flex justify-between items-center text-xs text-slate-400">
             <span>Fila de triagem prioritária</span>
             <button onClick={() => onNavigate('cockpit')} className="text-purple-400 hover:underline font-semibold">
-              Ver todos (18)
+              Ver todos (0)
             </button>
           </div>
         </div>
@@ -596,11 +477,11 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
           <div className="flex items-center gap-1">
             <button disabled className="px-2.5 py-1 rounded bg-[#131722] border border-[#1e2433] text-slate-600 cursor-not-allowed">Anterior</button>
             <button className="px-2.5 py-1 rounded bg-purple-600 text-white font-bold neon-purple-glow">1</button>
-            <button className="px-2.5 py-1 rounded bg-[#131722] border border-[#1e2433] text-slate-300 hover:bg-[#1f2433]">2</button>
-            <button className="px-2.5 py-1 rounded bg-[#131722] border border-[#1e2433] text-slate-300 hover:bg-[#1f2433]">3</button>
-            <span className="px-1 text-slate-500">...</span>
-            <button className="px-2.5 py-1 rounded bg-[#131722] border border-[#1e2433] text-slate-300 hover:bg-[#1f2433]">964</button>
-            <button className="px-2.5 py-1 rounded bg-[#131722] border border-[#1e2433] text-slate-300 hover:bg-[#1f2433]">Próxima</button>
+
+
+
+
+            <button disabled className="px-2.5 py-1 rounded bg-[#131722] border border-[#1e2433] text-slate-600 cursor-not-allowed">Próxima</button>
           </div>
         </div>
       </section>

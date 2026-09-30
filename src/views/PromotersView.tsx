@@ -249,34 +249,36 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
         </div>
 
         {/* Card 3: Pendentes de Alocação */}
-        <div className="relative overflow-hidden rounded-xl bg-[#171b26] border border-amber-500/40 p-4 shadow-md flex flex-col justify-between bg-amber-500/[0.03]">
+        <div className="relative overflow-hidden rounded-xl bg-[#171b26] border border-[#1e2433] p-4 shadow-md flex flex-col justify-between">
           <div className="flex items-start justify-between">
-            <span className="text-[11px] font-bold font-mono text-amber-300 uppercase flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+            <span className="text-[11px] font-bold font-mono text-slate-400 uppercase flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-slate-500" />
               Pendentes de Alocação
             </span>
-            <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 font-mono text-[10px] font-bold border border-amber-500/30">
-              Ação Imediata
+            <span className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 font-mono text-[10px] font-bold border border-slate-700">
+              Quadro
             </span>
           </div>
           <div className="my-2">
-            <div className="text-3xl font-extrabold text-amber-300 font-mono tracking-tight">32</div>
-            <div className="flex items-center gap-3 mt-1 font-mono text-[11px] text-amber-300/80">
+            <div className="text-3xl font-extrabold text-white font-mono tracking-tight">
+              {promoters.filter((p) => !p.supervisor || !p.squad || p.supervisor === 'Nenhum' || p.squad === 'Nenhum').length}
+            </div>
+            <div className="flex items-center gap-3 mt-1 font-mono text-[11px] text-slate-400">
               <span className="flex items-center gap-1">
-                <span className="w-1 h-1 rounded-full bg-amber-400" />
-                12 sem equipe
+                <span className="w-1 h-1 rounded-full bg-slate-500" />
+                {promoters.filter((p) => !p.squad || p.squad === 'Nenhum').length} sem equipe
               </span>
               <span className="flex items-center gap-1">
-                <span className="w-1 h-1 rounded-full bg-amber-400" />
-                20 sem supervisor
+                <span className="w-1 h-1 rounded-full bg-slate-500" />
+                {promoters.filter((p) => !p.supervisor || p.supervisor === 'Nenhum').length} sem supervisor
               </span>
             </div>
           </div>
           <button
             onClick={() => setChipFilter('alerta')}
-            className="w-full py-1 text-center font-mono text-[11px] uppercase font-bold tracking-wider text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 rounded border border-amber-500/30 transition-colors"
+            className="w-full py-1 text-center font-mono text-[11px] uppercase font-bold tracking-wider text-slate-300 bg-[#131722] hover:bg-[#1f2433] rounded border border-[#1e2433] transition-colors"
           >
-            Resolver alocações pendentes →
+            Filtrar pendências →
           </button>
         </div>
 
@@ -284,8 +286,8 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
         <div className="relative overflow-hidden rounded-xl bg-[#171b26] border border-[#1e2433] p-4 shadow-md flex flex-col justify-between">
           <div className="flex items-start justify-between">
             <span className="text-[11px] font-bold uppercase font-mono text-slate-400">Status Operacional Hoje</span>
-            <span className="font-mono text-xs text-emerald-400 font-bold flex items-center gap-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            <span className="font-mono text-xs text-slate-400 font-bold flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-slate-500" />
               Tempo Real
             </span>
           </div>
@@ -295,21 +297,27 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
                 <span className="w-2 h-2 rounded-full bg-emerald-400" />
                 Em campo
               </span>
-              <span className="font-mono font-bold text-white">1.342</span>
+              <span className="font-mono font-bold text-white">
+                {promoters.filter((p) => p.operationalTodayStatus === 'campo').length}
+              </span>
             </div>
             <div className="flex items-center justify-between text-slate-400">
               <span className="flex items-center gap-1.5">
                 <span className="w-2 h-2 rounded-full bg-cyan-400" />
                 Folga / Férias
               </span>
-              <span className="font-mono font-medium">52</span>
+              <span className="font-mono font-medium">
+                {promoters.filter((p) => p.status === 'ferias' || p.operationalTodayStatus === 'folga').length}
+              </span>
             </div>
             <div className="flex items-center justify-between text-slate-400">
               <span className="flex items-center gap-1.5">
                 <span className="w-2 h-2 rounded-full bg-rose-400" />
                 Faltas / Atestados
               </span>
-              <span className="font-mono font-bold text-rose-400">34</span>
+              <span className="font-mono font-bold text-rose-400">
+                {promoters.filter((p) => p.operationalTodayStatus === 'falta' || p.operationalTodayStatus === 'atestado').length}
+              </span>
             </div>
           </div>
           <div className="text-[10px] text-slate-500 font-mono text-right">
@@ -644,11 +652,11 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
               <span className="material-symbols-outlined text-base">chevron_left</span>
             </button>
             <button className="w-8 h-8 rounded bg-purple-600 text-white font-bold neon-purple-glow">1</button>
-            <button className="w-8 h-8 rounded bg-[#171b26] border border-[#1e2433] text-slate-300 hover:bg-[#1f2433]">2</button>
-            <button className="w-8 h-8 rounded bg-[#171b26] border border-[#1e2433] text-slate-300 hover:bg-[#1f2433]">3</button>
-            <span className="px-1 text-slate-500">...</span>
-            <button className="w-8 h-8 rounded bg-[#171b26] border border-[#1e2433] text-slate-300 hover:bg-[#1f2433]">179</button>
-            <button className="p-1.5 rounded bg-[#171b26] border border-[#1e2433] text-slate-300 hover:bg-[#1f2433]">
+
+
+
+
+            <button disabled className="p-1.5 rounded bg-[#171b26] border border-[#1e2433] text-slate-600 cursor-not-allowed">
               <span className="material-symbols-outlined text-base">chevron_right</span>
             </button>
           </div>

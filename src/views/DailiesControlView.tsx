@@ -133,7 +133,7 @@ export const DailiesControlView: React.FC<DailiesControlViewProps> = ({
           <div className="flex items-center gap-2 mt-2">
             <span className="material-symbols-outlined text-sm text-purple-400">verified_user</span>
             <span className="font-mono text-xs text-slate-300">
-              Ciclo Operacional Outubro/2024 • Fechamento Quinzenal Automático
+              Ciclo Operacional Vigente • Fechamento Quinzenal Automático
             </span>
           </div>
         </div>
@@ -167,14 +167,14 @@ export const DailiesControlView: React.FC<DailiesControlViewProps> = ({
             </span>
           </div>
           <div className="flex items-baseline gap-3 my-1">
-            <span className="text-3xl font-extrabold text-white font-mono">428</span>
+            <span className="text-3xl font-extrabold text-white font-mono">{dailies.length}</span>
             <span className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-400 font-mono text-[11px] font-bold border border-emerald-500/20">
-              <span className="material-symbols-outlined text-xs">arrow_upward</span>+18
+              0
             </span>
           </div>
           <div className="flex items-center gap-2 pt-3 border-t border-[#1e2433] text-slate-400 font-mono text-xs">
             <span className="material-symbols-outlined text-[15px] text-emerald-400">my_location</span>
-            <span>384 validadas por geofence</span>
+            <span>{dailies.filter((d) => d.geofenceValidated).length} validadas por geofence</span>
           </div>
         </div>
 
@@ -187,14 +187,14 @@ export const DailiesControlView: React.FC<DailiesControlViewProps> = ({
             </span>
           </div>
           <div className="flex items-baseline gap-2 my-1">
-            <span className="text-3xl font-extrabold text-white font-mono">R$ 38.640,00</span>
+            <span className="text-3xl font-extrabold text-white font-mono">R$ {dailies.filter((d) => d.status === 'a_pagar').reduce((sum, d) => sum + d.amount, 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
           </div>
           <div className="flex items-center justify-between pt-3 border-t border-[#1e2433] font-mono text-xs">
             <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-amber-500/15 text-amber-300 border border-amber-500/30">
               <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
-              184 diárias em aberto
+              {dailies.filter((d) => d.status === 'a_pagar').length} diárias em aberto
             </span>
-            <span className="text-slate-400">Prev: 20/Out</span>
+            <span className="text-slate-400">Em aberto</span>
           </div>
         </div>
 
@@ -207,12 +207,12 @@ export const DailiesControlView: React.FC<DailiesControlViewProps> = ({
             </span>
           </div>
           <div className="flex items-baseline gap-2 my-1">
-            <span className="text-3xl font-extrabold text-white font-mono">R$ 49.820,00</span>
+            <span className="text-3xl font-extrabold text-white font-mono">R$ {dailies.filter((d) => d.status === 'pago').reduce((sum, d) => sum + d.amount, 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
           </div>
           <div className="flex items-center justify-between pt-3 border-t border-[#1e2433] font-mono text-xs">
             <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-              244 diárias liquidadas
+              {dailies.filter((d) => d.status === 'pago').length} diárias liquidadas
             </span>
             <span className="text-slate-400">100% conciliação PIX</span>
           </div>
@@ -227,11 +227,11 @@ export const DailiesControlView: React.FC<DailiesControlViewProps> = ({
             </span>
           </div>
           <div className="flex items-baseline gap-2 my-1">
-            <span className="text-3xl font-extrabold text-white font-mono">R$ 88.460,00</span>
+            <span className="text-3xl font-extrabold text-white font-mono">R$ {dailies.reduce((sum, d) => sum + d.amount, 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
           </div>
           <div className="flex items-center justify-between pt-3 border-t border-[#1e2433] text-slate-400 font-mono text-xs">
-            <span className="text-cyan-300 font-semibold">Média: R$ 206,68 / diária</span>
-            <span>428 lançamentos</span>
+            <span className="text-cyan-300 font-semibold">Média: R$ {(dailies.length > 0 ? (dailies.reduce((sum, d) => sum + d.amount, 0) / dailies.length) : 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} / diária</span>
+            <span>{dailies.length} lançamentos</span>
           </div>
         </div>
       </div>
@@ -249,21 +249,21 @@ export const DailiesControlView: React.FC<DailiesControlViewProps> = ({
               <span className="font-mono text-xs text-slate-400">• Fechamento automático integrado</span>
             </div>
             <h2 className="text-xl font-bold text-white mt-1.5">
-              2ª Quinzena de Outubro (18/10 a 31/10)
+              Quinzena Vigente
             </h2>
             <p className="text-xs text-slate-400 mt-0.5">
-              Execução em campo: <strong className="text-white">18 a 31 de Outubro de 2024</strong> • Data de fechamento: <strong className="text-white">31/10/2024 às 23:59</strong>
+              Execução em campo: <strong className="text-white">Período Vigente</strong> • Data de fechamento: <strong className="text-white">Fim do Ciclo</strong>
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5 font-mono text-xs">
             <div className="px-3 py-2 rounded-lg bg-[#131722] border border-[#1e2433] flex items-center gap-2 text-slate-200">
               <span className="material-symbols-outlined text-[16px] text-amber-400">schedule</span>
-              <span>Status: <strong className="text-amber-400">Em Andamento</strong> (Faltam 7 dias)</span>
+              <span>Status: <strong className="text-amber-400">Em Andamento</strong></span>
             </div>
             <div className="px-3 py-2 rounded-lg bg-[#131722] border border-[#1e2433] flex items-center gap-2 text-slate-200">
               <span className="material-symbols-outlined text-[16px] text-emerald-400">event_available</span>
-              <span>Repasse PIX: <strong className="text-white">05/11/2024</strong></span>
+              <span>Repasse PIX: <strong className="text-white">No Fechamento</strong></span>
             </div>
           </div>
         </div>
@@ -287,11 +287,11 @@ export const DailiesControlView: React.FC<DailiesControlViewProps> = ({
                 <div className="flex items-center gap-2.5">
                   <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping" />
                   <div>
-                    <div className="text-xs font-bold text-white">Quinzena 18–31 Out (Atual)</div>
-                    <div className="font-mono text-[11px] text-slate-400">Em aberto • 184 diárias</div>
+                    <div className="text-xs font-bold text-white">Quinzena Atual</div>
+                    <div className="font-mono text-[11px] text-slate-400">Em aberto • {dailies.filter((d) => d.status === 'a_pagar').length} diárias</div>
                   </div>
                 </div>
-                <span className="font-mono text-xs font-bold text-cyan-300">R$ 38.640,00</span>
+                <span className="font-mono text-xs font-bold text-cyan-300">R$ {dailies.filter((d) => d.status === 'a_pagar').reduce((sum, d) => sum + d.amount, 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
               </button>
 
               <button
@@ -305,11 +305,11 @@ export const DailiesControlView: React.FC<DailiesControlViewProps> = ({
                 <div className="flex items-center gap-2.5">
                   <span className="w-2 h-2 rounded-full bg-emerald-400" />
                   <div>
-                    <div className="text-xs font-bold text-white">Quinzena 04–17 Out (Fechada)</div>
-                    <div className="font-mono text-[11px] text-slate-400">Paga via PIX • 244 diárias</div>
+                    <div className="text-xs font-bold text-white">Quinzena Anterior</div>
+                    <div className="font-mono text-[11px] text-slate-400">Liquidada • {dailies.filter((d) => d.status === 'pago').length} diárias</div>
                   </div>
                 </div>
-                <span className="font-mono text-xs font-bold text-emerald-400">R$ 49.820,00</span>
+                <span className="font-mono text-xs font-bold text-emerald-400">R$ {dailies.filter((d) => d.status === 'pago').reduce((sum, d) => sum + d.amount, 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
               </button>
             </div>
           </div>
@@ -318,30 +318,30 @@ export const DailiesControlView: React.FC<DailiesControlViewProps> = ({
           <div className="xl:col-span-8 grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div className="p-3.5 rounded-lg bg-[#131722] border border-[#1e2433] flex flex-col justify-between">
               <span className="text-[10px] uppercase font-mono font-bold text-slate-400">Lançadas</span>
-              <div className="my-1 text-2xl font-extrabold text-white font-mono">184</div>
+              <div className="my-1 text-2xl font-extrabold text-white font-mono">{dailies.length}</div>
               <span className="font-mono text-[10px] text-slate-400">100% registradas</span>
             </div>
 
             <div className="p-3.5 rounded-lg bg-[#131722] border border-[#1e2433] flex flex-col justify-between">
               <span className="text-[10px] uppercase font-mono font-bold text-slate-400">Aprov. Supervisor</span>
-              <div className="my-1 text-2xl font-extrabold text-emerald-400 font-mono">162</div>
+              <div className="my-1 text-2xl font-extrabold text-emerald-400 font-mono">{dailies.filter((d) => d.status === 'pago').length}</div>
               <div className="w-full bg-[#10141f] h-1.5 rounded-full overflow-hidden mt-1">
-                <div className="bg-emerald-400 h-full w-[88%] rounded-full shadow-[0_0_6px_rgba(78,222,163,0.8)]" />
+                <div className="bg-emerald-400 h-full w-full rounded-full" />
               </div>
             </div>
 
             <div className="p-3.5 rounded-lg bg-[#131722] border border-[#1e2433] flex flex-col justify-between">
               <span className="text-[10px] uppercase font-mono font-bold text-slate-400">Análise Geofence</span>
-              <div className="my-1 text-2xl font-extrabold text-amber-400 font-mono">22</div>
+              <div className="my-1 text-2xl font-extrabold text-amber-400 font-mono">0</div>
               <div className="w-full bg-[#10141f] h-1.5 rounded-full overflow-hidden mt-1">
-                <div className="bg-amber-400 h-full w-[12%] rounded-full" />
+                <div className="bg-amber-400 h-full w-0 rounded-full" />
               </div>
             </div>
 
             <div className="p-3.5 rounded-lg bg-[#131722] border border-[#1e2433] flex flex-col justify-between">
               <span className="text-[10px] uppercase font-mono font-bold text-slate-400">Estimativa Quinzena</span>
-              <div className="my-1 text-xl font-bold text-cyan-300 font-mono">R$ 38.640</div>
-              <span className="font-mono text-[10px] text-slate-400">Previsão 05/11</span>
+              <div className="my-1 text-xl font-bold text-cyan-300 font-mono">R$ {dailies.filter((d) => d.status === 'a_pagar').reduce((sum, d) => sum + d.amount, 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+              <span className="font-mono text-[10px] text-slate-400">Previsão no fechamento</span>
             </div>
           </div>
         </div>
@@ -607,9 +607,9 @@ export const DailiesControlView: React.FC<DailiesControlViewProps> = ({
         {/* Rodapé da Tabela */}
         <div className="px-5 py-3.5 bg-[#10141f] border-t border-[#1e2433] flex flex-col sm:flex-row items-center justify-between gap-3 font-mono text-xs text-slate-400">
           <div className="flex items-center gap-2">
-            <span>Exibindo <strong>1-{filteredDailies.length}</strong> de <strong>428</strong> diárias registradas</span>
+            <span>Exibindo <strong>{filteredDailies.length}</strong> de <strong>{dailies.length}</strong> diárias registradas</span>
             <span>•</span>
-            <span>Total filtrado: <strong className="text-white">R$ 88.460,00</strong></span>
+            <span>Total filtrado: <strong className="text-white">R$ {filteredDailies.reduce((sum, d) => sum + d.amount, 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></span>
           </div>
 
           <div className="flex items-center gap-1">
@@ -617,11 +617,11 @@ export const DailiesControlView: React.FC<DailiesControlViewProps> = ({
               <span className="material-symbols-outlined text-sm">chevron_left</span>
             </button>
             <button className="w-8 h-8 rounded-lg bg-purple-600 text-white font-bold flex items-center justify-center neon-purple-glow">1</button>
-            <button className="w-8 h-8 rounded-lg bg-[#171b26] border border-[#1e2433] text-slate-300 hover:bg-[#1f2433] flex items-center justify-center">2</button>
-            <button className="w-8 h-8 rounded-lg bg-[#171b26] border border-[#1e2433] text-slate-300 hover:bg-[#1f2433] flex items-center justify-center">3</button>
-            <span className="px-1 text-slate-500">...</span>
-            <button className="w-8 h-8 rounded-lg bg-[#171b26] border border-[#1e2433] text-slate-300 hover:bg-[#1f2433] flex items-center justify-center">54</button>
-            <button className="p-1.5 rounded-lg bg-[#171b26] border border-[#1e2433] text-slate-300 hover:bg-[#1f2433]">
+
+
+
+
+            <button disabled className="p-1.5 rounded-lg bg-[#171b26] border border-[#1e2433] text-slate-600 cursor-not-allowed">
               <span className="material-symbols-outlined text-sm">chevron_right</span>
             </button>
           </div>
