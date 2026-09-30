@@ -22,7 +22,7 @@ export const DailiesControlView: React.FC<DailiesControlViewProps> = ({
 
   // Modal New Daily state
   const [modalOpen, setModalOpen] = useState(false);
-  const [modalFreelancerId, setModalFreelancerId] = useState(INITIAL_FREELANCERS[0].id);
+  const [modalFreelancerId, setModalFreelancerId] = useState(INITIAL_FREELANCERS[0]?.id ?? '');
   const [modalDate, setModalDate] = useState('2024-10-24');
   const [modalStore, setModalStore] = useState('Atacadão Santo Amaro - SP');
   const [modalIndustry, setModalIndustry] = useState('Ambev');
@@ -42,7 +42,16 @@ export const DailiesControlView: React.FC<DailiesControlViewProps> = ({
 
   const handleSaveDaily = (e: React.FormEvent) => {
     e.preventDefault();
-    const freelancer = INITIAL_FREELANCERS.find((f) => f.id === modalFreelancerId) || INITIAL_FREELANCERS[0];
+    const freelancer = INITIAL_FREELANCERS.find((f) => f.id === modalFreelancerId);
+    if (!freelancer) {
+      setModalOpen(false);
+      onShowToast({
+        title: 'Nenhum freelancer disponível',
+        message: 'Cadastre um freelancer antes de registrar uma diária.',
+        type: 'warning'
+      });
+      return;
+    }
     const amountNum = parseFloat(modalAmount.replace(',', '.')) || 190;
 
     const indColors: Record<string, string> = {

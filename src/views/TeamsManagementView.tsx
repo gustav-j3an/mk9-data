@@ -12,7 +12,7 @@ export const TeamsManagementView: React.FC<TeamsManagementViewProps> = ({
   onShowToast
 }) => {
   const [squads, setSquads] = useState<SquadTeam[]>(INITIAL_SQUADS);
-  const [selectedSquad, setSelectedSquad] = useState<SquadTeam>(INITIAL_SQUADS[0]);
+  const [selectedSquad, setSelectedSquad] = useState<SquadTeam | null>(INITIAL_SQUADS[0] ?? null);
   const [drawerTab, setDrawerTab] = useState<'dados' | 'promotores'>('promotores');
   const [search, setSearch] = useState('');
   const [regionFilter, setRegionFilter] = useState('all');
@@ -103,6 +103,33 @@ export const TeamsManagementView: React.FC<TeamsManagementViewProps> = ({
 
     return matchesSearch && matchesStatus;
   });
+
+  if (!selectedSquad) {
+    return (
+      <div className="w-full px-4 lg:px-8 py-6 max-w-[1720px] mx-auto">
+        <div className="rounded-2xl border border-[#1e2433] bg-[#111522] p-10 text-center">
+          <span className="material-symbols-outlined text-4xl text-purple-400">groups</span>
+          <h1 className="mt-4 text-2xl font-extrabold text-white">Gestão de Equipes</h1>
+          <p className="mt-2 text-sm text-slate-400">Não há equipes cadastradas ainda.</p>
+          <button onClick={() => setModalNewSquad(true)} className="mt-6 rounded-lg bg-purple-600 px-4 py-2 text-xs font-bold text-white hover:bg-purple-500">
+            Criar primeira equipe
+          </button>
+        </div>
+        {modalNewSquad && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+            <form onSubmit={handleCreateSquad} className="w-full max-w-md rounded-xl border border-[#2a3042] bg-[#111522] p-6">
+              <h2 className="text-lg font-bold text-white">Nova equipe</h2>
+              <input required value={newSquadName} onChange={(e) => setNewSquadName(e.target.value)} placeholder="Nome da equipe" className="mt-4 h-10 w-full rounded-lg border border-[#2a3042] bg-[#0a0d14] px-3 text-sm text-white" />
+              <div className="mt-4 flex justify-end gap-2">
+                <button type="button" onClick={() => setModalNewSquad(false)} className="rounded-lg px-4 py-2 text-xs text-slate-300">Cancelar</button>
+                <button className="rounded-lg bg-purple-600 px-4 py-2 text-xs font-bold text-white">Salvar</button>
+              </div>
+            </form>
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="w-full px-4 lg:px-8 py-6 max-w-[1720px] mx-auto space-y-6">
