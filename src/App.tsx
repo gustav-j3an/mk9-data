@@ -15,6 +15,7 @@ import { ImportView } from './views/ImportView';
 import { RoutesView } from './views/RoutesView';
 import { IndustriesView } from './views/IndustriesView';
 import { StoresView } from './views/StoresView';
+import { PromoterPortalView } from './views/PromoterPortalView';
 import { AuthProvider } from './auth/AuthProvider';
 import { LoginPage } from './auth/LoginPage';
 import { ProtectedRoute } from './auth/ProtectedRoute';
@@ -85,6 +86,9 @@ function Dashboard() {
       )}
       {currentScreen === 'lojas' && (
         <StoresView onShowToast={addToast} />
+      )}
+      {currentScreen === 'portal-promotor' && (
+        <PromoterPortalView onShowToast={addToast} />
       )}
       {currentScreen === 'gestao-equipes' && (
         <TeamsManagementView onNavigate={setCurrentScreen} onShowToast={addToast} />

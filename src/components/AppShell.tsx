@@ -34,6 +34,7 @@ export const AppShell: React.FC<AppShellProps> = ({
     {
       group: 'CAMPO & ROTAS',
       items: [
+        { id: 'portal-promotor' as ScreenId, label: 'Portal do Promotor', icon: 'smartphone' },
         { id: 'presenca' as ScreenId, label: 'Controle de Presença', icon: 'how_to_reg' },
         { id: 'rotas-fixas' as ScreenId, label: 'Rotas Fixas', icon: 'alt_route' }
       ]
@@ -71,6 +72,8 @@ export const AppShell: React.FC<AppShellProps> = ({
         return { text: 'Gestor', color: 'text-cyan-400 border-cyan-500/40 bg-cyan-950/60' };
       case 'operador':
         return { text: 'Operador', color: 'text-emerald-400 border-emerald-500/40 bg-emerald-950/60' };
+      case 'promotor':
+        return { text: 'Promotor', color: 'text-amber-400 border-amber-500/40 bg-amber-950/60' };
     }
   };
 

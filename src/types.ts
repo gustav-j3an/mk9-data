@@ -5,6 +5,7 @@ export type ScreenId =
   | 'rotas-fixas'
   | 'industrias'
   | 'lojas'
+  | 'portal-promotor'
   | 'gestao-equipes'
   | 'freelancers'
   | 'controle-diarias'
@@ -86,18 +87,77 @@ export interface ImportHistoryRecord {
   created_at: string;
 }
 
-export type UserRole = 'admin' | 'gestor' | 'operador';
+export type UserRole = 'admin' | 'gestor' | 'operador' | 'promotor';
 
 export interface UserProfile {
   id: string;
   email: string;
   name: string;
   role: UserRole;
+  promotor_matricula?: string | null;
   avatar_url?: string;
   department?: string;
   status?: 'ativo' | 'inativo';
   created_at?: string;
   updated_at?: string;
+}
+
+export type VisitStatus = 'pendente' | 'em_andamento' | 'concluida' | 'nao_realizada';
+
+export interface Visit {
+  id: string;
+  rota_id?: string | null;
+  promotor_matricula: string;
+  loja_codigo: string;
+  industria_codigo: string;
+  data_visita: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  status: VisitStatus;
+  motivo_nao_realizada?: string | null;
+  observacao_geral?: string | null;
+  created_at?: string;
+  updated_at?: string;
+
+  // Relacionamentos com Joins
+  promotor?: { matricula: string; nome: string } | null;
+  loja?: { codigo: string; nome: string; cidade?: string; uf?: string; endereco?: string } | null;
+  industria?: { codigo: string; nome: string } | null;
+  rota?: RouteItem | null;
+  checklist_items?: VisitChecklistItem[];
+  photos?: VisitPhoto[];
+  occurrences?: VisitOccurrence[];
+}
+
+export interface VisitChecklistItem {
+  id?: string;
+  visit_id?: string;
+  item_key: string;
+  item_label: string;
+  checked: boolean;
+  valor_texto?: string | null;
+  observacao?: string | null;
+}
+
+export interface VisitPhoto {
+  id?: string;
+  visit_id?: string;
+  tipo_foto: 'fachada' | 'gondola' | 'preco' | 'ponto_extra' | 'ruptura' | 'outros';
+  storage_path: string;
+  file_url: string;
+  legenda?: string | null;
+  created_at?: string;
+}
+
+export interface VisitOccurrence {
+  id?: string;
+  visit_id?: string;
+  tipo: 'ruptura' | 'preco_divergente' | 'falta_espaco' | 'outro';
+  descricao: string;
+  resolvido?: boolean;
+  created_at?: string;
 }
 
 export interface Freelancer {
