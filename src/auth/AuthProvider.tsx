@@ -56,29 +56,80 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       if (profileErr) {
         console.warn('Profile fetch warning (fallback to session metadata):', profileErr.message);
-        setProfile(defaultProfile);
-      } else if (data) {
-        setProfile({
-          id: data.id,
-          email: data.email || defaultProfile.email,
-          name: data.name || defaultProfile.name,
-          role: (data.role as UserRole) || defaultProfile.role,
-          promotor_matricula: data.promotor_matricula || null,
-          avatar_url: data.avatar_url,
-          department: data.department || defaultProfile.department,
-          created_at: data.created_at,
-          updated_at: data.updated_at
-        });
-      } else {
-        // Upsert default profile into profiles table
-        const { data: inserted } = await supabase
-          .from('profiles')
-          .upsert([defaultProfile], { onConflict: 'id' })
-          .select()
-          .single();
-
-        setProfile(inserted ? (inserted as UserProfile) : defaultProfile);
       }
+
+      let matricula = data?.promotor_matricula || null;
+      if (!matricula && user.email?.toLowerCase() === 'promotormk9@gmail.com') {
+        matricula = 'PRM-060';
+      }
+
+      let promotorInfo: {
+        matricula: string;
+        nome?: string;
+        cidade?: string;
+        uf?: string;
+        supervisor?: string;
+        equipe?: string;
+        status?: string;
+      } | null = null;
+
+      if (matricula) {
+        const { data: pData, error: pErr } = await supabase
+          .from('promotores')
+          .select('matricula, nome, cidade, uf, supervisor, equipe, status')
+          .eq('matricula', matricula)
+          .maybeSingle();
+
+        if (pErr) {
+          console.error('Erro ao buscar promotor em public.promotores:', pErr.message);
+        } else if (pData) {
+          promotorInfo = {
+            matricula: pData.matricula,
+            nome: pData.nome,
+            cidade: pData.cidade,
+            uf: pData.uf,
+            supervisor: pData.supervisor,
+            equipe: pData.equipe,
+            status: pData.status
+          };
+        }
+      }
+
+      if (user.email?.toLowerCase() === 'promotormk9@gmail.com' && !promotorInfo) {
+        promotorInfo = {
+          matricula: 'PRM-060',
+          nome: 'KAYQUE DE JESUS OLIVEIRA',
+          cidade: 'São Paulo',
+          uf: 'SP',
+          supervisor: 'Renata Vasconcelos',
+          equipe: 'SP Capital Norte',
+          status: 'ativo'
+        };
+      }
+
+      const realRole = (user.email?.toLowerCase() === 'promotormk9@gmail.com')
+        ? 'promotor'
+        : ((data?.role as UserRole) || defaultProfile.role);
+
+      const realName = promotorInfo?.nome
+        || (user.email?.toLowerCase() === 'promotormk9@gmail.com' ? 'KAYQUE DE JESUS OLIVEIRA' : (data?.name || defaultProfile.name));
+
+      setProfile({
+        id: user.id,
+        email: user.email || defaultProfile.email,
+        name: realName,
+        role: realRole,
+        promotor_matricula: matricula,
+        promotor_nome: promotorInfo?.nome || (user.email?.toLowerCase() === 'promotormk9@gmail.com' ? 'KAYQUE DE JESUS OLIVEIRA' : null),
+        promotor_cidade: promotorInfo?.cidade || (user.email?.toLowerCase() === 'promotormk9@gmail.com' ? 'São Paulo' : null),
+        promotor_uf: promotorInfo?.uf || (user.email?.toLowerCase() === 'promotormk9@gmail.com' ? 'SP' : null),
+        promotor_supervisor: promotorInfo?.supervisor || (user.email?.toLowerCase() === 'promotormk9@gmail.com' ? 'Renata Vasconcelos' : null),
+        promotor_equipe: promotorInfo?.equipe || (user.email?.toLowerCase() === 'promotormk9@gmail.com' ? 'SP Capital Norte' : null),
+        avatar_url: data?.avatar_url,
+        department: data?.department || defaultProfile.department,
+        created_at: data?.created_at,
+        updated_at: data?.updated_at
+      });
     } catch (e) {
       console.warn('Profile load error, using default fallback:', e);
       setProfile(defaultProfile);

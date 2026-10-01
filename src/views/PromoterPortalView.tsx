@@ -40,6 +40,15 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
   const [notDoneReason, setNotDoneReason] = useState('');
   const [showNotDoneModal, setShowNotDoneModal] = useState<RouteItem | null>(null);
 
+  const [promoterDetails, setPromoterDetails] = useState<{
+    nome?: string;
+    matricula?: string;
+    cidade?: string;
+    uf?: string;
+    supervisor?: string;
+    equipe?: string;
+  } | null>(null);
+
   // Recarregar dados do portal do promotor
   const loadPortalData = useCallback(async () => {
     setLoading(true);
@@ -54,6 +63,32 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
       const dayIndex = now.getDay();
       const dayKeys = ['domingo', 'segunda', 'terca', 'quarta', 'quinta', 'sexta', 'sabado'];
       const currentDayKey = dayKeys[dayIndex];
+
+      // Buscar cadastro do promotor em public.promotores usando profiles.promotor_matricula = promotores.matricula
+      if (promotorMatricula) {
+        try {
+          const { data: pData, error: pErr } = await supabase
+            .from('promotores')
+            .select('matricula, nome, cidade, uf, supervisor, equipe')
+            .eq('matricula', promotorMatricula)
+            .maybeSingle();
+
+          if (pErr) {
+            console.error('Erro ao buscar cadastro em public.promotores:', pErr.message);
+          } else if (pData) {
+            setPromoterDetails({
+              nome: pData.nome,
+              matricula: pData.matricula,
+              cidade: pData.cidade,
+              uf: pData.uf,
+              supervisor: pData.supervisor,
+              equipe: pData.equipe
+            });
+          }
+        } catch (err) {
+          console.error('Erro na consulta do promotor:', err);
+        }
+      }
 
       // Se for perfil de promotor, filtrar pela matrícula associada. Se for admin/gestor, carregar primeiras rotas.
       let rotasQuery = supabase.from('rotas').select(`
@@ -127,6 +162,20 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
   useEffect(() => {
     loadPortalData();
   }, [loadPortalData]);
+
+  const realName = promoterDetails?.nome || profile?.promotor_nome || profile?.name || (promotorMatricula ? 'Promotor de Campo' : 'Promotor não vinculado');
+  const realMatricula = promoterDetails?.matricula || profile?.promotor_matricula || null;
+  const realCidade = promoterDetails?.cidade || profile?.promotor_cidade;
+  const realUf = promoterDetails?.uf || profile?.promotor_uf;
+  const realSupervisor = promoterDetails?.supervisor || profile?.promotor_supervisor;
+  const realEquipe = promoterDetails?.equipe || profile?.promotor_equipe;
+
+  const initials = (() => {
+    if (!realName || realName === 'Promotor não vinculado') return 'PR';
+    const parts = realName.trim().split(/\s+/);
+    if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+    return realName.substring(0, 2).toUpperCase();
+  })();
 
   // Resumo de execução do dia
   const totalPlanned = routes.length;
@@ -418,7 +467,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                 Portal do Promotor
               </h1>
               <p className="text-xs text-slate-400 font-mono">
-                {profile?.name || 'Promotor de Campo'} {promotorMatricula ? `• Matrícula: ${promotorMatricula}` : ''}
+                {realName} {realMatricula ? `• Matrícula: ${realMatricula}` : ''}
               </p>
             </div>
           </div>
@@ -435,6 +484,54 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
           <span>Atualizar Minha Rota</span>
         </button>
       </section>
+
+      {/* CARTÃO DE PERFIL DETALHADO DO PROMOTOR */}
+      <div className="p-5 rounded-2xl bg-[#171b26] border border-[#1e2433] shadow-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+        <div className="flex items-center gap-4">
+          <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-amber-500 via-purple-600 to-indigo-500 flex items-center justify-center font-extrabold text-white text-lg shadow-[0_0_18px_rgba(245,158,11,0.4)] border border-amber-400/40 shrink-0">
+            {initials}
+          </div>
+          <div className="space-y-1">
+            <h2 className="text-lg font-extrabold text-white tracking-tight">
+              {realName}
+            </h2>
+            <div className="flex flex-wrap items-center gap-2 text-xs font-mono">
+              {realMatricula ? (
+                <span className="px-2.5 py-1 rounded bg-amber-500/15 border border-amber-500/30 text-amber-300 font-bold">
+                  Matrícula: {realMatricula}
+                </span>
+              ) : (
+                <span className="px-2.5 py-1 rounded bg-rose-500/15 border border-rose-500/30 text-rose-300 font-bold flex items-center gap-1">
+                  <span className="material-symbols-outlined text-xs">warning</span>
+                  Promotor não vinculado
+                </span>
+              )}
+
+              {(realCidade || realUf) && (
+                <span className="text-slate-300 flex items-center gap-1 bg-[#10141f] px-2.5 py-1 rounded border border-[#1e2433]">
+                  <span className="material-symbols-outlined text-xs text-amber-400">location_on</span>
+                  {realCidade}{realUf ? ` - ${realUf}` : ''}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {(realSupervisor || realEquipe) && (
+          <div className="p-3 rounded-xl bg-[#10141f] border border-[#1e2433] text-xs font-mono space-y-1 w-full sm:w-auto text-left sm:text-right">
+            {realSupervisor && (
+              <div className="text-slate-300">
+                <span className="text-slate-500">Supervisor:</span> <strong className="text-slate-100">{realSupervisor}</strong>
+              </div>
+            )}
+            {realEquipe && (
+              <div className="text-cyan-400">
+                <span className="text-slate-500">Equipe:</span> <strong>{realEquipe}</strong>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* 1. RESUMO EXECUTIVO DO DIA */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 font-mono">

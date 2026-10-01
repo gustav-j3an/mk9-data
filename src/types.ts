@@ -95,6 +95,11 @@ export interface UserProfile {
   name: string;
   role: UserRole;
   promotor_matricula?: string | null;
+  promotor_nome?: string | null;
+  promotor_cidade?: string | null;
+  promotor_uf?: string | null;
+  promotor_supervisor?: string | null;
+  promotor_equipe?: string | null;
   avatar_url?: string;
   department?: string;
   status?: 'ativo' | 'inativo';

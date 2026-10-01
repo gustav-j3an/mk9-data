@@ -254,9 +254,14 @@ export const AppShell: React.FC<AppShellProps> = ({
           <div className="flex items-center gap-3">
             <div className="flex flex-col text-right hidden sm:flex">
               <span className="text-xs font-bold text-slate-200 leading-tight">
-                {profile?.name || (session?.user?.email ? session.user.email.split('@')[0] : 'Usuário MK9')}
+                {profile?.promotor_nome || profile?.name || (session?.user?.email ? session.user.email.split('@')[0] : 'Usuário MK9')}
               </span>
-              <div className="flex items-center justify-end gap-1 mt-0.5">
+              <div className="flex items-center justify-end gap-1.5 mt-0.5">
+                {profile?.promotor_matricula && (
+                  <span className="text-[10px] font-mono text-amber-400 font-bold bg-amber-500/10 border border-amber-500/30 px-1.5 py-0.2 rounded">
+                    Matrícula: {profile.promotor_matricula}
+                  </span>
+                )}
                 <span className={`px-1.5 py-0.2 rounded border font-mono font-bold text-[9px] uppercase tracking-wider ${roleInfo.color}`}>
                   {roleInfo.text}
                 </span>
@@ -264,7 +269,12 @@ export const AppShell: React.FC<AppShellProps> = ({
             </div>
             <div className="w-9 h-9 rounded-full overflow-hidden ring-2 ring-purple-500/40 shadow-[0_0_12px_rgba(147,51,234,0.3)] bg-purple-900/40 flex items-center justify-center shrink-0">
               <span className="font-bold text-xs text-purple-200 uppercase">
-                {(profile?.name || session?.user?.email || 'MK').substring(0, 2).toUpperCase()}
+                {(() => {
+                  const n = profile?.promotor_nome || profile?.name || session?.user?.email || 'MK';
+                  const parts = n.trim().split(/\s+/);
+                  if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+                  return n.substring(0, 2).toUpperCase();
+                })()}
               </span>
             </div>
 
