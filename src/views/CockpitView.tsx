@@ -64,7 +64,7 @@ export const CockpitView: React.FC<CockpitViewProps> = ({ onNavigate, onShowToas
     statusColor: string;
   }>>([]);
 
-  // Função principal de carregamento de dados do Supabase
+  // Função resiliente de carregamento de dados do Supabase
   const loadCockpitData = useCallback(async (isManualRefresh = false) => {
     if (isManualRefresh) {
       setIsSyncing(true);
@@ -81,54 +81,76 @@ export const CockpitView: React.FC<CockpitViewProps> = ({ onNavigate, onShowToas
     }
 
     try {
-      // Obter dia da semana atual em português (segunda..domingo)
+      // Dia da semana atual em português: segunda, terca, quarta, quinta, sexta, sabado, domingo
       const now = new Date();
       const dayIndex = now.getDay(); // 0 = Domingo, 1 = Segunda...
       const dayKeys = ['domingo', 'segunda', 'terca', 'quarta', 'quinta', 'sexta', 'sabado'];
       const currentDayKey = dayKeys[dayIndex];
 
-      // Promise.all para buscar todas as tabelas em paralelo
-      const [
-        promotoresRes,
-        lojasRes,
-        industriasRes,
-        rotasRes,
-        presencaRes,
-        diariasRes
-      ] = await Promise.all([
+      // Usar Promise.allSettled para garantir resiliência caso tabelas opcionais não existam
+      const results = await Promise.allSettled([
         supabase.from('promotores').select('*'),
         supabase.from('lojas').select('*'),
         supabase.from('industrias').select('*'),
         supabase.from('rotas').select(`
-          *,
+          id,
+          codigo_rota,
+          industria_codigo,
+          loja_codigo,
+          promotor_matricula,
+          uf,
+          frequencia,
+          segunda,
+          terca,
+          quarta,
+          quinta,
+          sexta,
+          sabado,
+          domingo,
           industria:industrias(nome),
           loja:lojas(nome, cidade),
           promotor:promotores(nome)
         `),
-        supabase.from('presenca').select('*').then((r) => r, () => ({ data: null, error: null })),
-        supabase.from('diarias').select('*').then((r) => r, () => ({ data: null, error: null }))
+        supabase.from('presenca').select('*'),
+        supabase.from('diarias').select('*')
       ]);
 
-      if (promotoresRes.error) throw promotoresRes.error;
-      if (lojasRes.error) throw lojasRes.error;
-      if (industriasRes.error) throw industriasRes.error;
-      if (rotasRes.error) throw rotasRes.error;
+      const [promotoresSettled, lojasSettled, industriasSettled, rotasSettled, presencaSettled, diariasSettled] = results;
 
-      const promotores = promotoresRes.data || [];
-      const lojas = lojasRes.data || [];
-      const industrias = industriasRes.data || [];
-      const rotas = rotasRes.data || [];
-      const presencas = presencaRes.data || [];
-      const diarias = diariasRes.data || [];
+      // Verificar falha APENAS nas tabelas obrigatórias existentes
+      let mandatoryError: string | null = null;
+      if (promotoresSettled.status === 'rejected' || (promotoresSettled.status === 'fulfilled' && promotoresSettled.value.error)) {
+        mandatoryError = promotoresSettled.status === 'rejected' ? String(promotoresSettled.reason) : promotoresSettled.value.error?.message || 'Erro em promotores';
+      } else if (lojasSettled.status === 'rejected' || (lojasSettled.status === 'fulfilled' && lojasSettled.value.error)) {
+        mandatoryError = lojasSettled.status === 'rejected' ? String(lojasSettled.reason) : lojasSettled.value.error?.message || 'Erro em lojas';
+      } else if (industriasSettled.status === 'rejected' || (industriasSettled.status === 'fulfilled' && industriasSettled.value.error)) {
+        mandatoryError = industriasSettled.status === 'rejected' ? String(industriasSettled.reason) : industriasSettled.value.error?.message || 'Erro em industrias';
+      } else if (rotasSettled.status === 'rejected' || (rotasSettled.status === 'fulfilled' && rotasSettled.value.error)) {
+        mandatoryError = rotasSettled.status === 'rejected' ? String(rotasSettled.reason) : rotasSettled.value.error?.message || 'Erro em rotas';
+      }
+
+      if (mandatoryError) {
+        throw new Error(`Falha nas tabelas principais: ${mandatoryError}`);
+      }
+
+      // Extrair dados seguros
+      const promotores = (promotoresSettled.status === 'fulfilled' && !promotoresSettled.value.error) ? promotoresSettled.value.data || [] : [];
+      const lojas = (lojasSettled.status === 'fulfilled' && !lojasSettled.value.error) ? lojasSettled.value.data || [] : [];
+      const industrias = (industriasSettled.status === 'fulfilled' && !industriasSettled.value.error) ? industriasSettled.value.data || [] : [];
+      const rotas = (rotasSettled.status === 'fulfilled' && !rotasSettled.value.error) ? rotasSettled.value.data || [] : [];
+
+      // Tabelas Opcionais (Presença & Diárias): tratar erros graciosamente como array vazio
+      const presencas = (presencaSettled.status === 'fulfilled' && !presencaSettled.value.error) ? presencaSettled.value.data || [] : [];
+      const diarias = (diariasSettled.status === 'fulfilled' && !diariasSettled.value.error) ? diariasSettled.value.data || [] : [];
 
       // 1. Promotores Ativos (CLT vs Freelancer)
-      const promotoresAtivos = promotores.filter((p) => p.status === 'ativo');
+      const promotoresAtivos = promotores.filter((p: any) => p.status === 'ativo');
       const totalPromotoresAtivos = promotoresAtivos.length;
       
       let cltCount = 0;
       let freelanceCount = 0;
 
-      promotoresAtivos.forEach((p) => {
+      promotoresAtivos.forEach((p: any) => {
         const typeStr = String(p.tipo || p.contrato || p.equipe || '').toUpperCase();
         if (typeStr.includes('FREE') || typeStr.includes('DIARIA')) {
           freelanceCount++;
@@ -137,18 +159,18 @@ export const CockpitView: React.FC<CockpitViewProps> = ({ onNavigate, onShowToas
         }
       });
 
-      // 2. Visitas/Rotas
+      // 2. Visitas/Rotas (Colunas exatas: segunda, terca, quarta, quinta, sexta, sabado, domingo)
       const totalRotas = rotas.length;
-      const rotasComVisitaDiaAtual = rotas.filter((r) => Boolean(r[currentDayKey])).length;
+      const rotasComVisitaDiaAtual = rotas.filter((r: any) => Boolean(r[currentDayKey])).length;
 
-      // 3. Presença
+      // 3. Presença (Dados opcionais realistas)
       let presentesHoje = 0;
       let faltasHoje = 0;
       let atestadosHoje = 0;
       let presencaPerc = 0;
 
       if (presencas.length > 0) {
-        presencas.forEach((pr) => {
+        presencas.forEach((pr: any) => {
           const st = String(pr.status || '').toLowerCase();
           if (st === 'presente') presentesHoje++;
           else if (st === 'falta') faltasHoje++;
@@ -158,10 +180,10 @@ export const CockpitView: React.FC<CockpitViewProps> = ({ onNavigate, onShowToas
         presencaPerc = totalRegistrosPresenca > 0 ? Math.round((presentesHoje / totalRegistrosPresenca) * 100) : 0;
       }
 
-      // 4. Diárias Total a Pagar
+      // 4. Diárias (Dados opcionais realistas)
       let totalAPagar = 0;
       if (diarias.length > 0) {
-        diarias.forEach((d) => {
+        diarias.forEach((d: any) => {
           if (d.status === 'a_pagar' || d.status === 'pendente') {
             totalAPagar += Number(d.valor || d.amount || 0);
           }
@@ -183,8 +205,8 @@ export const CockpitView: React.FC<CockpitViewProps> = ({ onNavigate, onShowToas
         totalAPagar
       });
 
-      // Gerar transmissão de atividades recentes com base em rotas reais
-      const activitiesMapped = rotas.slice(0, 10).map((r, idx) => {
+      // Atividades recentes mapeadas a partir das rotas reais existentes
+      const activitiesMapped = rotas.slice(0, 10).map((r: any, idx: number) => {
         const pName = r.promotor?.nome || r.promotor_matricula || 'Promotor';
         const pInitials = pName.substring(0, 2).toUpperCase();
         const storeName = r.loja?.nome || r.loja_codigo || 'PDV Cadastrado';
@@ -213,16 +235,16 @@ export const CockpitView: React.FC<CockpitViewProps> = ({ onNavigate, onShowToas
       if (isManualRefresh) {
         onShowToast({
           title: 'Cockpit Sincronizado',
-          message: 'Indicadores táticos atualizados diretamente do Supabase.',
+          message: 'Métricas atualizadas com sucesso a partir das tabelas ativas no Supabase.',
           type: 'success'
         });
       }
     } catch (err: any) {
-      console.error('Erro ao carregar dados do Cockpit:', err);
-      setError(err.message || 'Falha ao sincronizar telemetria com o Supabase.');
+      console.error('Erro no Cockpit:', err);
+      setError(err.message || 'Falha ao sincronizar dados com o Supabase.');
       onShowToast({
         title: 'Erro de Sincronização',
-        message: err.message || 'Não foi possível carregar métricas reais.',
+        message: err.message || 'Erro ao carregar dados do Supabase.',
         type: 'error'
       });
     } finally {
@@ -252,7 +274,7 @@ export const CockpitView: React.FC<CockpitViewProps> = ({ onNavigate, onShowToas
 
   return (
     <div className="w-full px-4 lg:px-8 py-6 max-w-[1720px] mx-auto space-y-6 font-sans">
-      {/* Top Ambient Glow */}
+      {/* Ambient Glow */}
       <div className="absolute top-16 left-0 right-0 h-96 bg-gradient-to-b from-purple-900/15 via-cyan-900/5 to-transparent pointer-events-none -z-10 blur-3xl" />
 
       {/* Header Area */}
@@ -275,7 +297,6 @@ export const CockpitView: React.FC<CockpitViewProps> = ({ onNavigate, onShowToas
 
         {/* Action Controls */}
         <div className="flex flex-wrap items-center gap-3">
-          {/* Period Selector */}
           <div className="relative inline-flex items-center bg-[#171b26] border border-[#1e2433] px-3 py-2 rounded-xl shadow-md font-mono text-xs">
             <span className="material-symbols-outlined text-cyan-400 text-[18px] mr-2">calendar_today</span>
             <select
@@ -290,7 +311,6 @@ export const CockpitView: React.FC<CockpitViewProps> = ({ onNavigate, onShowToas
             <span className="material-symbols-outlined text-slate-400 text-sm pointer-events-none">expand_more</span>
           </div>
 
-          {/* Primary Command: Refresh */}
           <div className="flex items-center gap-2 bg-[#0a0d14] border border-[#1e2433] p-1 rounded-xl shadow-md">
             <button
               onClick={() => loadCockpitData(true)}
@@ -309,7 +329,7 @@ export const CockpitView: React.FC<CockpitViewProps> = ({ onNavigate, onShowToas
         </div>
       </div>
 
-      {/* ERRO DE CONEXÃO SUPABASE */}
+      {/* BANNER DE ERRO REAL DE TABELAS OBRIGATÓRIAS */}
       {error && (
         <div className="p-4 bg-rose-500/10 border border-rose-500/30 rounded-xl text-xs font-mono text-rose-300 flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -325,7 +345,7 @@ export const CockpitView: React.FC<CockpitViewProps> = ({ onNavigate, onShowToas
         </div>
       )}
 
-      {/* CARDS DE KPIS TÁTICOS (5 CARDS REAIS) */}
+      {/* 5 CARDS TÁTICOS CONECTADOS AO SUPABASE */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
         {/* KPI 1: Promotores Ativos */}
         <div
@@ -355,7 +375,7 @@ export const CockpitView: React.FC<CockpitViewProps> = ({ onNavigate, onShowToas
           </div>
         </div>
 
-        {/* KPI 2: Rotas e Visitas */}
+        {/* KPI 2: Rotas e Visitas Hoje */}
         <div
           onClick={() => onNavigate('rotas-fixas')}
           className="cursor-pointer bg-[#171b26] border border-[#1e2433] hover:border-cyan-500/40 p-4 rounded-xl shadow-lg relative overflow-hidden transition-all group"
@@ -389,7 +409,7 @@ export const CockpitView: React.FC<CockpitViewProps> = ({ onNavigate, onShowToas
           </div>
         </div>
 
-        {/* KPI 3: Operação de Lojas & Indústrias */}
+        {/* KPI 3: Lojas & Indústrias */}
         <div
           onClick={() => onNavigate('lojas')}
           className="cursor-pointer bg-[#171b26] border border-[#1e2433] hover:border-amber-500/40 p-4 rounded-xl shadow-lg relative overflow-hidden transition-all group"
@@ -415,7 +435,7 @@ export const CockpitView: React.FC<CockpitViewProps> = ({ onNavigate, onShowToas
           </div>
         </div>
 
-        {/* KPI 4: Presença Reais */}
+        {/* KPI 4: Presença (Tabela opcional tratada com resiliência) */}
         <div
           onClick={() => onNavigate('presenca')}
           className="cursor-pointer bg-[#171b26] border border-[#1e2433] hover:border-emerald-500/40 p-4 rounded-xl shadow-lg relative overflow-hidden transition-all group"
@@ -441,7 +461,7 @@ export const CockpitView: React.FC<CockpitViewProps> = ({ onNavigate, onShowToas
           </div>
         </div>
 
-        {/* KPI 5: Total a Pagar Diárias */}
+        {/* KPI 5: Total a Pagar Diárias (Tabela opcional tratada com resiliência) */}
         <div
           onClick={() => onNavigate('controle-diarias')}
           className="cursor-pointer bg-[#171b26] border border-[#1e2433] hover:border-purple-500/40 p-4 rounded-xl shadow-lg relative overflow-hidden transition-all group"
@@ -459,15 +479,14 @@ export const CockpitView: React.FC<CockpitViewProps> = ({ onNavigate, onShowToas
             </span>
           </div>
           <div className="flex items-center justify-between pt-2 border-t border-[#1e2433] text-[11px] font-mono text-slate-400">
-            <span className="truncate">Lotes Pendentes</span>
+            <span className="truncate">{metrics.totalAPagar > 0 ? 'Lotes Pendentes' : 'Sem dados'}</span>
             <span className="text-purple-400 font-bold">{metrics.freelanceCount} Freelancers</span>
           </div>
         </div>
       </div>
 
-      {/* SEÇÃO INTERMEDIÁRIA: GRAFICOS E DISTRIBUIÇÃO */}
+      {/* SEÇÃO INTERMEDIÁRIA: VISUALIZAÇÃO E GRÁFICOS */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Gráfico de Visitas e Cobertura Operacional */}
         <div className="lg:col-span-7 xl:col-span-8 bg-[#171b26] border border-[#1e2433] rounded-xl p-5 shadow-xl flex flex-col justify-between relative overflow-hidden">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
             <div>
@@ -496,7 +515,6 @@ export const CockpitView: React.FC<CockpitViewProps> = ({ onNavigate, onShowToas
             </div>
           </div>
 
-          {/* Gráfico visual limpo baseado nos números da operação */}
           <div className="relative w-full h-64 flex flex-col items-center justify-center border border-[#1e2433] rounded-xl bg-[#131722]/50 p-6 space-y-4 font-mono">
             {metrics.totalRotas > 0 ? (
               <div className="w-full space-y-4">
@@ -541,7 +559,6 @@ export const CockpitView: React.FC<CockpitViewProps> = ({ onNavigate, onShowToas
           </div>
         </div>
 
-        {/* Card Donut: Distribuição da Equipe */}
         <div className="lg:col-span-5 xl:col-span-4 bg-[#171b26] border border-[#1e2433] rounded-xl p-5 shadow-xl flex flex-col justify-between">
           <div className="flex items-center justify-between">
             <div>
@@ -556,7 +573,6 @@ export const CockpitView: React.FC<CockpitViewProps> = ({ onNavigate, onShowToas
             </span>
           </div>
 
-          {/* Visualização de Distribuição */}
           <div className="relative flex items-center justify-center my-6">
             <div className="w-36 h-36 rounded-full border-8 border-[#10141f] border-t-purple-500 border-r-cyan-400 flex items-center justify-center text-center font-mono">
               <div>
@@ -566,7 +582,6 @@ export const CockpitView: React.FC<CockpitViewProps> = ({ onNavigate, onShowToas
             </div>
           </div>
 
-          {/* Lista de Detalhamento */}
           <div className="space-y-2 pt-3 border-t border-[#1e2433] text-xs font-mono">
             <div className="flex items-center justify-between py-1.5 px-2.5 rounded bg-[#131722]">
               <div className="flex items-center gap-2">
@@ -589,7 +604,6 @@ export const CockpitView: React.FC<CockpitViewProps> = ({ onNavigate, onShowToas
 
       {/* SEÇÃO INFERIOR: ATIVIDADES E ALERTAS */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Atividades Recentes Baseadas na Operação Real */}
         <div className="lg:col-span-7 xl:col-span-8 bg-[#171b26] border border-[#1e2433] rounded-xl shadow-xl flex flex-col justify-between overflow-hidden">
           <div className="p-4 border-b border-[#1e2433] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
@@ -603,7 +617,6 @@ export const CockpitView: React.FC<CockpitViewProps> = ({ onNavigate, onShowToas
             </div>
           </div>
 
-          {/* Tabela de Atividades */}
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse text-xs">
               <thead>
@@ -663,7 +676,6 @@ export const CockpitView: React.FC<CockpitViewProps> = ({ onNavigate, onShowToas
           </div>
         </div>
 
-        {/* Alertas Operacionais */}
         <div className="lg:col-span-5 xl:col-span-4 bg-[#171b26] border border-[#1e2433] rounded-xl p-5 shadow-xl flex flex-col justify-between">
           <div>
             <div className="flex items-center justify-between mb-4">
