@@ -13,6 +13,8 @@ import { DesignSystemView } from './views/DesignSystemView';
 import { UsersPermissionsView } from './views/UsersPermissionsView';
 import { ImportView } from './views/ImportView';
 import { RoutesView } from './views/RoutesView';
+import { IndustriesView } from './views/IndustriesView';
+import { StoresView } from './views/StoresView';
 import { AuthProvider } from './auth/AuthProvider';
 import { LoginPage } from './auth/LoginPage';
 import { ProtectedRoute } from './auth/ProtectedRoute';
@@ -77,6 +79,12 @@ function Dashboard() {
       )}
       {currentScreen === 'rotas-fixas' && (
         <RoutesView onNavigate={setCurrentScreen} onShowToast={addToast} />
+      )}
+      {currentScreen === 'industrias' && (
+        <IndustriesView onShowToast={addToast} />
+      )}
+      {currentScreen === 'lojas' && (
+        <StoresView onShowToast={addToast} />
       )}
       {currentScreen === 'gestao-equipes' && (
         <TeamsManagementView onNavigate={setCurrentScreen} onShowToast={addToast} />

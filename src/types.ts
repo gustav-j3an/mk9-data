@@ -3,6 +3,8 @@ export type ScreenId =
   | 'painel-operacional'
   | 'presenca'
   | 'rotas-fixas'
+  | 'industrias'
+  | 'lojas'
   | 'gestao-equipes'
   | 'freelancers'
   | 'controle-diarias'
@@ -10,6 +12,31 @@ export type ScreenId =
   | 'importacao'
   | 'design-system'
   | 'usuarios';
+
+export interface IndustryItem {
+  id: string;
+  codigo: string;
+  nome: string;
+  cnpj: string | null;
+  status: 'ativo' | 'inativo';
+  observacao?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface StoreItem {
+  id: string;
+  codigo: string;
+  nome: string;
+  cnpj: string | null;
+  cidade: string;
+  uf: string;
+  endereco?: string | null;
+  rede?: string | null;
+  status: 'ativo' | 'inativo';
+  created_at?: string;
+  updated_at?: string;
+}
 
 export interface RouteItem {
   id: string;
