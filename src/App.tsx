@@ -20,16 +20,35 @@ import { AuthProvider } from './auth/AuthProvider';
 import { LoginPage } from './auth/LoginPage';
 import { ProtectedRoute } from './auth/ProtectedRoute';
 
+import { useAuth } from './auth/AuthProvider';
+
+function isScreenAllowedForRole(screen: ScreenId, role: string): boolean {
+  if (role === 'promotor') {
+    return screen === 'portal-promotor';
+  }
+  if (role === 'operador') {
+    return screen !== 'importacao' && screen !== 'usuarios';
+  }
+  return true;
+}
+
 function Dashboard() {
-  const [currentScreen, setCurrentScreen] = useState<ScreenId>('cockpit');
+  const { role } = useAuth();
+  const [currentScreen, setCurrentScreen] = useState<ScreenId>(role === 'promotor' ? 'portal-promotor' : 'cockpit');
   const [toasts, setToasts] = useState<ToastMessage[]>([
     {
       id: 'init-toast',
       title: 'Sistema Conectado',
-      message: 'MK9 Command Center sincronizado com 4.820 PDVs.',
+      message: 'MK9 Command Center sincronizado.',
       type: 'success'
     }
   ]);
+
+  useEffect(() => {
+    if (role === 'promotor' && currentScreen !== 'portal-promotor') {
+      setCurrentScreen('portal-promotor');
+    }
+  }, [role, currentScreen]);
 
   const addToast = (toast: Omit<ToastMessage, 'id'>) => {
     const id = `toast-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`;
@@ -59,56 +78,66 @@ function Dashboard() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
+  const handleNavigate = (screen: ScreenId) => {
+    if (!isScreenAllowedForRole(screen, role)) {
+      if (role === 'promotor') {
+        setCurrentScreen('portal-promotor');
+      }
+      return;
+    }
+    setCurrentScreen(screen);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const activeScreen = isScreenAllowedForRole(currentScreen, role) ? currentScreen : (role === 'promotor' ? 'portal-promotor' : 'cockpit');
+
   return (
     <AppShell
-      currentScreen={currentScreen}
-      onNavigate={(screen) => {
-        setCurrentScreen(screen);
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-      }}
+      currentScreen={activeScreen}
+      onNavigate={handleNavigate}
       toasts={toasts}
       onDismissToast={dismissToast}
     >
-      {currentScreen === 'cockpit' && (
-        <CockpitView onNavigate={setCurrentScreen} onShowToast={addToast} />
+      {activeScreen === 'cockpit' && (
+        <CockpitView onNavigate={handleNavigate} onShowToast={addToast} />
       )}
-      {currentScreen === 'painel-operacional' && (
-        <OperationalDashboardView onNavigate={setCurrentScreen} onShowToast={addToast} />
+      {activeScreen === 'painel-operacional' && (
+        <OperationalDashboardView onNavigate={handleNavigate} onShowToast={addToast} />
       )}
-      {currentScreen === 'presenca' && (
-        <AttendanceControlView onNavigate={setCurrentScreen} onShowToast={addToast} />
+      {activeScreen === 'presenca' && (
+        <AttendanceControlView onNavigate={handleNavigate} onShowToast={addToast} />
       )}
-      {currentScreen === 'rotas-fixas' && (
-        <RoutesView onNavigate={setCurrentScreen} onShowToast={addToast} />
+      {activeScreen === 'rotas-fixas' && (
+        <RoutesView onNavigate={handleNavigate} onShowToast={addToast} />
       )}
-      {currentScreen === 'industrias' && (
+      {activeScreen === 'industrias' && (
         <IndustriesView onShowToast={addToast} />
       )}
-      {currentScreen === 'lojas' && (
+      {activeScreen === 'lojas' && (
         <StoresView onShowToast={addToast} />
       )}
-      {currentScreen === 'portal-promotor' && (
+      {activeScreen === 'portal-promotor' && (
         <PromoterPortalView onShowToast={addToast} />
       )}
-      {currentScreen === 'gestao-equipes' && (
-        <TeamsManagementView onNavigate={setCurrentScreen} onShowToast={addToast} />
+      {activeScreen === 'gestao-equipes' && (
+        <TeamsManagementView onNavigate={handleNavigate} onShowToast={addToast} />
       )}
-      {currentScreen === 'freelancers' && (
-        <FreelancersView onNavigate={setCurrentScreen} onShowToast={addToast} />
+      {activeScreen === 'freelancers' && (
+        <FreelancersView onNavigate={handleNavigate} onShowToast={addToast} />
       )}
-      {currentScreen === 'controle-diarias' && (
-        <DailiesControlView onNavigate={setCurrentScreen} onShowToast={addToast} />
+      {activeScreen === 'controle-diarias' && (
+        <DailiesControlView onNavigate={handleNavigate} onShowToast={addToast} />
       )}
-      {currentScreen === 'promotores' && (
-        <PromotersView onNavigate={setCurrentScreen} onShowToast={addToast} />
+      {activeScreen === 'promotores' && (
+        <PromotersView onNavigate={handleNavigate} onShowToast={addToast} />
       )}
-      {currentScreen === 'importacao' && (
+      {activeScreen === 'importacao' && (
         <ImportView onShowToast={addToast} />
       )}
-      {currentScreen === 'design-system' && (
+      {activeScreen === 'design-system' && (
         <DesignSystemView onShowToast={addToast} />
       )}
-      {currentScreen === 'usuarios' && (
+      {activeScreen === 'usuarios' && (
         <UsersPermissionsView onShowToast={addToast} />
       )}
     </AppShell>

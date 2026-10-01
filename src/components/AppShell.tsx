@@ -26,40 +26,40 @@ export const AppShell: React.FC<AppShellProps> = ({
     {
       group: 'OPERAÇÕES CENTRAIS',
       items: [
-        { id: 'cockpit' as ScreenId, label: 'Cockpit', icon: 'speed' },
-        { id: 'painel-operacional' as ScreenId, label: 'Painel Operacional', icon: 'monitoring' },
-        { id: 'gestao-equipes' as ScreenId, label: 'Gestão de Equipes', icon: 'groups' }
+        { id: 'cockpit' as ScreenId, label: 'Cockpit', icon: 'speed', roles: ['admin', 'gestor', 'operador'] as UserRole[] },
+        { id: 'painel-operacional' as ScreenId, label: 'Painel Operacional', icon: 'monitoring', roles: ['admin', 'gestor', 'operador'] as UserRole[] },
+        { id: 'gestao-equipes' as ScreenId, label: 'Gestão de Equipes', icon: 'groups', roles: ['admin', 'gestor', 'operador'] as UserRole[] }
       ]
     },
     {
       group: 'CAMPO & ROTAS',
       items: [
-        { id: 'portal-promotor' as ScreenId, label: 'Portal do Promotor', icon: 'smartphone' },
-        { id: 'presenca' as ScreenId, label: 'Controle de Presença', icon: 'how_to_reg' },
-        { id: 'rotas-fixas' as ScreenId, label: 'Rotas Fixas', icon: 'alt_route' }
+        { id: 'portal-promotor' as ScreenId, label: 'Portal do Promotor', icon: 'smartphone', roles: ['admin', 'gestor', 'operador', 'promotor'] as UserRole[] },
+        { id: 'presenca' as ScreenId, label: 'Controle de Presença', icon: 'how_to_reg', roles: ['admin', 'gestor', 'operador'] as UserRole[] },
+        { id: 'rotas-fixas' as ScreenId, label: 'Rotas Fixas', icon: 'alt_route', roles: ['admin', 'gestor', 'operador'] as UserRole[] }
       ]
     },
     {
       group: 'CADASTROS',
       items: [
-        { id: 'industrias' as ScreenId, label: 'Indústrias', icon: 'factory' },
-        { id: 'lojas' as ScreenId, label: 'Lojas / PDVs', icon: 'store' },
-        { id: 'promotores' as ScreenId, label: 'Promotores', icon: 'badge' },
-        { id: 'freelancers' as ScreenId, label: 'Freelancers', icon: 'engineering' },
+        { id: 'industrias' as ScreenId, label: 'Indústrias', icon: 'factory', roles: ['admin', 'gestor', 'operador'] as UserRole[] },
+        { id: 'lojas' as ScreenId, label: 'Lojas / PDVs', icon: 'store', roles: ['admin', 'gestor', 'operador'] as UserRole[] },
+        { id: 'promotores' as ScreenId, label: 'Promotores', icon: 'badge', roles: ['admin', 'gestor', 'operador'] as UserRole[] },
+        { id: 'freelancers' as ScreenId, label: 'Freelancers', icon: 'engineering', roles: ['admin', 'gestor', 'operador'] as UserRole[] },
         { id: 'importacao' as ScreenId, label: 'Importação de Planilhas', icon: 'upload_file', roles: ['admin', 'gestor'] as UserRole[] }
       ]
     },
     {
       group: 'FINANCEIRO & AUDITORIA',
       items: [
-        { id: 'controle-diarias' as ScreenId, label: 'Controle de Diárias', icon: 'payments' }
+        { id: 'controle-diarias' as ScreenId, label: 'Controle de Diárias', icon: 'payments', roles: ['admin', 'gestor', 'operador'] as UserRole[] }
       ]
     },
     {
       group: 'CONFIGURAÇÕES & SEGURANÇA',
       items: [
         { id: 'usuarios' as ScreenId, label: 'Perfis & Permissões', icon: 'admin_panel_settings', roles: ['admin', 'gestor'] as UserRole[] },
-        { id: 'design-system' as ScreenId, label: 'Logo & Design System', icon: 'palette' }
+        { id: 'design-system' as ScreenId, label: 'Logo & Design System', icon: 'palette', roles: ['admin', 'gestor', 'operador'] as UserRole[] }
       ]
     }
   ];
@@ -98,7 +98,7 @@ export const AppShell: React.FC<AppShellProps> = ({
         <div className="flex flex-col">
           {/* Brand Header */}
           <div
-            onClick={() => onNavigate('cockpit')}
+            onClick={() => onNavigate(role === 'promotor' ? 'portal-promotor' : 'cockpit')}
             className="h-16 px-5 flex items-center gap-3 border-b border-[#1e2433] bg-[#0a0d14]/90 backdrop-blur-xl cursor-pointer group"
           >
             <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-purple-600 to-indigo-500 flex items-center justify-center font-bold text-white shadow-[0_0_14px_rgba(147,51,234,0.6)] group-hover:scale-105 transition-transform">

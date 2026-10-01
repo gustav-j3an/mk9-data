@@ -30,7 +30,11 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
   const [editDepartment, setEditDepartment] = useState('');
   const [editRole, setEditRole] = useState<UserRole>('operador');
   const [editStatus, setEditStatus] = useState<'ativo' | 'inativo'>('ativo');
+  const [editPromotorMatricula, setEditPromotorMatricula] = useState<string>('');
   const [savingEdit, setSavingEdit] = useState(false);
+
+  // Promotores options for linking
+  const [promotoresOptions, setPromotoresOptions] = useState<{ matricula: string; name: string }[]>([]);
 
   const fetchUsers = async () => {
     setLoading(true);
@@ -43,16 +47,20 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
     }
 
     try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .order('created_at', { ascending: false });
+      const [profilesRes, promotoresRes] = await Promise.all([
+        supabase.from('profiles').select('*').order('created_at', { ascending: false }),
+        supabase.from('promotores').select('matricula, name').order('name')
+      ]);
 
-      if (error) {
-        setErrorMessage(`Falha ao buscar usuários do Supabase: ${error.message}`);
+      if (profilesRes.error) {
+        setErrorMessage(`Falha ao buscar usuários do Supabase: ${profilesRes.error.message}`);
         if (profile) setUsersList([profile]);
-      } else if (data) {
-        setUsersList(data as UserProfile[]);
+      } else if (profilesRes.data) {
+        setUsersList(profilesRes.data as UserProfile[]);
+      }
+
+      if (promotoresRes.data) {
+        setPromotoresOptions(promotoresRes.data as { matricula: string; name: string }[]);
       }
     } catch (err) {
       setErrorMessage(`Erro de conexão com o banco de dados: ${String(err)}`);
@@ -144,6 +152,7 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
     setEditDepartment(userToEdit.department || 'Operações MK9');
     setEditRole(userToEdit.role);
     setEditStatus(userToEdit.status || 'ativo');
+    setEditPromotorMatricula(userToEdit.promotor_matricula || '');
   };
 
   const handleSaveEdit = async (e: React.FormEvent) => {
@@ -154,7 +163,8 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
     const { error } = await updateUserProfile(editingUser.id, {
       department: editDepartment,
       role: editRole,
-      status: editStatus
+      status: editStatus,
+      promotor_matricula: editPromotorMatricula.trim() || null
     });
     setSavingEdit(false);
 
@@ -168,7 +178,13 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
       setUsersList((prev) =>
         prev.map((u) =>
           u.id === editingUser.id
-            ? { ...u, department: editDepartment, role: editRole, status: editStatus }
+            ? {
+                ...u,
+                department: editDepartment,
+                role: editRole,
+                status: editStatus,
+                promotor_matricula: editPromotorMatricula.trim() || null
+              }
             : u
         )
       );
@@ -255,6 +271,12 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
             OPERADOR DE CAMPO
           </span>
         );
+      case 'promotor':
+        return (
+          <span className="px-2.5 py-1 rounded-md bg-amber-950/80 border border-amber-500/50 text-amber-300 text-[10px] font-extrabold uppercase tracking-wider font-mono shadow-[0_0_10px_rgba(245,158,11,0.3)]">
+            PROMOTOR DE CAMPO
+          </span>
+        );
     }
   };
 
@@ -272,7 +294,7 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
             </h1>
           </div>
           <p className="text-xs sm:text-sm text-slate-400 mt-1 max-w-3xl">
-            Gestão centralizada de papéis RBAC (<code className="text-purple-400 font-mono">Admin</code>, <code className="text-cyan-400 font-mono">Gestor</code>, <code className="text-emerald-400 font-mono">Operador</code>) e governança de acessos no <strong>MK9 Command Center</strong>.
+            Gestão centralizada de papéis RBAC (<code className="text-purple-400 font-mono">Admin</code>, <code className="text-cyan-400 font-mono">Gestor</code>, <code className="text-emerald-400 font-mono">Operador</code>, <code className="text-amber-400 font-mono">Promotor</code>) e vínculo de matrículas do Portal do Promotor.
           </p>
         </div>
 
@@ -298,55 +320,72 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
       </section>
 
       {/* Role Matrix Info Cards */}
-      <section className="grid grid-cols-1 md:grid-cols-3 gap-5">
-        <div className="p-5 rounded-2xl bg-[#171b26] border border-purple-500/30 shadow-xl relative overflow-hidden group">
-          <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
-            <span className="material-symbols-outlined text-6xl text-purple-400">shield_person</span>
+      <section className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="p-4 rounded-2xl bg-[#171b26] border border-purple-500/30 shadow-xl relative overflow-hidden group">
+          <div className="absolute top-0 right-0 p-3 opacity-10 group-hover:opacity-20 transition-opacity">
+            <span className="material-symbols-outlined text-5xl text-purple-400">shield_person</span>
           </div>
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-2">
             <span className="w-2.5 h-2.5 rounded-full bg-purple-500 animate-pulse"></span>
-            <h3 className="text-sm font-extrabold text-white uppercase tracking-wider font-mono">Papel: Admin</h3>
+            <h3 className="text-xs font-extrabold text-white uppercase tracking-wider font-mono">Admin</h3>
           </div>
-          <p className="text-xs text-slate-400 mt-2 leading-relaxed">
-            Acesso irrestrito a todos os módulos, gerenciamento de usuários, parametrizações globais do sistema e aprovação final de reembolsos/diárias.
+          <p className="text-[11px] text-slate-400 mt-2 leading-relaxed">
+            Acesso irrestrito a todos os módulos, usuários, parametrizações e financeiro.
           </p>
-          <div className="mt-4 pt-3 border-t border-[#1e2433] flex items-center justify-between text-[11px] font-mono text-purple-300">
-            <span>Privilégios: Totais</span>
+          <div className="mt-3 pt-2 border-t border-[#1e2433] flex items-center justify-between text-[10px] font-mono text-purple-300">
+            <span>Totais</span>
             <span className="font-bold">Nível 1</span>
           </div>
         </div>
 
-        <div className="p-5 rounded-2xl bg-[#171b26] border border-cyan-500/30 shadow-xl relative overflow-hidden group">
-          <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
-            <span className="material-symbols-outlined text-6xl text-cyan-400">supervisor_account</span>
+        <div className="p-4 rounded-2xl bg-[#171b26] border border-cyan-500/30 shadow-xl relative overflow-hidden group">
+          <div className="absolute top-0 right-0 p-3 opacity-10 group-hover:opacity-20 transition-opacity">
+            <span className="material-symbols-outlined text-5xl text-cyan-400">supervisor_account</span>
           </div>
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-2">
             <span className="w-2.5 h-2.5 rounded-full bg-cyan-500"></span>
-            <h3 className="text-sm font-extrabold text-white uppercase tracking-wider font-mono">Papel: Gestor</h3>
+            <h3 className="text-xs font-extrabold text-white uppercase tracking-wider font-mono">Gestor</h3>
           </div>
-          <p className="text-xs text-slate-400 mt-2 leading-relaxed">
-            Supervisão operacional de equipes, acompanhamento de presença ao vivo, cadastro de promotores/freelancers e criação de rotas.
+          <p className="text-[11px] text-slate-400 mt-2 leading-relaxed">
+            Supervisão operacional, rotas, cadastros e acompanhamento de equipes.
           </p>
-          <div className="mt-4 pt-3 border-t border-[#1e2433] flex items-center justify-between text-[11px] font-mono text-cyan-300">
-            <span>Privilégios: Gestão Operacional</span>
+          <div className="mt-3 pt-2 border-t border-[#1e2433] flex items-center justify-between text-[10px] font-mono text-cyan-300">
+            <span>Operacional</span>
             <span className="font-bold">Nível 2</span>
           </div>
         </div>
 
-        <div className="p-5 rounded-2xl bg-[#171b26] border border-emerald-500/30 shadow-xl relative overflow-hidden group">
-          <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
-            <span className="material-symbols-outlined text-6xl text-emerald-400">badge</span>
+        <div className="p-4 rounded-2xl bg-[#171b26] border border-emerald-500/30 shadow-xl relative overflow-hidden group">
+          <div className="absolute top-0 right-0 p-3 opacity-10 group-hover:opacity-20 transition-opacity">
+            <span className="material-symbols-outlined text-5xl text-emerald-400">badge</span>
           </div>
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-2">
             <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
-            <h3 className="text-sm font-extrabold text-white uppercase tracking-wider font-mono">Papel: Operador</h3>
+            <h3 className="text-xs font-extrabold text-white uppercase tracking-wider font-mono">Operador</h3>
           </div>
-          <p className="text-xs text-slate-400 mt-2 leading-relaxed">
-            Acesso direcionado para registro de ponto georreferenciado, relatórios de campo, confirmação de presença e checagem de SKUs.
+          <p className="text-[11px] text-slate-400 mt-2 leading-relaxed">
+            Painel operacional, rotas, cadastros e diárias do dia a dia.
           </p>
-          <div className="mt-4 pt-3 border-t border-[#1e2433] flex items-center justify-between text-[11px] font-mono text-emerald-300">
-            <span>Privilégios: Execução de Campo</span>
+          <div className="mt-3 pt-2 border-t border-[#1e2433] flex items-center justify-between text-[10px] font-mono text-emerald-300">
+            <span>Campo & Ops</span>
             <span className="font-bold">Nível 3</span>
+          </div>
+        </div>
+
+        <div className="p-4 rounded-2xl bg-[#171b26] border border-amber-500/30 shadow-xl relative overflow-hidden group">
+          <div className="absolute top-0 right-0 p-3 opacity-10 group-hover:opacity-20 transition-opacity">
+            <span className="material-symbols-outlined text-5xl text-amber-400">smartphone</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-amber-500"></span>
+            <h3 className="text-xs font-extrabold text-white uppercase tracking-wider font-mono">Promotor</h3>
+          </div>
+          <p className="text-[11px] text-slate-400 mt-2 leading-relaxed">
+            Acesso exclusivo ao Portal do Promotor, suas rotas, check-in e fotos de visita.
+          </p>
+          <div className="mt-3 pt-2 border-t border-[#1e2433] flex items-center justify-between text-[10px] font-mono text-amber-300">
+            <span>Portal Mobile</span>
+            <span className="font-bold">Nível 4</span>
           </div>
         </div>
       </section>
@@ -369,7 +408,7 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
               type="text"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Buscar por nome, e-mail ou departamento..."
+              placeholder="Buscar por nome, e-mail ou matrícula..."
               className="w-full h-10 pl-9 pr-4 bg-[#131722] border border-[#1e2433] rounded-xl text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-purple-500 transition-all"
             />
           </div>
@@ -386,6 +425,7 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                 <option value="admin">Administrador</option>
                 <option value="gestor">Gestor</option>
                 <option value="operador">Operador</option>
+                <option value="promotor">Promotor</option>
               </select>
             </div>
 
@@ -409,12 +449,12 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
           <table className="w-full text-left text-xs border-collapse">
             <thead>
               <tr className="bg-[#131722] border-b border-[#1e2433] text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono">
-                <th className="py-3.5 px-4">Usuário</th>
+                <th className="py-3.5 px-4">Usuário Auth</th>
+                <th className="py-3.5 px-4">Matrícula Promotor</th>
                 <th className="py-3.5 px-4">Departamento</th>
                 <th className="py-3.5 px-4">Papel Atual</th>
                 <th className="py-3.5 px-4">Status</th>
-                <th className="py-3.5 px-4">Data de Cadastro</th>
-                <th className="py-3.5 px-4 text-right">Ações de Acesso</th>
+                <th className="py-3.5 px-4 text-right">Ações de Vínculo</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[#1e2433] text-slate-300">
@@ -433,13 +473,6 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
               ) : (
                 filteredUsers.map((u) => {
                   const isUserActive = (u.status || 'ativo') === 'ativo';
-                  const formattedDate = u.created_at
-                    ? new Date(u.created_at).toLocaleDateString('pt-BR', {
-                        day: '2-digit',
-                        month: '2-digit',
-                        year: 'numeric'
-                      })
-                    : '--';
 
                   return (
                     <tr key={u.id} className="hover:bg-[#131722]/60 transition-colors">
@@ -461,6 +494,15 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                           </div>
                         </div>
                       </td>
+                      <td className="py-4 px-4 font-mono text-xs">
+                        {u.promotor_matricula ? (
+                          <span className="px-2 py-1 rounded bg-amber-500/10 border border-amber-500/30 text-amber-300 font-bold">
+                            {u.promotor_matricula}
+                          </span>
+                        ) : (
+                          <span className="text-slate-600 font-mono">—</span>
+                        )}
+                      </td>
                       <td className="py-4 px-4 font-mono text-slate-300">
                         {u.department || 'Operações MK9'}
                       </td>
@@ -477,9 +519,6 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                           {isUserActive ? 'ATIVO' : 'BLOQUEADO'}
                         </span>
                       </td>
-                      <td className="py-4 px-4 font-mono text-slate-400 text-xs">
-                        {formattedDate}
-                      </td>
                       <td className="py-4 px-4 text-right">
                         {role === 'admin' ? (
                           <div className="flex items-center justify-end gap-2">
@@ -493,12 +532,13 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                               <option value="admin">Admin</option>
                               <option value="gestor">Gestor</option>
                               <option value="operador">Operador</option>
+                              <option value="promotor">Promotor</option>
                             </select>
 
                             <button
                               onClick={() => handleOpenEditModal(u)}
                               className="p-1.5 rounded-lg bg-[#131722] hover:bg-[#1f2433] text-slate-300 hover:text-white border border-[#1e2433] transition-colors"
-                              title="Editar Perfil"
+                              title="Editar Perfil e Vínculo de Matrícula"
                             >
                               <span className="material-symbols-outlined text-[16px]">edit</span>
                             </button>
@@ -586,7 +626,7 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                   type="text"
                   value={inviteDepartment}
                   onChange={(e) => setInviteDepartment(e.target.value)}
-                  placeholder="ex: Supervisão de Campo SP"
+                  placeholder="ex: Campo SP"
                   className="w-full h-10 px-3 bg-[#10141f] border border-[#1e2433] rounded-xl text-white placeholder:text-slate-500 focus:outline-none focus:border-purple-500"
                 />
               </div>
@@ -600,6 +640,7 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                 >
                   <option value="gestor">Gestor de Operação</option>
                   <option value="operador">Operador de Campo</option>
+                  <option value="promotor">Promotor de Campo</option>
                 </select>
               </div>
 
@@ -641,7 +682,7 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                   <span className="material-symbols-outlined text-xl">manage_accounts</span>
                 </div>
                 <div>
-                  <h3 className="text-base font-bold text-white">Editar Usuário</h3>
+                  <h3 className="text-base font-bold text-white">Editar Usuário &amp; Vínculo</h3>
                   <p className="text-[11px] font-mono text-slate-400">{editingUser.email}</p>
                 </div>
               </div>
@@ -684,7 +725,37 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                   <option value="admin">Administrador</option>
                   <option value="gestor">Gestor de Operação</option>
                   <option value="operador">Operador de Campo</option>
+                  <option value="promotor">Promotor de Campo</option>
                 </select>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="font-bold text-slate-300 flex items-center justify-between">
+                  <span>Vincular Matrícula de Promotor</span>
+                  <span className="text-[10px] text-amber-400 font-mono">(public.promotores)</span>
+                </label>
+                {promotoresOptions.length > 0 ? (
+                  <select
+                    value={editPromotorMatricula}
+                    onChange={(e) => setEditPromotorMatricula(e.target.value)}
+                    className="w-full h-10 px-3 bg-[#10141f] border border-[#1e2433] rounded-xl text-white font-mono text-xs focus:outline-none focus:border-purple-500 cursor-pointer"
+                  >
+                    <option value="">-- Sem Matrícula Vinculada --</option>
+                    {promotoresOptions.map((p) => (
+                      <option key={p.matricula} value={p.matricula}>
+                        Matrícula: {p.matricula} - {p.name}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    placeholder="Digite a matrícula (ex: PROM001)"
+                    value={editPromotorMatricula}
+                    onChange={(e) => setEditPromotorMatricula(e.target.value)}
+                    className="w-full h-10 px-3 bg-[#10141f] border border-[#1e2433] rounded-xl text-white font-mono text-xs focus:outline-none focus:border-purple-500"
+                  />
+                )}
               </div>
 
               <div className="space-y-1.5">

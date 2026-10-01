@@ -15,7 +15,7 @@ interface AuthContextValue {
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
   updateProfileRole: (userId: string, newRole: UserRole) => Promise<{ error: Error | null }>;
-  updateUserProfile: (userId: string, updates: { role?: UserRole; department?: string; status?: 'ativo' | 'inativo' }) => Promise<{ error: Error | null }>;
+  updateUserProfile: (userId: string, updates: { role?: UserRole; department?: string; status?: 'ativo' | 'inativo'; promotor_matricula?: string | null }) => Promise<{ error: Error | null }>;
   inviteUser: (data: { email: string; name: string; department: string; role: UserRole }) => Promise<{ error: Error | null }>;
 }
 
@@ -63,6 +63,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           email: data.email || defaultProfile.email,
           name: data.name || defaultProfile.name,
           role: (data.role as UserRole) || defaultProfile.role,
+          promotor_matricula: data.promotor_matricula || null,
           avatar_url: data.avatar_url,
           department: data.department || defaultProfile.department,
           created_at: data.created_at,
@@ -130,7 +131,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return { error: null };
   }, [role, session]);
 
-  const updateUserProfile = useCallback(async (userId: string, updates: { role?: UserRole; department?: string; status?: 'ativo' | 'inativo' }) => {
+  const updateUserProfile = useCallback(async (
+    userId: string, 
+    updates: { role?: UserRole; department?: string; status?: 'ativo' | 'inativo'; promotor_matricula?: string | null }
+  ) => {
     if (!supabase) return { error: new Error('Supabase não configurado.') };
     if (role !== 'admin') return { error: new Error('Apenas administradores podem alterar permissões de usuários.') };
 
