@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../auth/AuthProvider';
 import { supabase } from '../lib/supabase';
 import type { ToastMessage, UserProfile, UserRole } from '../types';
@@ -7,14 +7,31 @@ interface UsersPermissionsViewProps {
   onShowToast: (toast: Omit<ToastMessage, 'id'>) => void;
 }
 
+export interface PromoterRecord {
+  id?: string;
+  matricula: string;
+  nome: string;
+  supervisor?: string | null;
+  equipe?: string | null;
+  status?: string | null;
+  cidade?: string | null;
+  uf?: string | null;
+}
+
+export interface ExtendedUserProfile extends UserProfile {
+  last_sign_in_at?: string | null;
+  promotor?: PromoterRecord | null;
+}
+
 export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onShowToast }) => {
   const { profile, role, updateUserProfile, inviteUser } = useAuth();
-  const [usersList, setUsersList] = useState<UserProfile[]>([]);
+  const [usersList, setUsersList] = useState<ExtendedUserProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [roleFilter, setRoleFilter] = useState<'all' | UserRole>('all');
   const [statusFilter, setStatusFilter] = useState<'all' | 'ativo' | 'inativo'>('all');
+  const [promotorFilter, setPromotorFilter] = useState<'all' | 'linked' | 'unlinked' | 'unlinked_promoter'>('all');
   const [savingUserId, setSavingUserId] = useState<string | null>(null);
 
   // Invite Modal state
@@ -22,19 +39,29 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteName, setInviteName] = useState('');
   const [inviteDepartment, setInviteDepartment] = useState('Operações MK9');
-  const [inviteRole, setInviteRole] = useState<UserRole>('operador');
+  const [inviteRole, setInviteRole] = useState<UserRole>('promotor');
+  const [invitePromotorMatricula, setInvitePromotorMatricula] = useState('');
   const [inviting, setInviting] = useState(false);
 
   // Edit Modal state
-  const [editingUser, setEditingUser] = useState<UserProfile | null>(null);
+  const [editingUser, setEditingUser] = useState<ExtendedUserProfile | null>(null);
   const [editDepartment, setEditDepartment] = useState('');
   const [editRole, setEditRole] = useState<UserRole>('operador');
   const [editStatus, setEditStatus] = useState<'ativo' | 'inativo'>('ativo');
   const [editPromotorMatricula, setEditPromotorMatricula] = useState<string>('');
   const [savingEdit, setSavingEdit] = useState(false);
 
+  // Confirmation Modal for Link Change
+  const [confirmModalData, setConfirmModalData] = useState<{
+    user: ExtendedUserProfile;
+    newMatricula: string;
+    newRole: UserRole;
+    newDepartment: string;
+    newStatus: 'ativo' | 'inativo';
+  } | null>(null);
+
   // Promotores options for linking
-  const [promotoresOptions, setPromotoresOptions] = useState<{ matricula: string; name: string }[]>([]);
+  const [promotoresOptions, setPromotoresOptions] = useState<PromoterRecord[]>([]);
 
   const fetchUsers = async () => {
     setLoading(true);
@@ -47,23 +74,85 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
     }
 
     try {
+      // Execute relational query between profiles and promotores
       const [profilesRes, promotoresRes] = await Promise.all([
-        supabase.from('profiles').select('*').order('created_at', { ascending: false }),
-        supabase.from('promotores').select('matricula, name').order('name')
+        supabase
+          .from('profiles')
+          .select(`
+            *,
+            promotor:promotores!profiles_promotor_matricula_fkey(
+              id,
+              matricula,
+              nome,
+              supervisor,
+              equipe,
+              status
+            )
+          `)
+          .order('created_at', { ascending: false }),
+        supabase
+          .from('promotores')
+          .select('id, matricula, nome, supervisor, equipe, status')
+          .order('nome')
       ]);
 
+      let rawProfiles: any[] = [];
       if (profilesRes.error) {
-        setErrorMessage(`Falha ao buscar usuários do Supabase: ${profilesRes.error.message}`);
-        if (profile) setUsersList([profile]);
-      } else if (profilesRes.data) {
-        setUsersList(profilesRes.data as UserProfile[]);
+        // Fallback standard select if FK relationship alias varies in PostgREST schema
+        const fallbackRes = await supabase.from('profiles').select('*').order('created_at', { ascending: false });
+        if (fallbackRes.error) {
+          setErrorMessage(`Falha ao carregar perfis do Supabase: ${fallbackRes.error.message}`);
+          if (profile) setUsersList([profile]);
+        } else {
+          rawProfiles = fallbackRes.data || [];
+        }
+      } else {
+        rawProfiles = profilesRes.data || [];
       }
 
+      const promotoresMap = new Map<string, PromoterRecord>();
       if (promotoresRes.data) {
-        setPromotoresOptions(promotoresRes.data as { matricula: string; name: string }[]);
+        const list: PromoterRecord[] = promotoresRes.data.map((p: any) => ({
+          id: p.id,
+          matricula: p.matricula,
+          nome: p.nome || p.name || 'Promotor Sem Nome',
+          supervisor: p.supervisor || null,
+          equipe: p.equipe || p.squad || null,
+          status: p.status || 'ativo'
+        }));
+        setPromotoresOptions(list);
+        list.forEach((p) => promotoresMap.set(p.matricula, p));
       }
+
+      const mergedList: ExtendedUserProfile[] = rawProfiles.map((p: any) => {
+        let linkedPromoter: PromoterRecord | null = null;
+        if (p.promotor) {
+          linkedPromoter = Array.isArray(p.promotor) ? p.promotor[0] : p.promotor;
+          if (linkedPromoter) {
+            linkedPromoter = {
+              matricula: linkedPromoter.matricula,
+              nome: linkedPromoter.nome || (linkedPromoter as any).name || 'Promotor Sem Nome',
+              supervisor: linkedPromoter.supervisor || null,
+              equipe: linkedPromoter.equipe || (linkedPromoter as any).squad || null,
+              status: linkedPromoter.status || 'ativo'
+            };
+          }
+        }
+        
+        if (!linkedPromoter && p.promotor_matricula && promotoresMap.has(p.promotor_matricula)) {
+          linkedPromoter = promotoresMap.get(p.promotor_matricula)!;
+        }
+
+        return {
+          ...p,
+          role: (p.role as UserRole) || 'operador',
+          promotor: linkedPromoter
+        };
+      });
+
+      setUsersList(mergedList);
     } catch (err) {
-      setErrorMessage(`Erro de conexão com o banco de dados: ${String(err)}`);
+      setErrorMessage(`Erro ao conectar com o banco de dados: ${String(err)}`);
     } finally {
       setLoading(false);
     }
@@ -73,7 +162,7 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
     fetchUsers();
   }, [profile]);
 
-  const handleQuickStatusToggle = async (targetUser: UserProfile) => {
+  const handleQuickStatusToggle = async (targetUser: ExtendedUserProfile) => {
     if (role !== 'admin') {
       onShowToast({
         title: 'Acesso Negado',
@@ -100,8 +189,8 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
         prev.map((u) => (u.id === targetUser.id ? { ...u, status: newStatus } : u))
       );
       onShowToast({
-        title: newStatus === 'ativo' ? 'Acesso Desbloqueado' : 'Acesso Bloqueado',
-        message: `O status de ${targetUser.name} foi alterado para ${newStatus.toUpperCase()}.`,
+        title: newStatus === 'ativo' ? 'Acesso Liberado' : 'Acesso Bloqueado',
+        message: `Status de ${targetUser.name} alterado para ${newStatus.toUpperCase()}.`,
         type: 'success'
       });
     }
@@ -111,7 +200,7 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
     if (role !== 'admin') {
       onShowToast({
         title: 'Acesso Negado',
-        message: 'Apenas administradores podem alterar papéis de permissão.',
+        message: 'Apenas administradores podem alterar papéis de acesso.',
         type: 'warning'
       });
       return;
@@ -123,8 +212,8 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
 
     if (error) {
       onShowToast({
-        title: 'Erro de Permissão',
-        message: `Falha ao atualizar papel: ${error.message}`,
+        title: 'Erro ao Alterar Papel',
+        message: error.message,
         type: 'error'
       });
     } else {
@@ -132,18 +221,18 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
         prev.map((u) => (u.id === targetUserId ? { ...u, role: newRole } : u))
       );
       onShowToast({
-        title: 'Permissão Atualizada',
+        title: 'Papel Atualizado',
         message: `O papel de ${targetName} foi alterado para ${newRole.toUpperCase()}.`,
         type: 'success'
       });
     }
   };
 
-  const handleOpenEditModal = (userToEdit: UserProfile) => {
+  const handleOpenEditModal = (userToEdit: ExtendedUserProfile) => {
     if (role !== 'admin') {
       onShowToast({
-        title: 'Acesso Negado',
-        message: 'Apenas administradores podem editar perfis de usuários.',
+        title: 'Acesso Restrito',
+        message: 'Apenas administradores podem gerenciar vínculos e papéis de usuários.',
         type: 'warning'
       });
       return;
@@ -155,18 +244,43 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
     setEditPromotorMatricula(userToEdit.promotor_matricula || '');
   };
 
-  const handleSaveEdit = async (e: React.FormEvent) => {
+  const handlePreSaveEdit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingUser) return;
 
+    const matriculaChanged = editPromotorMatricula.trim() !== (editingUser.promotor_matricula || '');
+
+    if (matriculaChanged) {
+      // Abre modal de confirmação antes de alterar o vínculo
+      setConfirmModalData({
+        user: editingUser,
+        newMatricula: editPromotorMatricula.trim(),
+        newRole: editRole,
+        newDepartment: editDepartment,
+        newStatus: editStatus
+      });
+    } else {
+      // Executa direto se a matrícula não mudou
+      executeSaveEdit(editingUser.id, editPromotorMatricula.trim() || null, editRole, editDepartment, editStatus);
+    }
+  };
+
+  const executeSaveEdit = async (
+    userId: string,
+    newMatricula: string | null,
+    newRole: UserRole,
+    newDepartment: string,
+    newStatus: 'ativo' | 'inativo'
+  ) => {
     setSavingEdit(true);
-    const { error } = await updateUserProfile(editingUser.id, {
-      department: editDepartment,
-      role: editRole,
-      status: editStatus,
-      promotor_matricula: editPromotorMatricula.trim() || null
+    const { error } = await updateUserProfile(userId, {
+      department: newDepartment,
+      role: newRole,
+      status: newStatus,
+      promotor_matricula: newMatricula
     });
     setSavingEdit(false);
+    setConfirmModalData(null);
 
     if (error) {
       onShowToast({
@@ -175,25 +289,38 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
         type: 'error'
       });
     } else {
+      // Encontra dados do novo promotor vinculado
+      const newPromoterObj = newMatricula
+        ? promotoresOptions.find((p) => p.matricula === newMatricula) || {
+            matricula: newMatricula,
+            nome: 'Promotor Vinculado',
+            status: 'ativo'
+          }
+        : null;
+
+      // Atualiza lista local imediatamente
       setUsersList((prev) =>
         prev.map((u) =>
-          u.id === editingUser.id
+          u.id === userId
             ? {
                 ...u,
-                department: editDepartment,
-                role: editRole,
-                status: editStatus,
-                promotor_matricula: editPromotorMatricula.trim() || null
+                department: newDepartment,
+                role: newRole,
+                status: newStatus,
+                promotor_matricula: newMatricula,
+                promotor: newPromoterObj
               }
             : u
         )
       );
+
       setEditingUser(null);
       onShowToast({
-        title: 'Perfil Atualizado',
-        message: `As alterações no perfil de ${editingUser.name} foram salvas com sucesso.`,
+        title: 'Vínculo e Perfil Atualizados',
+        message: `As alterações de perfil e vínculo para ${editingUser?.name || 'o usuário'} foram aplicadas com sucesso.`,
         type: 'success'
       });
+      fetchUsers();
     }
   };
 
@@ -202,7 +329,7 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
     if (!inviteEmail || !inviteName) {
       onShowToast({
         title: 'Campos Obrigatórios',
-        message: 'Preencha o e-mail e o nome do usuário.',
+        message: 'Preencha o e-mail e o nome completo do usuário.',
         type: 'warning'
       });
       return;
@@ -228,7 +355,8 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
       setInviteEmail('');
       setInviteName('');
       setInviteDepartment('Operações MK9');
-      setInviteRole('operador');
+      setInviteRole('promotor');
+      setInvitePromotorMatricula('');
       fetchUsers();
       onShowToast({
         title: 'Convite Enviado',
@@ -238,18 +366,39 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
     }
   };
 
-  const filteredUsers = usersList.filter((u) => {
-    const matchesSearch =
-      u.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      u.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (u.department && u.department.toLowerCase().includes(searchTerm.toLowerCase()));
+  // Filtragem avançada dos usuários
+  const filteredUsers = useMemo(() => {
+    return usersList.filter((u) => {
+      const q = searchTerm.toLowerCase().trim();
+      const matchesSearch =
+        !q ||
+        u.name.toLowerCase().includes(q) ||
+        u.email.toLowerCase().includes(q) ||
+        (u.department && u.department.toLowerCase().includes(q)) ||
+        (u.promotor_matricula && u.promotor_matricula.toLowerCase().includes(q)) ||
+        (u.promotor?.nome && u.promotor.nome.toLowerCase().includes(q)) ||
+        (u.promotor?.supervisor && u.promotor.supervisor.toLowerCase().includes(q)) ||
+        (u.promotor?.equipe && u.promotor.equipe.toLowerCase().includes(q));
 
-    const matchesRole = roleFilter === 'all' || u.role === roleFilter;
-    const matchesStatus =
-      statusFilter === 'all' || (u.status || 'ativo') === statusFilter;
+      const matchesRole = roleFilter === 'all' || u.role === roleFilter;
+      const matchesStatus = statusFilter === 'all' || (u.status || 'ativo') === statusFilter;
 
-    return matchesSearch && matchesRole && matchesStatus;
-  });
+      let matchesPromotorFilter = true;
+      if (promotorFilter === 'linked') {
+        matchesPromotorFilter = !!u.promotor_matricula;
+      } else if (promotorFilter === 'unlinked') {
+        matchesPromotorFilter = !u.promotor_matricula;
+      } else if (promotorFilter === 'unlinked_promoter') {
+        matchesPromotorFilter = u.role === 'promotor' && !u.promotor_matricula;
+      }
+
+      return matchesSearch && matchesRole && matchesStatus && matchesPromotorFilter;
+    });
+  }, [usersList, searchTerm, roleFilter, statusFilter, promotorFilter]);
+
+  // Contadores para resumos e alertas
+  const totalPromotores = usersList.filter((u) => u.role === 'promotor').length;
+  const unlinkedPromotoresCount = usersList.filter((u) => u.role === 'promotor' && !u.promotor_matricula).length;
 
   const getRoleBadge = (userRole: UserRole) => {
     switch (userRole) {
@@ -273,10 +422,25 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
         );
       case 'promotor':
         return (
-          <span className="px-2.5 py-1 rounded-md bg-amber-950/80 border border-amber-500/50 text-amber-300 text-[10px] font-extrabold uppercase tracking-wider font-mono shadow-[0_0_10px_rgba(245,158,11,0.3)]">
-            PROMOTOR DE CAMPO
+          <span className="px-2.5 py-1 rounded-md bg-amber-950/80 border border-amber-500/50 text-amber-300 text-[10px] font-extrabold uppercase tracking-wider font-mono shadow-[0_0_10px_rgba(245,158,11,0.3)] flex items-center gap-1 w-fit">
+            <span className="material-symbols-outlined text-xs text-amber-400">smartphone</span>
+            PROMOTOR
           </span>
         );
+    }
+  };
+
+  const getPromoterStatusBadge = (status?: string | null) => {
+    if (!status) return null;
+    switch (status.toLowerCase()) {
+      case 'ativo':
+        return <span className="px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-[10px] font-mono font-bold">ATIVO</span>;
+      case 'ferias':
+        return <span className="px-2 py-0.5 rounded bg-amber-500/10 border border-amber-500/30 text-amber-300 text-[10px] font-mono font-bold">FÉRIAS</span>;
+      case 'afastado':
+        return <span className="px-2 py-0.5 rounded bg-purple-500/10 border border-purple-500/30 text-purple-300 text-[10px] font-mono font-bold">AFASTADO</span>;
+      default:
+        return <span className="px-2 py-0.5 rounded bg-rose-500/10 border border-rose-500/30 text-rose-400 text-[10px] font-mono font-bold">INATIVO</span>;
     }
   };
 
@@ -293,8 +457,8 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
               Perfis &amp; Permissões de Acesso
             </h1>
           </div>
-          <p className="text-xs sm:text-sm text-slate-400 mt-1 max-w-3xl">
-            Gestão centralizada de papéis RBAC (<code className="text-purple-400 font-mono">Admin</code>, <code className="text-cyan-400 font-mono">Gestor</code>, <code className="text-emerald-400 font-mono">Operador</code>, <code className="text-amber-400 font-mono">Promotor</code>) e vínculo de matrículas do Portal do Promotor.
+          <p className="text-xs sm:text-sm text-slate-400 mt-1 max-w-4xl">
+            Gestão de usuários Auth, associação de papéis RBAC (<code className="text-purple-400 font-mono">Admin</code>, <code className="text-cyan-400 font-mono">Gestor</code>, <code className="text-emerald-400 font-mono">Operador</code>, <code className="text-amber-400 font-mono">Promotor</code>) e vínculo direto com o cadastro de <strong>public.promotores</strong>.
           </p>
         </div>
 
@@ -319,6 +483,31 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
         </div>
       </section>
 
+      {/* Alerta de Promotores sem Vínculo */}
+      {unlinkedPromotoresCount > 0 && (
+        <section className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between gap-4 shadow-lg animate-fadeIn">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/40 flex items-center justify-center shrink-0 font-bold">
+              <span className="material-symbols-outlined text-2xl">warning</span>
+            </div>
+            <div>
+              <h4 className="text-sm font-bold text-amber-200">
+                {unlinkedPromotoresCount} {unlinkedPromotoresCount === 1 ? 'usuário promotor sem matrícula vinculada' : 'usuários promotores sem matrícula vinculada'}
+              </h4>
+              <p className="text-xs text-amber-300/80">
+                Usuários com o papel <strong>Promotor</strong> precisam estar vinculados a um registro em <strong>public.promotores</strong> para acessar suas rotas e visitas.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => setPromotorFilter('unlinked_promoter')}
+            className="px-3.5 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/40 font-bold text-xs shrink-0 transition-colors"
+          >
+            Filtrar Pendentes ({unlinkedPromotoresCount})
+          </button>
+        </section>
+      )}
+
       {/* Role Matrix Info Cards */}
       <section className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div className="p-4 rounded-2xl bg-[#171b26] border border-purple-500/30 shadow-xl relative overflow-hidden group">
@@ -330,12 +519,8 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
             <h3 className="text-xs font-extrabold text-white uppercase tracking-wider font-mono">Admin</h3>
           </div>
           <p className="text-[11px] text-slate-400 mt-2 leading-relaxed">
-            Acesso irrestrito a todos os módulos, usuários, parametrizações e financeiro.
+            Acesso irrestrito a todos os módulos, parametrizações globais, usuários e finanças.
           </p>
-          <div className="mt-3 pt-2 border-t border-[#1e2433] flex items-center justify-between text-[10px] font-mono text-purple-300">
-            <span>Totais</span>
-            <span className="font-bold">Nível 1</span>
-          </div>
         </div>
 
         <div className="p-4 rounded-2xl bg-[#171b26] border border-cyan-500/30 shadow-xl relative overflow-hidden group">
@@ -347,12 +532,8 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
             <h3 className="text-xs font-extrabold text-white uppercase tracking-wider font-mono">Gestor</h3>
           </div>
           <p className="text-[11px] text-slate-400 mt-2 leading-relaxed">
-            Supervisão operacional, rotas, cadastros e acompanhamento de equipes.
+            Supervisão operacional, gestão de equipes, acompanhamento de presença e criação de rotas.
           </p>
-          <div className="mt-3 pt-2 border-t border-[#1e2433] flex items-center justify-between text-[10px] font-mono text-cyan-300">
-            <span>Operacional</span>
-            <span className="font-bold">Nível 2</span>
-          </div>
         </div>
 
         <div className="p-4 rounded-2xl bg-[#171b26] border border-emerald-500/30 shadow-xl relative overflow-hidden group">
@@ -364,12 +545,8 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
             <h3 className="text-xs font-extrabold text-white uppercase tracking-wider font-mono">Operador</h3>
           </div>
           <p className="text-[11px] text-slate-400 mt-2 leading-relaxed">
-            Painel operacional, rotas, cadastros e diárias do dia a dia.
+            Painéis operacionais de rotas, lojas e relatórios gerais da central.
           </p>
-          <div className="mt-3 pt-2 border-t border-[#1e2433] flex items-center justify-between text-[10px] font-mono text-emerald-300">
-            <span>Campo & Ops</span>
-            <span className="font-bold">Nível 3</span>
-          </div>
         </div>
 
         <div className="p-4 rounded-2xl bg-[#171b26] border border-amber-500/30 shadow-xl relative overflow-hidden group">
@@ -381,16 +558,12 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
             <h3 className="text-xs font-extrabold text-white uppercase tracking-wider font-mono">Promotor</h3>
           </div>
           <p className="text-[11px] text-slate-400 mt-2 leading-relaxed">
-            Acesso exclusivo ao Portal do Promotor, suas rotas, check-in e fotos de visita.
+            Acesso exclusivo ao Portal Mobile do Promotor, suas rotas, check-in e fotos de campo.
           </p>
-          <div className="mt-3 pt-2 border-t border-[#1e2433] flex items-center justify-between text-[10px] font-mono text-amber-300">
-            <span>Portal Mobile</span>
-            <span className="font-bold">Nível 4</span>
-          </div>
         </div>
       </section>
 
-      {/* Users List & Controls */}
+      {/* Controls & Filters */}
       <section className="bg-[#171b26] border border-[#1e2433] rounded-2xl p-6 shadow-2xl space-y-6">
         {errorMessage && (
           <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs font-mono flex items-center gap-2">
@@ -399,8 +572,8 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
           </div>
         )}
 
-        <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
-          <div className="relative w-full sm:w-80">
+        <div className="flex flex-col lg:flex-row items-center justify-between gap-4">
+          <div className="relative w-full lg:w-96">
             <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-[18px]">
               search
             </span>
@@ -408,33 +581,50 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
               type="text"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Buscar por nome, e-mail ou matrícula..."
-              className="w-full h-10 pl-9 pr-4 bg-[#131722] border border-[#1e2433] rounded-xl text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-purple-500 transition-all"
+              placeholder="Buscar por nome, e-mail, matrícula, supervisor ou equipe..."
+              className="w-full h-10 pl-9 pr-4 bg-[#131722] border border-[#1e2433] rounded-xl text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-purple-500 transition-all font-sans"
             />
           </div>
 
-          <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
+          <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto">
+            {/* Filtro por Papel */}
             <div className="flex items-center gap-2">
               <span className="text-xs text-slate-400 font-mono">Papel:</span>
               <select
                 value={roleFilter}
                 onChange={(e) => setRoleFilter(e.target.value as 'all' | UserRole)}
-                className="h-10 px-3 bg-[#131722] border border-[#1e2433] rounded-xl text-xs text-slate-200 focus:outline-none focus:border-purple-500 transition-all font-mono"
+                className="h-10 px-3 bg-[#131722] border border-[#1e2433] rounded-xl text-xs text-slate-200 focus:outline-none focus:border-purple-500 transition-all font-mono cursor-pointer"
               >
                 <option value="all">Todos os Papéis</option>
-                <option value="admin">Administrador</option>
+                <option value="admin">Admin</option>
                 <option value="gestor">Gestor</option>
                 <option value="operador">Operador</option>
                 <option value="promotor">Promotor</option>
               </select>
             </div>
 
+            {/* Filtro por Vínculo de Promotor */}
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-slate-400 font-mono">Vínculo:</span>
+              <select
+                value={promotorFilter}
+                onChange={(e) => setPromotorFilter(e.target.value as any)}
+                className="h-10 px-3 bg-[#131722] border border-[#1e2433] rounded-xl text-xs text-slate-200 focus:outline-none focus:border-purple-500 transition-all font-mono cursor-pointer"
+              >
+                <option value="all">Todos os Registros</option>
+                <option value="linked">Apenas Vinculados</option>
+                <option value="unlinked">Apenas Não Vinculados</option>
+                <option value="unlinked_promoter">⚠️ Promotores Sem Vínculo</option>
+              </select>
+            </div>
+
+            {/* Filtro por Status da Conta */}
             <div className="flex items-center gap-2">
               <span className="text-xs text-slate-400 font-mono">Status:</span>
               <select
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value as 'all' | 'ativo' | 'inativo')}
-                className="h-10 px-3 bg-[#131722] border border-[#1e2433] rounded-xl text-xs text-slate-200 focus:outline-none focus:border-purple-500 transition-all font-mono"
+                className="h-10 px-3 bg-[#131722] border border-[#1e2433] rounded-xl text-xs text-slate-200 focus:outline-none focus:border-purple-500 transition-all font-mono cursor-pointer"
               >
                 <option value="all">Todos os Status</option>
                 <option value="ativo">Ativos</option>
@@ -444,41 +634,67 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
           </div>
         </div>
 
-        {/* Table */}
+        {/* Tabela de Usuários e Vínculos */}
         <div className="overflow-x-auto rounded-xl border border-[#1e2433]">
           <table className="w-full text-left text-xs border-collapse">
             <thead>
               <tr className="bg-[#131722] border-b border-[#1e2433] text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono">
                 <th className="py-3.5 px-4">Usuário Auth</th>
+                <th className="py-3.5 px-4">Papel</th>
                 <th className="py-3.5 px-4">Matrícula Promotor</th>
-                <th className="py-3.5 px-4">Departamento</th>
-                <th className="py-3.5 px-4">Papel Atual</th>
-                <th className="py-3.5 px-4">Status</th>
+                <th className="py-3.5 px-4">Nome no Cadastro</th>
+                <th className="py-3.5 px-4">Status Promotor</th>
+                <th className="py-3.5 px-4">Supervisor / Equipe</th>
+                <th className="py-3.5 px-4">Último Acesso</th>
+                <th className="py-3.5 px-4">Status Acesso</th>
                 <th className="py-3.5 px-4 text-right">Ações de Vínculo</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[#1e2433] text-slate-300">
               {loading ? (
                 <tr>
-                  <td colSpan={6} className="py-8 text-center text-slate-400 font-mono text-xs">
-                    Carregando usuários registrados do Supabase...
+                  <td colSpan={9} className="py-12 text-center text-slate-400 font-mono text-xs">
+                    Carregando tabela de usuários e relacionamentos...
                   </td>
                 </tr>
               ) : filteredUsers.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="py-8 text-center text-slate-400 font-mono text-xs">
-                    Nenhum usuário cadastrado ou encontrado com os filtros aplicados.
+                  <td colSpan={9} className="py-12 text-center text-slate-400 font-mono text-xs">
+                    Nenhum perfil encontrado com os filtros selecionados.
                   </td>
                 </tr>
               ) : (
                 filteredUsers.map((u) => {
                   const isUserActive = (u.status || 'ativo') === 'ativo';
+                  const isPromotorRole = u.role === 'promotor';
+                  const isUnlinkedPromoter = isPromotorRole && !u.promotor_matricula;
+                  const formattedDate = u.updated_at || u.created_at
+                    ? new Date(u.updated_at || u.created_at!).toLocaleDateString('pt-BR', {
+                        day: '2-digit',
+                        month: '2-digit',
+                        year: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit'
+                      })
+                    : '--';
 
                   return (
-                    <tr key={u.id} className="hover:bg-[#131722]/60 transition-colors">
+                    <tr
+                      key={u.id}
+                      className={`transition-colors ${
+                        isUnlinkedPromoter
+                          ? 'bg-amber-950/20 border-l-4 border-l-amber-500 hover:bg-amber-950/35'
+                          : 'hover:bg-[#131722]/60'
+                      }`}
+                    >
+                      {/* Usuário Auth */}
                       <td className="py-4 px-4">
                         <div className="flex items-center gap-3">
-                          <div className="w-9 h-9 rounded-full bg-purple-950/80 border border-purple-500/40 text-purple-200 font-extrabold flex items-center justify-center text-xs shadow-inner">
+                          <div className={`w-9 h-9 rounded-full font-extrabold flex items-center justify-center text-xs shadow-inner ${
+                            isUnlinkedPromoter 
+                              ? 'bg-amber-950/90 border border-amber-500/50 text-amber-200' 
+                              : 'bg-purple-950/80 border border-purple-500/40 text-purple-200'
+                          }`}>
                             {u.name.substring(0, 2).toUpperCase()}
                           </div>
                           <div>
@@ -494,19 +710,64 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                           </div>
                         </div>
                       </td>
+
+                      {/* Papel */}
+                      <td className="py-4 px-4">{getRoleBadge(u.role)}</td>
+
+                      {/* Matrícula do Promotor */}
                       <td className="py-4 px-4 font-mono text-xs">
                         {u.promotor_matricula ? (
-                          <span className="px-2 py-1 rounded bg-amber-500/10 border border-amber-500/30 text-amber-300 font-bold">
+                          <span className="px-2.5 py-1 rounded bg-amber-500/10 border border-amber-500/30 text-amber-300 font-bold flex items-center gap-1 w-fit">
+                            <span className="material-symbols-outlined text-xs">badge</span>
                             {u.promotor_matricula}
                           </span>
                         ) : (
-                          <span className="text-slate-600 font-mono">—</span>
+                          <span className={`px-2.5 py-1 rounded text-[11px] font-mono font-bold flex items-center gap-1 w-fit ${
+                            isPromotorRole
+                              ? 'bg-rose-500/15 border border-rose-500/40 text-rose-300 animate-pulse'
+                              : 'bg-slate-800/60 border border-slate-700/50 text-slate-500'
+                          }`}>
+                            {isPromotorRole && <span className="material-symbols-outlined text-xs">warning</span>}
+                            Não vinculado
+                          </span>
                         )}
                       </td>
-                      <td className="py-4 px-4 font-mono text-slate-300">
-                        {u.department || 'Operações MK9'}
+
+                      {/* Nome no Cadastro (Promotor) */}
+                      <td className="py-4 px-4 font-sans font-medium text-slate-200">
+                        {u.promotor?.nome ? (
+                          <div className="flex flex-col">
+                            <span className="font-semibold text-slate-100">{u.promotor.nome}</span>
+                            <span className="text-[10px] text-slate-500 font-mono">public.promotores</span>
+                          </div>
+                        ) : (
+                          <span className="text-slate-500 text-xs italic">Não vinculado</span>
+                        )}
                       </td>
-                      <td className="py-4 px-4">{getRoleBadge(u.role)}</td>
+
+                      {/* Status Promotor */}
+                      <td className="py-4 px-4">
+                        {u.promotor ? getPromoterStatusBadge(u.promotor.status) : <span className="text-slate-600">—</span>}
+                      </td>
+
+                      {/* Supervisor & Equipe */}
+                      <td className="py-4 px-4">
+                        {u.promotor ? (
+                          <div className="flex flex-col text-[11px]">
+                            <span className="text-slate-200 font-medium">{u.promotor.supervisor || 'Sem Supervisor'}</span>
+                            <span className="text-cyan-400/80 font-mono text-[10px]">{u.promotor.equipe || 'Sem Equipe'}</span>
+                          </div>
+                        ) : (
+                          <span className="text-slate-600">—</span>
+                        )}
+                      </td>
+
+                      {/* Último Acesso */}
+                      <td className="py-4 px-4 font-mono text-slate-400 text-xs">
+                        {formattedDate}
+                      </td>
+
+                      {/* Status do Acesso */}
                       <td className="py-4 px-4">
                         <span
                           className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full font-mono text-[10px] font-bold ${
@@ -519,6 +780,8 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                           {isUserActive ? 'ATIVO' : 'BLOQUEADO'}
                         </span>
                       </td>
+
+                      {/* Ações de Vínculo */}
                       <td className="py-4 px-4 text-right">
                         {role === 'admin' ? (
                           <div className="flex items-center justify-end gap-2">
@@ -527,7 +790,7 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                               value={u.role}
                               onChange={(e) => handleRoleChange(u.id, u.name, e.target.value as UserRole)}
                               className="h-8 px-2 bg-[#131722] border border-[#2a3042] rounded-lg text-xs font-mono text-slate-200 focus:outline-none focus:border-purple-500 transition-colors disabled:opacity-50 cursor-pointer"
-                              title="Alterar papel de acesso"
+                              title="Alterar papel (Privilégio de Admin)"
                             >
                               <option value="admin">Admin</option>
                               <option value="gestor">Gestor</option>
@@ -537,10 +800,14 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
 
                             <button
                               onClick={() => handleOpenEditModal(u)}
-                              className="p-1.5 rounded-lg bg-[#131722] hover:bg-[#1f2433] text-slate-300 hover:text-white border border-[#1e2433] transition-colors"
+                              className={`p-1.5 rounded-lg border transition-all ${
+                                isUnlinkedPromoter
+                                  ? 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border-amber-500/50 shadow-[0_0_10px_rgba(245,158,11,0.2)]'
+                                  : 'bg-[#131722] hover:bg-[#1f2433] text-slate-300 hover:text-white border-[#1e2433]'
+                              }`}
                               title="Editar Perfil e Vínculo de Matrícula"
                             >
-                              <span className="material-symbols-outlined text-[16px]">edit</span>
+                              <span className="material-symbols-outlined text-[16px]">link</span>
                             </button>
 
                             <button
@@ -638,9 +905,10 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                   onChange={(e) => setInviteRole(e.target.value as UserRole)}
                   className="w-full h-10 px-3 bg-[#10141f] border border-[#1e2433] rounded-xl text-white font-mono focus:outline-none focus:border-purple-500 cursor-pointer"
                 >
-                  <option value="gestor">Gestor de Operação</option>
-                  <option value="operador">Operador de Campo</option>
                   <option value="promotor">Promotor de Campo</option>
+                  <option value="operador">Operador de Campo</option>
+                  <option value="gestor">Gestor de Operação</option>
+                  <option value="admin">Administrador</option>
                 </select>
               </div>
 
@@ -672,17 +940,17 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
         </div>
       )}
 
-      {/* Modal Editar Perfil / Permissões */}
+      {/* Modal Editar Perfil e Vínculo */}
       {editingUser && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
-          <div className="relative w-full max-w-md bg-[#171b26] border border-[#1e2433] rounded-2xl shadow-2xl p-6 overflow-hidden">
+          <div className="relative w-full max-w-lg bg-[#171b26] border border-[#1e2433] rounded-2xl shadow-2xl p-6 overflow-hidden">
             <div className="flex items-center justify-between pb-4 border-b border-[#1e2433]">
               <div className="flex items-center gap-2.5">
                 <div className="w-9 h-9 rounded-lg bg-purple-600/20 text-purple-400 border border-purple-500/30 flex items-center justify-center font-bold">
                   <span className="material-symbols-outlined text-xl">manage_accounts</span>
                 </div>
                 <div>
-                  <h3 className="text-base font-bold text-white">Editar Usuário &amp; Vínculo</h3>
+                  <h3 className="text-base font-bold text-white">Vincular Login ao Promotor</h3>
                   <p className="text-[11px] font-mono text-slate-400">{editingUser.email}</p>
                 </div>
               </div>
@@ -694,7 +962,7 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
               </button>
             </div>
 
-            <form onSubmit={handleSaveEdit} className="space-y-4 py-4 text-xs">
+            <form onSubmit={handlePreSaveEdit} className="space-y-4 py-4 text-xs">
               <div className="space-y-1.5">
                 <label className="font-bold text-slate-300">Nome do Usuário</label>
                 <input
@@ -703,6 +971,35 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                   value={editingUser.name}
                   className="w-full h-10 px-3 bg-[#10141f] border border-[#1e2433] rounded-xl text-slate-400 cursor-not-allowed font-medium"
                 />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <label className="font-bold text-slate-300">Papel RBAC</label>
+                  <select
+                    disabled={role !== 'admin'}
+                    value={editRole}
+                    onChange={(e) => setEditRole(e.target.value as UserRole)}
+                    className="w-full h-10 px-3 bg-[#10141f] border border-[#1e2433] rounded-xl text-white font-mono focus:outline-none focus:border-purple-500 cursor-pointer disabled:opacity-50"
+                  >
+                    <option value="admin">Administrador</option>
+                    <option value="gestor">Gestor de Operação</option>
+                    <option value="operador">Operador de Campo</option>
+                    <option value="promotor">Promotor de Campo</option>
+                  </select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="font-bold text-slate-300">Status do Acesso</label>
+                  <select
+                    value={editStatus}
+                    onChange={(e) => setEditStatus(e.target.value as 'ativo' | 'inativo')}
+                    className="w-full h-10 px-3 bg-[#10141f] border border-[#1e2433] rounded-xl text-white font-mono focus:outline-none focus:border-purple-500 cursor-pointer"
+                  >
+                    <option value="ativo">Ativo (Acesso Liberado)</option>
+                    <option value="inativo">Inativo (Acesso Bloqueado)</option>
+                  </select>
+                </div>
               </div>
 
               <div className="space-y-1.5">
@@ -715,59 +1012,41 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                 />
               </div>
 
-              <div className="space-y-1.5">
-                <label className="font-bold text-slate-300">Papel RBAC</label>
-                <select
-                  value={editRole}
-                  onChange={(e) => setEditRole(e.target.value as UserRole)}
-                  className="w-full h-10 px-3 bg-[#10141f] border border-[#1e2433] rounded-xl text-white font-mono focus:outline-none focus:border-purple-500 cursor-pointer"
-                >
-                  <option value="admin">Administrador</option>
-                  <option value="gestor">Gestor de Operação</option>
-                  <option value="operador">Operador de Campo</option>
-                  <option value="promotor">Promotor de Campo</option>
-                </select>
-              </div>
+              {/* Seção Vínculo com public.promotores */}
+              <div className="p-4 rounded-xl bg-[#10141f] border border-amber-500/30 space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="font-bold text-amber-300 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm">badge</span>
+                    Vínculo de Matrícula (public.promotores)
+                  </label>
+                  <span className="text-[10px] text-amber-400 font-mono">Chave relacional</span>
+                </div>
 
-              <div className="space-y-1.5">
-                <label className="font-bold text-slate-300 flex items-center justify-between">
-                  <span>Vincular Matrícula de Promotor</span>
-                  <span className="text-[10px] text-amber-400 font-mono">(public.promotores)</span>
-                </label>
                 {promotoresOptions.length > 0 ? (
                   <select
                     value={editPromotorMatricula}
                     onChange={(e) => setEditPromotorMatricula(e.target.value)}
-                    className="w-full h-10 px-3 bg-[#10141f] border border-[#1e2433] rounded-xl text-white font-mono text-xs focus:outline-none focus:border-purple-500 cursor-pointer"
+                    className="w-full h-10 px-3 bg-[#171b26] border border-[#1e2433] rounded-xl text-white font-mono text-xs focus:outline-none focus:border-amber-500 cursor-pointer"
                   >
                     <option value="">-- Sem Matrícula Vinculada --</option>
                     {promotoresOptions.map((p) => (
                       <option key={p.matricula} value={p.matricula}>
-                        Matrícula: {p.matricula} - {p.name}
+                        {p.matricula} - {p.nome} ({p.supervisor || 'Sem Sup.'} | {p.equipe || 'Sem Eq.'})
                       </option>
                     ))}
                   </select>
                 ) : (
                   <input
                     type="text"
-                    placeholder="Digite a matrícula (ex: PROM001)"
+                    placeholder="Digite a matrícula do promotor (ex: PROM001)"
                     value={editPromotorMatricula}
                     onChange={(e) => setEditPromotorMatricula(e.target.value)}
-                    className="w-full h-10 px-3 bg-[#10141f] border border-[#1e2433] rounded-xl text-white font-mono text-xs focus:outline-none focus:border-purple-500"
+                    className="w-full h-10 px-3 bg-[#171b26] border border-[#1e2433] rounded-xl text-white font-mono text-xs focus:outline-none focus:border-amber-500"
                   />
                 )}
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="font-bold text-slate-300">Status da Conta</label>
-                <select
-                  value={editStatus}
-                  onChange={(e) => setEditStatus(e.target.value as 'ativo' | 'inativo')}
-                  className="w-full h-10 px-3 bg-[#10141f] border border-[#1e2433] rounded-xl text-white font-mono focus:outline-none focus:border-purple-500 cursor-pointer"
-                >
-                  <option value="ativo">Ativo (Acesso Liberado)</option>
-                  <option value="inativo">Inativo (Acesso Bloqueado)</option>
-                </select>
+                <p className="text-[11px] text-slate-400">
+                  O Portal do Promotor filtra rotas e visitas baseando-se no campo <code className="text-amber-300 font-mono">promotor_matricula</code>.
+                </p>
               </div>
 
               <div className="pt-3 border-t border-[#1e2433] flex items-center justify-end gap-2">
@@ -783,10 +1062,76 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                   disabled={savingEdit}
                   className="px-5 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold neon-purple-glow disabled:opacity-50"
                 >
-                  {savingEdit ? 'Salvando...' : 'Salvar Alterações'}
+                  Salvar Alterações
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Confirmação de Alteração de Vínculo */}
+      {confirmModalData && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-fadeIn">
+          <div className="relative w-full max-w-md bg-[#171b26] border border-amber-500/40 rounded-2xl shadow-2xl p-6 overflow-hidden space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/40 flex items-center justify-center font-bold shrink-0">
+                <span className="material-symbols-outlined text-2xl">help</span>
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white">Confirmar Alteração de Vínculo</h3>
+                <p className="text-[11px] text-slate-400 font-mono">Associação de conta de acesso a promotor</p>
+              </div>
+            </div>
+
+            <div className="p-4 rounded-xl bg-[#10141f] border border-[#1e2433] space-y-2 text-xs">
+              <div className="flex justify-between border-b border-[#1e2433] pb-2">
+                <span className="text-slate-400">Usuário Auth:</span>
+                <span className="font-bold text-white">{confirmModalData.user.email}</span>
+              </div>
+              <div className="flex justify-between border-b border-[#1e2433] pb-2">
+                <span className="text-slate-400">Vínculo Atual:</span>
+                <span className="font-mono text-slate-300">
+                  {confirmModalData.user.promotor_matricula || 'Nenhum'}
+                </span>
+              </div>
+              <div className="flex justify-between pt-1">
+                <span className="text-amber-300 font-semibold">Novo Vínculo:</span>
+                <span className="font-mono font-bold text-amber-400">
+                  {confirmModalData.newMatricula || 'Remover Vínculo'}
+                </span>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-300 leading-relaxed">
+              Tem certeza que deseja aplicar esta alteração? O usuário passará a visualizar apenas os dados da nova matrícula especificada.
+            </p>
+
+            <div className="pt-2 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setConfirmModalData(null)}
+                className="px-4 py-2 rounded-xl bg-[#131722] hover:bg-[#1f2433] text-slate-300 border border-[#1e2433] text-xs font-semibold"
+              >
+                Voltar
+              </button>
+              <button
+                type="button"
+                disabled={savingEdit}
+                onClick={() =>
+                  executeSaveEdit(
+                    confirmModalData.user.id,
+                    confirmModalData.newMatricula || null,
+                    confirmModalData.newRole,
+                    confirmModalData.newDepartment,
+                    confirmModalData.newStatus
+                  )
+                }
+                className="px-5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-extrabold text-xs shadow-lg transition-all"
+              >
+                {savingEdit ? 'Gravando...' : 'Confirmar e Salvar'}
+              </button>
+            </div>
           </div>
         </div>
       )}
