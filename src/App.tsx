@@ -12,6 +12,7 @@ import { PromotersView } from './views/PromotersView';
 import { DesignSystemView } from './views/DesignSystemView';
 import { UsersPermissionsView } from './views/UsersPermissionsView';
 import { ImportView } from './views/ImportView';
+import { RoutesView } from './views/RoutesView';
 import { AuthProvider } from './auth/AuthProvider';
 import { LoginPage } from './auth/LoginPage';
 import { ProtectedRoute } from './auth/ProtectedRoute';
@@ -73,6 +74,9 @@ function Dashboard() {
       )}
       {currentScreen === 'presenca' && (
         <AttendanceControlView onNavigate={setCurrentScreen} onShowToast={addToast} />
+      )}
+      {currentScreen === 'rotas-fixas' && (
+        <RoutesView onNavigate={setCurrentScreen} onShowToast={addToast} />
       )}
       {currentScreen === 'gestao-equipes' && (
         <TeamsManagementView onNavigate={setCurrentScreen} onShowToast={addToast} />

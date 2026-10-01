@@ -2,6 +2,7 @@ export type ScreenId =
   | 'cockpit'
   | 'painel-operacional'
   | 'presenca'
+  | 'rotas-fixas'
   | 'gestao-equipes'
   | 'freelancers'
   | 'controle-diarias'
@@ -9,6 +10,30 @@ export type ScreenId =
   | 'importacao'
   | 'design-system'
   | 'usuarios';
+
+export interface RouteItem {
+  id: string;
+  codigo_rota: string;
+  industria_codigo: string;
+  loja_codigo: string;
+  promotor_matricula: string;
+  uf: string | null;
+  frequencia: 'SEMANAL' | 'QUINZENAL';
+  segunda: boolean;
+  terca: boolean;
+  quarta: boolean;
+  quinta: boolean;
+  sexta: boolean;
+  sabado: boolean;
+  domingo: boolean;
+  observacao?: string | null;
+  created_at?: string;
+  updated_at?: string;
+  // Relacionamentos com joins
+  industria?: { codigo: string; nome: string } | null;
+  loja?: { codigo: string; nome: string; cidade?: string; uf?: string } | null;
+  promotor?: { matricula: string; nome: string; supervisor?: string; equipe?: string } | null;
+}
 
 export type ImportType = 'industrias' | 'lojas' | 'promotores' | 'rotas';
 

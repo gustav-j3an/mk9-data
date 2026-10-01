@@ -34,7 +34,8 @@ export const AppShell: React.FC<AppShellProps> = ({
     {
       group: 'CAMPO & ROTAS',
       items: [
-        { id: 'presenca' as ScreenId, label: 'Controle de Presença', icon: 'how_to_reg' }
+        { id: 'presenca' as ScreenId, label: 'Controle de Presença', icon: 'how_to_reg' },
+        { id: 'rotas-fixas' as ScreenId, label: 'Rotas Fixas', icon: 'alt_route' }
       ]
     },
     {
