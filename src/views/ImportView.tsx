@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../auth/AuthProvider';
 import { supabase } from '../lib/supabase';
+import * as XLSX from 'xlsx';
 import type { ToastMessage, ImportType, ImportRowError, ImportHistoryRecord } from '../types';
 import { generateXLSXTemplate, generateCSVTemplate, TEMPLATE_SPECS } from '../utils/templateGenerator';
 
@@ -136,6 +137,128 @@ export const ImportView: React.FC<ImportViewProps> = ({ onShowToast }) => {
     });
   };
 
+  // Normalização de string: remove acentos, espaços extras e converte para minúsculo
+  const normalizeHeader = (str: string): string => {
+    return str
+      .trim()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9_]/g, '');
+  };
+
+  // Helper para converter marcações de dia em boolean
+  const isDayMarked = (val?: any): boolean => {
+    if (val === null || val === undefined) return false;
+    const str = String(val).trim();
+    if (!str) return false;
+    const clean = normalizeHeader(str);
+    if (['sim', 'x', '1', 'v', 'verdadeiro', 'marcado', 'true', 's'].includes(clean)) return true;
+    if (['check', 'checked', 'ok', 'yes', 'y'].includes(clean)) return true;
+    // Qualquer outro texto preenchido diferente de "nao"/"0"/"false"
+    if (!['nao', '0', 'false', 'f', 'n'].includes(clean) && str.length > 0) {
+      return true;
+    }
+    return false;
+  };
+
+  // Processador de arquivos XLSX/CSV
+  const processSpreadsheetFile = async (uploadedFile: File) => {
+    const arrayBuffer = await uploadedFile.arrayBuffer();
+    const wb = XLSX.read(arrayBuffer, { type: 'array' });
+
+    const ignoredSheets = ['LEIA-ME', 'LEIAME', 'INSTRUÇÕES', 'INSTRUCOES', 'LISTAS_AUXILIARES', 'LISTAS AUXILIARES', 'CONFIG', 'CONFIGURAÇÕES', 'CONFIGURACOES'];
+    let targetSheetName = '';
+
+    // Priorizar aba "DADOS"
+    const exactDados = wb.SheetNames.find((name) => normalizeHeader(name) === 'dados');
+    if (exactDados) {
+      targetSheetName = exactDados;
+    } else {
+      // Procurar primeira aba que não esteja na lista de ignoradas e contenha dados
+      for (const sheetName of wb.SheetNames) {
+        const normName = normalizeHeader(sheetName);
+        if (!ignoredSheets.map(normalizeHeader).includes(normName)) {
+          const sheet = wb.Sheets[sheetName];
+          if (sheet) {
+            const rawData = XLSX.utils.sheet_to_json<any[]>(sheet, { header: 1 });
+            if (rawData && rawData.length > 0) {
+              targetSheetName = sheetName;
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    if (!targetSheetName) {
+      // Se não achou nenhuma diferente, usa a primeira disponível que tenha dados
+      targetSheetName = wb.SheetNames[0];
+    }
+
+    const sheet = wb.Sheets[targetSheetName];
+    if (!sheet) {
+      return { headers: [], rawHeadersMap: {}, rows: [] };
+    }
+
+    const rawRows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+    if (!rawRows || rawRows.length === 0) {
+      return { headers: [], rawHeadersMap: {}, rows: [] };
+    }
+
+    // Encontrar linha de cabeçalho real
+    let headerRowIndex = -1;
+    let normalizedHeaders: string[] = [];
+    const headerMap: Record<string, string> = {}; // normalized -> original trimmed header
+
+    for (let i = 0; i < rawRows.length; i++) {
+      const row = rawRows[i];
+      if (!Array.isArray(row)) continue;
+      const rowNorms = row.map((cell) => normalizeHeader(String(cell || '')));
+      
+      // Se a linha tem pelo menos um dos cabeçalhos chave de rotas ou indústrias/lojas/promotores
+      const hasRotaHeaders = ['industria', 'loja', 'promotor', 'frequencia'].every((h) => rowNorms.includes(h));
+      const hasIndHeaders = rowNorms.includes('codigo') && rowNorms.includes('nome');
+      const hasPromHeaders = rowNorms.includes('matricula') || (rowNorms.includes('nome') && rowNorms.includes('cidade'));
+
+      if (hasRotaHeaders || hasIndHeaders || hasPromHeaders || rowNorms.some((n) => n.length > 0)) {
+        headerRowIndex = i;
+        row.forEach((cell) => {
+          const origStr = String(cell || '').trim();
+          const norm = normalizeHeader(origStr);
+          if (norm) {
+            normalizedHeaders.push(norm);
+            headerMap[norm] = origStr;
+          }
+        });
+        break;
+      }
+    }
+
+    if (headerRowIndex === -1) {
+      return { headers: [], rawHeadersMap: {}, rows: [] };
+    }
+
+    const rows: Record<string, string>[] = [];
+    for (let i = headerRowIndex + 1; i < rawRows.length; i++) {
+      const rowValues = rawRows[i];
+      if (!Array.isArray(rowValues)) continue;
+
+      // Verificar se a linha não é totalmente em branco
+      const hasValue = rowValues.some((v) => String(v ?? '').trim() !== '');
+      if (!hasValue) continue;
+
+      const rowObj: Record<string, string> = {};
+      normalizedHeaders.forEach((normHeader, colIdx) => {
+        const rawVal = rowValues[colIdx];
+        rowObj[normHeader] = rawVal !== undefined && rawVal !== null ? String(rawVal).trim() : '';
+      });
+      rows.push(rowObj);
+    }
+
+    return { headers: normalizedHeaders, rawHeadersMap: headerMap, rows };
+  };
+
   // Leitura e Detecção Automática do Tipo de Planilha
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const uploadedFile = e.target.files?.[0];
@@ -145,8 +268,7 @@ export const ImportView: React.FC<ImportViewProps> = ({ onShowToast }) => {
     setParsing(true);
 
     try {
-      const text = await uploadedFile.text();
-      const { headers, rows } = parseCSV(text);
+      const { headers, rows } = await processSpreadsheetFile(uploadedFile);
 
       if (rows.length === 0) {
         onShowToast({
@@ -160,13 +282,16 @@ export const ImportView: React.FC<ImportViewProps> = ({ onShowToast }) => {
 
       // Detecção Automática pelo Cabeçalho
       let detectedType: ImportType = selectedType;
-      if (headers.includes('industria') && headers.includes('loja') && headers.includes('promotor') && headers.includes('frequencia')) {
+      const isRotas = ['industria', 'loja', 'promotor', 'frequencia'].every((h) => headers.includes(h)) ||
+        (headers.includes('industria') && headers.includes('loja') && headers.includes('promotor'));
+
+      if (isRotas) {
         detectedType = 'rotas';
       } else if (headers.includes('matricula') || headers.includes('supervisor')) {
         detectedType = 'promotores';
       } else if (headers.includes('endereco') || headers.includes('rede')) {
         detectedType = 'lojas';
-      } else if (headers.includes('codigo') && headers.includes('observacao')) {
+      } else if (headers.includes('codigo') && headers.includes('nome')) {
         detectedType = 'industrias';
       }
 
@@ -175,6 +300,7 @@ export const ImportView: React.FC<ImportViewProps> = ({ onShowToast }) => {
       validateData(rows, detectedType);
       setStep('preview');
     } catch (err) {
+      console.error(err);
       onShowToast({
         title: 'Erro de Leitura',
         message: 'Não foi possível ler o arquivo. Certifique-se que é um CSV/XLSX válido.',
@@ -183,13 +309,6 @@ export const ImportView: React.FC<ImportViewProps> = ({ onShowToast }) => {
     } finally {
       setParsing(false);
     }
-  };
-
-  // Helper para converter marcações de dia em boolean
-  const isDayMarked = (val?: string): boolean => {
-    if (!val) return false;
-    const clean = val.trim().toUpperCase();
-    return ['SIM', 'X', '1', '✓', 'TRUE', 'S', 'V'].includes(clean);
   };
 
   // Validação Estrita de Colunas e Formatos
@@ -634,20 +753,58 @@ export const ImportView: React.FC<ImportViewProps> = ({ onShowToast }) => {
               <table className="w-full text-left text-xs border-collapse">
                 <thead>
                   <tr className="bg-[#131722] border-b border-[#1e2433] text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono">
-                    {acceptedRows.length > 0 &&
+                    {selectedType === 'rotas' ? (
+                      <>
+                        <th className="py-3 px-4">Rota</th>
+                        <th className="py-3 px-4">Indústria</th>
+                        <th className="py-3 px-4">Loja</th>
+                        <th className="py-3 px-4">UF</th>
+                        <th className="py-3 px-4">Promotor</th>
+                        <th className="py-3 px-4">Frequência</th>
+                        <th className="py-3 px-4">Dias marcados</th>
+                      </>
+                    ) : (
+                      acceptedRows.length > 0 &&
                       Object.keys(acceptedRows[0]).map((key) => (
                         <th key={key} className="py-3 px-4">{key}</th>
-                      ))}
+                      ))
+                    )}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#1e2433] text-slate-300">
-                  {acceptedRows.slice(0, 10).map((row, idx) => (
-                    <tr key={idx} className="hover:bg-[#131722]/60">
-                      {Object.values(row).map((val, vIdx) => (
-                        <td key={vIdx} className="py-3 px-4 font-mono">{val}</td>
-                      ))}
-                    </tr>
-                  ))}
+                  {acceptedRows.slice(0, 10).map((row, idx) => {
+                    if (selectedType === 'rotas') {
+                      const days = [];
+                      if (isDayMarked(row.segunda)) days.push('Seg');
+                      if (isDayMarked(row.terca)) days.push('Ter');
+                      if (isDayMarked(row.quarta)) days.push('Qua');
+                      if (isDayMarked(row.quinta)) days.push('Qui');
+                      if (isDayMarked(row.sexta)) days.push('Sex');
+                      if (isDayMarked(row.sabado)) days.push('Sáb');
+                      if (isDayMarked(row.domingo)) days.push('Dom');
+
+                      const rotaCode = row.codigo_rota?.trim() || `ROT-${(row.promotor || row.promotor_matricula || 'GERAL').trim()}`;
+
+                      return (
+                        <tr key={idx} className="hover:bg-[#131722]/60">
+                          <td className="py-3 px-4 font-mono font-bold text-purple-400">{rotaCode}</td>
+                          <td className="py-3 px-4 font-mono">{row.industria || row.industria_codigo}</td>
+                          <td className="py-3 px-4 font-mono">{row.loja || row.loja_codigo}</td>
+                          <td className="py-3 px-4 font-mono">{row.uf || '-'}</td>
+                          <td className="py-3 px-4 font-mono">{row.promotor || row.promotor_matricula}</td>
+                          <td className="py-3 px-4 font-mono uppercase">{row.frequencia || 'SEMANAL'}</td>
+                          <td className="py-3 px-4 font-mono text-emerald-400 font-bold">{days.join(', ') || 'Nenhum'}</td>
+                        </tr>
+                      );
+                    }
+                    return (
+                      <tr key={idx} className="hover:bg-[#131722]/60">
+                        {Object.values(row).map((val, vIdx) => (
+                          <td key={vIdx} className="py-3 px-4 font-mono">{val}</td>
+                        ))}
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
