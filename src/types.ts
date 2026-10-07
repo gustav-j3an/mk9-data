@@ -134,6 +134,41 @@ export interface Visit {
   checklist_items?: VisitChecklistItem[];
   photos?: VisitPhoto[];
   occurrences?: VisitOccurrence[];
+  validity_items?: VisitProductValidity[];
+}
+
+export type AlertPriority = 'critico' | 'atencao' | 'pendente' | 'resolvido';
+export type AlertType = 'ruptura' | 'validade' | 'visita' | 'aderencia';
+
+export interface AlertItem {
+  id: string;
+  prioridade: AlertPriority;
+  tipo: AlertType;
+  data: string;
+  loja: string;
+  lojaCodigo?: string;
+  industria: string;
+  industriaCodigo?: string;
+  promotor: string;
+  promotorMatricula?: string;
+  titulo: string;
+  descricao: string;
+  origem: string;
+  statusVisual: string;
+  visitObj?: Visit | null;
+  occurrenceId?: string;
+  createdAtTimestamp?: number;
+}
+
+export interface VisitProductValidity {
+  id?: string;
+  visit_id?: string;
+  produto_nome: string;
+  quantidade: number;
+  data_vencimento: string;
+  lote?: string | null;
+  observacao?: string | null;
+  created_at?: string;
 }
 
 export interface VisitChecklistItem {

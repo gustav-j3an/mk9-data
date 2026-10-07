@@ -217,7 +217,7 @@ export const AppShell: React.FC<AppShellProps> = ({
         <div className="flex items-center gap-3 sm:gap-4 shrink-0">
           <div className="hidden md:flex items-center gap-2 px-3 py-1 rounded-lg bg-[#131722] border border-[#1e2433] text-xs font-medium text-slate-300">
             <span className="material-symbols-outlined text-[16px] text-cyan-400">calendar_today</span>
-            <span>Hoje, 24 de Outubro</span>
+            <span>{`Hoje, ${new Date().getDate()} de ${new Date().toLocaleDateString('pt-BR', { month: 'long' }).replace(/^./, (c) => c.toUpperCase())}`}</span>
           </div>
 
           {/* Notification Button & Menu */}

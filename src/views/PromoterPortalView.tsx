@@ -38,6 +38,15 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
   const [occurrenceType, setOccurrenceType] = useState<'ruptura' | 'preco_divergente' | 'falta_espaco' | 'outro'>('ruptura');
   const [occurrenceDesc, setOccurrenceDesc] = useState('');
   const [savingOccurrence, setSavingOccurrence] = useState(false);
+
+  // Form State para Validade de Produtos (Etapa 4)
+  const [validityProdutoNome, setValidityProdutoNome] = useState('');
+  const [validityQuantidade, setValidityQuantidade] = useState<number>(1);
+  const [validityDataVencimento, setValidityDataVencimento] = useState('');
+  const [validityLote, setValidityLote] = useState('');
+  const [validityObservacao, setValidityObservacao] = useState('');
+  const [savingValidity, setSavingValidity] = useState(false);
+
   const [generalObs, setGeneralObs] = useState('');
   const [completingVisit, setCompletingVisit] = useState(false);
   const [notDoneReason, setNotDoneReason] = useState('');
@@ -112,7 +121,8 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
         promotor:promotores(matricula, nome),
         checklist_items:visit_checklist_items(*),
         photos:visit_photos(*),
-        occurrences:visit_occurrences(*)
+        occurrences:visit_occurrences(*),
+        validity_items:visit_product_validity(*)
       `).eq('data_visita', todayStr);
 
       if (promotorMatricula) {
@@ -470,6 +480,72 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
       });
     } finally {
       setSavingOccurrence(false);
+    }
+  };
+
+  // Registrar Validade de Produto (Etapa 4)
+  const handleAddProductValidity = async () => {
+    if (!validityProdutoNome.trim() || !validityDataVencimento || !activeVisit || !supabase) {
+      onShowToast({
+        title: 'Dados Incompletos',
+        message: 'Preencha o nome do produto e a data de vencimento.',
+        type: 'warning'
+      });
+      return;
+    }
+
+    if (validityQuantidade <= 0) {
+      onShowToast({
+        title: 'Quantidade Inválida',
+        message: 'A quantidade deve ser um número inteiro maior que zero.',
+        type: 'warning'
+      });
+      return;
+    }
+
+    setSavingValidity(true);
+    try {
+      const { error: err } = await supabase.from('visit_product_validity').insert([
+        {
+          visit_id: activeVisit.id,
+          produto_nome: validityProdutoNome.trim(),
+          quantidade: Math.max(1, Math.floor(validityQuantidade)),
+          data_vencimento: validityDataVencimento,
+          lote: validityLote.trim() || null,
+          observacao: validityObservacao.trim() || null
+        }
+      ]);
+
+      if (err) throw err;
+
+      onShowToast({
+        title: 'Validade Registrada',
+        message: `Produto ${validityProdutoNome.trim()} adicionado com sucesso!`,
+        type: 'success'
+      });
+
+      setValidityProdutoNome('');
+      setValidityQuantidade(1);
+      setValidityDataVencimento('');
+      setValidityLote('');
+      setValidityObservacao('');
+
+      const { data: updatedVal } = await supabase
+        .from('visit_product_validity')
+        .select('*')
+        .eq('visit_id', activeVisit.id)
+        .order('data_vencimento', { ascending: true });
+
+      setActiveVisit((prev) => (prev ? { ...prev, validity_items: updatedVal as any } : null));
+    } catch (err: any) {
+      console.error('Erro ao salvar validade do produto:', err);
+      onShowToast({
+        title: 'Erro de Gravação',
+        message: err.message || 'Falha ao salvar registro de validade.',
+        type: 'error'
+      });
+    } finally {
+      setSavingValidity(false);
     }
   };
 
@@ -1024,11 +1100,153 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
             </div>
           </div>
 
-          {/* PASSO 4: OBSERVAÇÕES GERAIS E FINALIZAÇÃO */}
+          {/* PASSO 4: CONTROLE DE VALIDADE E VENCIMENTO DE PRODUTOS */}
+          <div className="space-y-3 pt-3 border-t border-[#1e2433]">
+            <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider font-mono flex items-center gap-2">
+              <span className="material-symbols-outlined text-amber-400 text-sm">inventory_2</span>
+              4. 📦 Controle de Validade dos Produtos
+            </h3>
+
+            <div className="p-4 rounded-xl bg-[#131722] border border-[#1e2433] space-y-3 font-mono text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+                <div className="lg:col-span-2">
+                  <label className="text-slate-400 block mb-1">PRODUTO (*)</label>
+                  <input
+                    type="text"
+                    value={validityProdutoNome}
+                    onChange={(e) => setValidityProdutoNome(e.target.value)}
+                    placeholder="Nome ou descrição do produto..."
+                    className="w-full h-9 px-3 bg-[#171b26] border border-[#1e2433] rounded-lg text-slate-200"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-slate-400 block mb-1">QUANTIDADE (*)</label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={validityQuantidade}
+                    onChange={(e) => setValidityQuantidade(Math.max(1, parseInt(e.target.value) || 1))}
+                    className="w-full h-9 px-3 bg-[#171b26] border border-[#1e2433] rounded-lg text-slate-200"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-slate-400 block mb-1">VALIDADE (*)</label>
+                  <input
+                    type="date"
+                    value={validityDataVencimento}
+                    onChange={(e) => setValidityDataVencimento(e.target.value)}
+                    className="w-full h-9 px-3 bg-[#171b26] border border-[#1e2433] rounded-lg text-slate-200"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-slate-400 block mb-1">LOTE (OPCIONAL)</label>
+                  <input
+                    type="text"
+                    value={validityLote}
+                    onChange={(e) => setValidityLote(e.target.value)}
+                    placeholder="L12345"
+                    className="w-full h-9 px-3 bg-[#171b26] border border-[#1e2433] rounded-lg text-slate-200"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-slate-400 block mb-1">OBSERVAÇÃO (OPCIONAL)</label>
+                <input
+                  type="text"
+                  value={validityObservacao}
+                  onChange={(e) => setValidityObservacao(e.target.value)}
+                  placeholder="Ex: Produto recolhido / Avaria na embalagem..."
+                  className="w-full h-9 px-3 bg-[#171b26] border border-[#1e2433] rounded-lg text-slate-200"
+                />
+              </div>
+
+              <button
+                type="button"
+                onClick={handleAddProductValidity}
+                disabled={!validityProdutoNome.trim() || !validityDataVencimento || savingValidity}
+                className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs flex items-center gap-1.5 disabled:opacity-50 cursor-pointer shadow-sm transition-all"
+              >
+                <span className={`material-symbols-outlined text-sm ${savingValidity ? 'animate-spin' : ''}`}>
+                  {savingValidity ? 'sync' : 'add'}
+                </span>
+                <span>{savingValidity ? 'Adicionando...' : '+ Adicionar produto'}</span>
+              </button>
+
+              {/* Lista de Produtos Registrados na Visita */}
+              {activeVisit.validity_items && activeVisit.validity_items.length > 0 ? (
+                <div className="space-y-2 pt-2 border-t border-[#1e2433]">
+                  <span className="text-[11px] text-slate-400 font-bold block">
+                    PRODUTOS E VALIDADES REGISTRADOS ({activeVisit.validity_items.length}):
+                  </span>
+
+                  <div className="overflow-x-auto rounded-lg border border-[#1e2433]">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead>
+                        <tr className="bg-[#171b26] text-slate-400 text-[10px] font-bold uppercase border-b border-[#1e2433]">
+                          <th className="py-2 px-3">Produto</th>
+                          <th className="py-2 px-3 text-right">Qtd.</th>
+                          <th className="py-2 px-3">Validade</th>
+                          <th className="py-2 px-3">Lote</th>
+                          <th className="py-2 px-3 text-right">Situação</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[#1e2433] text-slate-200">
+                        {activeVisit.validity_items.map((valItem, idx) => {
+                          // Calcular classificação de vencimento local
+                          const [vYear, vMonth, vDay] = valItem.data_vencimento.split('-').map(Number);
+                          const vencDate = new Date(vYear, vMonth - 1, vDay);
+                          const nDate = new Date();
+                          const todayLocal = new Date(nDate.getFullYear(), nDate.getMonth(), nDate.getDate());
+
+                          const diffTime = vencDate.getTime() - todayLocal.getTime();
+                          const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+                          let statusBadge = { label: '🟢 Normal', color: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' };
+                          if (diffDays < 0) {
+                            statusBadge = { label: '🔴 Vencido', color: 'bg-rose-500/20 text-rose-300 border-rose-500/40 animate-pulse' };
+                          } else if (diffDays <= 3) {
+                            statusBadge = { label: '🚨 Até 3 dias', color: 'bg-rose-500/20 text-rose-300 border-rose-500/40' };
+                          } else if (diffDays <= 7) {
+                            statusBadge = { label: '🟠 4–7 dias', color: 'bg-amber-500/20 text-amber-300 border-amber-500/40' };
+                          } else if (diffDays <= 30) {
+                            statusBadge = { label: '🟡 8–30 dias', color: 'bg-yellow-500/20 text-yellow-300 border-yellow-500/40' };
+                          }
+
+                          return (
+                            <tr key={valItem.id || idx} className="hover:bg-[#171b26]/50">
+                              <td className="py-2 px-3 font-bold text-white">{valItem.produto_nome}</td>
+                              <td className="py-2 px-3 text-right font-bold text-amber-300">{valItem.quantidade}</td>
+                              <td className="py-2 px-3">{new Date(vencDate).toLocaleDateString('pt-BR')}</td>
+                              <td className="py-2 px-3 text-slate-400">{valItem.lote || '—'}</td>
+                              <td className="py-2 px-3 text-right">
+                                <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${statusBadge.color}`}>
+                                  {statusBadge.label}
+                                </span>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-[11px] text-slate-500 italic pt-1 text-center">
+                  Nenhum produto cadastrado para controle de validade nesta visita.
+                </p>
+              )}
+            </div>
+          </div>
+
+          {/* PASSO 5: OBSERVAÇÕES GERAIS E FINALIZAÇÃO */}
           <div className="space-y-4 pt-3 border-t border-[#1e2433]">
             <div>
               <label className="text-xs font-bold text-slate-200 uppercase tracking-wider font-mono block mb-1.5">
-                4. Observações Gerais do Atendimento
+                5. Observações Gerais do Atendimento
               </label>
               <textarea
                 value={generalObs}
@@ -1044,7 +1262,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                 <span className="material-symbols-outlined text-sm">summarize</span>
                 Resumo do Atendimento Antes do Check-out
               </h4>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-slate-300">
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-slate-300">
                 <div className="p-2.5 rounded-lg bg-[#171b26] border border-[#1e2433]">
                   <span className="text-[10px] text-slate-500 block font-bold">HORÁRIO ENTRADA</span>
                   <span className="text-sm font-extrabold text-white">
@@ -1070,6 +1288,13 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                   <span className="text-[10px] text-slate-500 block font-bold">OCORRÊNCIAS</span>
                   <span className="text-sm font-extrabold text-rose-300">
                     {activeVisit.occurrences?.length || 0}
+                  </span>
+                </div>
+
+                <div className="p-2.5 rounded-lg bg-[#171b26] border border-[#1e2433]">
+                  <span className="text-[10px] text-slate-500 block font-bold">VALIDADES</span>
+                  <span className="text-sm font-extrabold text-amber-400">
+                    {activeVisit.validity_items?.length || 0}
                   </span>
                 </div>
               </div>
