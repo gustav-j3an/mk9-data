@@ -170,9 +170,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!supabase) return { error: new Error('Supabase não configurado.') };
     if (role !== 'admin') return { error: new Error('Apenas administradores podem alterar permissões de usuários.') };
 
+    const { status, ...dbUpdates } = updates;
+
     const { error: updateErr } = await supabase
       .from('profiles')
-      .update({ ...updates, updated_at: new Date().toISOString() })
+      .update({ ...dbUpdates, updated_at: new Date().toISOString() })
       .eq('id', userId);
 
     if (updateErr) {
@@ -180,12 +182,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     if (session?.user?.id === userId) {
-      setProfile((prev) => prev ? { ...prev, ...updates } : null);
+      setProfile((prev) => prev ? { ...prev, ...dbUpdates } : null);
     }
     return { error: null };
   }, [role, session]);
 
-  const inviteUser = useCallback(async ({ email, name, department, role: initialRole }: { email: string; name: string; department: string; role: UserRole }) => {
+  const inviteUser = useCallback(async ({ email, name, department, role: initialRole }: { email: string; name: string; department: string; role: UserRole | string }) => {
     if (!supabase) return { error: new Error('Supabase não configurado.') };
     if (role !== 'admin') return { error: new Error('Apenas administradores podem convidar usuários.') };
 
@@ -199,6 +201,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       console.warn('Erro no envio de e-mail Supabase Auth:', authError.message);
     }
 
+    const roleMap: Record<string, UserRole> = {
+      'administrador': 'admin',
+      'admin': 'admin',
+      'gestor': 'gestor',
+      'operador': 'operador',
+      'promotor': 'promotor'
+    };
+    const validRole: UserRole = roleMap[String(initialRole).toLowerCase().trim()] || 'promotor';
+
     // Insert pending/active invited profile into profiles table
     // Generates a deterministically unique UUID for initial tracking if auth user record trigger hasn't fired yet
     const tempId = crypto.randomUUID();
@@ -208,8 +219,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         email,
         name,
         department,
-        role: initialRole,
-        status: 'ativo'
+        role: validRole
       }
     ]);
 
@@ -220,8 +230,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           email,
           name,
           department,
-          role: initialRole,
-          status: 'ativo'
+          role: validRole
         }
       ], { onConflict: 'email' });
       if (upsertErr) {
