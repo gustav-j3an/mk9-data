@@ -1,8 +1,10 @@
-import { FormEvent, useState } from 'react';
+import { FormEvent, useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from './AuthProvider';
 
 export function LoginPage() {
   const { configured, session, signIn, isPasswordRecovery, updatePassword, resetPasswordForEmail } = useAuth();
+  const navigate = useNavigate();
   
   // Normal Login state
   const [email, setEmail] = useState('');
@@ -20,18 +22,23 @@ export function LoginPage() {
   // Check if current user is logged in with first access flag
   const isFirstAccess = Boolean(session?.user?.user_metadata?.must_change_password);
 
+  useEffect(() => {
+    if (session && !isPasswordRecovery) {
+      navigate('/', { replace: true });
+    }
+  }, [session, isPasswordRecovery, navigate]);
+
   // 1. Handle Standard Login
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     setMessage(null);
     setSubmitting(true);
-    const { error } = await signIn(email, password);
+    const { error } = await signIn(email.trim(), password);
     setSubmitting(false);
 
     if (error) {
       setMessage({ text: error.message, type: 'error' });
     }
-    // Note: If login succeeds, session updates. If must_change_password is true, isFirstAccess becomes true automatically.
   }
 
   // 2. Handle Password Change (First Access or Recovery)
