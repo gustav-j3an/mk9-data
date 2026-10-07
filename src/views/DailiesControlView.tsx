@@ -24,8 +24,8 @@ export const DailiesControlView: React.FC<DailiesControlViewProps> = ({
   const [modalOpen, setModalOpen] = useState(false);
   const [modalFreelancerId, setModalFreelancerId] = useState(INITIAL_FREELANCERS[0]?.id ?? '');
   const [modalDate, setModalDate] = useState('2024-10-24');
-  const [modalStore, setModalStore] = useState('Atacadão Santo Amaro - SP');
-  const [modalIndustry, setModalIndustry] = useState('Ambev');
+  const [modalStore, setModalStore] = useState('');
+  const [modalIndustry, setModalIndustry] = useState('');
   const [modalAmount, setModalAmount] = useState('190,00');
   const [modalNotes, setModalNotes] = useState('Substituição pontual por ausência CLT. Roteiro de abastecimento de gôndolas e ponto extra sazonal de cervejas.');
 
@@ -684,6 +684,7 @@ export const DailiesControlView: React.FC<DailiesControlViewProps> = ({
                     onChange={(e) => setModalStore(e.target.value)}
                     className="w-full h-10 px-3 bg-[#10141f] border border-[#1e2433] rounded-lg text-white focus:outline-none focus:border-purple-500 cursor-pointer"
                   >
+                    <option value="">Selecione uma loja...</option>
                     <option value="Atacadão Santo Amaro - SP">Atacadão Santo Amaro - SP</option>
                     <option value="Carrefour D. Pedro - Campinas">Carrefour D. Pedro - Campinas</option>
                     <option value="Pão de Açúcar Morumbi - SP">Pão de Açúcar Morumbi - SP</option>
@@ -699,6 +700,7 @@ export const DailiesControlView: React.FC<DailiesControlViewProps> = ({
                     onChange={(e) => setModalIndustry(e.target.value)}
                     className="w-full h-10 px-3 bg-[#10141f] border border-[#1e2433] rounded-lg text-white focus:outline-none focus:border-purple-500 cursor-pointer"
                   >
+                    <option value="">Selecione uma indústria...</option>
                     <option value="Ambev">Ambev - Cervejas &amp; Bebidas</option>
                     <option value="L'Oréal Brasil">L'Oréal Brasil</option>
                     <option value="Nestlé">Nestlé</option>
