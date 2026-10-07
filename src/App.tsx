@@ -18,6 +18,7 @@ import { StoresView } from './views/StoresView';
 import { PromoterPortalView } from './views/PromoterPortalView';
 import { AuthProvider } from './auth/AuthProvider';
 import { LoginPage } from './auth/LoginPage';
+import { ResetPasswordPage } from './auth/ResetPasswordPage';
 import { ProtectedRoute } from './auth/ProtectedRoute';
 
 import { useAuth } from './auth/AuthProvider';
@@ -146,6 +147,7 @@ export default function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/reset-password" element={<ResetPasswordPage />} />
           <Route element={<ProtectedRoute />}>
             <Route path="/*" element={<Dashboard />} />
           </Route>

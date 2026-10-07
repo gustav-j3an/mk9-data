@@ -46,6 +46,8 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
   const [inviteRole, setInviteRole] = useState<UserRole>('promotor');
   const [invitePromotorMatricula, setInvitePromotorMatricula] = useState('');
   const [inviting, setInviting] = useState(false);
+  const [createdCredentials, setCreatedCredentials] = useState<{ email: string; tempPassword?: string; emailSent?: boolean } | null>(null);
+  const [showContingencyPassword, setShowContingencyPassword] = useState(false);
 
   // Edit Modal state
   const [editingUser, setEditingUser] = useState<ExtendedUserProfile | null>(null);
@@ -380,7 +382,7 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
     }
 
     setInviting(true);
-    const { error } = await inviteUser({
+    const { error, tempPassword, emailSent } = await inviteUser({
       email: inviteEmail.trim(),
       name: inviteName.trim(),
       department: inviteDepartment.trim() || 'Operações MK9',
@@ -396,6 +398,12 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
       });
     } else {
       setIsInviteModalOpen(false);
+      setCreatedCredentials({
+        email: inviteEmail.trim(),
+        tempPassword,
+        emailSent: emailSent ?? false
+      });
+      setShowContingencyPassword(false);
       setInviteEmail('');
       setInviteName('');
       setInviteDepartment('Operações MK9');
@@ -403,9 +411,11 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
       setInvitePromotorMatricula('');
       fetchUsers();
       onShowToast({
-        title: 'Convite Enviado',
-        message: `Convite de acesso enviado para ${inviteEmail}.`,
-        type: 'success'
+        title: 'Usuário Criado',
+        message: emailSent
+          ? `Acesso criado e credenciais enviadas por e-mail para ${inviteEmail}.`
+          : `Usuário criado, mas não foi possível enviar o e-mail.`,
+        type: emailSent ? 'success' : 'warning'
       });
     }
   };
@@ -1044,6 +1054,109 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                     <span>Excluir usuário</span>
                   </>
                 )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Credenciais Criadas (Exibido 1x para o Administrador) */}
+      {createdCredentials && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+          <div className="bg-[#0b0e14] border border-purple-500/30 rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4">
+            <div className="flex items-center gap-3 text-purple-400">
+              <span className="material-symbols-outlined text-2xl">check_circle</span>
+              <h3 className="text-base font-bold text-white">Usuário criado com sucesso</h3>
+            </div>
+
+            {createdCredentials.emailSent ? (
+              <>
+                <div className="p-4 bg-emerald-950/20 border border-emerald-500/30 rounded-xl text-xs space-y-3">
+                  <div>
+                    <span className="text-slate-400 font-sans block mb-1">As credenciais foram enviadas para:</span>
+                    <div className="text-emerald-300 font-bold font-mono text-sm select-all">{createdCredentials.email}</div>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 font-sans block mb-1">Link de acesso:</span>
+                    <a
+                      href="https://mk9-date.vercel.app/login"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-cyan-400 font-bold font-mono text-xs underline select-all hover:text-cyan-300"
+                    >
+                      https://mk9-date.vercel.app/login
+                    </a>
+                  </div>
+                </div>
+
+                <div className="pt-2 border-t border-[#1e2433]">
+                  <button
+                    type="button"
+                    onClick={() => setShowContingencyPassword((prev) => !prev)}
+                    className="text-[11px] text-slate-400 hover:text-amber-400 flex items-center gap-1 transition-colors font-mono"
+                  >
+                    <span className="material-symbols-outlined text-sm">
+                      {showContingencyPassword ? 'expand_less' : 'key'}
+                    </span>
+                    <span>
+                      {showContingencyPassword ? 'Ocultar senha de contingência' : 'Exibir senha temporária (contingência)'}
+                    </span>
+                  </button>
+
+                  {showContingencyPassword && createdCredentials.tempPassword && (
+                    <div className="mt-2.5 p-3 bg-[#131722] border border-amber-500/30 rounded-xl text-xs font-mono space-y-1">
+                      <span className="text-amber-400 text-[11px] font-bold block">Senha Temporária (Contingência):</span>
+                      <div className="text-amber-300 font-bold bg-amber-500/10 border border-amber-500/20 px-2.5 py-1.5 rounded select-all text-sm tracking-wider">
+                        {createdCredentials.tempPassword}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="p-4 bg-amber-950/30 border border-amber-500/40 rounded-xl text-xs space-y-3">
+                  <div className="flex items-center gap-2 text-amber-400 font-bold">
+                    <span className="material-symbols-outlined text-lg">warning</span>
+                    <span>Usuário criado, mas não foi possível enviar o e-mail.</span>
+                  </div>
+                  <p className="text-slate-300 font-sans text-[11px] leading-relaxed">
+                    Repasse a senha temporária manualmente para o usuário poder realizar o primeiro acesso.
+                  </p>
+                  <div>
+                    <span className="text-slate-400 font-sans block mb-1">Login / E-mail:</span>
+                    <div className="text-white font-bold font-mono">{createdCredentials.email}</div>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 font-sans block mb-1">Link de acesso:</span>
+                    <a
+                      href="https://mk9-date.vercel.app/login"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-cyan-400 font-bold font-mono text-xs underline select-all hover:text-cyan-300"
+                    >
+                      https://mk9-date.vercel.app/login
+                    </a>
+                  </div>
+                  {createdCredentials.tempPassword && (
+                    <div>
+                      <span className="text-amber-300 font-bold font-sans block mb-1">Senha temporária:</span>
+                      <div className="text-amber-400 font-bold bg-amber-500/15 border border-amber-500/40 px-3 py-2 rounded-lg select-all font-mono text-sm tracking-wider">
+                        {createdCredentials.tempPassword}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+
+            <div className="pt-2 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setCreatedCredentials(null)}
+                className="px-5 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs shadow-md"
+              >
+                Concluído
               </button>
             </div>
           </div>

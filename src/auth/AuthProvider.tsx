@@ -10,14 +10,18 @@ interface AuthContextValue {
   loading: boolean;
   configured: boolean;
   error: string | null;
+  isPasswordRecovery: boolean;
   hasPermission: (requiredRoles: UserRole[]) => boolean;
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>;
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
   updateProfileRole: (userId: string, newRole: UserRole) => Promise<{ error: Error | null }>;
   updateUserProfile: (userId: string, updates: { role?: UserRole; department?: string; status?: 'ativo' | 'inativo'; promotor_matricula?: string | null }) => Promise<{ error: Error | null }>;
-  inviteUser: (data: { email: string; name: string; department: string; role: UserRole }) => Promise<{ error: Error | null }>;
+  inviteUser: (data: { email: string; name: string; department: string; role: UserRole }) => Promise<{ error: Error | null; tempPassword?: string; emailSent?: boolean }>;
   deleteUser: (userId: string) => Promise<{ error: Error | null }>;
+  updatePassword: (password: string) => Promise<{ error: Error | null }>;
+  resetPasswordForEmail: (email: string) => Promise<{ error: Error | null }>;
+  clearPasswordRecovery: () => void;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -27,6 +31,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isPasswordRecovery, setIsPasswordRecovery] = useState(false);
 
   const fetchProfile = useCallback(async (currentSession: Session | null) => {
     if (!currentSession?.user) {
@@ -124,19 +129,79 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
+    const isRecoveryInUrl =
+      window.location.hash.includes('type=recovery') ||
+      window.location.search.includes('type=recovery');
+
+    if (isRecoveryInUrl) {
+      setIsPasswordRecovery(true);
+    }
+
     supabase.auth.getSession().then(({ data, error: sessionError }) => {
       if (sessionError) setError(sessionError.message);
       setSession(data.session);
       fetchProfile(data.session).finally(() => setLoading(false));
     });
 
-    const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+    const { data } = supabase.auth.onAuthStateChange((event, nextSession) => {
+      if (event === 'PASSWORD_RECOVERY') {
+        setIsPasswordRecovery(true);
+      }
       setSession(nextSession);
       fetchProfile(nextSession).finally(() => setLoading(false));
     });
 
     return () => data.subscription.unsubscribe();
   }, [fetchProfile]);
+
+  const updatePassword = useCallback(async (newPassword: string) => {
+    if (!supabase) return { error: new Error('Supabase ainda não foi configurado.') };
+    if (!newPassword || newPassword.length < 6) {
+      return { error: new Error('A senha deve ter no mínimo 6 caracteres.') };
+    }
+
+    const { error: updateErr } = await supabase.auth.updateUser({
+      password: newPassword,
+      data: { must_change_password: false }
+    });
+
+    if (updateErr) {
+      return { error: new Error(updateErr.message) };
+    }
+
+    setIsPasswordRecovery(false);
+
+    setSession((prev) => {
+      if (!prev) return null;
+      return {
+        ...prev,
+        user: {
+          ...prev.user,
+          user_metadata: {
+            ...prev.user.user_metadata,
+            must_change_password: false
+          }
+        }
+      };
+    });
+
+    return { error: null };
+  }, []);
+
+  const resetPasswordForEmail = useCallback(async (email: string) => {
+    if (!supabase) return { error: new Error('Supabase ainda não foi configurado.') };
+    const { error: resetErr } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+      redirectTo: `${window.location.origin}/reset-password`
+    });
+    if (resetErr) {
+      return { error: new Error(resetErr.message) };
+    }
+    return { error: null };
+  }, []);
+
+  const clearPasswordRecovery = useCallback(() => {
+    setIsPasswordRecovery(false);
+  }, []);
 
   const role: UserRole = profile?.role ?? 'operador';
 
@@ -209,19 +274,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       .maybeSingle();
 
     let targetId = existingProfile?.id;
+    let generatedTempPassword: string | undefined = undefined;
 
-    // 2. If user does not exist yet, create user in Supabase Auth to obtain a real auth.users.id
-    // Use an isolated Supabase client (persistSession: false) so the logged in admin session is preserved.
+    // 2. If user does not exist yet, create user in Supabase Auth with temporary password & must_change_password flag
     if (!targetId) {
       const isolatedClient = createIsolatedClient();
       if (!isolatedClient) return { error: new Error('Supabase não configurado.') };
 
-      const tempPassword = `Mk9@${crypto.randomUUID().slice(0, 12)}`;
+      generatedTempPassword = `Mk9@${crypto.randomUUID().slice(0, 8)}`;
       const { data: signUpData, error: signUpError } = await isolatedClient.auth.signUp({
         email,
-        password: tempPassword,
+        password: generatedTempPassword,
         options: {
-          data: { full_name: name }
+          data: {
+            full_name: name,
+            must_change_password: true
+          }
         }
       });
 
@@ -236,16 +304,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return { error: new Error('Não foi possível obter o ID do usuário no Supabase Auth.') };
     }
 
-    // 3. Trigger password reset / magic link so user sets their own password
-    const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${window.location.origin}/login`
-    });
-
-    if (resetError) {
-      console.warn('Aviso no envio de e-mail de redefinição:', resetError.message);
-    }
-
-    // 4. Create or update profile in public.profiles using real auth.users.id (satisfies profiles_id_fkey)
+    // 3. Create or update profile in public.profiles using real auth.users.id
     const { error: upsertErr } = await supabase.from('profiles').upsert([
       {
         id: targetId,
@@ -260,7 +319,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return { error: new Error(upsertErr.message) };
     }
 
-    return { error: null };
+    // 4. Send email via Edge Function (does not roll back user if email fails)
+    let emailSent = false;
+    if (generatedTempPassword) {
+      try {
+        const { data: funcData, error: funcErr } = await supabase.functions.invoke('send-invite-email', {
+          body: {
+            name,
+            email,
+            tempPassword: generatedTempPassword
+          }
+        });
+
+        if (!funcErr && funcData?.emailSent) {
+          emailSent = true;
+        } else if (funcErr) {
+          console.warn('Falha na chamada da Edge Function send-invite-email:', funcErr.message);
+        }
+      } catch (e) {
+        console.warn('Exceção ao invocar Edge Function send-invite-email:', e);
+      }
+    }
+
+    return { error: null, tempPassword: generatedTempPassword, emailSent };
   }, [role]);
 
   const deleteUser = useCallback(async (userId: string) => {
@@ -283,6 +364,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     loading,
     configured: isSupabaseConfigured,
     error,
+    isPasswordRecovery,
     hasPermission,
     signIn: async (email, password) => {
       if (!supabase) return { error: new Error('Supabase ainda não foi configurado.') };
@@ -296,6 +378,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     signOut: async () => {
       setSession(null);
       setProfile(null);
+      setIsPasswordRecovery(false);
       if (supabase) await supabase.auth.signOut();
     },
     refreshProfile: async () => {
@@ -304,8 +387,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     updateProfileRole,
     updateUserProfile,
     inviteUser,
-    deleteUser
-  }), [deleteUser, error, fetchProfile, hasPermission, inviteUser, loading, profile, role, session, updateProfileRole, updateUserProfile]);
+    deleteUser,
+    updatePassword,
+    resetPasswordForEmail,
+    clearPasswordRecovery
+  }), [clearPasswordRecovery, deleteUser, error, fetchProfile, hasPermission, inviteUser, isPasswordRecovery, loading, profile, role, session, updatePassword, updateProfileRole, updateUserProfile, resetPasswordForEmail]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
