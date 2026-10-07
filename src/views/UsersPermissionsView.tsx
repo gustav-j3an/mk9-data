@@ -67,31 +67,8 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
     setLoading(true);
     setErrorMessage(null);
 
-    // Fallback/Default record for promotormk9@gmail.com
-    const defaultPromotorMk9: ExtendedUserProfile = {
-      id: 'promotor-mk9-demo-id',
-      email: 'promotormk9@gmail.com',
-      name: 'KAYQUE DE JESUS OLIVEIRA',
-      role: 'promotor',
-      department: 'Operações de Campo',
-      status: 'ativo',
-      promotor_matricula: 'PRM-060',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      promotor: {
-        matricula: 'PRM-060',
-        nome: 'KAYQUE DE JESUS OLIVEIRA',
-        supervisor: 'Renata Vasconcelos',
-        equipe: 'SP Capital Norte',
-        status: 'ativo'
-      }
-    };
-
     if (!supabase) {
-      setUsersList([defaultPromotorMk9, ...(profile ? [{ ...profile, role: profile.role || 'admin' }] : [])]);
-      setPromotoresOptions([
-        { matricula: 'PRM-060', nome: 'KAYQUE DE JESUS OLIVEIRA', supervisor: 'Renata Vasconcelos', equipe: 'SP Capital Norte', status: 'ativo' }
-      ]);
+      setUsersList(profile ? [{ ...profile, role: profile.role || 'admin' }] : []);
       setLoading(false);
       return;
     }
@@ -133,14 +110,6 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
       }
 
       const promotoresMap = new Map<string, PromoterRecord>();
-      // Ensure PRM-060 is always in promotoresOptions
-      promotoresMap.set('PRM-060', {
-        matricula: 'PRM-060',
-        nome: 'KAYQUE DE JESUS OLIVEIRA',
-        supervisor: 'Renata Vasconcelos',
-        equipe: 'SP Capital Norte',
-        status: 'ativo'
-      });
 
       if (promotoresRes.data && promotoresRes.data.length > 0) {
         promotoresRes.data.forEach((p: any) => {
@@ -157,7 +126,7 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
       
       setPromotoresOptions(Array.from(promotoresMap.values()));
 
-      let mergedList: ExtendedUserProfile[] = rawProfiles.map((p: any) => {
+      const mergedList: ExtendedUserProfile[] = rawProfiles.map((p: any) => {
         let linkedPromoter: PromoterRecord | null = null;
         if (p.promotor) {
           const firstP = Array.isArray(p.promotor) ? p.promotor[0] : p.promotor;
@@ -172,13 +141,13 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
           }
         }
         
-        const effectiveMatricula = p.email === 'promotormk9@gmail.com' ? (p.promotor_matricula || 'PRM-060') : p.promotor_matricula;
+        const effectiveMatricula = p.promotor_matricula || null;
 
         if (!linkedPromoter && effectiveMatricula && promotoresMap.has(effectiveMatricula)) {
           linkedPromoter = promotoresMap.get(effectiveMatricula)!;
         }
 
-        const effectiveRole = p.email === 'promotormk9@gmail.com' ? 'promotor' : ((p.role as UserRole) || 'operador');
+        const effectiveRole = (p.role as UserRole) || 'operador';
 
         return {
           ...p,
@@ -188,16 +157,10 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
         };
       });
 
-      // Ensure promotormk9@gmail.com is present in the list even if not present in Supabase Auth table
-      const hasMk9User = mergedList.some((u) => u.email.toLowerCase() === 'promotormk9@gmail.com');
-      if (!hasMk9User) {
-        mergedList.unshift(defaultPromotorMk9);
-      }
-
       setUsersList(mergedList);
     } catch (err) {
       setErrorMessage(`Erro ao conectar com o banco de dados: ${String(err)}`);
-      setUsersList([defaultPromotorMk9]);
+      setUsersList([]);
     } finally {
       setLoading(false);
     }

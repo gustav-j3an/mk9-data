@@ -29,20 +29,16 @@ function isScreenAllowedForRole(screen: ScreenId, role: string): boolean {
   if (role === 'operador') {
     return screen !== 'importacao' && screen !== 'usuarios';
   }
+  if (role === 'gestor') {
+    return screen !== 'usuarios';
+  }
   return true;
 }
 
 function Dashboard() {
   const { role } = useAuth();
   const [currentScreen, setCurrentScreen] = useState<ScreenId>(role === 'promotor' ? 'portal-promotor' : 'cockpit');
-  const [toasts, setToasts] = useState<ToastMessage[]>([
-    {
-      id: 'init-toast',
-      title: 'Sistema Conectado',
-      message: 'MK9 Command Center sincronizado.',
-      type: 'success'
-    }
-  ]);
+  const [toasts, setToasts] = useState<ToastMessage[]>([]);
 
   useEffect(() => {
     if (role === 'promotor' && currentScreen !== 'portal-promotor') {

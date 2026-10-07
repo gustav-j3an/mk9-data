@@ -31,12 +31,15 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
 
   // Form State para Visita em Andamento
   const [checklist, setChecklist] = useState<Record<string, { checked: boolean; obs: string; valTxt: string }>>({});
+  const [savingChecklistKey, setSavingChecklistKey] = useState<string | null>(null);
   const [photoType, setPhotoType] = useState<'fachada' | 'gondola' | 'preco' | 'ponto_extra' | 'ruptura' | 'outros'>('gondola');
   const [photoCaption, setPhotoCaption] = useState('');
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [occurrenceType, setOccurrenceType] = useState<'ruptura' | 'preco_divergente' | 'falta_espaco' | 'outro'>('ruptura');
   const [occurrenceDesc, setOccurrenceDesc] = useState('');
+  const [savingOccurrence, setSavingOccurrence] = useState(false);
   const [generalObs, setGeneralObs] = useState('');
+  const [completingVisit, setCompletingVisit] = useState(false);
   const [notDoneReason, setNotDoneReason] = useState('');
   const [showNotDoneModal, setShowNotDoneModal] = useState<RouteItem | null>(null);
 
@@ -132,6 +135,24 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
       // Verificar se há alguma visita em andamento para retomada automática
       const inProgress = visits.find((v) => v.status === 'em_andamento');
       if (inProgress) {
+        // Gerar signedUrls para as fotos da visita ativa
+        if (inProgress.photos && inProgress.photos.length > 0) {
+          const photosWithSignedUrls = await Promise.all(
+            inProgress.photos.map(async (p) => {
+              if (p.storage_path) {
+                const { data } = await supabase!.storage
+                  .from('visit-photos')
+                  .createSignedUrl(p.storage_path, 3600);
+                if (data?.signedUrl) {
+                  return { ...p, signed_url: data.signedUrl };
+                }
+              }
+              return p;
+            })
+          );
+          inProgress.photos = photosWithSignedUrls;
+        }
+
         setActiveVisit(inProgress);
         setGeneralObs(inProgress.observacao_geral || '');
 
@@ -187,68 +208,104 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
 
   // Iniciar Visita
   const handleStartVisit = async (route: RouteItem) => {
-    if (!supabase) return;
+    if (!supabase || !promotorMatricula) return;
 
     try {
-      // Obter Geolocalização do dispositivo se disponível
-      let lat: number | null = null;
-      let lng: number | null = null;
-
-      if (navigator.geolocation) {
-        try {
-          const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
-            navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 4000 });
-          });
-          lat = pos.coords.latitude;
-          lng = pos.coords.longitude;
-        } catch (e) {
-          console.warn('Geolocalização não concedida ou timeout');
-        }
-      }
-
       const todayStr = new Date().toISOString().split('T')[0];
 
-      // Inserir registro de visita em_andamento no Supabase
-      const { data: newVisit, error: insertErr } = await supabase
+      // 1. Verificar se já existe visita para esta rota e data (prevenir duplicidade)
+      const { data: existingVisits, error: checkErr } = await supabase
         .from('visits')
-        .insert([
-          {
-            rota_id: route.id,
-            promotor_matricula: route.promotor_matricula,
-            loja_codigo: route.loja_codigo,
-            industria_codigo: route.industria_codigo,
-            data_visita: todayStr,
-            started_at: new Date().toISOString(),
-            latitude: lat,
-            longitude: lng,
-            status: 'em_andamento'
-          }
-        ])
         .select(`
           *,
           industria:industrias(codigo, nome),
           loja:lojas(codigo, nome, cidade, uf, endereco),
-          promotor:promotores(matricula, nome)
+          promotor:promotores(matricula, nome),
+          checklist_items:visit_checklist_items(*),
+          photos:visit_photos(*),
+          occurrences:visit_occurrences(*)
         `)
-        .single();
+        .eq('promotor_matricula', promotorMatricula)
+        .eq('loja_codigo', route.loja_codigo)
+        .eq('industria_codigo', route.industria_codigo)
+        .eq('data_visita', todayStr);
 
-      if (insertErr) throw insertErr;
+      if (checkErr) throw checkErr;
 
-      const visitData = newVisit as Visit;
+      let visitData: Visit;
+
+      if (existingVisits && existingVisits.length > 0) {
+        // Reutilizar visita existente caso já tenha sido iniciada/criada hoje
+        visitData = existingVisits[0] as Visit;
+        onShowToast({
+          title: 'Visita Retomada',
+          message: `Visita já existente carregada para a loja ${route.loja?.nome || route.loja_codigo}.`,
+          type: 'info'
+        });
+      } else {
+        // Obter Geolocalização do dispositivo se disponível
+        let lat: number | null = null;
+        let lng: number | null = null;
+
+        if (navigator.geolocation) {
+          try {
+            const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
+              navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 4000 });
+            });
+            lat = pos.coords.latitude;
+            lng = pos.coords.longitude;
+          } catch (e) {
+            console.warn('Geolocalização não concedida ou timeout');
+          }
+        }
+
+        // Inserir registro de visita em_andamento no Supabase usando schema exato
+        const { data: newVisit, error: insertErr } = await supabase
+          .from('visits')
+          .insert([
+            {
+              rota_id: route.id,
+              promotor_matricula: promotorMatricula,
+              loja_codigo: route.loja_codigo,
+              industria_codigo: route.industria_codigo,
+              data_visita: todayStr,
+              started_at: new Date().toISOString(),
+              latitude: lat,
+              longitude: lng,
+              status: 'em_andamento'
+            }
+          ])
+          .select(`
+            *,
+            industria:industrias(codigo, nome),
+            loja:lojas(codigo, nome, cidade, uf, endereco),
+            promotor:promotores(matricula, nome)
+          `)
+          .single();
+
+        if (insertErr) throw insertErr;
+
+        visitData = newVisit as Visit;
+        onShowToast({
+          title: 'Visita Iniciada!',
+          message: `Check-in registrado na loja ${route.loja?.nome || route.loja_codigo}.`,
+          type: 'success'
+        });
+      }
+
       setActiveVisit(visitData);
 
       // Inicializar checklist padrão
       const initialChk: Record<string, { checked: boolean; obs: string; valTxt: string }> = {};
       DEFAULT_CHECKLIST_ITEMS.forEach((def) => {
-        initialChk[def.item_key] = { checked: false, obs: '', valTxt: '' };
+        const found = visitData.checklist_items?.find((c) => c.item_key === def.item_key);
+        initialChk[def.item_key] = {
+          checked: found ? found.checked : false,
+          obs: found?.observacao || '',
+          valTxt: found?.valor_texto || ''
+        };
       });
       setChecklist(initialChk);
-
-      onShowToast({
-        title: 'Visita Iniciada!',
-        message: `Check-in registrado na loja ${route.loja?.nome || route.loja_codigo}.`,
-        type: 'success'
-      });
 
       loadPortalData();
     } catch (err: any) {
@@ -261,11 +318,22 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
     }
   };
 
-  // Upload de Foto para o Bucket Privado 'visit-photos'
+  // Upload de Foto para o Bucket Privado 'visit-photos' com Validação e Cleanup de Órfãos
   const handleUploadPhoto = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !activeVisit || !supabase) return;
 
+    // 1. Validar tipo MIME (somente imagens)
+    if (!file.type.startsWith('image/')) {
+      onShowToast({
+        title: 'Formato Inválido',
+        message: 'Apenas arquivos de imagem (PNG, JPG, WEBP) são permitidos.',
+        type: 'warning'
+      });
+      return;
+    }
+
+    // 2. Validar limite de tamanho (10MB)
     if (file.size > 10 * 1024 * 1024) {
       onShowToast({
         title: 'Tamanho Excedido',
@@ -276,55 +344,81 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
     }
 
     setUploadingPhoto(true);
+    let uploadedPath: string | null = null;
 
     try {
-      const fileExt = file.name.split('.').pop() || 'jpg';
+      const fileExt = file.name.split('.').pop()?.toLowerCase() || 'jpg';
       const fileName = `${activeVisit.id}/${Date.now()}_${photoType}.${fileExt}`;
-      const filePath = `visits/${fileName}`;
+      uploadedPath = `visits/${fileName}`;
 
-      // Upload no Supabase Storage
+      // 3. Upload no Supabase Storage
       const { error: uploadErr } = await supabase.storage
         .from('visit-photos')
-        .upload(filePath, file, { upsert: true });
+        .upload(uploadedPath, file, { upsert: true, contentType: file.type });
 
       if (uploadErr) throw uploadErr;
 
-      // Obter URL pública ou assinada do arquivo
-      const { data: urlData } = supabase.storage.from('visit-photos').getPublicUrl(filePath);
-      const publicUrl = urlData.publicUrl;
+      // 4. Gerar Signed URL para exibicao temporaria
+      const { data: signedData } = await supabase.storage
+        .from('visit-photos')
+        .createSignedUrl(uploadedPath, 3600);
 
-      // Gravar referência na tabela visit_photos
+      const signedUrl = signedData?.signedUrl || '';
+
+      // 5. Gravar referência permanente na tabela visit_photos (storage_path)
       const { error: dbErr } = await supabase.from('visit-photos').insert([
         {
           visit_id: activeVisit.id,
           tipo_foto: photoType,
-          storage_path: filePath,
-          file_url: publicUrl,
+          storage_path: uploadedPath,
+          file_url: signedUrl || uploadedPath,
           legenda: photoCaption.trim() || null
         }
       ]);
 
-      if (dbErr) throw dbErr;
+      if (dbErr) {
+        // Se a gravação no banco falhar, limpa o arquivo enviado no Storage para evitar órfão
+        console.error('Erro no INSERT em visit_photos. Limpando arquivo enviado...', dbErr);
+        await supabase.storage.from('visit-photos').remove([uploadedPath]);
+        throw dbErr;
+      }
 
       onShowToast({
         title: 'Foto Anexada',
-        message: `Foto de ${photoType.toUpperCase()} salva com sucesso!`,
+        message: `Foto salva com sucesso!`,
         type: 'success'
       });
 
       setPhotoCaption('');
-      // Atualizar objeto ativo
+      // Atualizar lista de fotos da visita ativa com signed_url
       const { data: updatedPhotos } = await supabase.from('visit-photos').select('*').eq('visit_id', activeVisit.id);
-      setActiveVisit((prev) => (prev ? { ...prev, photos: updatedPhotos as any } : null));
+      if (updatedPhotos) {
+        const photosWithSignedUrls = await Promise.all(
+          updatedPhotos.map(async (p: any) => {
+            if (p.storage_path) {
+              const { data } = await supabase!.storage
+                .from('visit-photos')
+                .createSignedUrl(p.storage_path, 3600);
+              if (data?.signedUrl) {
+                return { ...p, signed_url: data.signedUrl };
+              }
+            }
+            return p;
+          })
+        );
+        setActiveVisit((prev) => (prev ? { ...prev, photos: photosWithSignedUrls as any } : null));
+      }
     } catch (err: any) {
-      console.error('Erro no upload de foto:', err);
+      console.error('Erro no fluxo de foto:', err);
       onShowToast({
-        title: 'Falha no Upload',
-        message: err.message || 'Erro ao enviar foto para o servidor.',
+        title: 'Falha no Envio da Foto',
+        message: err.message || 'Erro ao processar e salvar a imagem.',
         type: 'error'
       });
     } finally {
       setUploadingPhoto(false);
+      // Limpar input de arquivo
+      e.target.value = '';
     }
   };
 
@@ -332,6 +426,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
   const handleAddOccurrence = async () => {
     if (!occurrenceDesc.trim() || !activeVisit || !supabase) return;
 
+    setSavingOccurrence(true);
     try {
       const { error: err } = await supabase.from('visit_occurrences').insert([
         {
@@ -344,29 +439,55 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
       if (err) throw err;
 
       onShowToast({
-        title: 'Ocorrência Anotada',
-        message: `Incidente de ${occurrenceType} registrado para o gestor.`,
+        title: 'Ocorrência Registrada',
+        message: `Incidente de ${occurrenceType.toUpperCase()} salvo com sucesso!`,
         type: 'info'
       });
 
       setOccurrenceDesc('');
-      const { data: updatedOccs } = await supabase.from('visit_occurrences').select('*').eq('visit_id', activeVisit.id);
+      const { data: updatedOccs } = await supabase
+        .from('visit_occurrences')
+        .select('*')
+        .eq('visit_id', activeVisit.id)
+        .order('created_at', { ascending: false });
+
       setActiveVisit((prev) => (prev ? { ...prev, occurrences: updatedOccs as any } : null));
     } catch (err: any) {
+      console.error('Erro ao gravar ocorrência:', err);
       onShowToast({
         title: 'Erro de Gravação',
         message: err.message || 'Falha ao salvar ocorrência.',
         type: 'error'
       });
+    } finally {
+      setSavingOccurrence(false);
     }
   };
 
-  // Finalizar Visita
+  // Finalizar Visita / Check-out
   const handleCompleteVisit = async () => {
-    if (!activeVisit || !supabase) return;
+    if (!activeVisit || !supabase || completingVisit) return;
+
+    setCompletingVisit(true);
 
     try {
-      // 1. Salvar itens do checklist no banco
+      // 1. Obter Geolocalização do dispositivo no check-out se disponível
+      let lat: number | null = activeVisit.latitude || null;
+      let lng: number | null = activeVisit.longitude || null;
+
+      if (navigator.geolocation) {
+        try {
+          const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
+            navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 3500 });
+          });
+          lat = pos.coords.latitude;
+          lng = pos.coords.longitude;
+        } catch (e) {
+          console.warn('Geolocalização no check-out não concedida ou timeout');
+        }
+      }
+
+      // 2. Persistir itens finais do checklist no banco
       const checklistPayload = Object.entries(checklist).map(([key, item]) => {
         const label = DEFAULT_CHECKLIST_ITEMS.find((d) => d.item_key === key)?.item_label || key;
         return {
@@ -379,18 +500,22 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
         };
       });
 
-      // Limpar antigos e inserir atualizados
-      await supabase.from('visit_checklist_items').delete().eq('visit_id', activeVisit.id);
-      await supabase.from('visit_checklist_items').insert(checklistPayload);
+      if (checklistPayload.length > 0) {
+        await supabase.from('visit_checklist_items').delete().eq('visit_id', activeVisit.id);
+        await supabase.from('visit_checklist_items').insert(checklistPayload);
+      }
 
-      // 2. Atualizar status da visita para concluida
+      // 3. Atualizar visita com status oficial 'concluida' e completed_at (preservando started_at)
+      const nowIso = new Date().toISOString();
       const { error: updateErr } = await supabase
         .from('visits')
         .update({
           status: 'concluida',
-          completed_at: new Date().toISOString(),
+          completed_at: nowIso,
+          latitude: lat,
+          longitude: lng,
           observacao_geral: generalObs.trim() || null,
-          updated_at: new Date().toISOString()
+          updated_at: nowIso
         })
         .eq('id', activeVisit.id);
 
@@ -398,19 +523,21 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
 
       onShowToast({
         title: 'Visita Finalizada com Sucesso! 🎉',
-        message: 'Relatório enviado. O Painel Operacional foi atualizado em tempo real.',
+        message: `Check-out concluído na loja ${activeVisit.loja?.nome || activeVisit.loja_codigo}.`,
         type: 'success'
       });
 
       setActiveVisit(null);
-      loadPortalData();
+      await loadPortalData();
     } catch (err: any) {
-      console.error(err);
+      console.error('Erro ao finalizar visita:', err);
       onShowToast({
         title: 'Erro ao Concluir Visita',
         message: err.message || 'Falha ao encerrar relatório de visita no banco.',
         type: 'error'
       });
+    } finally {
+      setCompletingVisit(false);
     }
   };
 
@@ -602,30 +729,95 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
 
           {/* PASSO 1: CHECKLIST OPERACIONAL */}
           <div className="space-y-3 pt-2 border-t border-[#1e2433]">
-            <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider font-mono flex items-center gap-2">
-              <span className="material-symbols-outlined text-amber-400 text-sm">fact_check</span>
-              1. Checklist de Atendimento (10 Itens Padrão)
-            </h3>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider font-mono flex items-center gap-2">
+                <span className="material-symbols-outlined text-amber-400 text-sm">fact_check</span>
+                1. Checklist de Atendimento ({DEFAULT_CHECKLIST_ITEMS.length} Itens)
+              </h3>
+              <div className="flex items-center gap-2 font-mono text-xs">
+                <span className="px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 font-bold border border-amber-500/30">
+                  {Object.values(checklist).filter((c) => c.checked).length} de {DEFAULT_CHECKLIST_ITEMS.length} concluídos
+                </span>
+                {savingChecklistKey && (
+                  <span className="text-[10px] text-cyan-400 font-bold flex items-center gap-1 animate-pulse">
+                    <span className="material-symbols-outlined text-xs animate-spin">sync</span>
+                    Salvando...
+                  </span>
+                )}
+              </div>
+            </div>
 
             <div className="space-y-2">
               {DEFAULT_CHECKLIST_ITEMS.map((item) => {
                 const state = checklist[item.item_key] || { checked: false, obs: '', valTxt: '' };
+                const isSaving = savingChecklistKey === item.item_key;
+
+                const handleChecklistChange = async (newChecked: boolean, newObs: string, newValTxt: string) => {
+                  const updatedState = { checked: newChecked, obs: newObs, valTxt: newValTxt };
+                  setChecklist((prev) => ({
+                    ...prev,
+                    [item.item_key]: updatedState
+                  }));
+
+                  if (!activeVisit || !supabase) return;
+
+                  setSavingChecklistKey(item.item_key);
+                  try {
+                    // Tentar upsert imediato em public.visit_checklist_items
+                    const { data: existing } = await supabase
+                      .from('visit_checklist_items')
+                      .select('id')
+                      .eq('visit_id', activeVisit.id)
+                      .eq('item_key', item.item_key)
+                      .maybeSingle();
+
+                    if (existing) {
+                      await supabase
+                        .from('visit_checklist_items')
+                        .update({
+                          checked: newChecked,
+                          observacao: newObs.trim() || null,
+                          valor_texto: newValTxt.trim() || null
+                        })
+                        .eq('id', existing.id);
+                    } else {
+                      await supabase
+                        .from('visit_checklist_items')
+                        .insert([
+                          {
+                            visit_id: activeVisit.id,
+                            item_key: item.item_key,
+                            item_label: item.item_label,
+                            checked: newChecked,
+                            observacao: newObs.trim() || null,
+                            valor_texto: newValTxt.trim() || null
+                          }
+                        ]);
+                    }
+                  } catch (err) {
+                    console.error('Erro ao persistir item de checklist:', err);
+                  } finally {
+                    setSavingChecklistKey(null);
+                  }
+                };
+
                 return (
                   <div key={item.item_key} className="p-3 rounded-xl bg-[#131722] border border-[#1e2433] space-y-2">
-                    <label className="flex items-center gap-3 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={state.checked}
-                        onChange={(e) =>
-                          setChecklist({
-                            ...checklist,
-                            [item.item_key]: { ...state, checked: e.target.checked }
-                          })
-                        }
-                        className="rounded border-[#1e2433] bg-[#171b26] text-emerald-500 focus:ring-emerald-400 w-4 h-4"
-                      />
-                      <span className={`text-xs font-mono font-bold ${state.checked ? 'text-emerald-300' : 'text-slate-300'}`}>
-                        {item.item_label}
+                    <label className="flex items-center justify-between cursor-pointer">
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="checkbox"
+                          checked={state.checked}
+                          disabled={isSaving}
+                          onChange={(e) => handleChecklistChange(e.target.checked, state.obs, state.valTxt)}
+                          className="rounded border-[#1e2433] bg-[#171b26] text-emerald-500 focus:ring-emerald-400 w-4 h-4 cursor-pointer"
+                        />
+                        <span className={`text-xs font-mono font-bold ${state.checked ? 'text-emerald-300' : 'text-slate-300'}`}>
+                          {item.item_label}
+                        </span>
+                      </div>
+                      <span className={`text-[10px] font-mono px-2 py-0.5 rounded font-bold uppercase ${state.checked ? 'bg-emerald-500/20 text-emerald-300' : 'bg-slate-800 text-slate-400'}`}>
+                        {state.checked ? 'Concluído' : 'Pendente'}
                       </span>
                     </label>
 
@@ -634,24 +826,14 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                         <input
                           type="text"
                           value={state.valTxt}
-                          onChange={(e) =>
-                            setChecklist({
-                              ...checklist,
-                              [item.item_key]: { ...state, valTxt: e.target.value }
-                            })
-                          }
+                          onChange={(e) => handleChecklistChange(state.checked, state.obs, e.target.value)}
                           placeholder="Valor / Preço / Qtd..."
                           className="h-8 px-2.5 bg-[#171b26] border border-[#1e2433] rounded-lg text-slate-200 focus:outline-none focus:border-amber-500"
                         />
                         <input
                           type="text"
                           value={state.obs}
-                          onChange={(e) =>
-                            setChecklist({
-                              ...checklist,
-                              [item.item_key]: { ...state, obs: e.target.value }
-                            })
-                          }
+                          onChange={(e) => handleChecklistChange(state.checked, e.target.value, state.valTxt)}
                           placeholder="Observações do item..."
                           className="h-8 px-2.5 bg-[#171b26] border border-[#1e2433] rounded-lg text-slate-200 focus:outline-none focus:border-amber-500"
                         />
@@ -718,18 +900,37 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                 </button>
               </div>
 
-              {/* Lista de Fotos Anexadas */}
-              {activeVisit.photos && activeVisit.photos.length > 0 && (
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2">
-                  {activeVisit.photos.map((p, idx) => (
-                    <div key={idx} className="p-2 rounded-lg bg-[#171b26] border border-[#1e2433] space-y-1">
-                      <span className="px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 text-[9px] font-bold block uppercase truncate">
-                        {p.tipo_foto}
-                      </span>
-                      {p.legenda && <p className="text-[10px] text-slate-400 truncate">{p.legenda}</p>}
-                    </div>
-                  ))}
+              {/* Lista de Fotos Anexadas com Preview de Miniaturas */}
+              {activeVisit.photos && activeVisit.photos.length > 0 ? (
+                <div className="space-y-2 pt-2 border-t border-[#1e2433]">
+                  <span className="text-[11px] text-slate-400 font-bold block">FOTOS REGISTRADAS NESTA VISITA ({activeVisit.photos.length}):</span>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    {activeVisit.photos.map((p, idx) => (
+                      <div key={idx} className="p-2 rounded-xl bg-[#171b26] border border-[#1e2433] space-y-1.5 flex flex-col justify-between">
+                        <div className="relative aspect-video rounded-lg bg-[#10141f] overflow-hidden border border-[#1e2433] flex items-center justify-center">
+                          {(p.signed_url || p.file_url) ? (
+                            <img
+                              src={p.signed_url || p.file_url}
+                              alt={p.legenda || p.tipo_foto}
+                              className="w-full h-full object-cover"
+                              onError={(err) => {
+                                (err.target as HTMLElement).style.display = 'none';
+                              }}
+                            />
+                          ) : (
+                            <span className="material-symbols-outlined text-slate-600 text-2xl">image</span>
+                          )}
+                          <span className="absolute top-1 left-1 px-1.5 py-0.5 rounded bg-black/70 backdrop-blur-sm text-cyan-300 text-[9px] font-bold uppercase border border-cyan-500/30">
+                            {p.tipo_foto}
+                          </span>
+                        </div>
+                        {p.legenda && <p className="text-[10px] text-slate-300 truncate" title={p.legenda}>{p.legenda}</p>}
+                      </div>
+                    ))}
+                  </div>
                 </div>
+              ) : (
+                <p className="text-[11px] text-slate-500 italic pt-1 text-center">Nenhuma foto enviada para esta visita ainda.</p>
               )}
             </div>
           </div>
@@ -772,45 +973,113 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
               <button
                 type="button"
                 onClick={handleAddOccurrence}
-                disabled={!occurrenceDesc.trim()}
-                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
+                disabled={!occurrenceDesc.trim() || savingOccurrence}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs flex items-center gap-1.5 disabled:opacity-50 cursor-pointer shadow-sm transition-all"
               >
-                <span className="material-symbols-outlined text-sm">add</span>
-                <span>Adicionar Ocorrência</span>
+                <span className={`material-symbols-outlined text-sm ${savingOccurrence ? 'animate-spin' : ''}`}>
+                  {savingOccurrence ? 'sync' : 'add'}
+                </span>
+                <span>{savingOccurrence ? 'Salvando ocorrência...' : '+ Registrar Ocorrência'}</span>
               </button>
 
-              {activeVisit.occurrences && activeVisit.occurrences.length > 0 && (
-                <div className="space-y-1.5 pt-2">
-                  {activeVisit.occurrences.map((occ, idx) => (
-                    <div key={idx} className="p-2 rounded bg-rose-500/10 border border-rose-500/30 text-rose-300 flex justify-between items-center text-[11px]">
-                      <span><strong>{occ.tipo.toUpperCase()}:</strong> {occ.descricao}</span>
-                    </div>
-                  ))}
+              {/* Lista de Ocorrências Registradas */}
+              {activeVisit.occurrences && activeVisit.occurrences.length > 0 ? (
+                <div className="space-y-2 pt-2 border-t border-[#1e2433]">
+                  <span className="text-[11px] text-slate-400 font-bold block">OCORRÊNCIAS NESTA VISITA ({activeVisit.occurrences.length}):</span>
+                  <div className="space-y-2">
+                    {activeVisit.occurrences.map((occ, idx) => (
+                      <div key={idx} className="p-3 rounded-xl bg-rose-950/20 border border-rose-500/30 text-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+                        <div className="space-y-0.5">
+                          <div className="flex items-center gap-2">
+                            <span className="px-2 py-0.5 rounded bg-rose-500/30 text-rose-300 text-[10px] font-bold uppercase">
+                              {occ.tipo.replace('_', ' ')}
+                            </span>
+                            {occ.created_at && (
+                              <span className="text-[10px] text-slate-400">
+                                {new Date(occ.created_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-slate-200 font-mono text-xs">{occ.descricao}</p>
+                        </div>
+                        <span className="text-[10px] text-amber-400 font-bold px-2 py-0.5 rounded bg-amber-500/10 border border-amber-500/20 self-start sm:self-center">
+                          Pendente Gestão
+                        </span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
+              ) : (
+                <p className="text-[11px] text-slate-500 italic pt-1 text-center">Nenhuma ocorrência registrada para esta visita.</p>
               )}
             </div>
           </div>
 
           {/* PASSO 4: OBSERVAÇÕES GERAIS E FINALIZAÇÃO */}
-          <div className="space-y-3 pt-3 border-t border-[#1e2433]">
-            <label className="text-xs font-bold text-slate-200 uppercase tracking-wider font-mono block">
-              4. Observações Gerais do Atendimento
-            </label>
-            <textarea
-              value={generalObs}
-              onChange={(e) => setGeneralObs(e.target.value)}
-              placeholder="Digite impressões gerais, conversas com o gerente da loja..."
-              className="w-full p-3 bg-[#131722] border border-[#1e2433] rounded-xl text-slate-200 focus:outline-none focus:border-amber-500 font-mono text-xs h-20 resize-none"
-            />
+          <div className="space-y-4 pt-3 border-t border-[#1e2433]">
+            <div>
+              <label className="text-xs font-bold text-slate-200 uppercase tracking-wider font-mono block mb-1.5">
+                4. Observações Gerais do Atendimento
+              </label>
+              <textarea
+                value={generalObs}
+                onChange={(e) => setGeneralObs(e.target.value)}
+                placeholder="Digite impressões gerais, conversas com o gerente da loja..."
+                className="w-full p-3 bg-[#131722] border border-[#1e2433] rounded-xl text-slate-200 focus:outline-none focus:border-amber-500 font-mono text-xs h-20 resize-none"
+              />
+            </div>
+
+            {/* PAINEL DE RESUMO DA VISITA PARA FINALIZAÇÃO */}
+            <div className="p-4 rounded-xl bg-[#10141f] border border-[#1e2433] space-y-3 font-mono text-xs">
+              <h4 className="text-xs font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-2">
+                <span className="material-symbols-outlined text-sm">summarize</span>
+                Resumo do Atendimento Antes do Check-out
+              </h4>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-slate-300">
+                <div className="p-2.5 rounded-lg bg-[#171b26] border border-[#1e2433]">
+                  <span className="text-[10px] text-slate-500 block font-bold">HORÁRIO ENTRADA</span>
+                  <span className="text-sm font-extrabold text-white">
+                    {activeVisit.started_at ? new Date(activeVisit.started_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—'}
+                  </span>
+                </div>
+
+                <div className="p-2.5 rounded-lg bg-[#171b26] border border-[#1e2433]">
+                  <span className="text-[10px] text-slate-500 block font-bold">CHECKLIST</span>
+                  <span className="text-sm font-extrabold text-amber-300">
+                    {Object.values(checklist).filter((c) => c.checked).length} / {DEFAULT_CHECKLIST_ITEMS.length}
+                  </span>
+                </div>
+
+                <div className="p-2.5 rounded-lg bg-[#171b26] border border-[#1e2433]">
+                  <span className="text-[10px] text-slate-500 block font-bold">FOTOS ANEXADAS</span>
+                  <span className="text-sm font-extrabold text-cyan-300">
+                    {activeVisit.photos?.length || 0}
+                  </span>
+                </div>
+
+                <div className="p-2.5 rounded-lg bg-[#171b26] border border-[#1e2433]">
+                  <span className="text-[10px] text-slate-500 block font-bold">OCORRÊNCIAS</span>
+                  <span className="text-sm font-extrabold text-rose-300">
+                    {activeVisit.occurrences?.length || 0}
+                  </span>
+                </div>
+              </div>
+            </div>
           </div>
 
-          <div className="pt-4 border-t border-[#1e2433] flex items-center justify-end gap-3 font-mono">
+          <div className="pt-4 border-t border-[#1e2433] flex flex-col sm:flex-row items-center justify-between gap-3 font-mono">
+            <span className="text-[11px] text-slate-400 text-center sm:text-left">
+              Ao finalizar, o check-out será registrado e a visita não poderá ser reeditada.
+            </span>
             <button
               onClick={handleCompleteVisit}
-              className="px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-2 shadow-[0_0_15px_rgba(16,185,129,0.4)] cursor-pointer"
+              disabled={completingVisit}
+              className="w-full sm:w-auto px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-[0_0_15px_rgba(16,185,129,0.4)] cursor-pointer transition-all"
             >
-              <span className="material-symbols-outlined text-lg">check_circle</span>
-              <span>Finalizar Visita &amp; Sincronizar</span>
+              <span className={`material-symbols-outlined text-lg ${completingVisit ? 'animate-spin' : ''}`}>
+                {completingVisit ? 'sync' : 'check_circle'}
+              </span>
+              <span>{completingVisit ? 'Finalizando...' : 'Finalizar Visita & Check-out'}</span>
             </button>
           </div>
         </section>

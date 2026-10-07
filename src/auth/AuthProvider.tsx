@@ -58,10 +58,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         console.warn('Profile fetch warning (fallback to session metadata):', profileErr.message);
       }
 
-      let matricula = data?.promotor_matricula || null;
-      if (!matricula && user.email?.toLowerCase() === 'promotormk9@gmail.com') {
-        matricula = 'PRM-060';
-      }
+      const matricula = data?.promotor_matricula || null;
 
       let promotorInfo: {
         matricula: string;
@@ -95,24 +92,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
       }
 
-      if (user.email?.toLowerCase() === 'promotormk9@gmail.com' && !promotorInfo) {
-        promotorInfo = {
-          matricula: 'PRM-060',
-          nome: 'KAYQUE DE JESUS OLIVEIRA',
-          cidade: 'São Paulo',
-          uf: 'SP',
-          supervisor: 'Renata Vasconcelos',
-          equipe: 'SP Capital Norte',
-          status: 'ativo'
-        };
-      }
-
-      const realRole = (user.email?.toLowerCase() === 'promotormk9@gmail.com')
-        ? 'promotor'
-        : ((data?.role as UserRole) || defaultProfile.role);
-
-      const realName = promotorInfo?.nome
-        || (user.email?.toLowerCase() === 'promotormk9@gmail.com' ? 'KAYQUE DE JESUS OLIVEIRA' : (data?.name || defaultProfile.name));
+      const realRole = (data?.role as UserRole) || defaultProfile.role;
+      const realName = promotorInfo?.nome || data?.name || defaultProfile.name;
 
       setProfile({
         id: user.id,
@@ -120,11 +101,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         name: realName,
         role: realRole,
         promotor_matricula: matricula,
-        promotor_nome: promotorInfo?.nome || (user.email?.toLowerCase() === 'promotormk9@gmail.com' ? 'KAYQUE DE JESUS OLIVEIRA' : null),
-        promotor_cidade: promotorInfo?.cidade || (user.email?.toLowerCase() === 'promotormk9@gmail.com' ? 'São Paulo' : null),
-        promotor_uf: promotorInfo?.uf || (user.email?.toLowerCase() === 'promotormk9@gmail.com' ? 'SP' : null),
-        promotor_supervisor: promotorInfo?.supervisor || (user.email?.toLowerCase() === 'promotormk9@gmail.com' ? 'Renata Vasconcelos' : null),
-        promotor_equipe: promotorInfo?.equipe || (user.email?.toLowerCase() === 'promotormk9@gmail.com' ? 'SP Capital Norte' : null),
+        promotor_nome: promotorInfo?.nome || null,
+        promotor_cidade: promotorInfo?.cidade || null,
+        promotor_uf: promotorInfo?.uf || null,
+        promotor_supervisor: promotorInfo?.supervisor || null,
+        promotor_equipe: promotorInfo?.equipe || null,
         avatar_url: data?.avatar_url,
         department: data?.department || defaultProfile.department,
         created_at: data?.created_at,

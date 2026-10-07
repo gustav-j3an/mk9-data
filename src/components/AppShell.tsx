@@ -58,7 +58,7 @@ export const AppShell: React.FC<AppShellProps> = ({
     {
       group: 'CONFIGURAÇÕES & SEGURANÇA',
       items: [
-        { id: 'usuarios' as ScreenId, label: 'Perfis & Permissões', icon: 'admin_panel_settings', roles: ['admin', 'gestor'] as UserRole[] },
+        { id: 'usuarios' as ScreenId, label: 'Perfis & Permissões', icon: 'admin_panel_settings', roles: ['admin'] as UserRole[] },
         { id: 'design-system' as ScreenId, label: 'Logo & Design System', icon: 'palette', roles: ['admin', 'gestor', 'operador'] as UserRole[] }
       ]
     }
@@ -210,8 +210,6 @@ export const AppShell: React.FC<AppShellProps> = ({
               <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-400"></span>
             </span>
             <span className="text-[11px] font-bold text-emerald-400">Operação Ao Vivo</span>
-            <span className="text-slate-600 text-xs">•</span>
-            <span className="font-mono text-[11px] text-slate-300">99.1% Ativa</span>
           </div>
         </div>
 

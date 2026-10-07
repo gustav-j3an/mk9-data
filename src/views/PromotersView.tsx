@@ -1,17 +1,58 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { ScreenId, ToastMessage, Promoter } from '../types';
-import { INITIAL_PROMOTERS } from '../data/mockData';
+import { supabase } from '../lib/supabase';
 
 interface PromotersViewProps {
   onNavigate: (screen: ScreenId) => void;
   onShowToast: (toast: Omit<ToastMessage, 'id'>) => void;
 }
 
+function mapRowToPromoter(row: any): Promoter {
+  const name = row.nome || '';
+  const initials = name
+    ? name
+        .split(' ')
+        .map((n: string) => n[0])
+        .filter(Boolean)
+        .slice(0, 2)
+        .join('')
+        .toUpperCase()
+    : 'PR';
+
+  let status: 'ativo' | 'ferias' | 'afastado' | 'arquivado' = 'ativo';
+  const rawStatus = (row.status || '').toLowerCase();
+  if (rawStatus === 'ferias') status = 'ferias';
+  else if (rawStatus === 'afastado') status = 'afastado';
+  else if (rawStatus === 'inativo' || rawStatus === 'arquivado') status = 'arquivado';
+  else status = 'ativo';
+
+  return {
+    id: row.id,
+    matricula: row.matricula || '',
+    name,
+    initials,
+    contractType: 'CLT',
+    cpf: row.cpf || '',
+    phone: row.telefone || '',
+    email: row.email || '',
+    city: row.cidade || '',
+    state: row.uf || 'SP',
+    supervisor: row.supervisor || '',
+    squad: row.equipe || '',
+    status,
+    operationalTodayStatus: 'campo'
+  };
+}
+
 export const PromotersView: React.FC<PromotersViewProps> = ({
   onNavigate,
   onShowToast
 }) => {
-  const [promoters, setPromoters] = useState<Promoter[]>(INITIAL_PROMOTERS);
+  const [promoters, setPromoters] = useState<Promoter[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [supervisorFilter, setSupervisorFilter] = useState('all');
@@ -35,16 +76,48 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
   const [formSquad, setFormSquad] = useState('');
   const [formStatus, setFormStatus] = useState<'ativo' | 'ferias' | 'afastado' | 'arquivado'>('ativo');
 
+  const fetchPromoters = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+
+    if (!supabase) {
+      setError('Cliente Supabase não inicializado.');
+      setLoading(false);
+      return;
+    }
+
+    try {
+      const { data, error: fetchErr } = await supabase
+        .from('promotores')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (fetchErr) throw fetchErr;
+
+      const list = (data || []).map(mapRowToPromoter);
+      setPromoters(list);
+    } catch (err: any) {
+      console.error('Erro ao carregar promotores:', err);
+      setError(err.message || 'Falha ao buscar promotores no banco de dados.');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchPromoters();
+  }, [fetchPromoters]);
+
   const openNewModal = () => {
     setEditingPromoter(null);
     setFormName('');
     setFormCpf('');
     setFormPhone('');
     setFormEmail('');
-    setFormMatricula(`MAT-${Math.floor(10000 + Math.random() * 90000)}`);
+    setFormMatricula(`PRM-${Math.floor(1000 + Math.random() * 9000)}`);
     setFormCity('São Paulo - SP');
-    setFormSupervisor('Renata Vasconcelos');
-    setFormSquad('SP Capital Norte');
+    setFormSupervisor('');
+    setFormSquad('');
     setFormStatus('ativo');
     setModalOpen(true);
   };
@@ -56,90 +129,178 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
     setFormPhone(p.phone);
     setFormEmail(p.email || '');
     setFormMatricula(p.matricula);
-    setFormCity(`${p.city} - ${p.state}`);
-    setFormSupervisor(p.supervisor);
-    setFormSquad(p.squad);
+    setFormCity(p.city && p.state ? `${p.city} - ${p.state}` : p.city || 'São Paulo - SP');
+    setFormSupervisor(p.supervisor || '');
+    setFormSquad(p.squad || '');
     setFormStatus(p.status);
     setModalOpen(true);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formName.trim()) return;
 
-    const initials = formName.split(' ').map((n) => n[0]).slice(0, 2).join('').toUpperCase();
-    const [city, state] = formCity.includes('-')
-      ? formCity.split('-').map((s) => s.trim())
-      : [formCity, 'SP'];
-
-    if (editingPromoter) {
-      setPromoters((prev) =>
-        prev.map((item) =>
-          item.id === editingPromoter.id
-            ? {
-                ...item,
-                name: formName,
-                initials,
-                cpf: formCpf || item.cpf,
-                phone: formPhone || item.phone,
-                email: formEmail,
-                city,
-                state: state || 'SP',
-                supervisor: formSupervisor,
-                squad: formSquad,
-                status: formStatus
-              }
-            : item
-        )
-      );
+    if (!formMatricula.trim()) {
       onShowToast({
-        title: 'Promotor Atualizado',
-        message: `Ficha cadastral de ${formName} atualizada.`,
-        type: 'success'
+        title: 'Campo Obrigatório',
+        message: 'A Matrícula é obrigatória.',
+        type: 'warning'
       });
-    } else {
-      const newP: Promoter = {
-        id: `prom-${Date.now()}`,
-        matricula: formMatricula,
-        name: formName,
-        initials,
-        contractType: 'CLT',
-        cpf: formCpf || '***.418.092-**',
-        phone: formPhone,
-        email: formEmail,
-        city,
-        state: state || 'SP',
-        supervisor: formSupervisor,
-        squad: formSquad,
-        status: formStatus,
-        operationalTodayStatus: 'campo'
-      };
-      setPromoters((prev) => [newP, ...prev]);
-      onShowToast({
-        title: 'Novo Promotor Cadastrado',
-        message: `${formName} adicionado ao quadro operacional CLT.`,
-        type: 'success'
-      });
+      return;
     }
 
-    setModalOpen(false);
+    if (!formName.trim()) {
+      onShowToast({
+        title: 'Campo Obrigatório',
+        message: 'O Nome Completo é obrigatório.',
+        type: 'warning'
+      });
+      return;
+    }
+
+    const cleanMatricula = formMatricula.trim();
+    const duplicate = promoters.find(
+      (p) => p.matricula.toLowerCase() === cleanMatricula.toLowerCase() && p.id !== editingPromoter?.id
+    );
+
+    if (duplicate) {
+      onShowToast({
+        title: 'Matrícula Duplicada',
+        message: `A matrícula "${cleanMatricula}" já pertence ao promotor ${duplicate.name}.`,
+        type: 'error'
+      });
+      return;
+    }
+
+    if (!supabase) {
+      onShowToast({
+        title: 'Erro de Supabase',
+        message: 'Cliente Supabase não configurado.',
+        type: 'error'
+      });
+      return;
+    }
+
+    setSaving(true);
+
+    const [city, state] = formCity.includes('-')
+      ? formCity.split('-').map((s) => s.trim())
+      : [formCity.trim() || 'São Paulo', 'SP'];
+
+    const dbStatus = formStatus === 'arquivado' ? 'inativo' : formStatus;
+
+    const payload = {
+      matricula: cleanMatricula,
+      nome: formName.trim(),
+      cpf: formCpf.trim() || null,
+      telefone: formPhone.trim() || null,
+      email: formEmail.trim() || null,
+      cidade: city || 'São Paulo',
+      uf: state || 'SP',
+      supervisor: formSupervisor.trim() || null,
+      equipe: formSquad.trim() || null,
+      status: dbStatus
+    };
+
+    try {
+      if (editingPromoter) {
+        const { error: updateErr } = await supabase
+          .from('promotores')
+          .update({ ...payload, updated_at: new Date().toISOString() })
+          .eq('id', editingPromoter.id);
+
+        if (updateErr) throw updateErr;
+
+        onShowToast({
+          title: 'Promotor Atualizado',
+          message: `Ficha cadastral de ${formName} atualizada no banco.`,
+          type: 'success'
+        });
+      } else {
+        const { error: insertErr } = await supabase
+          .from('promotores')
+          .insert([payload]);
+
+        if (insertErr) {
+          if (insertErr.code === '23505') {
+            throw new Error(`A matrícula "${cleanMatricula}" já está cadastrada no sistema.`);
+          }
+          throw insertErr;
+        }
+
+        onShowToast({
+          title: 'Novo Promotor Cadastrado',
+          message: `${formName} gravado no banco de dados com sucesso.`,
+          type: 'success'
+        });
+      }
+
+      setModalOpen(false);
+      await fetchPromoters();
+    } catch (err: any) {
+      console.error('Erro ao salvar promotor:', err);
+      onShowToast({
+        title: 'Erro ao Salvar',
+        message: err.message || 'Falha ao gravar promotor no banco de dados.',
+        type: 'error'
+      });
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const handleArchive = (id: string, name: string) => {
-    setPromoters((prev) =>
-      prev.map((p) => (p.id === id ? { ...p, status: 'arquivado' } : p))
-    );
-    setModalOpen(false);
-    onShowToast({
-      title: 'Promotor Arquivado',
-      message: `${name} arquivado. Histórico de presenças 100% preservado.`,
-      type: 'info'
-    });
+  const handleArchive = async (id: string, name: string) => {
+    if (!supabase) return;
+
+    setSaving(true);
+    try {
+      const { error: err } = await supabase
+        .from('promotores')
+        .update({ status: 'inativo', updated_at: new Date().toISOString() })
+        .eq('id', id);
+
+      if (err) throw err;
+
+      onShowToast({
+        title: 'Promotor Inativado',
+        message: `${name} foi inativado no banco de dados. Histórico de presenças preservado.`,
+        type: 'info'
+      });
+
+      setModalOpen(false);
+      await fetchPromoters();
+    } catch (err: any) {
+      console.error('Erro ao inativar promotor:', err);
+      onShowToast({
+        title: 'Erro ao Inativar',
+        message: err.message || 'Não foi possível inativar o promotor.',
+        type: 'error'
+      });
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleSelectAll = (checked: boolean) => {
     setSelectedIds(checked ? filteredPromoters.map((p) => p.id) : []);
   };
+
+  const availableSupervisors = useMemo(() => {
+    return Array.from(new Set(promoters.map((p) => p.supervisor).filter(Boolean))).sort();
+  }, [promoters]);
+
+  const availableSquads = useMemo(() => {
+    return Array.from(new Set(promoters.map((p) => p.squad).filter(Boolean))).sort();
+  }, [promoters]);
+
+  const availableCities = useMemo(() => {
+    return Array.from(
+      new Set(
+        promoters
+          .map((p) => (p.city && p.state ? `${p.city} - ${p.state}` : p.city))
+          .filter(Boolean)
+      )
+    ).sort();
+  }, [promoters]);
 
   const filteredPromoters = promoters.filter((p) => {
     const matchesSearch =
@@ -148,7 +309,8 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
       p.matricula.toLowerCase().includes(search.toLowerCase());
 
     const matchesStatus =
-      statusFilter === 'all' || p.status === statusFilter;
+      statusFilter === 'all' ||
+      (statusFilter === 'arquivado' ? p.status === 'arquivado' : p.status === statusFilter);
 
     const matchesSupervisor =
       supervisorFilter === 'all' ||
@@ -158,7 +320,7 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
       squadFilter === 'all' || (squadFilter === 'none' ? !p.squad : p.squad === squadFilter);
 
     const matchesCity =
-      cityFilter === 'all' || `${p.city} - ${p.state}` === cityFilter;
+      cityFilter === 'all' || `${p.city} - ${p.state}` === cityFilter || p.city === cityFilter;
 
     let matchesChip = true;
     if (chipFilter === 'ativo') matchesChip = p.status === 'ativo';
@@ -190,6 +352,14 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
 
         <div className="flex items-center gap-3 shrink-0">
           <button
+            onClick={() => fetchPromoters()}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#171b26] hover:bg-[#1f2433] text-slate-200 border border-[#1e2433] text-xs font-semibold shadow-sm cursor-pointer"
+            title="Atualizar lista"
+          >
+            <span className="material-symbols-outlined text-base text-cyan-400">refresh</span>
+            <span>Atualizar</span>
+          </button>
+          <button
             onClick={() => onShowToast({ title: 'Exportar Base CLT', message: 'Planilha completa de promotores gerada.', type: 'info' })}
             className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#171b26] hover:bg-[#1f2433] text-slate-200 border border-[#1e2433] text-xs font-semibold shadow-sm"
           >
@@ -206,6 +376,22 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
         </div>
       </section>
 
+      {/* Error Alert */}
+      {error && (
+        <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 flex items-center justify-between gap-4 text-xs text-rose-300">
+          <div className="flex items-center gap-2">
+            <span className="material-symbols-outlined text-lg">error</span>
+            <span>{error}</span>
+          </div>
+          <button
+            onClick={fetchPromoters}
+            className="px-3 py-1 rounded bg-rose-500/20 hover:bg-rose-500/30 font-bold border border-rose-500/40 text-rose-200 cursor-pointer"
+          >
+            Tentar novamente
+          </button>
+        </div>
+      )}
+
       {/* KPI Summary Cards */}
       <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         {/* Card 1: Total */}
@@ -217,7 +403,9 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
             </span>
           </div>
           <div className="my-2">
-            <div className="text-3xl font-extrabold text-white font-mono tracking-tight">{promoters.length}</div>
+            <div className="text-3xl font-extrabold text-white font-mono tracking-tight">
+              {loading ? '...' : promoters.length}
+            </div>
             <div className="flex items-center gap-1.5 mt-1 text-slate-400 text-xs">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
               <span>{promoters.filter((p) => p.status === 'ativo').length} CLT Ativos em folha</span>
@@ -236,7 +424,7 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
           </div>
           <div className="my-2">
             <div className="text-3xl font-extrabold text-white font-mono tracking-tight">
-              {promoters.filter((p) => p.squad && p.squad !== 'Nenhum').length}
+              {loading ? '...' : promoters.filter((p) => p.squad && p.squad !== 'Nenhum').length}
             </div>
             <div className="flex items-center gap-1.5 mt-1 text-slate-400 text-xs">
               <span className="material-symbols-outlined text-cyan-400 text-sm">groups</span>
@@ -261,7 +449,7 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
           </div>
           <div className="my-2">
             <div className="text-3xl font-extrabold text-white font-mono tracking-tight">
-              {promoters.filter((p) => !p.supervisor || !p.squad || p.supervisor === 'Nenhum' || p.squad === 'Nenhum').length}
+              {loading ? '...' : promoters.filter((p) => !p.supervisor || !p.squad || p.supervisor === 'Nenhum' || p.squad === 'Nenhum').length}
             </div>
             <div className="flex items-center gap-3 mt-1 font-mono text-[11px] text-slate-400">
               <span className="flex items-center gap-1">
@@ -276,7 +464,7 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
           </div>
           <button
             onClick={() => setChipFilter('alerta')}
-            className="w-full py-1 text-center font-mono text-[11px] uppercase font-bold tracking-wider text-slate-300 bg-[#131722] hover:bg-[#1f2433] rounded border border-[#1e2433] transition-colors"
+            className="w-full py-1 text-center font-mono text-[11px] uppercase font-bold tracking-wider text-slate-300 bg-[#131722] hover:bg-[#1f2433] rounded border border-[#1e2433] transition-colors cursor-pointer"
           >
             Filtrar pendências →
           </button>
@@ -298,7 +486,7 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
                 Em campo
               </span>
               <span className="font-mono font-bold text-white">
-                {promoters.filter((p) => p.operationalTodayStatus === 'campo').length}
+                {loading ? '...' : promoters.filter((p) => p.operationalTodayStatus === 'campo' && p.status === 'ativo').length}
               </span>
             </div>
             <div className="flex items-center justify-between text-slate-400">
@@ -307,7 +495,7 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
                 Folga / Férias
               </span>
               <span className="font-mono font-medium">
-                {promoters.filter((p) => p.status === 'ferias' || p.operationalTodayStatus === 'folga').length}
+                {loading ? '...' : promoters.filter((p) => p.status === 'ferias' || p.operationalTodayStatus === 'folga').length}
               </span>
             </div>
             <div className="flex items-center justify-between text-slate-400">
@@ -316,12 +504,12 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
                 Faltas / Atestados
               </span>
               <span className="font-mono font-bold text-rose-400">
-                {promoters.filter((p) => p.operationalTodayStatus === 'falta' || p.operationalTodayStatus === 'atestado').length}
+                {loading ? '...' : promoters.filter((p) => p.operationalTodayStatus === 'falta' || p.operationalTodayStatus === 'atestado').length}
               </span>
             </div>
           </div>
           <div className="text-[10px] text-slate-500 font-mono text-right">
-            Sincronizado com Controle de Presença
+            Sincronizado com Supabase (public.promotores)
           </div>
         </div>
       </section>
@@ -353,7 +541,7 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
               <option value="ativo">Ativo</option>
               <option value="ferias">Em Férias</option>
               <option value="afastado">Afastado</option>
-              <option value="arquivado">Arquivado</option>
+              <option value="arquivado">Inativo / Arquivado</option>
             </select>
           </div>
 
@@ -364,9 +552,9 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
               className="w-full bg-[#131722] border border-[#1e2433] px-3 py-2 rounded-lg text-slate-200 text-xs focus:outline-none cursor-pointer"
             >
               <option value="all">Todos os Supervisores</option>
-              <option value="Renata Vasconcelos">Renata Vasconcelos</option>
-              <option value="Carlos Silveira">Carlos Silveira</option>
-              <option value="Eduardo Mendes">Eduardo Mendes</option>
+              {availableSupervisors.map((s) => (
+                <option key={s} value={s}>{s}</option>
+              ))}
               <option value="none">⚠️ Sem Supervisor</option>
             </select>
           </div>
@@ -378,11 +566,9 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
               className="w-full bg-[#131722] border border-[#1e2433] px-3 py-2 rounded-lg text-slate-200 text-xs focus:outline-none cursor-pointer"
             >
               <option value="all">Todas as Equipes</option>
-              <option value="SP Capital Norte">SP Capital Norte</option>
-              <option value="RJ Metropolitana">RJ Metropolitana</option>
-              <option value="SP Campinas">SP Campinas</option>
-              <option value="Minas Trade">Minas Trade</option>
-              <option value="Sul Curitiba">Sul Curitiba</option>
+              {availableSquads.map((sq) => (
+                <option key={sq} value={sq}>{sq}</option>
+              ))}
               <option value="none">⚠️ Sem Equipe</option>
             </select>
           </div>
@@ -394,11 +580,9 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
               className="w-full bg-[#131722] border border-[#1e2433] px-3 py-2 rounded-lg text-slate-200 text-xs focus:outline-none cursor-pointer"
             >
               <option value="all">Todas as Cidades</option>
-              <option value="São Paulo - SP">São Paulo - SP</option>
-              <option value="Rio de Janeiro - RJ">Rio de Janeiro - RJ</option>
-              <option value="Campinas - SP">Campinas - SP</option>
-              <option value="Belo Horizonte - MG">Belo Horizonte - MG</option>
-              <option value="Curitiba - PR">Curitiba - PR</option>
+              {availableCities.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
             </select>
           </div>
         </div>
@@ -408,7 +592,7 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
           <div className="flex items-center gap-1.5 flex-wrap">
             <button
               onClick={() => setChipFilter('all')}
-              className={`px-3 py-1 rounded-full text-xs font-semibold transition-all ${
+              className={`px-3 py-1 rounded-full text-xs font-semibold transition-all cursor-pointer ${
                 chipFilter === 'all'
                   ? 'bg-purple-600 text-white font-bold neon-purple-glow'
                   : 'bg-[#131722] text-slate-300 hover:text-white border border-[#1e2433]'
@@ -418,7 +602,7 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
             </button>
             <button
               onClick={() => setChipFilter('ativo')}
-              className={`px-3 py-1 rounded-full text-xs font-semibold transition-all ${
+              className={`px-3 py-1 rounded-full text-xs font-semibold transition-all cursor-pointer ${
                 chipFilter === 'ativo'
                   ? 'bg-emerald-600 text-white font-bold'
                   : 'bg-[#131722] text-emerald-400 hover:text-white border border-[#1e2433]'
@@ -428,7 +612,7 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
             </button>
             <button
               onClick={() => setChipFilter('alerta')}
-              className={`px-3 py-1 rounded-full text-xs font-semibold flex items-center gap-1.5 transition-all ${
+              className={`px-3 py-1 rounded-full text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
                 chipFilter === 'alerta'
                   ? 'bg-amber-600 text-white font-bold'
                   : 'bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 border border-amber-500/30'
@@ -439,7 +623,7 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
             </button>
             <button
               onClick={() => setChipFilter('ferias')}
-              className={`px-3 py-1 rounded-full text-xs font-semibold transition-all ${
+              className={`px-3 py-1 rounded-full text-xs font-semibold transition-all cursor-pointer ${
                 chipFilter === 'ferias'
                   ? 'bg-cyan-600 text-white font-bold'
                   : 'bg-[#131722] text-slate-300 hover:text-white border border-[#1e2433]'
@@ -449,19 +633,19 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
             </button>
             <button
               onClick={() => setChipFilter('arquivado')}
-              className={`px-3 py-1 rounded-full text-xs font-semibold transition-all ${
+              className={`px-3 py-1 rounded-full text-xs font-semibold transition-all cursor-pointer ${
                 chipFilter === 'arquivado'
                   ? 'bg-slate-700 text-white font-bold'
                   : 'bg-[#131722] text-slate-400 hover:text-white border border-[#1e2433]'
               }`}
             >
-              Arquivados ({promoters.filter((p) => p.status === 'arquivado').length})
+              Inativos ({promoters.filter((p) => p.status === 'arquivado').length})
             </button>
           </div>
 
           <div className="flex items-center gap-2 text-slate-400 font-mono text-[11px]">
-            <span className="material-symbols-outlined text-sm text-emerald-400">sync</span>
-            <span>Espelhamento ativo com módulo Roteiros</span>
+            <span className="material-symbols-outlined text-sm text-emerald-400">database</span>
+            <span>Conectado ao Supabase (public.promotores)</span>
           </div>
         </div>
       </section>
@@ -490,154 +674,182 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-[#1e2433] text-slate-200">
-              {filteredPromoters.length === 0 ? (
+              {loading ? (
+                <tr>
+                  <td colSpan={8} className="py-12 text-center">
+                    <div className="flex flex-col items-center justify-center space-y-3">
+                      <div className="w-8 h-8 rounded-full border-2 border-purple-500 border-t-transparent animate-spin" />
+                      <p className="text-xs font-semibold text-slate-400">Carregando promotores do Supabase...</p>
+                    </div>
+                  </td>
+                </tr>
+              ) : filteredPromoters.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="py-12 text-center">
                     <div className="flex flex-col items-center justify-center space-y-2">
                       <span className="material-symbols-outlined text-4xl text-slate-600">badge</span>
-                      <p className="text-sm font-semibold text-slate-300">Não há dados cadastrados ainda.</p>
+                      <p className="text-sm font-semibold text-slate-300">
+                        {search || statusFilter !== 'all' || chipFilter !== 'all'
+                          ? 'Nenhum promotor encontrado com os filtros aplicados.'
+                          : 'Nenhum promotor cadastrado na base de dados.'}
+                      </p>
+                      <p className="text-xs text-slate-500 max-w-sm">
+                        Utilize o botão "+ Novo promotor" acima ou faça a importação de planilhas para popular o cadastro.
+                      </p>
                     </div>
                   </td>
                 </tr>
               ) : (
                 filteredPromoters.map((p) => {
-                const hasNoSupervisor = !p.supervisor || p.supervisor === 'Nenhum';
-                const hasNoSquad = !p.squad || p.squad === 'Nenhum';
-                const isSelected = selectedIds.includes(p.id);
+                  const hasNoSupervisor = !p.supervisor || p.supervisor === 'Nenhum';
+                  const hasNoSquad = !p.squad || p.squad === 'Nenhum';
+                  const isSelected = selectedIds.includes(p.id);
+                  const isArchived = p.status === 'arquivado';
 
-                return (
-                  <tr
-                    key={p.id}
-                    className={`hover:bg-[#1c2230] transition-colors group ${
-                      (hasNoSupervisor || hasNoSquad) && p.status !== 'arquivado'
-                        ? 'bg-amber-500/[0.02]'
-                        : ''
-                    }`}
-                  >
-                    <td className="px-4 py-3 text-center">
-                      <input
-                        type="checkbox"
-                        checked={isSelected}
-                        onChange={(e) => {
-                          setSelectedIds((prev) =>
-                            e.target.checked ? [...prev, p.id] : prev.filter((id) => id !== p.id)
-                          );
-                        }}
-                        className="rounded bg-[#131722] border-slate-600 text-purple-600 focus:ring-0 cursor-pointer"
-                      />
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-3">
-                        <div
-                          className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs ${
-                            p.status === 'arquivado'
-                              ? 'bg-slate-800 text-slate-500 border border-slate-700'
-                              : 'bg-purple-600/30 text-purple-300 border border-purple-500/40'
+                  return (
+                    <tr
+                      key={p.id}
+                      className={`hover:bg-[#1c2230] transition-colors group ${
+                        (hasNoSupervisor || hasNoSquad) && !isArchived
+                          ? 'bg-amber-500/[0.02]'
+                          : ''
+                      }`}
+                    >
+                      <td className="px-4 py-3 text-center">
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={(e) => {
+                            setSelectedIds((prev) =>
+                              e.target.checked ? [...prev, p.id] : prev.filter((id) => id !== p.id)
+                            );
+                          }}
+                          className="rounded bg-[#131722] border-slate-600 text-purple-600 focus:ring-0 cursor-pointer"
+                        />
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-3">
+                          <div
+                            className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs ${
+                              isArchived
+                                ? 'bg-slate-800 text-slate-500 border border-slate-700'
+                                : 'bg-purple-600/30 text-purple-300 border border-purple-500/40'
+                            }`}
+                          >
+                            {p.initials}
+                          </div>
+                          <div className="flex flex-col">
+                            <div className="flex items-center gap-2">
+                              <span className="font-bold text-white group-hover:text-purple-300 transition-colors">
+                                {p.name}
+                              </span>
+                              <span className="px-1.5 py-0.2 rounded bg-[#131722] font-mono text-[9px] text-cyan-400 font-bold border border-cyan-500/20">
+                                {isArchived ? 'INATIVO' : p.contractType}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-2 text-slate-400 font-mono text-[11px]">
+                              <span>{p.matricula}</span>
+                              {p.cpf && (
+                                <>
+                                  <span>•</span>
+                                  <span>CPF: {p.cpf}</span>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        {p.phone ? (
+                          <a
+                            href={`https://wa.me/55${p.phone.replace(/\D/g, '')}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="flex items-center gap-1.5 text-cyan-400 hover:underline font-mono"
+                          >
+                            <span className="material-symbols-outlined text-sm text-emerald-400">chat</span>
+                            {p.phone}
+                          </a>
+                        ) : (
+                          <span className="text-slate-500 text-[11px]">Não informado</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-slate-300">
+                        {p.city} {p.state ? `- ${p.state}` : ''}
+                      </td>
+                      <td className="px-4 py-3">
+                        {hasNoSupervisor && !isArchived ? (
+                          <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded bg-amber-500/10 text-amber-300 border border-amber-500/30">
+                            <span className="font-mono text-[10px] font-bold">⚠️ Sem Supervisor</span>
+                            <button
+                              onClick={() => openEditModal(p)}
+                              className="text-xs bg-amber-500/20 px-1.5 py-0.5 rounded text-amber-200 hover:bg-amber-500/30 font-semibold cursor-pointer"
+                            >
+                              Atribuir
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2 text-slate-200">
+                            <div className="w-5 h-5 rounded-full bg-[#131722] border border-[#1e2433] flex items-center justify-center text-[10px] font-mono text-cyan-400 font-bold">
+                              {p.supervisor ? p.supervisor.split(' ').map((n) => n[0]).join('') : '--'}
+                            </div>
+                            <span>{p.supervisor || 'Nenhum'}</span>
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-4 py-3">
+                        {hasNoSquad && !isArchived ? (
+                          <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded bg-amber-500/10 text-amber-300 border border-amber-500/30">
+                            <span className="font-mono text-[10px] font-bold">⚠️ Sem Equipe</span>
+                            <button
+                              onClick={() => openEditModal(p)}
+                              className="text-xs bg-amber-500/20 px-1.5 py-0.5 rounded text-amber-200 hover:bg-amber-500/30 font-semibold cursor-pointer"
+                            >
+                              Alocar Squad
+                            </button>
+                          </div>
+                        ) : (
+                          <span className="px-2.5 py-1 rounded bg-[#131722] text-slate-300 font-medium border border-[#1e2433]">
+                            {p.squad || 'Nenhum'}
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3">
+                        <span
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full font-mono text-[10px] font-bold ${
+                            p.status === 'ativo'
+                              ? 'bg-emerald-500/15 border border-emerald-500/30 text-emerald-400'
+                              : p.status === 'ferias'
+                              ? 'bg-cyan-500/15 border border-cyan-500/30 text-cyan-300'
+                              : 'bg-slate-800 border border-slate-700 text-slate-400'
                           }`}
                         >
-                          {p.initials}
-                        </div>
-                        <div className="flex flex-col">
-                          <div className="flex items-center gap-2">
-                            <span className="font-bold text-white group-hover:text-purple-300 transition-colors">
-                              {p.name}
-                            </span>
-                            <span className="px-1.5 py-0.2 rounded bg-[#131722] font-mono text-[9px] text-cyan-400 font-bold border border-cyan-500/20">
-                              {p.status === 'arquivado' ? 'DESLIGADO' : p.contractType}
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-2 text-slate-400 font-mono text-[11px]">
-                            <span>{p.matricula}</span>
-                            <span>•</span>
-                            <span>CPF: {p.cpf}</span>
-                          </div>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3">
-                      <a
-                        href={`https://wa.me/55${p.phone.replace(/\D/g, '')}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="flex items-center gap-1.5 text-cyan-400 hover:underline font-mono"
-                      >
-                        <span className="material-symbols-outlined text-sm text-emerald-400">chat</span>
-                        {p.phone}
-                      </a>
-                    </td>
-                    <td className="px-4 py-3 text-slate-300">{p.city} - {p.state}</td>
-                    <td className="px-4 py-3">
-                      {hasNoSupervisor && p.status !== 'arquivado' ? (
-                        <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded bg-amber-500/10 text-amber-300 border border-amber-500/30">
-                          <span className="font-mono text-[10px] font-bold">⚠️ Sem Supervisor</span>
-                          <button
-                            onClick={() => openEditModal(p)}
-                            className="text-xs bg-amber-500/20 px-1.5 py-0.5 rounded text-amber-200 hover:bg-amber-500/30 font-semibold"
-                          >
-                            Atribuir
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-2 text-slate-200">
-                          <div className="w-5 h-5 rounded-full bg-[#131722] border border-[#1e2433] flex items-center justify-center text-[10px] font-mono text-cyan-400 font-bold">
-                            {p.supervisor ? p.supervisor.split(' ').map((n) => n[0]).join('') : '--'}
-                          </div>
-                          <span>{p.supervisor}</span>
-                        </div>
-                      )}
-                    </td>
-                    <td className="px-4 py-3">
-                      {hasNoSquad && p.status !== 'arquivado' ? (
-                        <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded bg-amber-500/10 text-amber-300 border border-amber-500/30">
-                          <span className="font-mono text-[10px] font-bold">⚠️ Sem Equipe</span>
-                          <button
-                            onClick={() => openEditModal(p)}
-                            className="text-xs bg-amber-500/20 px-1.5 py-0.5 rounded text-amber-200 hover:bg-amber-500/30 font-semibold"
-                          >
-                            Alocar Squad
-                          </button>
-                        </div>
-                      ) : (
-                        <span className="px-2.5 py-1 rounded bg-[#131722] text-slate-300 font-medium border border-[#1e2433]">
-                          {p.squad}
+                          <span className={`w-1.5 h-1.5 rounded-full ${p.status === 'ativo' ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'}`} />
+                          {p.status === 'ferias' ? 'EM FÉRIAS' : (p.status === 'arquivado' ? 'INATIVO' : p.status.toUpperCase())}
                         </span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3">
-                      <span
-                        className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full font-mono text-[10px] font-bold ${
-                          p.status === 'ativo'
-                            ? 'bg-emerald-500/15 border border-emerald-500/30 text-emerald-400'
-                            : p.status === 'ferias'
-                            ? 'bg-cyan-500/15 border border-cyan-500/30 text-cyan-300'
-                            : 'bg-slate-800 border border-slate-700 text-slate-400'
-                        }`}
-                      >
-                        <span className={`w-1.5 h-1.5 rounded-full ${p.status === 'ativo' ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'}`} />
-                        {p.status === 'ferias' ? 'EM FÉRIAS' : p.status.toUpperCase()}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      <div className="flex items-center justify-end gap-1">
-                        <button
-                          onClick={() => openEditModal(p)}
-                          className="p-1.5 rounded hover:bg-[#131722] text-slate-400 hover:text-purple-400"
-                          title="Editar Promotor"
-                        >
-                          <span className="material-symbols-outlined text-base">edit</span>
-                        </button>
-                        <button
-                          onClick={() => onShowToast({ title: `Histórico de ${p.name}`, message: `Registro de presenças e lojas auditadas.`, type: 'info' })}
-                          className="p-1.5 rounded hover:bg-[#131722] text-slate-400 hover:text-white"
-                          title="Histórico Operacional"
-                        >
-                          <span className="material-symbols-outlined text-base">history</span>
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              }))}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <div className="flex items-center justify-end gap-1">
+                          <button
+                            onClick={() => openEditModal(p)}
+                            className="p-1.5 rounded hover:bg-[#131722] text-slate-400 hover:text-purple-400 cursor-pointer"
+                            title="Editar Promotor"
+                          >
+                            <span className="material-symbols-outlined text-base">edit</span>
+                          </button>
+                          <button
+                            onClick={() => onShowToast({ title: `Histórico de ${p.name}`, message: `Matrícula ${p.matricula} cadastrada no Supabase.`, type: 'info' })}
+                            className="p-1.5 rounded hover:bg-[#131722] text-slate-400 hover:text-white cursor-pointer"
+                            title="Histórico Operacional"
+                          >
+                            <span className="material-symbols-outlined text-base">history</span>
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
             </tbody>
           </table>
         </div>
@@ -645,17 +857,13 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
         {/* Footer */}
         <div className="p-4 bg-[#10141f] border-t border-[#1e2433] flex flex-col md:flex-row items-center justify-between gap-3 font-mono text-xs text-slate-400">
           <div>
-            Exibindo <strong className="text-white">{filteredPromoters.length}</strong> de <strong className="text-white">{promoters.length}</strong> promotores cadastrados
+            Exibindo <strong className="text-white">{filteredPromoters.length}</strong> de <strong className="text-white">{promoters.length}</strong> promotores cadastrados no Supabase
           </div>
           <div className="flex items-center gap-1">
             <button disabled className="p-1.5 rounded bg-[#171b26] border border-[#1e2433] text-slate-600 cursor-not-allowed">
               <span className="material-symbols-outlined text-base">chevron_left</span>
             </button>
             <button className="w-8 h-8 rounded bg-purple-600 text-white font-bold neon-purple-glow">1</button>
-
-
-
-
             <button disabled className="p-1.5 rounded bg-[#171b26] border border-[#1e2433] text-slate-600 cursor-not-allowed">
               <span className="material-symbols-outlined text-base">chevron_right</span>
             </button>
@@ -692,7 +900,7 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
                   <p className="text-[11px] text-slate-400">Preencha os dados contratuais e aloque o promotor na malha regional MK9.</p>
                 </div>
               </div>
-              <button onClick={() => setModalOpen(false)} className="p-1 rounded text-slate-400 hover:text-white">
+              <button onClick={() => setModalOpen(false)} className="p-1 rounded text-slate-400 hover:text-white cursor-pointer">
                 <span className="material-symbols-outlined text-xl">close</span>
               </button>
             </div>
@@ -716,10 +924,9 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
                     />
                   </div>
                   <div className="space-y-1">
-                    <label className="font-bold text-slate-300">CPF *</label>
+                    <label className="font-bold text-slate-300">CPF</label>
                     <input
                       type="text"
-                      required
                       value={formCpf}
                       onChange={(e) => setFormCpf(e.target.value)}
                       placeholder="000.000.000-00"
@@ -727,10 +934,9 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
                     />
                   </div>
                   <div className="space-y-1">
-                    <label className="font-bold text-slate-300">Telefone / WhatsApp *</label>
+                    <label className="font-bold text-slate-300">Telefone / WhatsApp</label>
                     <input
                       type="tel"
-                      required
                       value={formPhone}
                       onChange={(e) => setFormPhone(e.target.value)}
                       placeholder="(11) 98721-3344"
@@ -757,9 +963,10 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
                 </span>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                   <div className="space-y-1">
-                    <label className="font-bold text-slate-300">Matrícula MK9</label>
+                    <label className="font-bold text-slate-300">Matrícula MK9 *</label>
                     <input
                       type="text"
+                      required
                       value={formMatricula}
                       onChange={(e) => setFormMatricula(e.target.value)}
                       className="w-full h-10 px-3 bg-[#10141f] border border-[#1e2433] rounded-lg text-white font-mono focus:outline-none focus:border-purple-500"
@@ -774,9 +981,10 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
                     </select>
                   </div>
                   <div className="space-y-1">
-                    <label className="font-bold text-slate-300">Cidade / UF de Base</label>
+                    <label className="font-bold text-slate-300">Cidade / UF de Base *</label>
                     <input
                       type="text"
+                      required
                       value={formCity}
                       onChange={(e) => setFormCity(e.target.value)}
                       placeholder="São Paulo - SP"
@@ -794,32 +1002,24 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   <div className="space-y-1">
                     <label className="font-bold text-slate-300">Supervisor Responsável</label>
-                    <select
+                    <input
+                      type="text"
                       value={formSupervisor}
                       onChange={(e) => setFormSupervisor(e.target.value)}
-                      className="w-full h-10 px-3 bg-[#10141f] border border-[#1e2433] rounded-lg text-white focus:outline-none focus:border-purple-500 cursor-pointer"
-                    >
-                      <option value="Renata Vasconcelos">Renata Vasconcelos (SP Regional)</option>
-                      <option value="Carlos Silveira">Carlos Silveira (RJ Metropolitano)</option>
-                      <option value="Eduardo Mendes">Eduardo Mendes (Minas &amp; Sul)</option>
-                      <option value="">Não atribuído no momento</option>
-                    </select>
+                      placeholder="ex: Renata Vasconcelos"
+                      className="w-full h-10 px-3 bg-[#10141f] border border-[#1e2433] rounded-lg text-white focus:outline-none focus:border-purple-500"
+                    />
                   </div>
 
                   <div className="space-y-1">
                     <label className="font-bold text-slate-300">Equipe / Squad</label>
-                    <select
+                    <input
+                      type="text"
                       value={formSquad}
                       onChange={(e) => setFormSquad(e.target.value)}
-                      className="w-full h-10 px-3 bg-[#10141f] border border-[#1e2433] rounded-lg text-white focus:outline-none focus:border-purple-500 cursor-pointer"
-                    >
-                      <option value="SP Capital Norte">SP Capital Norte</option>
-                      <option value="SP Campinas">SP Campinas</option>
-                      <option value="RJ Metropolitana">RJ Metropolitana</option>
-                      <option value="Minas Trade">Minas Trade</option>
-                      <option value="Sul Curitiba">Sul Curitiba</option>
-                      <option value="">Não alocado no momento</option>
-                    </select>
+                      placeholder="ex: SP Capital Norte"
+                      className="w-full h-10 px-3 bg-[#10141f] border border-[#1e2433] rounded-lg text-white focus:outline-none focus:border-purple-500"
+                    />
                   </div>
                 </div>
               </div>
@@ -865,17 +1065,18 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
                 {editingPromoter && (
                   <div className="p-3.5 rounded-lg bg-[#10141f] border border-[#1e2433] flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
                     <div>
-                      <span className="font-bold text-slate-200 block">Arquivamento em Conformidade</span>
+                      <span className="font-bold text-slate-200 block">Inativação em Conformidade</span>
                       <p className="text-[11px] text-slate-400">
-                        Ao arquivar, o colaborador deixa a escala ativa sem apagar o histórico de auditorias.
+                        Ao inativar, o colaborador deixa a escala ativa sem apagar o histórico de auditorias.
                       </p>
                     </div>
                     <button
                       type="button"
+                      disabled={saving}
                       onClick={() => handleArchive(editingPromoter.id, editingPromoter.name)}
-                      className="px-3 py-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 text-xs font-semibold shrink-0"
+                      className="px-3 py-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 text-xs font-semibold shrink-0 cursor-pointer disabled:opacity-50"
                     >
-                      Arquivar Promotor
+                      Inativar Promotor
                     </button>
                   </div>
                 )}
@@ -885,15 +1086,16 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
                 <button
                   type="button"
                   onClick={() => setModalOpen(false)}
-                  className="px-4 py-2 rounded-lg bg-[#131722] hover:bg-[#1f2433] text-slate-300 font-semibold"
+                  className="px-4 py-2 rounded-lg bg-[#131722] hover:bg-[#1f2433] text-slate-300 font-semibold cursor-pointer"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
-                  className="px-6 py-2.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-bold neon-purple-glow"
+                  disabled={saving}
+                  className="px-6 py-2.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-bold neon-purple-glow cursor-pointer disabled:opacity-50"
                 >
-                  Salvar Promotor
+                  {saving ? 'Salvando...' : 'Salvar Promotor'}
                 </button>
               </div>
             </form>

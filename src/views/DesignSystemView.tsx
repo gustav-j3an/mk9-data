@@ -111,7 +111,7 @@ export const DesignSystemView: React.FC<DesignSystemViewProps> = ({ onShowToast 
             <span className="text-xs font-mono text-slate-400">Badge de Sistema</span>
             <div className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-[#0a0d14] border border-cyan-500/30 shadow-md">
               <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 neon-green-glow" />
-              <span className="font-mono text-xs font-bold text-white">MK9 CORE • 99.1% ATIVO</span>
+              <span className="font-mono text-xs font-bold text-white">MK9 CORE • SISTEMA ATIVO</span>
             </div>
             <span className="text-[11px] text-slate-500">Status bar do cockpit e telemetria</span>
           </div>
@@ -185,13 +185,12 @@ export const DesignSystemView: React.FC<DesignSystemViewProps> = ({ onShowToast 
               <div className="text-3xl font-extrabold text-white font-mono mt-1 flex items-baseline gap-3">
                 <span>R$ 238.053,60</span>
                 <span className="text-emerald-400 text-sm font-bold">+14 este mês</span>
-                <span className="text-cyan-300 text-sm">99.1% Ativa</span>
               </div>
             </div>
             <div className="pt-3">
               <span className="text-[10px] uppercase font-mono text-purple-400">Body-MD • 13px Regular</span>
               <p className="text-xs sm:text-sm text-slate-300 mt-1 max-w-3xl leading-relaxed">
-                Acompanhamento em tempo real de promotores de campo, cumprimento de rotas, índice de ruptura e conformidade de gôndola em 4.820 PDVs de redes estratégicas brasileiras.
+                Acompanhamento em tempo real de promotores de campo, cumprimento de rotas, índice de ruptura e conformidade de gôndola em PDVs de redes estratégicas brasileiras.
               </p>
             </div>
             <div className="pt-3">

@@ -152,6 +152,7 @@ export interface VisitPhoto {
   tipo_foto: 'fachada' | 'gondola' | 'preco' | 'ponto_extra' | 'ruptura' | 'outros';
   storage_path: string;
   file_url: string;
+  signed_url?: string;
   legenda?: string | null;
   created_at?: string;
 }
