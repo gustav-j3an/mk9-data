@@ -208,7 +208,16 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
 
   // Iniciar Visita
   const handleStartVisit = async (route: RouteItem) => {
-    if (!supabase || !promotorMatricula) return;
+    if (!supabase) return;
+
+    if (!promotorMatricula) {
+      onShowToast({
+        title: 'Matrícula Não Vinculada',
+        message: 'Seu usuário não possui uma matrícula de promotor associada. Solicite ao administrador a vinculação do seu perfil a um promotor cadastrado.',
+        type: 'warning'
+      });
+      return;
+    }
 
     try {
       const todayStr = new Date().toISOString().split('T')[0];
