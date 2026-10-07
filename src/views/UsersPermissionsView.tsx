@@ -24,7 +24,7 @@ export interface ExtendedUserProfile extends UserProfile {
 }
 
 export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onShowToast }) => {
-  const { profile, role, updateUserProfile, inviteUser } = useAuth();
+  const { profile, role, updateUserProfile, inviteUser, deleteUser } = useAuth();
   const [usersList, setUsersList] = useState<ExtendedUserProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -33,6 +33,10 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
   const [statusFilter, setStatusFilter] = useState<'all' | 'ativo' | 'inativo'>('all');
   const [promotorFilter, setPromotorFilter] = useState<'all' | 'linked' | 'unlinked'>('all');
   const [savingUserId, setSavingUserId] = useState<string | null>(null);
+
+  // Delete Modal state
+  const [deleteModalUser, setDeleteModalUser] = useState<ExtendedUserProfile | null>(null);
+  const [deletingUser, setDeletingUser] = useState(false);
 
   // Invite Modal state
   const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
@@ -201,6 +205,38 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
         message: `Status de ${targetUser.name} alterado para ${newStatus.toUpperCase()}.`,
         type: 'success'
       });
+    }
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!deleteModalUser) return;
+    if (role !== 'admin') {
+      onShowToast({
+        title: 'Acesso Negado',
+        message: 'Apenas administradores podem excluir usuários.',
+        type: 'warning'
+      });
+      return;
+    }
+
+    setDeletingUser(true);
+    const { error } = await deleteUser(deleteModalUser.id);
+    setDeletingUser(false);
+
+    if (error) {
+      onShowToast({
+        title: 'Erro ao Excluir',
+        message: `Falha ao excluir usuário: ${error.message}`,
+        type: 'error'
+      });
+    } else {
+      onShowToast({
+        title: 'Usuário Excluído',
+        message: `O usuário ${deleteModalUser.name} foi removido com sucesso.`,
+        type: 'success'
+      });
+      setDeleteModalUser(null);
+      fetchUsers();
     }
   };
 
@@ -562,11 +598,7 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
             <thead>
               <tr className="bg-[#131722] border-b border-[#1e2433] text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono">
                 <th className="py-3.5 px-4">Login/E-mail</th>
-                <th className="py-3.5 px-4">Nome do Promotor</th>
-                <th className="py-3.5 px-4">Matrícula</th>
                 <th className="py-3.5 px-4">Papel</th>
-                <th className="py-3.5 px-4">Supervisor</th>
-                <th className="py-3.5 px-4">Equipe</th>
                 <th className="py-3.5 px-4">Status</th>
                 <th className="py-3.5 px-4">Último Acesso</th>
                 <th className="py-3.5 px-4 text-right">Ações</th>
@@ -575,13 +607,13 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
             <tbody className="divide-y divide-[#1e2433] text-slate-300">
               {loading ? (
                 <tr>
-                  <td colSpan={9} className="py-12 text-center text-slate-400 font-mono text-xs">
+                  <td colSpan={5} className="py-12 text-center text-slate-400 font-mono text-xs">
                     Carregando tabela de perfis e permissões...
                   </td>
                 </tr>
               ) : filteredUsers.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="py-12 text-center text-slate-400 font-mono text-xs">
+                  <td colSpan={5} className="py-12 text-center text-slate-400 font-mono text-xs">
                     Nenhum perfil encontrado com os critérios de busca.
                   </td>
                 </tr>
@@ -615,45 +647,10 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                         <div className="text-[11px] text-slate-400 font-sans mt-0.5">{u.name}</div>
                       </td>
 
-                      {/* 2. Nome do Promotor */}
-                      <td className="py-4 px-4 font-sans font-medium">
-                        {u.promotor?.nome ? (
-                          <span className="font-semibold text-slate-100">{u.promotor.nome}</span>
-                        ) : (
-                          <span className="text-amber-400 font-bold font-mono text-xs flex items-center gap-1">
-                            <span className="material-symbols-outlined text-xs">warning</span>
-                            Não vinculado
-                          </span>
-                        )}
-                      </td>
-
-                      {/* 3. Matrícula */}
-                      <td className="py-4 px-4 font-mono text-xs">
-                        {hasMatricula ? (
-                          <span className="px-2.5 py-1 rounded bg-amber-500/10 border border-amber-500/30 text-amber-300 font-bold inline-block">
-                            {u.promotor_matricula || u.promotor?.matricula}
-                          </span>
-                        ) : (
-                          <span className="text-amber-400 font-bold font-mono text-xs">
-                            Não vinculado
-                          </span>
-                        )}
-                      </td>
-
-                      {/* 4. Papel */}
+                      {/* 2. Papel */}
                       <td className="py-4 px-4">{getRoleBadge(u.role)}</td>
 
-                      {/* 5. Supervisor */}
-                      <td className="py-4 px-4 font-mono text-xs text-slate-300">
-                        {u.promotor?.supervisor || '—'}
-                      </td>
-
-                      {/* 6. Equipe */}
-                      <td className="py-4 px-4 font-mono text-xs text-cyan-400">
-                        {u.promotor?.equipe || '—'}
-                      </td>
-
-                      {/* 7. Status */}
+                      {/* 3. Status */}
                       <td className="py-4 px-4">
                         <div className="flex flex-col gap-1">
                           <span
@@ -670,12 +667,12 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                         </div>
                       </td>
 
-                      {/* 8. Último Acesso */}
+                      {/* 4. Último Acesso */}
                       <td className="py-4 px-4 font-mono text-slate-400 text-xs">
                         {formattedDate}
                       </td>
 
-                      {/* 9. Ações */}
+                      {/* 5. Ações */}
                       <td className="py-4 px-4 text-right">
                         {role === 'admin' ? (
                           <div className="flex items-center justify-end gap-2">
@@ -713,6 +710,15 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                               <span className="material-symbols-outlined text-[16px]">
                                 {isUserActive ? 'block' : 'check_circle'}
                               </span>
+                            </button>
+
+                            <button
+                              disabled={savingUserId === u.id || u.id === profile?.id}
+                              onClick={() => setDeleteModalUser(u)}
+                              className="p-1.5 rounded-lg bg-red-950/30 hover:bg-red-900/50 text-red-400 border border-red-800/40 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                              title="Excluir Usuário"
+                            >
+                              <span className="material-symbols-outlined text-[16px]">delete</span>
                             </button>
                           </div>
                         ) : (
@@ -996,6 +1002,48 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                 className="px-5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-extrabold text-xs shadow-lg transition-all"
               >
                 {savingEdit ? 'Salvando...' : 'Confirmar e Salvar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Confirmar Exclusão de Usuário */}
+      {deleteModalUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+          <div className="bg-[#0b0e14] border border-red-500/30 rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4">
+            <div className="flex items-center gap-3 text-red-400">
+              <span className="material-symbols-outlined text-2xl">warning</span>
+              <h3 className="text-base font-bold text-white">Excluir usuário?</h3>
+            </div>
+
+            <p className="text-xs text-slate-300 leading-relaxed">
+              Essa ação excluirá permanentemente o usuário <strong className="text-white">{deleteModalUser.name}</strong> ({deleteModalUser.email}) e o acesso dele ao sistema. Essa operação não pode ser desfeita.
+            </p>
+
+            <div className="pt-3 border-t border-[#1e2433] flex items-center justify-end gap-2 text-xs">
+              <button
+                type="button"
+                disabled={deletingUser}
+                onClick={() => setDeleteModalUser(null)}
+                className="px-4 py-2 rounded-xl bg-[#131722] hover:bg-[#1f2433] text-slate-300 border border-[#1e2433] font-semibold"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={deletingUser}
+                onClick={handleConfirmDelete}
+                className="px-5 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold disabled:opacity-50 flex items-center gap-1.5"
+              >
+                {deletingUser ? (
+                  <span>Excluindo...</span>
+                ) : (
+                  <>
+                    <span className="material-symbols-outlined text-sm">delete</span>
+                    <span>Excluir usuário</span>
+                  </>
+                )}
               </button>
             </div>
           </div>

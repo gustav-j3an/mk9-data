@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState, useCallback } from 'react';
 import type { Session } from '@supabase/supabase-js';
-import { isSupabaseConfigured, supabase } from '../lib/supabase';
+import { createIsolatedClient, isSupabaseConfigured, supabase } from '../lib/supabase';
 import type { UserProfile, UserRole } from '../types';
 
 interface AuthContextValue {
@@ -17,6 +17,7 @@ interface AuthContextValue {
   updateProfileRole: (userId: string, newRole: UserRole) => Promise<{ error: Error | null }>;
   updateUserProfile: (userId: string, updates: { role?: UserRole; department?: string; status?: 'ativo' | 'inativo'; promotor_matricula?: string | null }) => Promise<{ error: Error | null }>;
   inviteUser: (data: { email: string; name: string; department: string; role: UserRole }) => Promise<{ error: Error | null }>;
+  deleteUser: (userId: string) => Promise<{ error: Error | null }>;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -191,16 +192,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!supabase) return { error: new Error('Supabase não configurado.') };
     if (role !== 'admin') return { error: new Error('Apenas administradores podem convidar usuários.') };
 
-    // Standard client invitation flow: trigger a password reset/magic link email from Supabase Auth
-    // and pre-insert or upsert profile in public.profiles.
-    const { data: authData, error: authError } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${window.location.origin}/login`
-    });
-
-    if (authError) {
-      console.warn('Erro no envio de e-mail Supabase Auth:', authError.message);
-    }
-
     const roleMap: Record<string, UserRole> = {
       'administrador': 'admin',
       'admin': 'admin',
@@ -210,36 +201,80 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
     const validRole: UserRole = roleMap[String(initialRole).toLowerCase().trim()] || 'promotor';
 
-    // Insert pending/active invited profile into profiles table
-    // Generates a deterministically unique UUID for initial tracking if auth user record trigger hasn't fired yet
-    const tempId = crypto.randomUUID();
-    const { error: profileErr } = await supabase.from('profiles').insert([
+    // 1. Look up existing profile by email to reuse primary key ID if user already exists
+    const { data: existingProfile } = await supabase
+      .from('profiles')
+      .select('id')
+      .eq('email', email)
+      .maybeSingle();
+
+    let targetId = existingProfile?.id;
+
+    // 2. If user does not exist yet, create user in Supabase Auth to obtain a real auth.users.id
+    // Use an isolated Supabase client (persistSession: false) so the logged in admin session is preserved.
+    if (!targetId) {
+      const isolatedClient = createIsolatedClient();
+      if (!isolatedClient) return { error: new Error('Supabase não configurado.') };
+
+      const tempPassword = `Mk9@${crypto.randomUUID().slice(0, 12)}`;
+      const { data: signUpData, error: signUpError } = await isolatedClient.auth.signUp({
+        email,
+        password: tempPassword,
+        options: {
+          data: { full_name: name }
+        }
+      });
+
+      if (signUpError) {
+        return { error: new Error(`Erro ao criar usuário no Auth: ${signUpError.message}`) };
+      }
+
+      targetId = signUpData.user?.id;
+    }
+
+    if (!targetId) {
+      return { error: new Error('Não foi possível obter o ID do usuário no Supabase Auth.') };
+    }
+
+    // 3. Trigger password reset / magic link so user sets their own password
+    const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: `${window.location.origin}/login`
+    });
+
+    if (resetError) {
+      console.warn('Aviso no envio de e-mail de redefinição:', resetError.message);
+    }
+
+    // 4. Create or update profile in public.profiles using real auth.users.id (satisfies profiles_id_fkey)
+    const { error: upsertErr } = await supabase.from('profiles').upsert([
       {
-        id: tempId,
+        id: targetId,
         email,
         name,
         department,
         role: validRole
       }
-    ]);
+    ], { onConflict: 'id' });
 
-    if (profileErr) {
-      // If profile with email already exists, update it
-      const { error: upsertErr } = await supabase.from('profiles').upsert([
-        {
-          email,
-          name,
-          department,
-          role: validRole
-        }
-      ], { onConflict: 'email' });
-      if (upsertErr) {
-        return { error: new Error(upsertErr.message) };
-      }
+    if (upsertErr) {
+      return { error: new Error(upsertErr.message) };
     }
 
     return { error: null };
   }, [role]);
+
+  const deleteUser = useCallback(async (userId: string) => {
+    if (!supabase) return { error: new Error('Supabase não configurado.') };
+    if (role !== 'admin') return { error: new Error('Apenas administradores podem excluir usuários.') };
+    if (session?.user?.id === userId) return { error: new Error('Não é possível excluir a própria conta em uso.') };
+
+    const { error: rpcErr } = await supabase.rpc('delete_user_by_admin', { target_user_id: userId });
+    if (rpcErr) {
+      return { error: new Error(rpcErr.message) };
+    }
+
+    return { error: null };
+  }, [role, session]);
 
   const value = useMemo<AuthContextValue>(() => ({
     session,
@@ -268,8 +303,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     },
     updateProfileRole,
     updateUserProfile,
-    inviteUser
-  }), [error, fetchProfile, hasPermission, inviteUser, loading, profile, role, session, updateProfileRole, updateUserProfile]);
+    inviteUser,
+    deleteUser
+  }), [deleteUser, error, fetchProfile, hasPermission, inviteUser, loading, profile, role, session, updateProfileRole, updateUserProfile]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
