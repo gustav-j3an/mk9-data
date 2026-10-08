@@ -108,10 +108,23 @@ export const StoresView: React.FC<StoresViewProps> = ({ onShowToast }) => {
   }, [stores, searchTerm, statusFilter, ufFilter]);
 
   // Abrir Modal Criar
-  const handleOpenCreate = () => {
+  const handleOpenCreate = async () => {
     setEditingItem(null);
+
+    let nextCode = '';
+    try {
+      if (supabase) {
+        const { data, error: rpcErr } = await supabase.rpc('get_next_store_code');
+        if (!rpcErr && data) {
+          nextCode = data;
+        }
+      }
+    } catch (err) {
+      console.error('Erro ao consultar próximo código da loja:', err);
+    }
+
     setFormData({
-      codigo: '',
+      codigo: nextCode,
       nome: '',
       cnpj: '',
       cidade: '',
@@ -176,10 +189,10 @@ export const StoresView: React.FC<StoresViewProps> = ({ onShowToast }) => {
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!formData.codigo.trim() || !formData.nome.trim() || !formData.cidade.trim() || !formData.uf.trim()) {
+    if (!formData.nome.trim() || !formData.cidade.trim() || !formData.uf.trim()) {
       onShowToast({
         title: 'Campos Obrigatórios',
-        message: 'Código, Nome, Cidade e UF são obrigatórios.',
+        message: 'Nome, Cidade e UF são obrigatórios.',
         type: 'warning'
       });
       return;
@@ -560,15 +573,13 @@ export const StoresView: React.FC<StoresViewProps> = ({ onShowToast }) => {
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs font-mono">
               <div className="sm:col-span-2">
-                <label className="text-slate-300 block mb-1">CÓDIGO DA LOJA (*)</label>
+                <label className="text-slate-300 block mb-1">CÓDIGO DA LOJA</label>
                 <input
                   type="text"
-                  required
-                  value={formData.codigo}
-                  onChange={(e) => setFormData({ ...formData, codigo: e.target.value })}
-                  placeholder="Ex: LOJ-001"
-                  disabled={Boolean(editingItem)}
-                  className="w-full h-10 px-3 bg-[#131722] border border-[#1e2433] rounded-xl text-slate-200 focus:outline-none focus:border-cyan-500 disabled:opacity-50"
+                  readOnly
+                  disabled
+                  value={formData.codigo || 'Gerando...'}
+                  className="w-full h-10 px-3 bg-[#131722] border border-[#1e2433] rounded-xl text-cyan-400 font-bold focus:outline-none disabled:opacity-70 cursor-not-allowed"
                 />
               </div>
 
