@@ -16,16 +16,18 @@ import { RoutesView } from './views/RoutesView';
 import { IndustriesView } from './views/IndustriesView';
 import { StoresView } from './views/StoresView';
 import { PromoterPortalView } from './views/PromoterPortalView';
-import { AuthProvider } from './auth/AuthProvider';
+import { IndustryPortalView } from './views/IndustryPortalView';
+import { AuthProvider, useAuth } from './auth/AuthProvider';
 import { LoginPage } from './auth/LoginPage';
 import { ResetPasswordPage } from './auth/ResetPasswordPage';
 import { ProtectedRoute } from './auth/ProtectedRoute';
 
-import { useAuth } from './auth/AuthProvider';
-
 function isScreenAllowedForRole(screen: ScreenId, role: string): boolean {
   if (role === 'promotor') {
     return screen === 'portal-promotor';
+  }
+  if (role === 'client_industry') {
+    return screen === 'portal-industria';
   }
   if (role === 'operador') {
     return screen !== 'importacao' && screen !== 'usuarios';
@@ -37,13 +39,17 @@ function isScreenAllowedForRole(screen: ScreenId, role: string): boolean {
 }
 
 function Dashboard() {
-  const { role } = useAuth();
-  const [currentScreen, setCurrentScreen] = useState<ScreenId>(role === 'promotor' ? 'portal-promotor' : 'cockpit');
+  const { role, profile } = useAuth();
+  const [currentScreen, setCurrentScreen] = useState<ScreenId>(
+    role === 'promotor' ? 'portal-promotor' : role === 'client_industry' ? 'portal-industria' : 'cockpit'
+  );
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
 
   useEffect(() => {
     if (role === 'promotor' && currentScreen !== 'portal-promotor') {
       setCurrentScreen('portal-promotor');
+    } else if (role === 'client_industry' && currentScreen !== 'portal-industria') {
+      setCurrentScreen('portal-industria');
     }
   }, [role, currentScreen]);
 
@@ -79,6 +85,8 @@ function Dashboard() {
     if (!isScreenAllowedForRole(screen, role)) {
       if (role === 'promotor') {
         setCurrentScreen('portal-promotor');
+      } else if (role === 'client_industry') {
+        setCurrentScreen('portal-industria');
       }
       return;
     }
@@ -86,7 +94,13 @@ function Dashboard() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const activeScreen = isScreenAllowedForRole(currentScreen, role) ? currentScreen : (role === 'promotor' ? 'portal-promotor' : 'cockpit');
+  const activeScreen = isScreenAllowedForRole(currentScreen, role)
+    ? currentScreen
+    : role === 'promotor'
+    ? 'portal-promotor'
+    : role === 'client_industry'
+    ? 'portal-industria'
+    : 'cockpit';
 
   return (
     <AppShell
@@ -115,6 +129,9 @@ function Dashboard() {
       )}
       {activeScreen === 'portal-promotor' && (
         <PromoterPortalView onShowToast={addToast} />
+      )}
+      {activeScreen === 'portal-industria' && (
+        <IndustryPortalView onShowToast={addToast} />
       )}
       {activeScreen === 'gestao-equipes' && (
         <TeamsManagementView onNavigate={handleNavigate} onShowToast={addToast} />

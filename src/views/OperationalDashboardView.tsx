@@ -2,6 +2,12 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { ScreenId, ToastMessage, Visit, RouteItem, AlertItem } from '../types';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../auth/AuthProvider';
+import {
+  calculateOperationalVisits,
+  getLocalDateString,
+  OperationalVisitItem,
+  DayOfWeekDate
+} from '../utils/routePlanner';
 
 interface OperationalDashboardViewProps {
   onNavigate: (screen: ScreenId) => void;
@@ -38,6 +44,10 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
   const [tableSearch, setTableSearch] = useState('');
   const [tableStatus, setTableStatus] = useState<string>('all');
   const [selectedVisit, setSelectedVisit] = useState<Visit | null>(null);
+
+  // Estado para Central de Pendências Operacionais (Etapa 7.2)
+  const [pendenciaStatusFilter, setPendenciaStatusFilter] = useState<string>('pendente'); // 'pendente' | 'em_andamento' | 'nao_realizada' | 'concluida' | 'todas'
+  const [selectedPendingItem, setSelectedPendingItem] = useState<OperationalVisitItem | null>(null);
 
   // Estado para URLs Assinadas de Fotos de Ruptura (visitId -> signedUrl)
   const [rupturePhotosSigned, setRupturePhotosSigned] = useState<Record<string, string>>({});
@@ -246,6 +256,130 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
       datesInPeriod.push({ dateStr, dayKey });
     }
   }
+  // 1.5. CÁLCULO UNIFICADO DA CENTRAL DE PENDÊNCIAS OPERACIONAIS (Etapa 7.2)
+  const todayStr = useMemo(() => getLocalDateString(new Date()), []);
+
+  const periodDaysRange = useMemo(() => {
+    const now = new Date();
+    let numDays = 1;
+    if (periodFilter === 'week') numDays = 7;
+    if (periodFilter === 'month') numDays = 30;
+
+    const days: DayOfWeekDate[] = [];
+    const dayKeys: Array<'domingo' | 'segunda' | 'terca' | 'quarta' | 'quinta' | 'sexta' | 'sabado'> = [
+      'domingo', 'segunda', 'terca', 'quarta', 'quinta', 'sexta', 'sabado'
+    ];
+    const dayLabels = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
+    const dayShorts = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+
+    for (let i = numDays - 1; i >= 0; i--) {
+      const d = new Date(now);
+      d.setDate(now.getDate() - i);
+      const dateStr = getLocalDateString(d);
+      const dayIdx = d.getDay();
+
+      days.push({
+        dateStr,
+        dayKey: dayKeys[dayIdx],
+        dayLabel: dayLabels[dayIdx],
+        dayShort: dayShorts[dayIdx],
+        isToday: dateStr === todayStr,
+        isPast: dateStr < todayStr,
+        isFuture: dateStr > todayStr
+      });
+    }
+    return days;
+  }, [periodFilter, todayStr]);
+
+  const allOperationalVisits = useMemo(() => {
+    return calculateOperationalVisits({
+      routes,
+      visits,
+      promotoresList,
+      industriasList,
+      daysRange: periodDaysRange,
+      todayStr
+    });
+  }, [routes, visits, promotoresList, industriasList, periodDaysRange, todayStr]);
+
+  const pendenciasKpis = useMemo(() => {
+    const pendentesHoje = allOperationalVisits.filter(v => v.status === 'pendente' && v.dataStr === todayStr).length;
+    const pendentesTotal = allOperationalVisits.filter(v => v.status === 'pendente').length;
+    const pendentesAtrasadas = allOperationalVisits.filter(v => v.status === 'pendente' && v.isPastOverdue).length;
+    const naoRealizadas = allOperationalVisits.filter(v => v.status === 'nao_realizada').length;
+    const emAndamento = allOperationalVisits.filter(v => v.status === 'em_andamento').length;
+    const concluidas = allOperationalVisits.filter(v => v.status === 'concluida').length;
+    const totalPlanejadas = allOperationalVisits.length;
+    const aderencia = totalPlanejadas > 0 ? Math.round((concluidas / totalPlanejadas) * 100) : 0;
+
+    return {
+      pendentesHoje,
+      pendentesTotal,
+      pendentesAtrasadas,
+      naoRealizadas,
+      emAndamento,
+      concluidas,
+      totalPlanejadas,
+      aderencia
+    };
+  }, [allOperationalVisits, todayStr]);
+
+  const promotoresPendingSummary = useMemo(() => {
+    const map = new Map<string, {
+      matricula: string;
+      nome: string;
+      totalPlanned: number;
+      pendentes: number;
+      concluidas: number;
+      naoRealizadas: number;
+      emAndamento: number;
+    }>();
+
+    allOperationalVisits.forEach((item) => {
+      if (!map.has(item.promotorMatricula)) {
+        map.set(item.promotorMatricula, {
+          matricula: item.promotorMatricula,
+          nome: item.promotorNome,
+          totalPlanned: 0,
+          pendentes: 0,
+          concluidas: 0,
+          naoRealizadas: 0,
+          emAndamento: 0
+        });
+      }
+      const p = map.get(item.promotorMatricula)!;
+      p.totalPlanned++;
+      if (item.status === 'pendente') p.pendentes++;
+      if (item.status === 'concluida') p.concluidas++;
+      if (item.status === 'nao_realizada') p.naoRealizadas++;
+      if (item.status === 'em_andamento') p.emAndamento++;
+    });
+
+    return Array.from(map.values())
+      .map((p) => ({
+        ...p,
+        aderencia: p.totalPlanned > 0 ? Math.round((p.concluidas / p.totalPlanned) * 100) : 0
+      }))
+      .sort((a, b) => {
+        if (b.pendentes !== a.pendentes) return b.pendentes - a.pendentes;
+        return a.aderencia - b.aderencia;
+      });
+  }, [allOperationalVisits]);
+
+  const pendenciasFiltradas = useMemo(() => {
+    return allOperationalVisits.filter((item) => {
+      const matchInd = filterIndustria === 'all' || item.industriaCodigo === filterIndustria;
+      const matchProm = filterPromotor === 'all' || item.promotorMatricula === filterPromotor;
+      const matchLoja = filterLoja === 'all' || item.lojaCodigo === filterLoja;
+
+      let matchStatus = true;
+      if (pendenciaStatusFilter !== 'todas') {
+        matchStatus = item.status === pendenciaStatusFilter;
+      }
+
+      return matchInd && matchProm && matchLoja && matchStatus;
+    });
+  }, [allOperationalVisits, filterIndustria, filterPromotor, filterLoja, pendenciaStatusFilter]);
 
   // 2. EXPANDIR OCORRÊNCIAS DE PLANEJAMENTO REAL POR DATA E ROTA
   // Chave de desduplicação única: `promotor_matricula|loja_codigo|industria_codigo|dataStr`
@@ -1337,6 +1471,380 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
           <span className="text-2xl font-extrabold text-slate-200 mt-1 block">{totalFotos}</span>
         </div>
       </div>
+
+      {/* ========================================================= */}
+      {/* ETAPA 7.2 — CENTRAL DE PENDÊNCIAS OPERACIONAIS             */}
+      {/* ========================================================= */}
+      <section className="bg-[#171b26] border border-cyan-500/40 rounded-2xl p-6 shadow-2xl space-y-6 font-mono">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#1e2433] pb-4">
+          <div className="space-y-1">
+            <h2 className="text-lg font-bold text-white uppercase tracking-wider flex items-center gap-2">
+              <span className="material-symbols-outlined text-cyan-400 text-2xl animate-pulse">pending_actions</span>
+              🔔 Central de Pendências Operacionais
+            </h2>
+            <p className="text-xs text-slate-400">
+              Acompanhamento unificado das visitas planejadas em aberto, atrasadas e pendentes de execução em campo.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-slate-300 font-bold bg-[#131722] border border-[#1e2433] px-3 py-1.5 rounded-xl">
+              Pendentes Hoje: <strong className="text-rose-400">{pendenciasKpis.pendentesHoje}</strong>
+            </span>
+            <span className="text-xs text-slate-300 font-bold bg-[#131722] border border-[#1e2433] px-3 py-1.5 rounded-xl">
+              Total Pendentes: <strong className="text-amber-400">{pendenciasKpis.pendentesTotal}</strong>
+            </span>
+          </div>
+        </div>
+
+        {/* CARDS DE KPIS DE PENDÊNCIAS */}
+        <div className="grid grid-cols-2 sm:grid-cols-6 gap-3 text-xs">
+          <div
+            onClick={() => setPendenciaStatusFilter('pendente')}
+            className={`p-4 rounded-xl border transition-all cursor-pointer ${
+              pendenciaStatusFilter === 'pendente'
+                ? 'bg-rose-950/60 border-rose-500 shadow-lg scale-[1.02]'
+                : 'bg-[#131722] border-rose-500/30 hover:border-rose-500/60'
+            }`}
+          >
+            <span className="text-[10px] text-rose-400 block font-bold uppercase">🔴 Pendentes Hoje</span>
+            <span className="text-2xl font-extrabold text-rose-300 mt-1 block">{pendenciasKpis.pendentesHoje}</span>
+            <span className="text-[10px] text-rose-400/80 block mt-1">Requer Ação</span>
+          </div>
+
+          <div
+            onClick={() => setPendenciaStatusFilter('pendente')}
+            className={`p-4 rounded-xl border transition-all cursor-pointer ${
+              pendenciaStatusFilter === 'pendente'
+                ? 'bg-amber-950/60 border-amber-500 shadow-lg scale-[1.02]'
+                : 'bg-[#131722] border-amber-500/30 hover:border-amber-500/60'
+            }`}
+          >
+            <span className="text-[10px] text-amber-400 block font-bold uppercase">🚨 Atrasadas</span>
+            <span className="text-2xl font-extrabold text-amber-300 mt-1 block">{pendenciasKpis.pendentesAtrasadas}</span>
+            <span className="text-[10px] text-amber-400/80 block mt-1">Dias Anteriores</span>
+          </div>
+
+          <div
+            onClick={() => setPendenciaStatusFilter('em_andamento')}
+            className={`p-4 rounded-xl border transition-all cursor-pointer ${
+              pendenciaStatusFilter === 'em_andamento'
+                ? 'bg-blue-950/60 border-blue-500 shadow-lg scale-[1.02]'
+                : 'bg-[#131722] border-blue-500/30 hover:border-blue-500/60'
+            }`}
+          >
+            <span className="text-[10px] text-blue-400 block font-bold uppercase">🔵 Em Andamento</span>
+            <span className="text-2xl font-extrabold text-blue-300 mt-1 block">{pendenciasKpis.emAndamento}</span>
+            <span className="text-[10px] text-blue-400/80 block mt-1">Em Campo</span>
+          </div>
+
+          <div
+            onClick={() => setPendenciaStatusFilter('nao_realizada')}
+            className={`p-4 rounded-xl border transition-all cursor-pointer ${
+              pendenciaStatusFilter === 'nao_realizada'
+                ? 'bg-orange-950/60 border-orange-500 shadow-lg scale-[1.02]'
+                : 'bg-[#131722] border-orange-500/30 hover:border-orange-500/60'
+            }`}
+          >
+            <span className="text-[10px] text-orange-400 block font-bold uppercase">🟠 Não Realizadas</span>
+            <span className="text-2xl font-extrabold text-orange-300 mt-1 block">{pendenciasKpis.naoRealizadas}</span>
+            <span className="text-[10px] text-orange-400/80 block mt-1">Com Justificativa</span>
+          </div>
+
+          <div
+            onClick={() => setPendenciaStatusFilter('concluida')}
+            className={`p-4 rounded-xl border transition-all cursor-pointer ${
+              pendenciaStatusFilter === 'concluida'
+                ? 'bg-emerald-950/60 border-emerald-500 shadow-lg scale-[1.02]'
+                : 'bg-[#131722] border-emerald-500/30 hover:border-emerald-500/60'
+            }`}
+          >
+            <span className="text-[10px] text-emerald-400 block font-bold uppercase">🟢 Concluídas</span>
+            <span className="text-2xl font-extrabold text-emerald-300 mt-1 block">{pendenciasKpis.concluidas}</span>
+            <span className="text-[10px] text-emerald-400/80 block mt-1">Finalizadas</span>
+          </div>
+
+          <div
+            onClick={() => setPendenciaStatusFilter('todas')}
+            className={`p-4 rounded-xl border transition-all cursor-pointer ${
+              pendenciaStatusFilter === 'todas'
+                ? 'bg-cyan-950/60 border-cyan-500 shadow-lg scale-[1.02]'
+                : 'bg-[#131722] border-cyan-500/30 hover:border-cyan-500/60'
+            }`}
+          >
+            <span className="text-[10px] text-cyan-300 block font-bold uppercase">📊 Aderência</span>
+            <span className="text-2xl font-extrabold text-cyan-200 mt-1 block">{pendenciasKpis.aderencia}%</span>
+            <span className="text-[10px] text-cyan-400/80 block mt-1">Taxa Geral</span>
+          </div>
+        </div>
+
+        {/* VISÃO POR PROMOTOR (RANKING DE PENDÊNCIAS) */}
+        <div className="bg-[#131722] border border-[#1e2433] rounded-xl p-4 space-y-3">
+          <h3 className="text-xs font-bold text-white uppercase tracking-wider flex items-center justify-between">
+            <span className="flex items-center gap-2">
+              <span className="material-symbols-outlined text-cyan-400 text-sm">leaderboard</span>
+              Resumo por Promotor — Ranking de Pendências
+            </span>
+            <span className="text-[10px] text-slate-400 font-normal">
+              Ordenado por promotores com mais pendências
+            </span>
+          </h3>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead>
+                <tr className="border-b border-[#1e2433] text-slate-400 text-[10px] uppercase font-mono">
+                  <th className="py-2 px-3">Promotor</th>
+                  <th className="py-2 px-3 text-center">Planejadas</th>
+                  <th className="py-2 px-3 text-center">Pendentes</th>
+                  <th className="py-2 px-3 text-center">Em Andamento</th>
+                  <th className="py-2 px-3 text-center">Não Realizadas</th>
+                  <th className="py-2 px-3 text-center">Concluídas</th>
+                  <th className="py-2 px-3 text-right">Aderência</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#1e2433]/50 text-slate-300">
+                {promotoresPendingSummary.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="py-4 text-center text-slate-500">
+                      Nenhum promotor encontrado com rotas no período.
+                    </td>
+                  </tr>
+                ) : (
+                  promotoresPendingSummary.map((p) => (
+                    <tr
+                      key={p.matricula}
+                      onClick={() => setFilterPromotor(p.matricula)}
+                      className="hover:bg-[#1f2433]/60 cursor-pointer transition-colors"
+                    >
+                      <td className="py-2.5 px-3 font-bold text-white flex items-center gap-2">
+                        <span className="material-symbols-outlined text-slate-400 text-base">person</span>
+                        {p.nome}
+                      </td>
+                      <td className="py-2.5 px-3 text-center font-mono">{p.totalPlanned}</td>
+                      <td className="py-2.5 px-3 text-center font-mono font-bold">
+                        <span className={p.pendentes > 0 ? 'text-rose-400 bg-rose-500/10 px-2 py-0.5 rounded border border-rose-500/30' : 'text-slate-400'}>
+                          {p.pendentes}
+                        </span>
+                      </td>
+                      <td className="py-2.5 px-3 text-center font-mono text-blue-400">{p.emAndamento}</td>
+                      <td className="py-2.5 px-3 text-center font-mono text-orange-400">{p.naoRealizadas}</td>
+                      <td className="py-2.5 px-3 text-center font-mono text-emerald-400 font-bold">{p.concluidas}</td>
+                      <td className="py-2.5 px-3 text-right font-mono font-bold">
+                        <span className={p.aderencia < 50 ? 'text-rose-400' : p.aderencia < 80 ? 'text-amber-400' : 'text-emerald-400'}>
+                          {p.aderencia}%
+                        </span>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* FILTROS E LISTA DE PENDÊNCIAS */}
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs pt-2 border-t border-[#1e2433]">
+          <div className="flex flex-wrap items-center gap-1.5 bg-[#131722] border border-[#1e2433] rounded-xl p-1">
+            <button
+              onClick={() => setPendenciaStatusFilter('pendente')}
+              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
+                pendenciaStatusFilter === 'pendente' ? 'bg-rose-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              🔴 Pendentes ({pendenciasKpis.pendentesTotal})
+            </button>
+            <button
+              onClick={() => setPendenciaStatusFilter('em_andamento')}
+              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
+                pendenciaStatusFilter === 'em_andamento' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              🔵 Em Andamento ({pendenciasKpis.emAndamento})
+            </button>
+            <button
+              onClick={() => setPendenciaStatusFilter('nao_realizada')}
+              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
+                pendenciaStatusFilter === 'nao_realizada' ? 'bg-orange-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              🟠 Não Realizadas ({pendenciasKpis.naoRealizadas})
+            </button>
+            <button
+              onClick={() => setPendenciaStatusFilter('concluida')}
+              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
+                pendenciaStatusFilter === 'concluida' ? 'bg-emerald-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              🟢 Concluídas ({pendenciasKpis.concluidas})
+            </button>
+            <button
+              onClick={() => setPendenciaStatusFilter('todas')}
+              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
+                pendenciaStatusFilter === 'todas' ? 'bg-slate-700 text-white shadow-md' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              Todas ({pendenciasKpis.totalPlanejadas})
+            </button>
+          </div>
+
+          <span className="text-[11px] text-slate-400">
+            Exibindo <strong>{pendenciasFiltradas.length}</strong> registro(s)
+          </span>
+        </div>
+
+        {/* TABELA / CARDS DA CENTRAL DE PENDÊNCIAS */}
+        {pendenciasFiltradas.length === 0 ? (
+          <div className="py-10 text-center space-y-2 bg-[#131722]/50 rounded-xl border border-[#1e2433]">
+            <span className="material-symbols-outlined text-emerald-400 text-3xl">check_circle</span>
+            <p className="text-xs text-slate-300 font-bold">Nenhuma pendência encontrada nesta visualização.</p>
+            <p className="text-[11px] text-slate-500">Todas as visitas do filtro selecionado estão em conformidade.</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto rounded-xl border border-[#1e2433]">
+            <table className="w-full text-left text-xs">
+              <thead>
+                <tr className="bg-[#131722] border-b border-[#1e2433] text-slate-400 text-[10px] uppercase font-mono">
+                  <th className="py-3 px-4">Data Prevista</th>
+                  <th className="py-3 px-4">Promotor</th>
+                  <th className="py-3 px-4">Loja / PDV</th>
+                  <th className="py-3 px-4">Indústria</th>
+                  <th className="py-3 px-4">Frequência</th>
+                  <th className="py-3 px-4">Situação</th>
+                  <th className="py-3 px-4 text-right">Ação</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#1e2433] text-slate-300 font-mono">
+                {pendenciasFiltradas.map((item) => {
+                  let badge = { label: '🔴 PENDENTE', style: 'bg-rose-500/10 text-rose-400 border-rose-500/30' };
+                  if (item.isPastOverdue) {
+                    badge = { label: '🚨 ATRASADA', style: 'bg-rose-950 text-rose-400 border-rose-500 font-bold animate-pulse' };
+                  } else if (item.status === 'em_andamento') {
+                    badge = { label: '🔵 EM ANDAMENTO', style: 'bg-blue-500/10 text-blue-400 border-blue-500/30' };
+                  } else if (item.status === 'nao_realizada') {
+                    badge = { label: '🟠 NÃO REALIZADA', style: 'bg-orange-500/10 text-orange-400 border-orange-500/30' };
+                  } else if (item.status === 'concluida') {
+                    badge = { label: '🟢 CONCLUÍDA', style: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' };
+                  } else if (item.status === 'planejada') {
+                    badge = { label: '⚪ PLANEJADA', style: 'bg-slate-700/50 text-slate-300 border-slate-600' };
+                  }
+
+                  return (
+                    <tr key={item.key} className="hover:bg-[#131722]/80 transition-colors">
+                      <td className="py-3 px-4">
+                        <div className="font-bold text-white">{item.dataStr}</div>
+                        <div className="text-[10px] text-slate-400">{item.dayOfWeekLabel}</div>
+                      </td>
+                      <td className="py-3 px-4 font-bold text-cyan-400">{item.promotorNome}</td>
+                      <td className="py-3 px-4">
+                        <div className="font-bold text-white">{item.lojaNome}</div>
+                        {item.lojaCidade && (
+                          <div className="text-[10px] text-slate-400">{item.lojaCidade} - {item.lojaUf}</div>
+                        )}
+                      </td>
+                      <td className="py-3 px-4 text-purple-300 font-bold">{item.industriaNome}</td>
+                      <td className="py-3 px-4 text-slate-400">{item.frequencia}</td>
+                      <td className="py-3 px-4">
+                        <span className={`px-2 py-0.5 rounded text-[10px] border ${badge.style}`}>
+                          {badge.label}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4 text-right">
+                        <button
+                          onClick={() => setSelectedPendingItem(item)}
+                          className="px-3 py-1.5 rounded-lg bg-[#131722] hover:bg-[#1f2433] text-cyan-400 border border-cyan-500/30 font-bold text-[11px] transition-all cursor-pointer"
+                        >
+                          Ver Detalhes
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      {/* MODAL DETALHES DA PENDÊNCIA OPERACIONAL */}
+      {selectedPendingItem && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-[#171b26] border border-[#1e2433] rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5 font-mono">
+            <div className="flex items-center justify-between border-b border-[#1e2433] pb-3">
+              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                <span className="material-symbols-outlined text-cyan-400">pending_actions</span>
+                VISITA PENDENTE — DETALHES
+              </h3>
+              <button onClick={() => setSelectedPendingItem(null)} className="text-slate-400 hover:text-white">
+                <span className="material-symbols-outlined">close</span>
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div>
+                <span className="text-slate-500 block">PROMOTOR:</span>
+                <span className="text-cyan-400 font-bold text-sm">{selectedPendingItem.promotorNome}</span>
+                <span className="text-[10px] text-slate-500 block">Matrícula: {selectedPendingItem.promotorMatricula}</span>
+              </div>
+              <div>
+                <span className="text-slate-500 block">LOJA / PDV:</span>
+                <span className="text-white font-bold">{selectedPendingItem.lojaNome}</span>
+                {selectedPendingItem.lojaCidade && (
+                  <span className="text-[10px] text-slate-400 block">{selectedPendingItem.lojaCidade} - {selectedPendingItem.lojaUf}</span>
+                )}
+              </div>
+              <div>
+                <span className="text-slate-500 block">INDÚSTRIA:</span>
+                <span className="text-purple-300 font-bold">{selectedPendingItem.industriaNome}</span>
+              </div>
+              <div>
+                <span className="text-slate-500 block">DATA PREVISTA / DIA:</span>
+                <span className="text-white font-bold">{selectedPendingItem.dataStr} ({selectedPendingItem.dayOfWeekLabel})</span>
+              </div>
+              <div>
+                <span className="text-slate-500 block">FREQUÊNCIA:</span>
+                <span className="text-slate-300">{selectedPendingItem.frequencia}</span>
+              </div>
+              <div>
+                <span className="text-slate-500 block">SITUAÇÃO ATUAL:</span>
+                <span className={`font-bold uppercase ${
+                  selectedPendingItem.status === 'concluida' ? 'text-emerald-400' :
+                  selectedPendingItem.status === 'em_andamento' ? 'text-blue-400' :
+                  selectedPendingItem.status === 'nao_realizada' ? 'text-orange-400' : 'text-rose-400'
+                }`}>
+                  {selectedPendingItem.isPastOverdue ? '🚨 Pendente (Atrasada)' : selectedPendingItem.status}
+                </span>
+              </div>
+              {selectedPendingItem.motivoNaoRealizada && (
+                <div>
+                  <span className="text-slate-500 block">MOTIVO NÃO REALIZADA:</span>
+                  <span className="text-orange-300">{selectedPendingItem.motivoNaoRealizada}</span>
+                </div>
+              )}
+            </div>
+
+            <div className="pt-3 border-t border-[#1e2433] flex justify-end gap-2">
+              <button
+                onClick={() => setSelectedPendingItem(null)}
+                className="px-4 py-2 rounded-xl bg-[#131722] hover:bg-[#1f2433] text-slate-300 border border-[#1e2433] text-xs font-semibold"
+              >
+                Fechar
+              </button>
+              <button
+                onClick={() => {
+                  setSelectedPendingItem(null);
+                  setFilterPromotor(selectedPendingItem.promotorMatricula);
+                  setFilterLoja(selectedPendingItem.lojaCodigo);
+                }}
+                className="px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs flex items-center gap-1.5"
+              >
+                <span className="material-symbols-outlined text-sm">visibility</span>
+                Ver rota / Ver atendimento
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ========================================================= */}
       {/* ETAPA 5 — CENTRAL DE ALERTAS OPERACIONAIS                 */}

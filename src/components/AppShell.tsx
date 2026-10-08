@@ -1,6 +1,9 @@
-import React, { useState } from 'react';
-import { ScreenId, ToastMessage, UserRole } from '../types';
+import React, { useState, useEffect } from 'react';
+import { ScreenId, ToastMessage, UserRole, AppNotification } from '../types';
 import { useAuth } from '../auth/AuthProvider';
+import { notificationService } from '../lib/notificationService';
+import { supabase } from '../lib/supabase';
+import { PWAInstallPrompt } from './PWAInstallPrompt';
 
 interface AppShellProps {
   currentScreen: ScreenId;
@@ -21,6 +24,69 @@ export const AppShell: React.FC<AppShellProps> = ({
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [globalSearch, setGlobalSearch] = useState('');
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+
+  // Estados de Notificações Persistentes (Etapa 7.1)
+  const [notificationsList, setNotificationsList] = useState<AppNotification[]>([]);
+  const [unreadCount, setUnreadCount] = useState<number>(0);
+
+  const loadUserNotifications = async () => {
+    if (!session?.user?.id) return;
+    const [notifRes, countRes] = await Promise.all([
+      notificationService.fetchNotifications(20),
+      notificationService.getUnreadCount()
+    ]);
+    if (!notifRes.error) setNotificationsList(notifRes.data);
+    if (!countRes.error) setUnreadCount(countRes.count);
+  };
+
+  useEffect(() => {
+    if (!session?.user?.id) return;
+    loadUserNotifications();
+
+    if (!supabase) return;
+
+    // Assinar Realtime para public.notifications
+    const channel = supabase
+      .channel('public:notifications')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'notifications',
+          filter: `user_id=eq.${session.user.id}`
+        },
+        () => {
+          loadUserNotifications();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase?.removeChannel(channel);
+    };
+  }, [session?.user?.id]);
+
+  const handleMarkAsRead = async (id: string) => {
+    const { error } = await notificationService.markAsRead(id);
+    if (!error) {
+      setNotificationsList((prev) =>
+        prev.map((n) => (n.id === id ? { ...n, read: true, read_at: new Date().toISOString() } : n))
+      );
+      setUnreadCount((prev) => Math.max(0, prev - 1));
+    }
+  };
+
+  const handleMarkAllAsRead = async () => {
+    if (!session?.user?.id) return;
+    const { error } = await notificationService.markAllAsRead(session.user.id);
+    if (!error) {
+      setNotificationsList((prev) =>
+        prev.map((n) => ({ ...n, read: true, read_at: new Date().toISOString() }))
+      );
+      setUnreadCount(0);
+    }
+  };
 
   const navItems = [
     {
@@ -61,6 +127,12 @@ export const AppShell: React.FC<AppShellProps> = ({
         { id: 'usuarios' as ScreenId, label: 'Perfis & Permissões', icon: 'admin_panel_settings', roles: ['admin'] as UserRole[] },
         { id: 'design-system' as ScreenId, label: 'Logo & Design System', icon: 'palette', roles: ['admin', 'gestor', 'operador'] as UserRole[] }
       ]
+    },
+    {
+      group: 'PORTAL EXTERNO',
+      items: [
+        { id: 'portal-industria' as ScreenId, label: 'Portal da Indústria', icon: 'domain', roles: ['admin', 'gestor', 'client_industry'] as UserRole[] }
+      ]
     }
   ];
 
@@ -74,6 +146,8 @@ export const AppShell: React.FC<AppShellProps> = ({
         return { text: 'Operador', color: 'text-emerald-400 border-emerald-500/40 bg-emerald-950/60' };
       case 'promotor':
         return { text: 'Promotor', color: 'text-amber-400 border-amber-500/40 bg-amber-950/60' };
+      case 'client_industry':
+        return { text: 'Cliente Indústria', color: 'text-indigo-400 border-indigo-500/40 bg-indigo-950/60' };
     }
   };
 
@@ -228,20 +302,90 @@ export const AppShell: React.FC<AppShellProps> = ({
               title="Notificações Operacionais"
             >
               <span className="material-symbols-outlined text-[20px]">notifications</span>
+              {unreadCount > 0 && (
+                <span className="absolute -top-1 -right-1 flex h-4.5 w-4.5 items-center justify-center rounded-full bg-rose-500 text-[10px] font-bold text-white shadow-[0_0_8px_rgba(244,63,94,0.6)] font-mono animate-pulse">
+                  {unreadCount > 9 ? '9+' : unreadCount}
+                </span>
+              )}
             </button>
 
             {notificationsOpen && (
-              <div className="absolute right-0 mt-2 w-80 bg-[#171b26] border border-[#1e2433] rounded-xl shadow-2xl p-3 z-50 animate-fadeIn">
+              <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-[#171b26] border border-[#1e2433] rounded-xl shadow-2xl p-4 z-50 animate-fadeIn space-y-3">
                 <div className="flex items-center justify-between pb-2 border-b border-[#1e2433]">
-                  <span className="text-xs font-bold text-white flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse"></span>
+                  <span className="text-xs font-bold text-white flex items-center gap-1.5 font-mono">
+                    <span className={`w-2 h-2 rounded-full ${unreadCount > 0 ? 'bg-rose-500 animate-pulse' : 'bg-slate-500'}`}></span>
                     Notificações Operacionais
                   </span>
-                  <span className="text-[10px] text-slate-400 font-mono">0 pendentes</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-slate-400 font-mono font-bold">
+                      {unreadCount} não lida(s)
+                    </span>
+                    {unreadCount > 0 && (
+                      <button
+                        onClick={handleMarkAllAsRead}
+                        className="text-[10px] text-cyan-400 hover:underline font-mono"
+                      >
+                        Marcar todas
+                      </button>
+                    )}
+                  </div>
                 </div>
-                <div className="py-6 text-center text-[11px] text-slate-400">
-                  Não há notificações operacionais cadastradas.
-                </div>
+
+                {notificationsList.length === 0 ? (
+                  <div className="py-8 text-center space-y-1">
+                    <span className="material-symbols-outlined text-slate-500 text-2xl block">notifications_off</span>
+                    <p className="text-[11px] text-slate-400 font-sans">
+                      Não há notificações operacionais registradas.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="max-h-80 overflow-y-auto space-y-2 pr-1 divide-y divide-[#1e2433]/50">
+                    {notificationsList.map((notif) => {
+                      const isCritico = notif.prioridade === 'critico';
+                      const isAtencao = notif.prioridade === 'atencao';
+
+                      return (
+                        <div
+                          key={notif.id}
+                          onClick={() => !notif.read && handleMarkAsRead(notif.id)}
+                          className={`pt-2 transition-colors cursor-pointer rounded-lg p-2 ${
+                            notif.read
+                              ? 'opacity-60 bg-transparent hover:bg-[#131722]'
+                              : 'bg-[#131722]/80 border-l-2 border-cyan-500 hover:bg-[#1f2433]'
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex items-center gap-1.5">
+                              <span
+                                className={`text-[10px] font-bold px-1.5 py-0.5 rounded uppercase font-mono ${
+                                  isCritico
+                                    ? 'bg-rose-500/10 text-rose-400 border border-rose-500/30'
+                                    : isAtencao
+                                    ? 'bg-amber-500/10 text-amber-400 border border-amber-500/30'
+                                    : 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/30'
+                                }`}
+                              >
+                                {notif.prioridade}
+                              </span>
+                              <h4 className="text-xs font-bold text-white font-sans truncate">
+                                {notif.titulo}
+                              </h4>
+                            </div>
+                            {!notif.read && (
+                              <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 shrink-0 mt-1"></span>
+                            )}
+                          </div>
+                          <p className="text-[11px] text-slate-300 mt-1 line-clamp-2 font-sans">
+                            {notif.mensagem}
+                          </p>
+                          <span className="text-[9px] text-slate-500 font-mono block mt-1">
+                            {new Date(notif.created_at).toLocaleString('pt-BR')}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -315,6 +459,9 @@ export const AppShell: React.FC<AppShellProps> = ({
           </div>
         ))}
       </div>
+
+      {/* PWA INSTALLATION PROMPT BANNER */}
+      <PWAInstallPrompt />
     </div>
   );
 };

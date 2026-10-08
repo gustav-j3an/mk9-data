@@ -1,0 +1,31 @@
+{
+  "name": "MK9 Trade Marketing",
+  "short_name": "MK9",
+  "description": "Plataforma completa de operações de trade marketing: Painel Operacional, Portal da Indústria e Portal do Promotor.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#0f131d",
+  "theme_color": "#171b26",
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

@@ -45,6 +45,7 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
   const [inviteDepartment, setInviteDepartment] = useState('Operações MK9');
   const [inviteRole, setInviteRole] = useState<UserRole>('promotor');
   const [invitePromotorMatricula, setInvitePromotorMatricula] = useState('');
+  const [inviteIndustriaCodigo, setInviteIndustriaCodigo] = useState('');
   const [inviting, setInviting] = useState(false);
   const [createdCredentials, setCreatedCredentials] = useState<{ email: string; tempPassword?: string; emailSent?: boolean } | null>(null);
   const [showContingencyPassword, setShowContingencyPassword] = useState(false);
@@ -55,12 +56,14 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
   const [editRole, setEditRole] = useState<UserRole>('operador');
   const [editStatus, setEditStatus] = useState<'ativo' | 'inativo'>('ativo');
   const [editPromotorMatricula, setEditPromotorMatricula] = useState<string>('');
+  const [editIndustriaCodigo, setEditIndustriaCodigo] = useState<string>('');
   const [savingEdit, setSavingEdit] = useState(false);
 
   // Confirmation Modal for Link Change
   const [confirmModalData, setConfirmModalData] = useState<{
     user: ExtendedUserProfile;
     newMatricula: string;
+    newIndustriaCodigo: string;
     newRole: UserRole;
     newDepartment: string;
     newStatus: 'ativo' | 'inativo';
@@ -68,6 +71,8 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
 
   // Promotores options for linking
   const [promotoresOptions, setPromotoresOptions] = useState<PromoterRecord[]>([]);
+  // Industrias options for linking
+  const [industriasOptions, setIndustriasOptions] = useState<Array<{ codigo: string; nome: string }>>([]);
 
   const fetchUsers = async () => {
     setLoading(true);
@@ -81,7 +86,7 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
 
     try {
       // Execute relational query between profiles and promotores using profiles.promotor_matricula = promotores.matricula
-      const [profilesRes, promotoresRes] = await Promise.all([
+      const [profilesRes, promotoresRes, industriasRes] = await Promise.all([
         supabase
           .from('profiles')
           .select(`
@@ -99,8 +104,16 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
         supabase
           .from('promotores')
           .select('id, matricula, nome, supervisor, equipe, status')
+          .order('nome'),
+        supabase
+          .from('industrias')
+          .select('codigo, nome')
           .order('nome')
       ]);
+
+      if (industriasRes.data) {
+        setIndustriasOptions(industriasRes.data);
+      }
 
       let rawProfiles: any[] = [];
       if (profilesRes.error) {
@@ -288,31 +301,51 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
     setEditRole(userToEdit.role);
     setEditStatus(userToEdit.status || 'ativo');
     setEditPromotorMatricula(userToEdit.promotor_matricula || '');
+    setEditIndustriaCodigo(userToEdit.industria_codigo || '');
   };
 
   const handlePreSaveEdit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingUser) return;
 
-    const matriculaChanged = editPromotorMatricula.trim() !== (editingUser.promotor_matricula || '');
+    if (editRole === 'client_industry' && !editIndustriaCodigo.trim()) {
+      onShowToast({
+        title: 'Indústria Obrigatória',
+        message: 'Selecione a indústria para vincular ao perfil Cliente — Indústria.',
+        type: 'warning'
+      });
+      return;
+    }
 
-    if (matriculaChanged) {
+    const matriculaChanged = editPromotorMatricula.trim() !== (editingUser.promotor_matricula || '');
+    const industriaChanged = editIndustriaCodigo.trim() !== (editingUser.industria_codigo || '');
+
+    if (matriculaChanged || industriaChanged) {
       // Confirmação antes de alterar o vínculo
       setConfirmModalData({
         user: editingUser,
-        newMatricula: editPromotorMatricula.trim(),
+        newMatricula: editRole === 'promotor' ? editPromotorMatricula.trim() : '',
+        newIndustriaCodigo: editRole === 'client_industry' ? editIndustriaCodigo.trim() : '',
         newRole: editRole,
         newDepartment: editDepartment,
         newStatus: editStatus
       });
     } else {
-      executeSaveEdit(editingUser.id, editPromotorMatricula.trim() || null, editRole, editDepartment, editStatus);
+      executeSaveEdit(
+        editingUser.id,
+        editRole === 'promotor' ? editPromotorMatricula.trim() || null : null,
+        editRole === 'client_industry' ? editIndustriaCodigo.trim() || null : null,
+        editRole,
+        editDepartment,
+        editStatus
+      );
     }
   };
 
   const executeSaveEdit = async (
     userId: string,
     newMatricula: string | null,
+    newIndustriaCodigo: string | null,
     newRole: UserRole,
     newDepartment: string,
     newStatus: 'ativo' | 'inativo'
@@ -322,7 +355,8 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
       department: newDepartment,
       role: newRole,
       status: newStatus,
-      promotor_matricula: newMatricula
+      promotor_matricula: newRole === 'promotor' ? newMatricula : null,
+      industria_codigo: newRole === 'client_industry' ? newIndustriaCodigo : null
     });
     setSavingEdit(false);
     setConfirmModalData(null);
@@ -335,13 +369,7 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
       });
     } else {
       const newPromoterObj = newMatricula
-        ? promotoresOptions.find((p) => p.matricula === newMatricula) || {
-            matricula: newMatricula,
-            nome: 'Promotor Vinculado',
-            supervisor: 'Renata Vasconcelos',
-            equipe: 'SP Capital Norte',
-            status: 'ativo'
-          }
+        ? promotoresOptions.find((p) => p.matricula === newMatricula) || null
         : null;
 
       // Atualiza a lista imediatamente
@@ -353,7 +381,8 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                 department: newDepartment,
                 role: newRole,
                 status: newStatus,
-                promotor_matricula: newMatricula,
+                promotor_matricula: newRole === 'promotor' ? newMatricula : null,
+                industria_codigo: newRole === 'client_industry' ? newIndustriaCodigo : null,
                 promotor: newPromoterObj
               }
             : u
@@ -381,12 +410,22 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
       return;
     }
 
+    if (inviteRole === 'client_industry' && !inviteIndustriaCodigo.trim()) {
+      onShowToast({
+        title: 'Indústria Obrigatória',
+        message: 'Selecione uma indústria para vincular ao perfil Cliente — Indústria.',
+        type: 'warning'
+      });
+      return;
+    }
+
     setInviting(true);
     const { error, tempPassword, emailSent } = await inviteUser({
       email: inviteEmail.trim(),
       name: inviteName.trim(),
       department: inviteDepartment.trim() || 'Operações MK9',
-      role: inviteRole
+      role: inviteRole,
+      industria_codigo: inviteRole === 'client_industry' ? inviteIndustriaCodigo.trim() : null
     });
     setInviting(false);
 
@@ -409,6 +448,7 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
       setInviteDepartment('Operações MK9');
       setInviteRole('promotor');
       setInvitePromotorMatricula('');
+      setInviteIndustriaCodigo('');
       fetchUsers();
       onShowToast({
         title: 'Usuário Criado',
@@ -473,6 +513,13 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
           <span className="px-2.5 py-1 rounded-md bg-amber-950/80 border border-amber-500/50 text-amber-300 text-[10px] font-extrabold uppercase tracking-wider font-mono shadow-[0_0_10px_rgba(245,158,11,0.3)] flex items-center gap-1 w-fit">
             <span className="material-symbols-outlined text-xs text-amber-400">smartphone</span>
             PROMOTOR
+          </span>
+        );
+      case 'client_industry':
+        return (
+          <span className="px-2.5 py-1 rounded-md bg-indigo-950/80 border border-indigo-500/50 text-indigo-300 text-[10px] font-extrabold uppercase tracking-wider font-mono shadow-[0_0_10px_rgba(99,102,241,0.3)] flex items-center gap-1 w-fit">
+            <span className="material-symbols-outlined text-xs text-indigo-400">factory</span>
+            CLIENTE — INDÚSTRIA
           </span>
         );
     }
@@ -569,6 +616,7 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                 <option value="gestor">Gestor</option>
                 <option value="operador">Operador</option>
                 <option value="promotor">Promotor</option>
+                <option value="client_industry">Cliente — Indústria</option>
               </select>
             </div>
 
@@ -658,7 +706,14 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                       </td>
 
                       {/* 2. Papel */}
-                      <td className="py-4 px-4">{getRoleBadge(u.role)}</td>
+                      <td className="py-4 px-4">
+                        {getRoleBadge(u.role)}
+                        {u.role === 'client_industry' && u.industria_codigo && (
+                          <span className="text-[10px] text-indigo-400 font-mono block mt-1 font-bold">
+                            Indústria: {u.industria_codigo}
+                          </span>
+                        )}
+                      </td>
 
                       {/* 3. Status */}
                       <td className="py-4 px-4">
@@ -697,6 +752,7 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                               <option value="gestor">Gestor</option>
                               <option value="operador">Operador</option>
                               <option value="promotor">Promotor</option>
+                              <option value="client_industry">Cliente — Indústria</option>
                             </select>
 
                             <button
@@ -815,8 +871,39 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                   <option value="operador">Operador de Campo</option>
                   <option value="gestor">Gestor de Operação</option>
                   <option value="admin">Administrador</option>
+                  <option value="client_industry">Cliente — Indústria</option>
                 </select>
               </div>
+
+              {/* Seção Vínculo de Indústria (Quando inviteRole === 'client_industry') */}
+              {inviteRole === 'client_industry' && (
+                <div className="p-4 rounded-xl bg-[#10141f] border border-cyan-500/30 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <label className="font-bold text-cyan-300 flex items-center gap-1.5">
+                      <span className="material-symbols-outlined text-sm">factory</span>
+                      Indústria * (profiles.industria_codigo)
+                    </label>
+                    <span className="text-[10px] text-cyan-400 font-mono font-semibold">Obrigatório</span>
+                  </div>
+
+                  <select
+                    value={inviteIndustriaCodigo}
+                    onChange={(e) => setInviteIndustriaCodigo(e.target.value)}
+                    required
+                    className="w-full h-10 px-3 bg-[#171b26] border border-[#1e2433] rounded-xl text-white font-mono text-xs focus:outline-none focus:border-cyan-500 cursor-pointer"
+                  >
+                    <option value="">-- Selecione uma Indústria --</option>
+                    {industriasOptions.map((ind) => (
+                      <option key={ind.codigo} value={ind.codigo}>
+                        {ind.nome} ({ind.codigo})
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-[11px] text-slate-400">
+                    Vincular o usuário à indústria cadastrada em <code className="text-cyan-300 font-mono">public.industrias</code> para restringir o portal.
+                  </p>
+                </div>
+              )}
 
               <div className="pt-3 border-t border-[#1e2433] flex items-center justify-end gap-2">
                 <button
@@ -892,6 +979,7 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                     <option value="gestor">Gestor de Operação</option>
                     <option value="operador">Operador de Campo</option>
                     <option value="promotor">Promotor de Campo</option>
+                    <option value="client_industry">Cliente — Indústria</option>
                   </select>
                 </div>
 
@@ -908,32 +996,63 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                 </div>
               </div>
 
-              {/* Seção Vínculo de Matrícula */}
-              <div className="p-4 rounded-xl bg-[#10141f] border border-amber-500/30 space-y-3">
-                <div className="flex items-center justify-between">
-                  <label className="font-bold text-amber-300 flex items-center gap-1.5">
-                    <span className="material-symbols-outlined text-sm">badge</span>
-                    Seleção de Matrícula (profiles.promotor_matricula)
-                  </label>
-                  <span className="text-[10px] text-amber-400 font-mono">Relacionamento</span>
-                </div>
+              {/* Seção Vínculo de Indústria (Quando editRole === 'client_industry') */}
+              {editRole === 'client_industry' && (
+                <div className="p-4 rounded-xl bg-[#10141f] border border-cyan-500/30 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <label className="font-bold text-cyan-300 flex items-center gap-1.5">
+                      <span className="material-symbols-outlined text-sm">factory</span>
+                      Seleção de Indústria * (profiles.industria_codigo)
+                    </label>
+                    <span className="text-[10px] text-cyan-400 font-mono font-semibold">Obrigatório</span>
+                  </div>
 
-                <select
-                  value={editPromotorMatricula}
-                  onChange={(e) => setEditPromotorMatricula(e.target.value)}
-                  className="w-full h-10 px-3 bg-[#171b26] border border-[#1e2433] rounded-xl text-white font-mono text-xs focus:outline-none focus:border-amber-500 cursor-pointer"
-                >
-                  <option value="">-- Não vinculado --</option>
-                  {promotoresOptions.map((p) => (
-                    <option key={p.matricula} value={p.matricula}>
-                      {p.matricula} - {p.nome} ({p.supervisor || 'Sem Supervisor'} | {p.equipe || 'Sem Equipe'})
-                    </option>
-                  ))}
-                </select>
-                <p className="text-[11px] text-slate-400">
-                  Associa o login aos dados de rotas, supervisor e equipe do registro em <code className="text-amber-300 font-mono">public.promotores</code>.
-                </p>
-              </div>
+                  <select
+                    value={editIndustriaCodigo}
+                    onChange={(e) => setEditIndustriaCodigo(e.target.value)}
+                    className="w-full h-10 px-3 bg-[#171b26] border border-[#1e2433] rounded-xl text-white font-mono text-xs focus:outline-none focus:border-cyan-500 cursor-pointer"
+                  >
+                    <option value="">-- Selecione uma Indústria --</option>
+                    {industriasOptions.map((ind) => (
+                      <option key={ind.codigo} value={ind.codigo}>
+                        {ind.nome} ({ind.codigo})
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-[11px] text-slate-400">
+                    Define qual indústria em <code className="text-cyan-300 font-mono">public.industrias</code> este usuário poderá acessar no Portal da Indústria.
+                  </p>
+                </div>
+              )}
+
+              {/* Seção Vínculo de Matrícula (Quando editRole === 'promotor') */}
+              {editRole === 'promotor' && (
+                <div className="p-4 rounded-xl bg-[#10141f] border border-amber-500/30 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <label className="font-bold text-amber-300 flex items-center gap-1.5">
+                      <span className="material-symbols-outlined text-sm">badge</span>
+                      Seleção de Matrícula (profiles.promotor_matricula)
+                    </label>
+                    <span className="text-[10px] text-amber-400 font-mono">Relacionamento</span>
+                  </div>
+
+                  <select
+                    value={editPromotorMatricula}
+                    onChange={(e) => setEditPromotorMatricula(e.target.value)}
+                    className="w-full h-10 px-3 bg-[#171b26] border border-[#1e2433] rounded-xl text-white font-mono text-xs focus:outline-none focus:border-amber-500 cursor-pointer"
+                  >
+                    <option value="">-- Não vinculado --</option>
+                    {promotoresOptions.map((p) => (
+                      <option key={p.matricula} value={p.matricula}>
+                        {p.matricula} - {p.nome} ({p.supervisor || 'Sem Supervisor'} | {p.equipe || 'Sem Equipe'})
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-[11px] text-slate-400">
+                    Associa o login aos dados de rotas, supervisor e equipe do registro em <code className="text-amber-300 font-mono">public.promotores</code>.
+                  </p>
+                </div>
+              )}
 
               <div className="pt-3 border-t border-[#1e2433] flex items-center justify-end gap-2">
                 <button
@@ -1004,6 +1123,7 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                   executeSaveEdit(
                     confirmModalData.user.id,
                     confirmModalData.newMatricula || null,
+                    confirmModalData.newIndustriaCodigo || null,
                     confirmModalData.newRole,
                     confirmModalData.newDepartment,
                     confirmModalData.newStatus

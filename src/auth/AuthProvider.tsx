@@ -16,8 +16,8 @@ interface AuthContextValue {
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
   updateProfileRole: (userId: string, newRole: UserRole) => Promise<{ error: Error | null }>;
-  updateUserProfile: (userId: string, updates: { role?: UserRole; department?: string; status?: 'ativo' | 'inativo'; promotor_matricula?: string | null }) => Promise<{ error: Error | null }>;
-  inviteUser: (data: { email: string; name: string; department: string; role: UserRole }) => Promise<{ error: Error | null; tempPassword?: string; emailSent?: boolean }>;
+  updateUserProfile: (userId: string, updates: { role?: UserRole; department?: string; status?: 'ativo' | 'inativo'; promotor_matricula?: string | null; industria_codigo?: string | null }) => Promise<{ error: Error | null }>;
+  inviteUser: (data: { email: string; name: string; department: string; role: UserRole; industria_codigo?: string | null }) => Promise<{ error: Error | null; tempPassword?: string; emailSent?: boolean }>;
   deleteUser: (userId: string) => Promise<{ error: Error | null }>;
   updatePassword: (password: string) => Promise<{ error: Error | null }>;
   resetPasswordForEmail: (email: string) => Promise<{ error: Error | null }>;
@@ -65,6 +65,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
 
       const matricula = data?.promotor_matricula || null;
+      const indCodigo = data?.industria_codigo || null;
 
       let promotorInfo: {
         matricula: string;
@@ -98,6 +99,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
       }
 
+      let industriaNome: string | null = null;
+      if (indCodigo) {
+        const { data: indData } = await supabase
+          .from('industrias')
+          .select('nome')
+          .eq('codigo', indCodigo)
+          .maybeSingle();
+        if (indData) {
+          industriaNome = indData.nome;
+        }
+      }
+
       const realRole = (data?.role as UserRole) || defaultProfile.role;
       const realName = promotorInfo?.nome || data?.name || defaultProfile.name;
 
@@ -112,6 +125,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         promotor_uf: promotorInfo?.uf || null,
         promotor_supervisor: promotorInfo?.supervisor || null,
         promotor_equipe: promotorInfo?.equipe || null,
+        industria_codigo: indCodigo,
+        industria_nome: industriaNome,
         avatar_url: data?.avatar_url,
         department: data?.department || defaultProfile.department,
         created_at: data?.created_at,
@@ -231,7 +246,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const updateUserProfile = useCallback(async (
     userId: string, 
-    updates: { role?: UserRole; department?: string; status?: 'ativo' | 'inativo'; promotor_matricula?: string | null }
+    updates: { role?: UserRole; department?: string; status?: 'ativo' | 'inativo'; promotor_matricula?: string | null; industria_codigo?: string | null }
   ) => {
     if (!supabase) return { error: new Error('Supabase não configurado.') };
     if (role !== 'admin') return { error: new Error('Apenas administradores podem alterar permissões de usuários.') };
@@ -253,7 +268,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return { error: null };
   }, [role, session]);
 
-  const inviteUser = useCallback(async ({ email, name, department, role: initialRole }: { email: string; name: string; department: string; role: UserRole | string }) => {
+  const inviteUser = useCallback(async ({ email, name, department, role: initialRole, industria_codigo }: { email: string; name: string; department: string; role: UserRole | string; industria_codigo?: string | null }) => {
     if (!supabase) return { error: new Error('Supabase não configurado.') };
     if (role !== 'admin') return { error: new Error('Apenas administradores podem convidar usuários.') };
 
@@ -262,7 +277,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       'admin': 'admin',
       'gestor': 'gestor',
       'operador': 'operador',
-      'promotor': 'promotor'
+      'promotor': 'promotor',
+      'client_industry': 'client_industry'
     };
     const validRole: UserRole = roleMap[String(initialRole).toLowerCase().trim()] || 'promotor';
 
@@ -311,7 +327,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         email,
         name,
         department,
-        role: validRole
+        role: validRole,
+        industria_codigo: validRole === 'client_industry' ? (industria_codigo || null) : null
       }
     ], { onConflict: 'id' });
 

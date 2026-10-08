@@ -6,6 +6,7 @@ export type ScreenId =
   | 'industrias'
   | 'lojas'
   | 'portal-promotor'
+  | 'portal-industria'
   | 'gestao-equipes'
   | 'freelancers'
   | 'controle-diarias'
@@ -87,7 +88,7 @@ export interface ImportHistoryRecord {
   created_at: string;
 }
 
-export type UserRole = 'admin' | 'gestor' | 'operador' | 'promotor';
+export type UserRole = 'admin' | 'gestor' | 'operador' | 'promotor' | 'client_industry';
 
 export interface UserProfile {
   id: string;
@@ -100,6 +101,8 @@ export interface UserProfile {
   promotor_uf?: string | null;
   promotor_supervisor?: string | null;
   promotor_equipe?: string | null;
+  industria_codigo?: string | null;
+  industria_nome?: string | null;
   avatar_url?: string;
   department?: string;
   status?: 'ativo' | 'inativo';
@@ -139,6 +142,33 @@ export interface Visit {
 
 export type AlertPriority = 'critico' | 'atencao' | 'pendente' | 'resolvido';
 export type AlertType = 'ruptura' | 'validade' | 'visita' | 'aderencia';
+
+export type NotificationType =
+  | 'ruptura'
+  | 'produto_vencido'
+  | 'produto_3_dias'
+  | 'produto_4_7_dias'
+  | 'produto_8_30_dias'
+  | 'visita_2h'
+  | 'visita_nao_realizada'
+  | 'rota_sem_atendimento'
+  | 'baixa_aderencia'
+  | 'aderencia_media';
+
+export interface AppNotification {
+  id: string;
+  user_id: string;
+  promotor_matricula?: string | null;
+  titulo: string;
+  mensagem: string;
+  tipo: NotificationType;
+  prioridade: AlertPriority;
+  alert_fingerprint: string;
+  link_action?: string | null;
+  read: boolean;
+  created_at: string;
+  read_at?: string | null;
+}
 
 export interface AlertItem {
   id: string;

@@ -1,7 +1,14 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useAuth } from '../auth/AuthProvider';
 import { supabase } from '../lib/supabase';
 import type { RouteItem, Visit, ToastMessage, VisitChecklistItem } from '../types';
+import {
+  calculateOperationalVisits,
+  getWeekDaysRange,
+  getLocalDateString,
+  DayOfWeekDate,
+  OperationalVisitItem
+} from '../utils/routePlanner';
 
 interface PromoterPortalViewProps {
   onShowToast: (toast: Omit<ToastMessage, 'id'>) => void;
@@ -29,12 +36,18 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
   const [todayVisits, setTodayVisits] = useState<Visit[]>([]);
   const [activeVisit, setActiveVisit] = useState<Visit | null>(null);
 
+  // Estado para Agenda Semanal "MINHA SEMANA" (Etapa 7.2)
+  const [weekOffset, setWeekOffset] = useState<number>(0);
+  const [weekVisits, setWeekVisits] = useState<Visit[]>([]);
+  const [selectedDayDateStr, setSelectedDayDateStr] = useState<string>(getLocalDateString(new Date()));
+
   // Form State para Visita em Andamento
   const [checklist, setChecklist] = useState<Record<string, { checked: boolean; obs: string; valTxt: string }>>({});
   const [savingChecklistKey, setSavingChecklistKey] = useState<string | null>(null);
   const [photoType, setPhotoType] = useState<'fachada' | 'gondola' | 'preco' | 'ponto_extra' | 'ruptura' | 'outros'>('gondola');
   const [photoCaption, setPhotoCaption] = useState('');
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [photoStatusMessage, setPhotoStatusMessage] = useState<string>('');
   const [occurrenceType, setOccurrenceType] = useState<'ruptura' | 'preco_divergente' | 'falta_espaco' | 'outro'>('ruptura');
   const [occurrenceDesc, setOccurrenceDesc] = useState('');
   const [savingOccurrence, setSavingOccurrence] = useState(false);
@@ -114,6 +127,10 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
         rotasQuery = rotasQuery.eq('promotor_matricula', promotorMatricula);
       }
 
+      const weekDays = getWeekDaysRange(new Date(), weekOffset);
+      const weekStartStr = weekDays[0].dateStr;
+      const weekEndStr = weekDays[6].dateStr;
+
       let visitsQuery = supabase.from('visits').select(`
         *,
         industria:industrias(codigo, nome),
@@ -123,7 +140,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
         photos:visit_photos(*),
         occurrences:visit_occurrences(*),
         validity_items:visit_product_validity(*)
-      `).eq('data_visita', todayStr);
+      `).gte('data_visita', weekStartStr).lte('data_visita', weekEndStr);
 
       if (promotorMatricula) {
         visitsQuery = visitsQuery.eq('promotor_matricula', promotorMatricula);
@@ -135,12 +152,11 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
       if (visitsRes.error) throw visitsRes.error;
 
       const rawRoutes = (rotasRes.data as unknown as RouteItem[]) || [];
-      // Filtrar rotas com visita agendada para o dia atual
-      const dayRoutes = rawRoutes.filter((r) => Boolean(r[currentDayKey as keyof RouteItem]));
-      setRoutes(dayRoutes.length > 0 ? dayRoutes : rawRoutes);
+      setRoutes(rawRoutes);
 
       const visits = (visitsRes.data as unknown as Visit[]) || [];
-      setTodayVisits(visits);
+      setWeekVisits(visits);
+      setTodayVisits(visits.filter((v) => v.data_visita === todayStr));
 
       // Verificar se há alguma visita em andamento para retomada automática
       const inProgress = visits.find((v) => v.status === 'em_andamento');
@@ -192,7 +208,19 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
 
   useEffect(() => {
     loadPortalData();
-  }, [loadPortalData]);
+  }, [loadPortalData, weekOffset]);
+
+  const todayStr = useMemo(() => getLocalDateString(new Date()), []);
+  const weekDaysRange = useMemo(() => getWeekDaysRange(new Date(), weekOffset), [weekOffset]);
+
+  const allWeekOperationalVisits = useMemo(() => {
+    return calculateOperationalVisits({
+      routes,
+      visits: weekVisits,
+      daysRange: weekDaysRange,
+      todayStr
+    });
+  }, [routes, weekVisits, weekDaysRange, todayStr]);
 
   const realName = promoterDetails?.nome || profile?.promotor_nome || profile?.name || (promotorMatricula ? 'Promotor de Campo' : 'Promotor não vinculado');
   const realMatricula = promoterDetails?.matricula || profile?.promotor_matricula || null;
@@ -337,55 +365,127 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
     }
   };
 
-  // Upload de Foto para o Bucket Privado 'visit-photos' com Validação e Cleanup de Órfãos
+  // Função nativa para Redimensionar e Comprimir Imagens no Dispositivo (Browser HTML5 Canvas API)
+  const compressImageFile = (file: File, maxDimension: number = 1920, quality: number = 0.82): Promise<Blob> => {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        let width = img.width;
+        let height = img.height;
+
+        // Manter proporção reduzindo o lado maior para maxDimension (1920px)
+        if (width > maxDimension || height > maxDimension) {
+          if (width > height) {
+            height = Math.round((height * maxDimension) / width);
+            width = maxDimension;
+          } else {
+            width = Math.round((width * maxDimension) / height);
+            height = maxDimension;
+          }
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+
+        if (!ctx) {
+          reject(new Error('Falha ao inicializar contexto 2D para otimização da imagem.'));
+          return;
+        }
+
+        ctx.drawImage(img, 0, 0, width, height);
+
+        // Exportar como JPEG otimizado
+        canvas.toBlob(
+          (blob) => {
+            if (blob) {
+              resolve(blob);
+            } else {
+              reject(new Error('Falha ao comprimir arquivo de imagem.'));
+            }
+          },
+          'image/jpeg',
+          quality
+        );
+      };
+
+      img.onerror = (err) => {
+        URL.revokeObjectURL(url);
+        reject(err);
+      };
+
+      img.src = url;
+    });
+  };
+
+  // Upload de Foto para o Bucket Privado 'visit-photos' com Compressão no Device e Validação
   const handleUploadPhoto = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !activeVisit || !supabase) return;
 
-    // 1. Validar tipo MIME (somente imagens)
-    if (!file.type.startsWith('image/')) {
+    // 1. Validar tipo MIME de segurança (somente imagens seguras)
+    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'];
+    if (!file.type.startsWith('image/') || file.type.includes('svg') || (!allowedTypes.includes(file.type.toLowerCase()) && !file.type.startsWith('image/'))) {
       onShowToast({
         title: 'Formato Inválido',
-        message: 'Apenas arquivos de imagem (PNG, JPG, WEBP) são permitidos.',
-        type: 'warning'
-      });
-      return;
-    }
-
-    // 2. Validar limite de tamanho (10MB)
-    if (file.size > 10 * 1024 * 1024) {
-      onShowToast({
-        title: 'Tamanho Excedido',
-        message: 'A foto deve ter no máximo 10MB.',
+        message: 'Apenas arquivos de imagem válidos (JPG, PNG, WEBP) são permitidos.',
         type: 'warning'
       });
       return;
     }
 
     setUploadingPhoto(true);
+    setPhotoStatusMessage('Otimizando foto...');
     let uploadedPath: string | null = null;
 
     try {
-      const fileExt = file.name.split('.').pop()?.toLowerCase() || 'jpg';
-      const fileName = `${activeVisit.id}/${Date.now()}_${photoType}.${fileExt}`;
+      // 2. Compressão e Redimensionamento no Dispositivo antes do envio (Máx 1920px, Qualidade 82% JPEG)
+      let fileToUpload: Blob = file;
+      try {
+        fileToUpload = await compressImageFile(file, 1920, 0.82);
+        console.log(`Foto otimizada: Original ${(file.size / 1024).toFixed(1)} KB -> Otimizada ${(fileToUpload.size / 1024).toFixed(1)} KB`);
+      } catch (cErr) {
+        console.warn('Falha na otimização nativa, enviando arquivo original:', cErr);
+      }
+
+      // 3. Validar limite de tamanho pós-compressão (máximo 5MB)
+      if (fileToUpload.size > 5 * 1024 * 1024) {
+        onShowToast({
+          title: 'Tamanho Excedido',
+          message: 'Mesmo após a otimização, a foto excedeu o limite seguro de 5MB.',
+          type: 'warning'
+        });
+        setUploadingPhoto(false);
+        setPhotoStatusMessage('');
+        return;
+      }
+
+      setPhotoStatusMessage('Enviando foto...');
+
+      // Estrutura padrão de caminho: visits/{visit_id}/{timestamp}_{tipo}.jpg
+      const fileName = `${activeVisit.id}/${Date.now()}_${photoType}.jpg`;
       uploadedPath = `visits/${fileName}`;
 
-      // 3. Upload no Supabase Storage
+      // 4. Upload no Supabase Storage
       const { error: uploadErr } = await supabase.storage
         .from('visit-photos')
-        .upload(uploadedPath, file, { upsert: true, contentType: file.type });
+        .upload(uploadedPath, fileToUpload, { upsert: true, contentType: 'image/jpeg' });
 
       if (uploadErr) throw uploadErr;
 
-      // 4. Gerar Signed URL para exibicao temporaria
+      // 5. Gerar Signed URL para exibição temporária privada (3600s)
       const { data: signedData } = await supabase.storage
         .from('visit-photos')
         .createSignedUrl(uploadedPath, 3600);
 
       const signedUrl = signedData?.signedUrl || '';
 
-      // 5. Gravar referência permanente na tabela visit_photos (storage_path)
-      const { error: dbErr } = await supabase.from('visit-photos').insert([
+      // 6. Gravar referência na tabela visit_photos (storage_path)
+      const { error: dbErr } = await supabase.from('visit_photos').insert([
         {
           visit_id: activeVisit.id,
           tipo_foto: photoType,
@@ -396,21 +496,21 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
       ]);
 
       if (dbErr) {
-        // Se a gravação no banco falhar, limpa o arquivo enviado no Storage para evitar órfão
-        console.error('Erro no INSERT em visit_photos. Limpando arquivo enviado...', dbErr);
+        console.error('Erro no INSERT em visit_photos. Limpando arquivo enviado no Storage...', dbErr);
         await supabase.storage.from('visit-photos').remove([uploadedPath]);
         throw dbErr;
       }
 
       onShowToast({
         title: 'Foto Anexada',
-        message: `Foto salva com sucesso!`,
+        message: `Foto otimizada e salva com sucesso! (${(fileToUpload.size / 1024).toFixed(0)} KB)`,
         type: 'success'
       });
 
       setPhotoCaption('');
+
       // Atualizar lista de fotos da visita ativa com signed_url
-      const { data: updatedPhotos } = await supabase.from('visit-photos').select('*').eq('visit_id', activeVisit.id);
+      const { data: updatedPhotos } = await supabase.from('visit_photos').select('*').eq('visit_id', activeVisit.id);
       if (updatedPhotos) {
         const photosWithSignedUrls = await Promise.all(
           updatedPhotos.map(async (p: any) => {
@@ -425,18 +525,18 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
             return p;
           })
         );
-        setActiveVisit((prev) => (prev ? { ...prev, photos: photosWithSignedUrls as any } : null));
+        setActiveVisit((prev) => prev ? { ...prev, photos: photosWithSignedUrls } : null);
       }
     } catch (err: any) {
-      console.error('Erro no fluxo de foto:', err);
+      console.error('Erro ao enviar foto otimizada:', err);
       onShowToast({
-        title: 'Falha no Envio da Foto',
-        message: err.message || 'Erro ao processar e salvar a imagem.',
+        title: 'Falha no Upload',
+        message: err.message || 'Erro ao enviar a foto otimizada para o servidor.',
         type: 'error'
       });
     } finally {
       setUploadingPhoto(false);
-      // Limpar input de arquivo
+      setPhotoStatusMessage('');
       e.target.value = '';
     }
   };
@@ -980,8 +1080,10 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                   disabled={uploadingPhoto}
                   className="w-full py-2.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50"
                 >
-                  <span className="material-symbols-outlined text-base">cloud_upload</span>
-                  <span>{uploadingPhoto ? 'Enviando foto para o Supabase Storage...' : 'Selecionar & Anexar Foto'}</span>
+                  <span className={`material-symbols-outlined text-base ${uploadingPhoto ? 'animate-spin' : ''}`}>
+                    {uploadingPhoto ? 'sync' : 'cloud_upload'}
+                  </span>
+                  <span>{uploadingPhoto ? (photoStatusMessage || 'Otimizando & enviando foto...') : 'Tirar Foto ou Selecionar da Galeria'}</span>
                 </button>
               </div>
 
@@ -1319,86 +1421,188 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
         </section>
       ) : null}
 
-      {/* 2. ROTA DO DIA (LISTA DE LOJAS PARA ATENDIMENTO) */}
-      <section className="bg-[#171b26] border border-[#1e2433] rounded-2xl p-6 shadow-2xl space-y-4">
-        <div className="flex items-center justify-between">
-          <h3 className="text-sm font-bold text-white uppercase tracking-wider font-mono flex items-center gap-2">
-            <span className="material-symbols-outlined text-amber-400">route</span>
-            2. Rota de Hoje ({routes.length} agendadas)
-          </h3>
+      {/* 2. MINHA SEMANA OPERACIONAL */}
+      <section className="bg-[#171b26] border border-[#1e2433] rounded-2xl p-6 shadow-2xl space-y-5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#1e2433] pb-4">
+          <div>
+            <h3 className="text-sm font-bold text-white uppercase tracking-wider font-mono flex items-center gap-2">
+              <span className="material-symbols-outlined text-purple-400">calendar_view_week</span>
+              2. Minha Semana Operacional ({allWeekOperationalVisits.length} agendadas)
+            </h3>
+            <p className="text-[11px] text-slate-400 font-mono mt-0.5">
+              Agenda semanal completa das suas rotas operacionais e pendências acumuladas.
+            </p>
+          </div>
+
+          {/* Navegação entre semanas */}
+          <div className="flex items-center gap-2 shrink-0 font-mono text-xs">
+            <button
+              onClick={() => setWeekOffset((prev) => prev - 1)}
+              className="p-1.5 rounded-lg bg-[#131722] hover:bg-[#1a202c] border border-[#1e2433] text-slate-300 hover:text-white cursor-pointer flex items-center gap-1"
+              title="Semana anterior"
+            >
+              <span className="material-symbols-outlined text-sm">chevron_left</span>
+              <span className="hidden md:inline">Anterior</span>
+            </button>
+
+            <button
+              onClick={() => setWeekOffset(0)}
+              className={`px-3 py-1.5 rounded-lg border text-xs font-bold transition-colors cursor-pointer ${
+                weekOffset === 0
+                  ? 'bg-purple-600/30 text-purple-300 border-purple-500/50'
+                  : 'bg-[#131722] text-slate-300 border-[#1e2433] hover:text-white'
+              }`}
+            >
+              Semana Atual
+            </button>
+
+            <button
+              onClick={() => setWeekOffset((prev) => prev + 1)}
+              className="p-1.5 rounded-lg bg-[#131722] hover:bg-[#1a202c] border border-[#1e2433] text-slate-300 hover:text-white cursor-pointer flex items-center gap-1"
+              title="Próxima semana"
+            >
+              <span className="hidden md:inline">Próxima</span>
+              <span className="material-symbols-outlined text-sm">chevron_right</span>
+            </button>
+          </div>
         </div>
 
-        {routes.length === 0 ? (
+        {/* Resumo rápido por dia da semana */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2 font-mono">
+          {weekDaysRange.map((day) => {
+            const isTodayDay = day.dateStr === getLocalDateString(new Date());
+            const dayVisits = allWeekOperationalVisits.filter((v) => v.dataStr === day.dateStr);
+            const pendingCount = dayVisits.filter((v) => v.status === 'pendente').length;
+            const completedCount = dayVisits.filter((v) => v.status === 'concluida').length;
+
+            return (
+              <div
+                key={day.dateStr}
+                className={`p-2.5 rounded-xl border flex flex-col justify-between space-y-1 ${
+                  isTodayDay
+                    ? 'bg-purple-950/20 border-purple-500/40'
+                    : 'bg-[#131722] border-[#1e2433]'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase">{day.dayShort}</span>
+                  {isTodayDay && (
+                    <span className="px-1.5 py-0.2 text-[8px] font-bold rounded bg-purple-500/20 text-purple-300">
+                      HOJE
+                    </span>
+                  )}
+                </div>
+                <div className="text-xs font-bold text-white">
+                  {day.dateStr.split('-').reverse().slice(0, 2).join('/')}
+                </div>
+                <div className="flex items-center gap-1.5 text-[10px] pt-1 border-t border-[#1e2433]/50">
+                  {completedCount > 0 && <span className="text-emerald-400 font-bold">🟢 {completedCount}</span>}
+                  {pendingCount > 0 && <span className="text-rose-400 font-bold">🔴 {pendingCount}</span>}
+                  {dayVisits.length === 0 && <span className="text-slate-600">—</span>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Lista detalhada das visitas da semana */}
+        {allWeekOperationalVisits.length === 0 ? (
           <div className="py-12 text-center space-y-3 font-mono">
             <div className="w-12 h-12 rounded-full bg-[#131722] border border-[#1e2433] flex items-center justify-center text-slate-500 mx-auto">
               <span className="material-symbols-outlined text-2xl">event_busy</span>
             </div>
-            <h4 className="text-xs font-bold text-white">Nenhuma Rota Agendada para Hoje</h4>
+            <h4 className="text-xs font-bold text-white">Nenhuma Rota para esta Semana</h4>
             <p className="text-[11px] text-slate-400 max-w-sm mx-auto">
-              Não há vínculos de rotas fixas para sua matrícula no dia da semana atual.
+              Não foram encontradas rotas cadastradas para a sua matrícula na semana selecionada.
             </p>
           </div>
         ) : (
           <div className="space-y-3">
-            {routes.map((route, idx) => {
-              const visit = todayVisits.find((v) => v.loja_codigo === route.loja_codigo && v.industria_codigo === route.industria_codigo);
-              const status = visit ? visit.status : 'pendente';
+            {allWeekOperationalVisits.map((item, idx) => {
+              const isTodayItem = item.dataStr === getLocalDateString(new Date());
+              const routeObj = routes.find((r) => r.id === item.routeId) || {
+                id: item.routeId,
+                promotor_matricula: item.promotorMatricula,
+                loja_codigo: item.lojaCodigo,
+                industria_codigo: item.industriaCodigo,
+                frequencia: item.frequencia,
+                loja: { codigo: item.lojaCodigo, nome: item.lojaNome, cidade: item.lojaCidade, uf: item.lojaUf },
+                industria: { codigo: item.industriaCodigo, nome: item.industriaNome }
+              } as RouteItem;
 
               return (
                 <div
-                  key={route.id}
-                  className={`p-4 rounded-xl border transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-4 font-mono ${
-                    status === 'concluida'
+                  key={`${item.key}_${item.dataStr}`}
+                  className={`p-4 rounded-xl border transition-all flex flex-col md:flex-row md:items-center justify-between gap-4 font-mono ${
+                    item.status === 'concluida'
                       ? 'bg-emerald-950/20 border-emerald-500/30'
-                      : status === 'em_andamento'
+                      : item.status === 'em_andamento'
                       ? 'bg-amber-950/20 border-amber-500/50'
-                      : status === 'nao_realizada'
+                      : item.status === 'nao_realizada'
                       ? 'bg-rose-950/20 border-rose-500/30'
+                      : item.status === 'pendente'
+                      ? 'bg-rose-950/15 border-rose-500/30'
                       : 'bg-[#131722] border-[#1e2433]'
                   }`}
                 >
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2">
+                  <div className="space-y-1.5">
+                    <div className="flex flex-wrap items-center gap-2">
                       <span className="w-5 h-5 rounded-full bg-[#171b26] border border-[#1e2433] text-purple-300 font-bold text-[10px] flex items-center justify-center">
                         {idx + 1}
                       </span>
-                      <h4 className="text-sm font-bold text-white">{route.loja?.nome || route.loja_codigo}</h4>
+                      <span className="text-xs font-bold text-purple-300 uppercase">
+                        {item.dataStr.split('-').reverse().join('/')} • {item.dayOfWeekLabel}
+                      </span>
                       <span
-                        className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase ${
-                          status === 'concluida'
-                            ? 'bg-emerald-500/20 text-emerald-300'
-                            : status === 'em_andamento'
-                            ? 'bg-amber-500/20 text-amber-300 animate-pulse'
-                            : status === 'nao_realizada'
-                            ? 'bg-rose-500/20 text-rose-300'
-                            : 'bg-slate-800 text-slate-400'
+                        className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase flex items-center gap-1 ${
+                          item.status === 'concluida'
+                            ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                            : item.status === 'em_andamento'
+                            ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30 animate-pulse'
+                            : item.status === 'nao_realizada'
+                            ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                            : item.status === 'pendente'
+                            ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
+                            : 'bg-slate-800 text-slate-300 border border-slate-700'
                         }`}
                       >
-                        {status.replace('_', ' ')}
+                        {item.status === 'concluida' && '🟢 Concluída'}
+                        {item.status === 'em_andamento' && '🔵 Em andamento'}
+                        {item.status === 'pendente' && (item.isPastOverdue ? '🔴 Pendente (Atrasada)' : '🔴 Pendente')}
+                        {item.status === 'nao_realizada' && '🟠 Não realizada'}
+                        {item.status === 'planejada' && '⚪ Planejada'}
                       </span>
                     </div>
 
+                    <h4 className="text-sm font-bold text-white">
+                      {item.lojaNome}
+                    </h4>
+
                     <p className="text-[11px] text-slate-400">
-                      Endereço: {(route.loja as any)?.endereco || '—'} ({route.loja?.cidade}/{route.loja?.uf || route.uf || '-'})
+                      Cidade/UF: {item.lojaCidade || '—'}/{item.lojaUf || '-'}
                     </p>
-                    <div className="flex items-center gap-3 text-[10px] text-slate-500">
-                      <span>Indústria: <strong className="text-purple-300">{route.industria?.nome || route.industria_codigo}</strong></span>
-                      <span>Frequência: <strong className="text-cyan-300">{route.frequencia}</strong></span>
+                    <div className="flex flex-wrap items-center gap-3 text-[10px] text-slate-500">
+                      <span>Indústria: <strong className="text-purple-300">{item.industriaNome}</strong></span>
+                      <span>Frequência: <strong className="text-cyan-300">{item.frequencia}</strong></span>
+                      {item.completedAt && (
+                        <span>Concluído às: <strong className="text-emerald-300">{new Date(item.completedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</strong></span>
+                      )}
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2 shrink-0">
-                    {status === 'pendente' && !activeVisit && (
+                  {/* Ações */}
+                  <div className="flex items-center gap-2 shrink-0 pt-2 md:pt-0 border-t md:border-t-0 border-[#1e2433]">
+                    {item.status === 'pendente' && isTodayItem && !activeVisit && (
                       <>
                         <button
-                          onClick={() => handleStartVisit(route)}
+                          onClick={() => handleStartVisit(routeObj)}
                           className="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-md"
                         >
                           <span className="material-symbols-outlined text-sm">play_arrow</span>
                           <span>Iniciar Visita</span>
                         </button>
                         <button
-                          onClick={() => setShowNotDoneModal(route)}
+                          onClick={() => setShowNotDoneModal(routeObj)}
                           className="px-3 py-2 rounded-xl bg-[#171b26] hover:bg-rose-500/20 text-slate-400 hover:text-rose-300 border border-[#1e2433] text-xs font-bold cursor-pointer"
                           title="Justificar Não Realização"
                         >
@@ -1407,24 +1611,41 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                       </>
                     )}
 
-                    {status === 'em_andamento' && (
-                      <span className="text-xs text-amber-300 font-bold flex items-center gap-1">
+                    {item.status === 'pendente' && !isTodayItem && item.isPastOverdue && !activeVisit && (
+                      <button
+                        onClick={() => handleStartVisit(routeObj)}
+                        className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-md"
+                      >
+                        <span className="material-symbols-outlined text-sm">play_arrow</span>
+                        <span>Regularizar Pendência</span>
+                      </button>
+                    )}
+
+                    {item.status === 'em_andamento' && (
+                      <span className="text-xs text-amber-300 font-bold flex items-center gap-1 px-3 py-2 bg-amber-500/10 rounded-xl border border-amber-500/30">
                         <span className="material-symbols-outlined text-sm animate-spin">sync</span>
-                        Em Preenchimento
+                        Em Atendimento
                       </span>
                     )}
 
-                    {status === 'concluida' && (
-                      <span className="text-xs text-emerald-400 font-bold flex items-center gap-1">
+                    {item.status === 'concluida' && (
+                      <span className="text-xs text-emerald-400 font-bold flex items-center gap-1 px-3 py-2 bg-emerald-500/10 rounded-xl border border-emerald-500/30">
                         <span className="material-symbols-outlined text-sm">check_circle</span>
                         Concluída
                       </span>
                     )}
 
-                    {status === 'nao_realizada' && (
-                      <span className="text-xs text-rose-400 font-bold flex items-center gap-1">
+                    {item.status === 'nao_realizada' && (
+                      <span className="text-xs text-rose-400 font-bold flex items-center gap-1 px-3 py-2 bg-rose-500/10 rounded-xl border border-rose-500/30">
                         <span className="material-symbols-outlined text-sm">cancel</span>
                         Não Realizada
+                      </span>
+                    )}
+
+                    {item.status === 'planejada' && (
+                      <span className="text-xs text-slate-400 font-bold flex items-center gap-1 px-3 py-2 bg-slate-800/40 rounded-xl border border-slate-700/50">
+                        <span className="material-symbols-outlined text-sm">event</span>
+                        Visita Planejada
                       </span>
                     )}
                   </div>
