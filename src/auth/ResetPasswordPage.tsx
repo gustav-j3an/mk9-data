@@ -65,8 +65,8 @@ export function ResetPasswordPage() {
   };
 
   return (
-    <main className="min-h-screen bg-[#0a0d14] text-slate-100 flex items-center justify-center px-6">
-      <section className="w-full max-w-md rounded-2xl border border-[#2a3042] bg-[#111522] p-8 shadow-2xl shadow-purple-950/30">
+    <main className="min-h-screen bg-[#E4E2DB] text-[#171717] flex items-center justify-center px-6">
+      <section className="w-full max-w-md rounded-2xl border border-[#CFCDC5] bg-[#F7F6F2] p-8 shadow-2xl shadow-purple-950/30">
         <div className="mb-8 flex items-center gap-3">
           <div className="h-11 w-11 rounded-xl bg-gradient-to-tr from-purple-600 to-indigo-500 flex items-center justify-center font-extrabold shadow-[0_0_18px_rgba(147,51,234,0.55)]">
             MK
@@ -105,7 +105,7 @@ export function ResetPasswordPage() {
             <button
               type="button"
               onClick={() => window.location.assign('/login')}
-              className="h-11 w-full rounded-lg bg-[#131722] hover:bg-[#1f2433] text-sm font-bold text-slate-200 border border-[#2a3042] transition"
+              className="h-11 w-full rounded-lg bg-[#EAE8E2] hover:bg-[#E4E2DB] text-sm font-bold text-[#171717] border border-[#CFCDC5] transition"
             >
               Voltar para o Login
             </button>
@@ -114,10 +114,10 @@ export function ResetPasswordPage() {
           /* Formulário de Redefinição de Senha */
           <div>
             <h2 className="text-2xl font-bold">Redefinir senha</h2>
-            <p className="mt-2 text-sm text-slate-400">Cadastre sua nova senha de acesso ao MK9.</p>
+            <p className="mt-2 text-sm text-[#77766F]">Cadastre sua nova senha de acesso ao MK9.</p>
 
             <form onSubmit={handleSubmit} className="mt-6 space-y-4">
-              <label className="block text-sm text-slate-300">
+              <label className="block text-sm text-[#171717]">
                 Nova senha (mínimo 6 caracteres)
                 <input
                   required
@@ -126,11 +126,11 @@ export function ResetPasswordPage() {
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
                   placeholder="••••••••"
-                  className="mt-2 h-11 w-full rounded-lg border border-[#2a3042] bg-[#0a0d14] px-3 text-sm outline-none focus:border-purple-500"
+                  className="mt-2 h-11 w-full rounded-lg border border-[#CFCDC5] bg-[#E4E2DB] px-3 text-sm outline-none focus:border-purple-500"
                 />
               </label>
 
-              <label className="block text-sm text-slate-300">
+              <label className="block text-sm text-[#171717]">
                 Confirmar nova senha
                 <input
                   required
@@ -139,7 +139,7 @@ export function ResetPasswordPage() {
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
                   placeholder="••••••••"
-                  className="mt-2 h-11 w-full rounded-lg border border-[#2a3042] bg-[#0a0d14] px-3 text-sm outline-none focus:border-purple-500"
+                  className="mt-2 h-11 w-full rounded-lg border border-[#CFCDC5] bg-[#E4E2DB] px-3 text-sm outline-none focus:border-purple-500"
                 />
               </label>
 

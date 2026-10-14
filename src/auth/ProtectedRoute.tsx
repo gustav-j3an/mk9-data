@@ -35,8 +35,8 @@ function FirstAccessForm() {
   }
 
   return (
-    <main className="min-h-screen bg-[#0a0d14] text-slate-100 flex items-center justify-center px-6">
-      <section className="w-full max-w-md rounded-2xl border border-[#2a3042] bg-[#111522] p-8 shadow-2xl shadow-purple-950/30">
+    <main className="min-h-screen bg-[#E4E2DB] text-[#171717] flex items-center justify-center px-6">
+      <section className="w-full max-w-md rounded-2xl border border-[#CFCDC5] bg-[#F7F6F2] p-8 shadow-2xl shadow-purple-950/30">
         <div className="mb-8 flex items-center gap-3">
           <div className="h-11 w-11 rounded-xl bg-gradient-to-tr from-purple-600 to-indigo-500 flex items-center justify-center font-extrabold shadow-[0_0_18px_rgba(147,51,234,0.55)]">
             MK
@@ -65,12 +65,12 @@ function FirstAccessForm() {
             <span className="text-xs font-mono uppercase tracking-wider font-bold">Primeiro Acesso</span>
           </div>
           <h2 className="text-2xl font-bold">Por segurança, crie sua nova senha</h2>
-          <p className="mt-2 text-sm text-slate-400">
+          <p className="mt-2 text-sm text-[#77766F]">
             Você está acessando com uma senha temporária. Cadastre sua senha pessoal definitiva para continuar.
           </p>
 
           <form onSubmit={handleSaveNewPassword} className="mt-6 space-y-4">
-            <label className="block text-sm text-slate-300">
+            <label className="block text-sm text-[#171717]">
               Nova senha (mínimo 6 caracteres)
               <input
                 required
@@ -79,11 +79,11 @@ function FirstAccessForm() {
                 value={newPassword}
                 onChange={(event) => setNewPassword(event.target.value)}
                 placeholder="••••••••"
-                className="mt-2 h-11 w-full rounded-lg border border-[#2a3042] bg-[#0a0d14] px-3 text-sm outline-none focus:border-purple-500"
+                className="mt-2 h-11 w-full rounded-lg border border-[#CFCDC5] bg-[#E4E2DB] px-3 text-sm outline-none focus:border-purple-500"
               />
             </label>
 
-            <label className="block text-sm text-slate-300">
+            <label className="block text-sm text-[#171717]">
               Confirmar nova senha
               <input
                 required
@@ -92,7 +92,7 @@ function FirstAccessForm() {
                 value={confirmPassword}
                 onChange={(event) => setConfirmPassword(event.target.value)}
                 placeholder="••••••••"
-                className="mt-2 h-11 w-full rounded-lg border border-[#2a3042] bg-[#0a0d14] px-3 text-sm outline-none focus:border-purple-500"
+                className="mt-2 h-11 w-full rounded-lg border border-[#CFCDC5] bg-[#E4E2DB] px-3 text-sm outline-none focus:border-purple-500"
               />
             </label>
 
@@ -114,7 +114,7 @@ export function ProtectedRoute() {
   const location = useLocation();
 
   if (loading) {
-    return <div className="min-h-screen bg-[#0a0d14] flex items-center justify-center text-slate-300 font-mono text-xs">Carregando sessão...</div>;
+    return <div className="min-h-screen bg-[#E4E2DB] flex items-center justify-center text-[#171717] font-mono text-xs">Carregando sessão...</div>;
   }
 
   if (!session) {

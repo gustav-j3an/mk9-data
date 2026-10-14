@@ -516,17 +516,17 @@ export const ImportView: React.FC<ImportViewProps> = ({ onShowToast }) => {
   return (
     <div className="w-full px-4 lg:px-8 py-6 max-w-[1720px] mx-auto space-y-8 font-sans">
       {/* Top Header */}
-      <section className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-[#1e2433] pb-6">
+      <section className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-[#CFCDC5] pb-6">
         <div>
           <div className="flex items-center gap-2.5">
             <div className="w-9 h-9 rounded-lg bg-gradient-to-tr from-purple-600 to-indigo-500 flex items-center justify-center font-bold text-white shadow-[0_0_14px_rgba(147,51,234,0.6)]">
               <span className="material-symbols-outlined text-[20px]">upload_file</span>
             </div>
-            <h1 className="text-3xl font-extrabold text-white tracking-tight">
+            <h1 className="text-3xl font-extrabold text-[#171717] tracking-tight">
               Importação de Dados por Planilha
             </h1>
           </div>
-          <p className="text-xs sm:text-sm text-slate-400 mt-1 max-w-3xl">
+          <p className="text-xs sm:text-sm text-[#77766F] mt-1 max-w-3xl">
             Carga em lote de <code className="text-purple-400 font-mono">Indústrias</code>, <code className="text-cyan-400 font-mono">Lojas</code>, <code className="text-emerald-400 font-mono">Promotores</code> e <code className="text-amber-400 font-mono">Rotas</code> com validação prévia de integridade.
           </p>
         </div>
@@ -534,7 +534,7 @@ export const ImportView: React.FC<ImportViewProps> = ({ onShowToast }) => {
         <div className="flex items-center gap-3">
           <button
             onClick={() => setStep(step === 'history' ? 'upload' : 'history')}
-            className="px-4 py-2 rounded-xl bg-[#171b26] border border-[#1e2433] text-xs font-semibold text-slate-300 hover:text-white hover:border-purple-500/40 transition-colors flex items-center gap-1.5 cursor-pointer"
+            className="px-4 py-2 rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] text-xs font-semibold text-[#171717] hover:text-white hover:border-purple-500/40 transition-colors flex items-center gap-1.5 cursor-pointer"
           >
             <span className="material-symbols-outlined text-[18px]">
               {step === 'history' ? 'upload_file' : 'history'}
@@ -548,8 +548,8 @@ export const ImportView: React.FC<ImportViewProps> = ({ onShowToast }) => {
       {step === 'upload' && (
         <section className="space-y-6">
           {/* Configuração de Tipo & Download de Modelos */}
-          <div className="bg-[#171b26] border border-[#1e2433] rounded-2xl p-6 shadow-2xl space-y-6">
-            <h3 className="text-sm font-bold text-white uppercase tracking-wider font-mono flex items-center gap-2">
+          <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-6 shadow-2xl space-y-6">
+            <h3 className="text-sm font-bold text-[#171717] uppercase tracking-wider font-mono flex items-center gap-2">
               <span className="material-symbols-outlined text-purple-400">tune</span>
               1. Selecione o Tipo de Cadastro &amp; Baixe o Modelo Limpo
             </h3>
@@ -564,7 +564,7 @@ export const ImportView: React.FC<ImportViewProps> = ({ onShowToast }) => {
                     className={`p-4 rounded-xl border text-left transition-all cursor-pointer ${
                       selectedType === type
                         ? 'bg-purple-950/40 border-purple-500 text-white shadow-[0_0_15px_rgba(147,51,234,0.3)]'
-                        : 'bg-[#131722] border-[#1e2433] text-slate-400 hover:border-slate-700 hover:text-slate-200'
+                        : 'bg-[#EAE8E2] border-[#CFCDC5] text-[#77766F] hover:border-[#CFCDC5] hover:text-slate-200'
                     }`}
                   >
                     <div className="flex items-center justify-between">
@@ -573,14 +573,14 @@ export const ImportView: React.FC<ImportViewProps> = ({ onShowToast }) => {
                         {type === 'industrias' ? 'factory' : type === 'lojas' ? 'store' : type === 'promotores' ? 'badge' : 'alt_route'}
                       </span>
                     </div>
-                    <p className="text-[11px] text-slate-400 mt-2">
+                    <p className="text-[11px] text-[#77766F] mt-2">
                       {type === 'industrias' && 'Marcas e indústrias parceiras.'}
                       {type === 'lojas' && 'PDVs, redes e endereços.'}
                       {type === 'promotores' && 'Matrículas e equipes.'}
                       {type === 'rotas' && 'Vínculos diários de visitas.'}
                     </p>
 
-                    <div className="mt-4 pt-3 border-t border-[#1e2433] flex items-center justify-between gap-2">
+                    <div className="mt-4 pt-3 border-t border-[#CFCDC5] flex items-center justify-between gap-2">
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
@@ -611,48 +611,48 @@ export const ImportView: React.FC<ImportViewProps> = ({ onShowToast }) => {
             </div>
 
             {/* Painel de Instruções e Orientações do Tipo Selecionado */}
-            <div className="p-5 rounded-xl bg-[#131722] border border-[#1e2433] space-y-3">
+            <div className="p-5 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] space-y-3">
               <div className="flex items-center gap-2">
                 <span className="material-symbols-outlined text-purple-400 text-lg">info</span>
-                <h4 className="text-xs font-bold text-white uppercase tracking-wider font-mono">
+                <h4 className="text-xs font-bold text-[#171717] uppercase tracking-wider font-mono">
                   Instruções &amp; Relacionamentos: {currentSpec.title}
                 </h4>
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs text-slate-300">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs text-[#171717]">
                 <div>
-                  <span className="font-bold text-slate-400 font-mono block">FINALIDADE:</span>
-                  <p className="mt-0.5 text-slate-300">{currentSpec.instructions.finalidade}</p>
+                  <span className="font-bold text-[#77766F] font-mono block">FINALIDADE:</span>
+                  <p className="mt-0.5 text-[#171717]">{currentSpec.instructions.finalidade}</p>
                 </div>
                 <div>
-                  <span className="font-bold text-slate-400 font-mono block">CAMPOS OBRIGATÓRIOS:</span>
+                  <span className="font-bold text-[#77766F] font-mono block">CAMPOS OBRIGATÓRIOS:</span>
                   <p className="mt-0.5 text-amber-300 font-mono">{currentSpec.instructions.obrigatorios}</p>
                 </div>
                 <div>
-                  <span className="font-bold text-slate-400 font-mono block">ORDEM DE IMPORTAÇÃO:</span>
+                  <span className="font-bold text-[#77766F] font-mono block">ORDEM DE IMPORTAÇÃO:</span>
                   <p className="mt-0.5 text-purple-300 font-mono">{currentSpec.instructions.ordem}</p>
                 </div>
                 <div>
-                  <span className="font-bold text-slate-400 font-mono block">DEPENDÊNCIAS &amp; RELACIONAMENTOS:</span>
+                  <span className="font-bold text-[#77766F] font-mono block">DEPENDÊNCIAS &amp; RELACIONAMENTOS:</span>
                   <p className="mt-0.5 text-cyan-300 font-mono">{currentSpec.instructions.relacionamentos}</p>
                 </div>
               </div>
             </div>
 
             {/* Configuração de Preservação vs Upsert */}
-            <div className="pt-4 border-t border-[#1e2433] flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div className="pt-4 border-t border-[#CFCDC5] flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
               <div className="space-y-1">
                 <span className="text-xs font-bold text-slate-200">Modo de Gravação de Dados</span>
-                <p className="text-xs text-slate-400">
+                <p className="text-xs text-[#77766F]">
                   Por padrão, os dados existentes são <strong>preservados</strong>. Marque para atualizar registros com chaves duplicadas (Upsert).
                 </p>
               </div>
 
-              <label className="inline-flex items-center gap-2 cursor-pointer bg-[#131722] border border-[#1e2433] px-4 py-2.5 rounded-xl">
+              <label className="inline-flex items-center gap-2 cursor-pointer bg-[#EAE8E2] border border-[#CFCDC5] px-4 py-2.5 rounded-xl">
                 <input
                   type="checkbox"
                   checked={allowUpsert}
                   onChange={(e) => setAllowUpsert(e.target.checked)}
-                  className="rounded border-[#1e2433] bg-[#171b26] text-purple-600 focus:ring-purple-500 w-4 h-4"
+                  className="rounded border-[#CFCDC5] bg-[#F7F6F2] text-purple-600 focus:ring-purple-500 w-4 h-4"
                 />
                 <span className="text-xs font-mono font-bold text-slate-200">
                   {allowUpsert ? 'Modo Upsert (Atualizar Duplicados)' : 'Modo Seguro (Manter Existentes)'}
@@ -662,7 +662,7 @@ export const ImportView: React.FC<ImportViewProps> = ({ onShowToast }) => {
           </div>
 
           {/* Área de Dropzone / Upload */}
-          <div className="bg-[#171b26] border border-[#1e2433] rounded-2xl p-10 shadow-2xl text-center relative overflow-hidden">
+          <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-10 shadow-2xl text-center relative overflow-hidden">
             <input
               type="file"
               accept=".csv,.xlsx,.xls"
@@ -670,16 +670,16 @@ export const ImportView: React.FC<ImportViewProps> = ({ onShowToast }) => {
               className="absolute inset-0 opacity-0 cursor-pointer w-full h-full z-10"
             />
             <div className="max-w-md mx-auto space-y-4 flex flex-col items-center">
-              <div className="w-16 h-16 rounded-full bg-[#131722] border border-[#1e2433] flex items-center justify-center text-purple-400 shadow-inner">
+              <div className="w-16 h-16 rounded-full bg-[#EAE8E2] border border-[#CFCDC5] flex items-center justify-center text-purple-400 shadow-inner">
                 <span className="material-symbols-outlined text-4xl">cloud_upload</span>
               </div>
               <div className="space-y-1">
-                <h3 className="text-base font-bold text-white">Arraste ou selecione a planilha preenchida (CSV ou XLSX)</h3>
-                <p className="text-xs text-slate-400">
+                <h3 className="text-base font-bold text-[#171717]">Arraste ou selecione a planilha preenchida (CSV ou XLSX)</h3>
+                <p className="text-xs text-[#77766F]">
                   Suporta arquivos formatados para <strong>{selectedType.toUpperCase()}</strong>.
                 </p>
               </div>
-              <button className="px-5 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs neon-purple-glow transition-all">
+              <button className="px-5 py-2.5 rounded-xl bg-[#222222] hover:bg-black text-white font-bold text-xs shadow-xs transition-all">
                 Selecionar Arquivo Preenchido
               </button>
             </div>
@@ -692,15 +692,15 @@ export const ImportView: React.FC<ImportViewProps> = ({ onShowToast }) => {
         <section className="space-y-6">
           {/* Card Resumo de Validação */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
-            <div className="p-5 rounded-2xl bg-[#171b26] border border-[#1e2433] shadow-xl">
-              <div className="flex items-center justify-between text-slate-400 font-mono text-xs">
+            <div className="p-5 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5] shadow-xl">
+              <div className="flex items-center justify-between text-[#77766F] font-mono text-xs">
                 <span>TOTAL DE LINHAS LIDAS</span>
                 <span className="material-symbols-outlined text-purple-400">format_list_numbered</span>
               </div>
-              <div className="text-3xl font-extrabold text-white font-mono mt-2">{parsedRows.length}</div>
+              <div className="text-3xl font-extrabold text-[#171717] font-mono mt-2">{parsedRows.length}</div>
             </div>
 
-            <div className="p-5 rounded-2xl bg-[#171b26] border border-emerald-500/30 shadow-xl">
+            <div className="p-5 rounded-2xl bg-[#F7F6F2] border border-emerald-500/30 shadow-xl">
               <div className="flex items-center justify-between text-emerald-400 font-mono text-xs font-bold">
                 <span>ACEITAS PARA IMPORTAÇÃO</span>
                 <span className="material-symbols-outlined">check_circle</span>
@@ -708,7 +708,7 @@ export const ImportView: React.FC<ImportViewProps> = ({ onShowToast }) => {
               <div className="text-3xl font-extrabold text-emerald-400 font-mono mt-2">{acceptedRows.length}</div>
             </div>
 
-            <div className="p-5 rounded-2xl bg-[#171b26] border border-rose-500/30 shadow-xl">
+            <div className="p-5 rounded-2xl bg-[#F7F6F2] border border-rose-500/30 shadow-xl">
               <div className="flex items-center justify-between text-rose-400 font-mono text-xs font-bold">
                 <span>REJEITADAS COM ERRO</span>
                 <span className="material-symbols-outlined">warning</span>
@@ -719,19 +719,19 @@ export const ImportView: React.FC<ImportViewProps> = ({ onShowToast }) => {
 
           {/* Relatório de Erros por Linha e Coluna */}
           {validationErrors.length > 0 && (
-            <div className="bg-[#171b26] border border-rose-500/30 rounded-2xl p-6 shadow-2xl space-y-4">
+            <div className="bg-[#F7F6F2] border border-rose-500/30 rounded-2xl p-6 shadow-2xl space-y-4">
               <h3 className="text-sm font-bold text-rose-400 uppercase tracking-wider font-mono flex items-center gap-2">
                 <span className="material-symbols-outlined text-lg">report_problem</span>
                 Relatório de Inconsistências Encaminhadas para Rejeição ({validationErrors.length})
               </h3>
               <div className="max-h-60 overflow-y-auto space-y-2 pr-2">
                 {validationErrors.map((err, idx) => (
-                  <div key={idx} className="p-3 rounded-xl bg-[#131722] border border-rose-500/20 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div key={idx} className="p-3 rounded-xl bg-[#EAE8E2] border border-rose-500/20 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                     <div className="flex items-center gap-2 font-mono">
                       <span className="px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 font-bold">Linha {err.rowNumber}</span>
-                      <span className="text-slate-300 font-bold">Coluna: {err.column}</span>
+                      <span className="text-[#171717] font-bold">Coluna: {err.column}</span>
                     </div>
-                    <div className="text-slate-400 text-xs">
+                    <div className="text-[#77766F] text-xs">
                       Valor: <code className="text-amber-300 font-mono">{err.value || 'VAZIO'}</code> — <span className="text-rose-300">{err.message}</span>
                     </div>
                   </div>
@@ -741,18 +741,18 @@ export const ImportView: React.FC<ImportViewProps> = ({ onShowToast }) => {
           )}
 
           {/* Tabela de Prévia dos Dados Aceitos */}
-          <div className="bg-[#171b26] border border-[#1e2433] rounded-2xl p-6 shadow-2xl space-y-4">
+          <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between">
-              <h3 className="text-sm font-bold text-white uppercase tracking-wider font-mono flex items-center gap-2">
+              <h3 className="text-sm font-bold text-[#171717] uppercase tracking-wider font-mono flex items-center gap-2">
                 <span className="material-symbols-outlined text-emerald-400">table_chart</span>
                 Prévia das Linhas Válidas ({acceptedRows.length})
               </h3>
             </div>
 
-            <div className="overflow-x-auto rounded-xl border border-[#1e2433]">
+            <div className="overflow-x-auto rounded-xl border border-[#CFCDC5]">
               <table className="w-full text-left text-xs border-collapse">
                 <thead>
-                  <tr className="bg-[#131722] border-b border-[#1e2433] text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono">
+                  <tr className="bg-[#E3E1DA] border-b border-[#CFCDC5] text-[11px] font-bold text-[#171717] uppercase tracking-wider font-mono">
                     {selectedType === 'rotas' ? (
                       <>
                         <th className="py-3 px-4">Rota</th>
@@ -771,7 +771,7 @@ export const ImportView: React.FC<ImportViewProps> = ({ onShowToast }) => {
                     )}
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-[#1e2433] text-slate-300">
+                <tbody className="divide-y divide-[#CFCDC5] text-[#171717]">
                   {acceptedRows.slice(0, 10).map((row, idx) => {
                     if (selectedType === 'rotas') {
                       const days = [];
@@ -786,7 +786,7 @@ export const ImportView: React.FC<ImportViewProps> = ({ onShowToast }) => {
                       const rotaCode = row.codigo_rota?.trim() || `ROT-${(row.promotor || row.promotor_matricula || 'GERAL').trim()}`;
 
                       return (
-                        <tr key={idx} className="hover:bg-[#131722]/60">
+                        <tr key={idx} className="hover:bg-[#EAE8E1]">
                           <td className="py-3 px-4 font-mono font-bold text-purple-400">{rotaCode}</td>
                           <td className="py-3 px-4 font-mono">{row.industria || row.industria_codigo}</td>
                           <td className="py-3 px-4 font-mono">{row.loja || row.loja_codigo}</td>
@@ -798,7 +798,7 @@ export const ImportView: React.FC<ImportViewProps> = ({ onShowToast }) => {
                       );
                     }
                     return (
-                      <tr key={idx} className="hover:bg-[#131722]/60">
+                      <tr key={idx} className="hover:bg-[#EAE8E1]">
                         {Object.values(row).map((val, vIdx) => (
                           <td key={vIdx} className="py-3 px-4 font-mono">{val}</td>
                         ))}
@@ -809,26 +809,26 @@ export const ImportView: React.FC<ImportViewProps> = ({ onShowToast }) => {
               </table>
             </div>
             {acceptedRows.length > 10 && (
-              <p className="text-[11px] text-slate-500 font-mono text-center">
+              <p className="text-[11px] text-[#5F5F5F] font-mono text-center">
                 Exibindo as primeiras 10 de {acceptedRows.length} linhas válidas.
               </p>
             )}
 
             {/* Ações de Confirmação ou Cancelamento */}
-            <div className="pt-4 border-t border-[#1e2433] flex items-center justify-end gap-3">
+            <div className="pt-4 border-t border-[#CFCDC5] flex items-center justify-end gap-3">
               <button
                 onClick={() => {
                   setStep('upload');
                   setFile(null);
                 }}
-                className="px-5 py-2.5 rounded-xl bg-[#131722] hover:bg-[#1f2433] text-slate-300 border border-[#1e2433] text-xs font-semibold cursor-pointer"
+                className="px-5 py-2.5 rounded-xl bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] border border-[#CFCDC5] text-xs font-semibold cursor-pointer"
               >
                 Cancelar Importação
               </button>
               <button
                 onClick={handleConfirmImport}
                 disabled={saving || acceptedRows.length === 0}
-                className="px-6 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs neon-purple-glow disabled:opacity-50 flex items-center gap-2 cursor-pointer"
+                className="px-6 py-2.5 rounded-xl bg-[#222222] hover:bg-black text-white font-bold text-xs shadow-xs disabled:opacity-50 flex items-center gap-2 cursor-pointer"
               >
                 {saving ? (
                   <span>Gravando no Banco...</span>
@@ -846,18 +846,18 @@ export const ImportView: React.FC<ImportViewProps> = ({ onShowToast }) => {
 
       {/* VIEW: HISTÓRICO DE IMPORTAÇÕES */}
       {step === 'history' && (
-        <section className="bg-[#171b26] border border-[#1e2433] rounded-2xl p-6 shadow-2xl space-y-6">
+        <section className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-6 shadow-2xl space-y-6">
           <div className="flex items-center justify-between">
-            <h3 className="text-sm font-bold text-white uppercase tracking-wider font-mono flex items-center gap-2">
+            <h3 className="text-sm font-bold text-[#171717] uppercase tracking-wider font-mono flex items-center gap-2">
               <span className="material-symbols-outlined text-purple-400">history</span>
               Histórico Geral de Importações de Planilhas
             </h3>
           </div>
 
-          <div className="overflow-x-auto rounded-xl border border-[#1e2433]">
+          <div className="overflow-x-auto rounded-xl border border-[#CFCDC5]">
             <table className="w-full text-left text-xs border-collapse">
               <thead>
-                <tr className="bg-[#131722] border-b border-[#1e2433] text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono">
+                <tr className="bg-[#E3E1DA] border-b border-[#CFCDC5] text-[11px] font-bold text-[#171717] uppercase tracking-wider font-mono">
                   <th className="py-3.5 px-4">Data / Hora</th>
                   <th className="py-3.5 px-4">Arquivo</th>
                   <th className="py-3.5 px-4">Tipo</th>
@@ -868,33 +868,33 @@ export const ImportView: React.FC<ImportViewProps> = ({ onShowToast }) => {
                   <th className="py-3.5 px-4">Modo</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-[#1e2433] text-slate-300">
+              <tbody className="divide-y divide-[#CFCDC5] text-[#171717]">
                 {loadingHistory ? (
                   <tr>
-                    <td colSpan={8} className="py-8 text-center text-slate-400 font-mono text-xs">
+                    <td colSpan={8} className="py-8 text-center text-[#77766F] font-mono text-xs">
                       Carregando histórico de cargas...
                     </td>
                   </tr>
                 ) : history.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="py-8 text-center text-slate-400 font-mono text-xs">
+                    <td colSpan={8} className="py-8 text-center text-[#77766F] font-mono text-xs">
                       Nenhuma importação registrada no histórico ainda.
                     </td>
                   </tr>
                 ) : (
                   history.map((rec) => (
-                    <tr key={rec.id} className="hover:bg-[#131722]/60 font-mono">
-                      <td className="py-3.5 px-4 text-slate-400">
+                    <tr key={rec.id} className="hover:bg-[#EAE8E1] font-mono">
+                      <td className="py-3.5 px-4 text-[#77766F]">
                         {new Date(rec.created_at).toLocaleString('pt-BR')}
                       </td>
                       <td className="py-3.5 px-4 text-white font-bold">{rec.filename}</td>
-                      <td className="py-3.5 px-4 uppercase text-purple-300 font-bold">{rec.tipo}</td>
-                      <td className="py-3.5 px-4 text-slate-300">{rec.imported_by_email}</td>
+                      <td className="py-3.5 px-4 uppercase text-[#7E22CE] font-bold">{rec.tipo}</td>
+                      <td className="py-3.5 px-4 text-[#171717]">{rec.imported_by_email}</td>
                       <td className="py-3.5 px-4 font-bold">{rec.rows_total}</td>
                       <td className="py-3.5 px-4 text-emerald-400 font-bold">{rec.rows_accepted}</td>
                       <td className="py-3.5 px-4 text-rose-400 font-bold">{rec.rows_rejected}</td>
                       <td className="py-3.5 px-4">
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${rec.is_upsert ? 'bg-amber-500/20 text-amber-300' : 'bg-slate-800 text-slate-400'}`}>
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${rec.is_upsert ? 'bg-amber-500/20 text-amber-300' : 'bg-slate-800 text-[#77766F]'}`}>
                           {rec.is_upsert ? 'UPSERT' : 'SEGURO'}
                         </span>
                       </td>

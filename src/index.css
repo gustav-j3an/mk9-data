@@ -2,26 +2,57 @@
 
 @layer base {
   :root {
-    --color-surface-dim: #0a0d14;
-    --color-surface: #0f131d;
-    --color-surface-container-lowest: #080b12;
-    --color-surface-container-low: #131722;
-    --color-surface-container: #171b26;
-    --color-surface-container-high: #1f2433;
-    --color-surface-container-highest: #282e40;
-    --color-primary: #ddb8ff;
-    --color-primary-container: #9333ea;
-    --color-secondary: #89ceff;
-    --color-secondary-container: #00a2e6;
-    --color-tertiary: #4edea3;
-    --color-tertiary-container: #007a53;
-    --color-border-dark: #1e2433;
+    /* ArtCraft / GridCraft Sophisticated Warm Palette */
+    --color-bg-main: #EAE8E2;
+    --color-sidebar: #F0EEE8;
+    --color-surface-card: #F7F6F2;
+    --color-surface-secondary: #E4E2DB;
+    --color-table-header: #E3E1DA;
+    --color-hover-row: #EAE8E1;
+    --color-border-grid: #CFCDC5;
+    --color-border-highlight: #AAA79E;
+
+    /* Tipografia de Alto Contraste */
+    --color-text-main: #222222;
+    --color-text-title: #171717;
+    --color-text-secondary: #5F5F5F;
+    --color-text-aux: #77766F;
+    --color-placeholder: #77766F;
+    --color-disabled: #737373;
+
+    /* Ações e Estados Semânticos */
+    --color-btn-primary: #222222;
+    --color-btn-primary-text: #FFFFFF;
+    --color-mk9-blue: #286FF5;
+    --color-mk9-success: #16794F;
+    --color-mk9-info: #087F9C;
+    --color-mk9-warning: #986000;
+    --color-mk9-danger: #C62828;
+    --color-mk9-violet: #7E22CE;
+
+    /* Legacy variable compatibility */
+    --color-surface-dim: #E4E2DB;
+    --color-surface: #EAE8E2;
+    --color-surface-container-lowest: #F7F6F2;
+    --color-surface-container-low: #F7F6F2;
+    --color-surface-container: #F7F6F2;
+    --color-surface-container-high: #E4E2DB;
+    --color-surface-container-highest: #CFCDC5;
+    --color-primary: #222222;
+    --color-primary-container: #286FF5;
+    --color-secondary: #286FF5;
+    --color-secondary-container: #EBF2FE;
+    --color-tertiary: #16794F;
+    --color-tertiary-container: #E8F5EE;
+    --color-border-dark: #CFCDC5;
   }
 
   body {
-    background-color: #0f131d;
-    color: #f1f3f9;
+    background-color: #EAE8E2;
+    color: #222222;
     font-family: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
   }
 }
 
@@ -50,43 +81,41 @@
   font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
 }
 
-/* Custom Scrollbars */
+/* Custom Scrollbars - Minimalist Technical Style */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
 }
 ::-webkit-scrollbar-track {
-  background: #0f131d;
+  background: #EAE8E2;
 }
 ::-webkit-scrollbar-thumb {
-  background: #282e40;
-  border-radius: 3px;
+  background: #CFCDC5;
+  border-radius: 2px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #475569;
+  background: #AAA79E;
 }
 
-/* Custom Tactical Glows */
-.neon-purple-glow {
-  box-shadow: 0 0 20px rgba(147, 51, 234, 0.45);
-}
-.neon-purple-subtle {
-  box-shadow: 0 0 12px rgba(147, 51, 234, 0.25);
-}
-.neon-green-glow {
-  box-shadow: 0 0 12px rgba(78, 222, 163, 0.4);
-}
-.neon-cyan-glow {
-  box-shadow: 0 0 14px rgba(137, 206, 255, 0.35);
-}
-.neon-amber-glow {
-  box-shadow: 0 0 12px rgba(245, 158, 11, 0.35);
-}
-.neon-rose-glow {
-  box-shadow: 0 0 12px rgba(255, 180, 171, 0.35);
+/* Subtle ArtCraft / GridCraft Focus & Border Classes */
+.gridcraft-card {
+  background-color: #F7F6F2;
+  border: 1px solid #CFCDC5;
 }
 
-/* @media print — Regras Profissionais de Impressão e PDF Nativo Executivo */
+.gridcraft-table {
+  background-color: #F7F6F2;
+  border: 1px solid #CFCDC5;
+}
+
+.gridcraft-th {
+  background-color: #E3E1DA;
+  color: #171717;
+  font-weight: 700;
+  border-bottom: 1px solid #CFCDC5;
+}
+
+/* @media print — Regras Profissionais de Impressão */
 @media print {
   @page {
     size: A4 portrait;
@@ -95,30 +124,26 @@
 
   body {
     background-color: #ffffff !important;
-    color: #0f172a !important;
+    color: #222222 !important;
     font-family: system-ui, -apple-system, sans-serif !important;
     margin: 0 !important;
     padding: 0 !important;
   }
 
-  /* Ocultar rigorosamente AppShell header, sidebar, navegações e controles interativos */
   header,
   nav,
   aside,
   .no-print,
   button,
   select,
-  input,
-  .hidden.print\:block {
-    /* Exibir apenas o bloco com a classe de print */
+  input {
+    display: none !important;
   }
 
-  /* Esconder por padrão TODOS os elementos de topo e filhos diretos do app exceto o container com o relatório */
   body > *:not(#root) {
     display: none !important;
   }
 
-  /* Isolar exclusivamente a árvore do relatório e desativar layouts normais do AppShell */
   body > #root,
   body > #root > *,
   body > #root > * > *,
@@ -130,14 +155,12 @@
     width: 100% !important;
   }
 
-  /* Ocultar containers interativos de tela que não são o relatório impresso */
   .max-w-7xl {
     max-width: 100% !important;
     padding: 0 !important;
     margin: 0 !important;
   }
 
-  /* Estilização das páginas A4 do relatório */
   .print-page {
     page-break-after: always !important;
     break-after: page !important;
@@ -145,7 +168,6 @@
     box-sizing: border-box !important;
   }
 
-  /* Evitar cortes no meio de tabelas e blocos */
   tr {
     break-inside: avoid !important;
     page-break-inside: avoid !important;

@@ -8,6 +8,7 @@ export interface ExecutiveReportDocumentProps {
   periodLabel?: string;
   periodFilter?: 'today' | 'week' | 'month';
   lastUpdate?: string;
+  operationMode?: string;
   kpis: {
     lojas: number;
     lojasComVisita: number;
@@ -79,6 +80,7 @@ export const ExecutiveReportDocument: React.FC<ExecutiveReportDocumentProps> = (
   periodLabel,
   periodFilter,
   lastUpdate,
+  operationMode,
   kpis,
   temporalEvolution,
   occurrencesSummary,
@@ -169,9 +171,15 @@ export const ExecutiveReportDocument: React.FC<ExecutiveReportDocumentProps> = (
               </div>
 
               <div className="border border-slate-300 p-3 bg-slate-900 text-white">
-                <span className="text-[9px] font-bold text-slate-300 uppercase block">Aderência Operacional</span>
-                <span className="text-2xl font-black text-white mt-1 block">{kpis.aderencia}%</span>
-                <span className="text-[9px] text-slate-400 block mt-0.5">Taxa de Execução</span>
+                <span className="text-[9px] font-bold text-[#171717] uppercase block">Aderência Operacional</span>
+                {operationMode !== 'OPERACAO_OFICIAL' ? (
+                  <span className="text-xs font-bold text-amber-300 mt-2 block leading-tight">
+                    Fase de implantação — SLA não ativo
+                  </span>
+                ) : (
+                  <span className="text-2xl font-black text-white mt-1 block">{kpis.aderencia}%</span>
+                )}
+                <span className="text-[9px] text-[#171717] block mt-0.5">Taxa de Execução</span>
               </div>
             </div>
           </div>
@@ -275,7 +283,9 @@ export const ExecutiveReportDocument: React.FC<ExecutiveReportDocumentProps> = (
                       <td className="py-1.5 px-2 text-center text-emerald-700 font-bold">{p.concluidas}</td>
                       <td className="py-1.5 px-2 text-center text-amber-700 font-bold">{p.pendentes}</td>
                       <td className="py-1.5 px-2 text-center text-rose-700 font-bold">{p.atrasadas}</td>
-                      <td className="py-1.5 px-2 text-center font-bold">{p.aderencia}%</td>
+                      <td className="py-1.5 px-2 text-center font-bold">
+                        {operationMode !== 'OPERACAO_OFICIAL' ? 'SLA n/a' : `${p.aderencia}%`}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -342,7 +352,9 @@ export const ExecutiveReportDocument: React.FC<ExecutiveReportDocumentProps> = (
                         <td className="py-1.5 px-2 text-center">{l.planejadas}</td>
                         <td className="py-1.5 px-2 text-center text-emerald-700 font-bold">{l.concluidas}</td>
                         <td className="py-1.5 px-2 text-center text-rose-700 font-bold">{l.atrasadas}</td>
-                        <td className="py-1.5 px-2 text-center font-bold">{l.aderencia}%</td>
+                        <td className="py-1.5 px-2 text-center font-bold">
+                          {operationMode !== 'OPERACAO_OFICIAL' ? 'SLA n/a' : `${l.aderencia}%`}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -396,7 +408,9 @@ export const ExecutiveReportDocument: React.FC<ExecutiveReportDocumentProps> = (
                         <td className="py-1.5 px-2 text-center text-emerald-700 font-bold">{p.concluidas}</td>
                         <td className="py-1.5 px-2 text-center text-amber-700 font-bold">{p.pendentes}</td>
                         <td className="py-1.5 px-2 text-center text-rose-700 font-bold">{p.atrasadas}</td>
-                        <td className="py-1.5 px-2 text-center font-bold">{p.aderencia}%</td>
+                        <td className="py-1.5 px-2 text-center font-bold">
+                          {operationMode !== 'OPERACAO_OFICIAL' ? 'SLA n/a' : `${p.aderencia}%`}
+                        </td>
                       </tr>
                     ))}
                   </tbody>

@@ -97,10 +97,10 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
       <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
         <div className="space-y-1">
           <div className="flex flex-wrap items-center gap-2.5">
-            <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
+            <h1 className="text-2xl sm:text-3xl font-extrabold text-[#171717] tracking-tight">
               Controle de Presença
             </h1>
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[#171b26] border border-[#1e2433] text-slate-300 font-mono text-[11px]">
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[#F7F6F2] border border-[#CFCDC5] text-[#171717] font-mono text-[11px]">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
               Sincronizado há 1 min
             </span>
@@ -108,7 +108,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
               {items.length} promotores escalados
             </span>
           </div>
-          <p className="text-xs sm:text-sm text-slate-400">
+          <p className="text-xs sm:text-sm text-[#77766F]">
             Acompanhe a presença diária das equipes de trade marketing em tempo real com validação geofence e telemetria de campo.
           </p>
         </div>
@@ -117,14 +117,14 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
         <div className="flex items-center gap-3 shrink-0">
           <button
             onClick={() => onShowToast({ title: 'Exportar Excel', message: 'Planilha de presenças diárias exportada.', type: 'info' })}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-[#171b26] hover:bg-[#1f2433] text-cyan-300 border border-[#1e2433] text-xs font-semibold shadow-sm transition-all"
+            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-[#F7F6F2] hover:bg-[#E4E2DB] text-cyan-300 border border-[#CFCDC5] text-xs font-semibold shadow-sm transition-all"
           >
             <span className="material-symbols-outlined text-[18px]">download</span>
             <span>Exportar Excel</span>
           </button>
           <button
             onClick={() => onNavigate('gestao-equipes')}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs neon-purple-glow transition-all active:scale-95 shadow-md cursor-pointer"
+            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-[#222222] hover:bg-black text-white font-bold text-xs shadow-xs transition-all active:scale-95 shadow-md cursor-pointer"
           >
             <span className="material-symbols-outlined text-[18px]">groups</span>
             <span>Gerenciar equipes</span>
@@ -148,13 +148,13 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
         return (
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
             {/* Presentes */}
-            <div className="relative overflow-hidden rounded-xl bg-[#171b26] border border-[#1e2433] p-5 shadow-lg hover:border-emerald-500/40 transition-all">
+            <div className="relative overflow-hidden rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] p-5 shadow-lg hover:border-emerald-500/40 transition-all">
               <div className="absolute top-0 left-0 right-0 h-1 bg-emerald-500" />
               <div className="flex items-start justify-between">
                 <div className="space-y-1">
-                  <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono">Presentes</span>
+                  <span className="text-[11px] font-bold text-[#77766F] uppercase tracking-wider font-mono">Presentes</span>
                   <div className="flex items-baseline gap-2">
-                    <span className="text-3xl font-extrabold text-white font-mono">{presentes}</span>
+                    <span className="text-3xl font-extrabold text-[#171717] font-mono">{presentes}</span>
                     <span className="font-mono text-xs text-emerald-400 font-semibold">({pPct}%)</span>
                   </div>
                 </div>
@@ -162,20 +162,20 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                   <span className="material-symbols-outlined text-2xl">check_circle</span>
                 </div>
               </div>
-              <div className="mt-3 pt-2 border-t border-[#1e2433] flex items-center justify-between text-xs text-slate-400 font-mono">
+              <div className="mt-3 pt-2 border-t border-[#CFCDC5] flex items-center justify-between text-xs text-[#77766F] font-mono">
                 <span>{presentes} confirmados</span>
                 <span className="text-emerald-400 font-semibold">0% vs ontem</span>
               </div>
             </div>
 
             {/* Faltas */}
-            <div className="relative overflow-hidden rounded-xl bg-[#171b26] border border-[#1e2433] p-5 shadow-lg hover:border-rose-500/40 transition-all">
+            <div className="relative overflow-hidden rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] p-5 shadow-lg hover:border-rose-500/40 transition-all">
               <div className="absolute top-0 left-0 right-0 h-1 bg-rose-500" />
               <div className="flex items-start justify-between">
                 <div className="space-y-1">
-                  <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono">Faltas</span>
+                  <span className="text-[11px] font-bold text-[#77766F] uppercase tracking-wider font-mono">Faltas</span>
                   <div className="flex items-baseline gap-2">
-                    <span className="text-3xl font-extrabold text-white font-mono">{faltas}</span>
+                    <span className="text-3xl font-extrabold text-[#171717] font-mono">{faltas}</span>
                     <span className="font-mono text-xs text-rose-400 font-semibold">({fPct}%)</span>
                   </div>
                 </div>
@@ -183,20 +183,20 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                   <span className="material-symbols-outlined text-2xl">cancel</span>
                 </div>
               </div>
-              <div className="mt-3 pt-2 border-t border-[#1e2433] flex items-center justify-between text-xs text-slate-400 font-mono">
+              <div className="mt-3 pt-2 border-t border-[#CFCDC5] flex items-center justify-between text-xs text-[#77766F] font-mono">
                 <span>{faltas} registradas</span>
                 <span className="text-rose-400 font-semibold">0% vs média</span>
               </div>
             </div>
 
             {/* Atestados */}
-            <div className="relative overflow-hidden rounded-xl bg-[#171b26] border border-[#1e2433] p-5 shadow-lg hover:border-cyan-500/40 transition-all">
+            <div className="relative overflow-hidden rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] p-5 shadow-lg hover:border-cyan-500/40 transition-all">
               <div className="absolute top-0 left-0 right-0 h-1 bg-cyan-400" />
               <div className="flex items-start justify-between">
                 <div className="space-y-1">
-                  <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono">Atestados</span>
+                  <span className="text-[11px] font-bold text-[#77766F] uppercase tracking-wider font-mono">Atestados</span>
                   <div className="flex items-baseline gap-2">
-                    <span className="text-3xl font-extrabold text-white font-mono">{atestados}</span>
+                    <span className="text-3xl font-extrabold text-[#171717] font-mono">{atestados}</span>
                     <span className="font-mono text-xs text-cyan-300 font-semibold">({aPct}%)</span>
                   </div>
                 </div>
@@ -204,28 +204,28 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                   <span className="material-symbols-outlined text-2xl">clinical_notes</span>
                 </div>
               </div>
-              <div className="mt-3 pt-2 border-t border-[#1e2433] flex items-center justify-between text-xs text-slate-400 font-mono">
+              <div className="mt-3 pt-2 border-t border-[#CFCDC5] flex items-center justify-between text-xs text-[#77766F] font-mono">
                 <span>{atestados} anexados</span>
-                <span className="text-slate-300 font-medium">Sem variação</span>
+                <span className="text-[#171717] font-medium">Sem variação</span>
               </div>
             </div>
 
             {/* Sem Registro */}
-            <div className="relative overflow-hidden rounded-xl bg-[#171b26] border border-[#1e2433] p-5 shadow-lg hover:border-purple-500/40 transition-all">
+            <div className="relative overflow-hidden rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] p-5 shadow-lg hover:border-purple-500/40 transition-all">
               <div className="absolute top-0 left-0 right-0 h-1 bg-slate-500" />
               <div className="flex items-start justify-between">
                 <div className="space-y-1">
-                  <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono">Sem Registro</span>
+                  <span className="text-[11px] font-bold text-[#77766F] uppercase tracking-wider font-mono">Sem Registro</span>
                   <div className="flex items-baseline gap-2">
-                    <span className="text-3xl font-extrabold text-white font-mono">{semRegistro}</span>
-                    <span className="font-mono text-xs text-slate-400">({sPct}%)</span>
+                    <span className="text-3xl font-extrabold text-[#171717] font-mono">{semRegistro}</span>
+                    <span className="font-mono text-xs text-[#77766F]">({sPct}%)</span>
                   </div>
                 </div>
-                <div className="p-2 rounded-lg bg-slate-800 text-slate-400 border border-slate-700">
+                <div className="p-2 rounded-lg bg-slate-800 text-[#77766F] border border-[#CFCDC5]">
                   <span className="material-symbols-outlined text-2xl">pending_actions</span>
                 </div>
               </div>
-              <div className="mt-3 pt-2 border-t border-[#1e2433] flex items-center justify-between text-xs text-slate-400 font-mono">
+              <div className="mt-3 pt-2 border-t border-[#CFCDC5] flex items-center justify-between text-xs text-[#77766F] font-mono">
                 <span>Pendente de registro</span>
                 <span className="text-purple-400 font-semibold">Sem dados</span>
               </div>
@@ -235,70 +235,70 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
       })()}
 
       {/* Filter & Search Bar */}
-      <div className="rounded-xl bg-[#171b26] border border-[#1e2433] p-4 shadow-md space-y-3">
+      <div className="rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] p-4 shadow-md space-y-3">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-12 gap-3 items-center">
           {/* Date Selector */}
-          <div className="lg:col-span-3 flex items-center bg-[#131722] border border-[#1e2433] px-3 py-2 rounded-lg text-slate-100">
+          <div className="lg:col-span-3 flex items-center bg-[#EAE8E2] border border-[#CFCDC5] px-3 py-2 rounded-lg text-[#171717]">
             <span className="material-symbols-outlined text-cyan-400 mr-2 text-[18px]">calendar_month</span>
             <div className="flex flex-col min-w-0 flex-1">
-              <span className="text-[9px] uppercase font-mono font-bold text-slate-400">Data Operacional</span>
+              <span className="text-[9px] uppercase font-mono font-bold text-[#77766F]">Data Operacional</span>
               <input
                 type="date"
                 value={dateVal}
                 onChange={(e) => setDateVal(e.target.value)}
-                className="bg-transparent font-semibold text-xs text-white focus:outline-none cursor-pointer"
+                className="bg-transparent font-semibold text-xs text-[#171717] focus:outline-none cursor-pointer"
               />
             </div>
           </div>
 
           {/* Supervisor Filter */}
-          <div className="lg:col-span-3 flex items-center bg-[#131722] border border-[#1e2433] px-3 py-2 rounded-lg">
-            <span className="material-symbols-outlined text-slate-400 mr-2 text-[18px]">badge</span>
+          <div className="lg:col-span-3 flex items-center bg-[#EAE8E2] border border-[#CFCDC5] px-3 py-2 rounded-lg">
+            <span className="material-symbols-outlined text-[#77766F] mr-2 text-[18px]">badge</span>
             <div className="flex flex-col min-w-0 flex-1">
-              <span className="text-[9px] uppercase font-mono font-bold text-slate-400">Supervisor</span>
+              <span className="text-[9px] uppercase font-mono font-bold text-[#77766F]">Supervisor</span>
               <select
                 value={supervisorFilter}
                 onChange={(e) => setSupervisorFilter(e.target.value)}
-                className="bg-transparent text-xs text-slate-200 focus:outline-none cursor-pointer"
+                className="bg-transparent text-xs text-[#171717] focus:outline-none cursor-pointer"
               >
-                <option value="" className="bg-[#171b26]">Todos os Supervisores</option>
+                <option value="" className="bg-[#F7F6F2]">Todos os Supervisores</option>
                 {Array.from(new Set(items.map((i) => i.supervisor).filter(Boolean))).map((sup) => (
-                  <option key={sup} value={sup} className="bg-[#171b26]">{sup}</option>
+                  <option key={sup} value={sup} className="bg-[#F7F6F2]">{sup}</option>
                 ))}
               </select>
             </div>
           </div>
 
           {/* Equipe Filter */}
-          <div className="lg:col-span-3 flex items-center bg-[#131722] border border-[#1e2433] px-3 py-2 rounded-lg">
-            <span className="material-symbols-outlined text-slate-400 mr-2 text-[18px]">hub</span>
+          <div className="lg:col-span-3 flex items-center bg-[#EAE8E2] border border-[#CFCDC5] px-3 py-2 rounded-lg">
+            <span className="material-symbols-outlined text-[#77766F] mr-2 text-[18px]">hub</span>
             <div className="flex flex-col min-w-0 flex-1">
-              <span className="text-[9px] uppercase font-mono font-bold text-slate-400">Equipe Regional</span>
+              <span className="text-[9px] uppercase font-mono font-bold text-[#77766F]">Equipe Regional</span>
               <select
                 value={squadFilter}
                 onChange={(e) => setSquadFilter(e.target.value)}
-                className="bg-transparent text-xs text-slate-200 focus:outline-none cursor-pointer"
+                className="bg-transparent text-xs text-[#171717] focus:outline-none cursor-pointer"
               >
-                <option value="" className="bg-[#171b26]">Todas as Equipes</option>
+                <option value="" className="bg-[#F7F6F2]">Todas as Equipes</option>
                 {Array.from(new Set(items.map((i) => i.squad).filter(Boolean))).map((sq) => (
-                  <option key={sq} value={sq} className="bg-[#171b26]">{sq}</option>
+                  <option key={sq} value={sq} className="bg-[#F7F6F2]">{sq}</option>
                 ))}
               </select>
             </div>
           </div>
 
           {/* Search Input */}
-          <div className="lg:col-span-3 flex items-center bg-[#131722] border border-[#1e2433] px-3 py-2 rounded-lg">
-            <span className="material-symbols-outlined text-slate-400 mr-2 text-[18px]">search</span>
+          <div className="lg:col-span-3 flex items-center bg-[#EAE8E2] border border-[#CFCDC5] px-3 py-2 rounded-lg">
+            <span className="material-symbols-outlined text-[#77766F] mr-2 text-[18px]">search</span>
             <input
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Buscar promotor, matrícula..."
-              className="w-full bg-transparent text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none"
+              className="w-full bg-transparent text-xs text-[#171717] placeholder:text-[#5F5F5F] focus:outline-none"
             />
             {search && (
-              <button onClick={() => setSearch('')} className="text-slate-400 hover:text-white p-1">
+              <button onClick={() => setSearch('')} className="text-[#77766F] hover:text-white p-1">
                 ✕
               </button>
             )}
@@ -306,17 +306,17 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
         </div>
 
         {/* Filter Chips & Simulation Toggle */}
-        <div className="pt-2 border-t border-[#1e2433] flex flex-wrap items-center justify-between gap-3">
+        <div className="pt-2 border-t border-[#CFCDC5] flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-1.5 flex-wrap">
-            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider font-mono mr-1">
+            <span className="text-[10px] font-bold text-[#5F5F5F] uppercase tracking-wider font-mono mr-1">
               Filtro rápido:
             </span>
             <button
               onClick={() => setQuickFilter('all')}
               className={`px-3 py-1 rounded-full text-xs font-semibold transition-all ${
                 quickFilter === 'all'
-                  ? 'bg-purple-600 text-white font-bold neon-purple-glow'
-                  : 'bg-[#131722] text-slate-300 hover:text-white border border-[#1e2433]'
+                  ? 'bg-[#222222] text-white font-bold shadow-xs'
+                  : 'bg-[#EAE8E2] text-[#222222] hover:bg-[#E4E2DB] border border-[#CFCDC5]'
               }`}
             >
               Todos ({items.length})
@@ -326,7 +326,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
               className={`px-3 py-1 rounded-full text-xs font-semibold transition-all ${
                 quickFilter === 'falta'
                   ? 'bg-rose-600 text-white font-bold'
-                  : 'bg-[#131722] text-rose-300 hover:text-white border border-[#1e2433]'
+                  : 'bg-[#EAE8E2] text-rose-700 hover:bg-rose-50 border border-[#CFCDC5]'
               }`}
             >
               Somente Faltas ({items.filter((i) => i.status === 'falta').length})
@@ -335,8 +335,8 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
               onClick={() => setQuickFilter('atestado')}
               className={`px-3 py-1 rounded-full text-xs font-semibold transition-all ${
                 quickFilter === 'atestado'
-                  ? 'bg-cyan-600 text-white font-bold'
-                  : 'bg-[#131722] text-cyan-300 hover:text-white border border-[#1e2433]'
+                  ? 'bg-[#087F9C] text-white font-bold'
+                  : 'bg-[#EAE8E2] text-[#087F9C] hover:bg-cyan-50 border border-[#CFCDC5]'
               }`}
             >
               Atestados Pendentes ({items.filter((i) => i.status === 'atestado').length})
@@ -345,8 +345,8 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
               onClick={() => setQuickFilter('sem_registro')}
               className={`px-3 py-1 rounded-full text-xs font-semibold transition-all ${
                 quickFilter === 'sem_registro'
-                  ? 'bg-purple-600/40 text-purple-300 font-bold border border-purple-500/40'
-                  : 'bg-[#131722] text-slate-300 hover:text-white border border-[#1e2433]'
+                  ? 'bg-[#5F5F5F] text-white font-bold'
+                  : 'bg-[#EAE8E2] text-[#5F5F5F] hover:bg-[#E4E2DB] border border-[#CFCDC5]'
               }`}
             >
               Sem Registro ({items.filter((i) => i.status === 'sem_registro').length})
@@ -367,14 +367,14 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
 
       {/* Main Table or Empty State */}
       {filteredItems.length === 0 ? (
-        <div className="rounded-xl bg-[#171b26] border border-[#1e2433] p-10 text-center shadow-xl">
+        <div className="rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] p-10 text-center shadow-xl">
           <div className="max-w-md mx-auto space-y-4 flex flex-col items-center">
-            <div className="w-16 h-16 rounded-full bg-[#131722] border border-[#1e2433] flex items-center justify-center text-purple-400">
+            <div className="w-16 h-16 rounded-full bg-[#EAE8E2] border border-[#CFCDC5] flex items-center justify-center text-purple-400">
               <span className="material-symbols-outlined text-4xl">person_search</span>
             </div>
             <div className="space-y-1">
-              <h3 className="text-base font-bold text-white">Não há dados de presença cadastrados ainda.</h3>
-              <p className="text-xs text-slate-400">
+              <h3 className="text-base font-bold text-[#171717]">Não há dados de presença cadastrados ainda.</h3>
+              <p className="text-xs text-[#77766F]">
                 Nenhum registro de presença ou telemetria operacional foi cadastrado ou encontrado com os filtros aplicados.
               </p>
             </div>
@@ -387,7 +387,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                   setQuickFilter('all');
                   setSimulateEmpty(false);
                 }}
-                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs neon-purple-glow transition-all"
+                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-[#222222] hover:bg-black text-white font-bold text-xs shadow-xs transition-all"
               >
                 <span className="material-symbols-outlined text-base">restart_alt</span>
                 <span>Limpar Filtros</span>
@@ -396,11 +396,11 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
           </div>
         </div>
       ) : (
-        <div className="rounded-xl bg-[#171b26] border border-[#1e2433] overflow-hidden shadow-xl flex flex-col">
+        <div className="rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] overflow-hidden shadow-xl flex flex-col">
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse min-w-[980px] text-xs">
               <thead>
-                <tr className="bg-[#10141f] text-slate-400 font-mono text-[10px] uppercase tracking-wider h-11 border-b border-[#1e2433] select-none">
+                <tr className="bg-[#E4E2DB] text-[#77766F] font-mono text-[10px] uppercase tracking-wider h-11 border-b border-[#CFCDC5] select-none">
                   <th className="py-3 px-4 font-semibold">Promotor / Registro</th>
                   <th className="py-3 px-4 font-semibold">Equipe</th>
                   <th className="py-3 px-4 font-semibold">Supervisor</th>
@@ -410,9 +410,9 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                   <th className="py-3 px-4 text-right font-semibold">Ações</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-[#1e2433] text-slate-200">
+              <tbody className="divide-y divide-[#CFCDC5] text-slate-200">
                 {filteredItems.map((item) => (
-                  <tr key={item.id} className="hover:bg-[#1c2230] transition-colors group">
+                  <tr key={item.id} className="hover:bg-[#E4E2DB] transition-colors group">
                     <td className="py-3.5 px-4">
                       <div className="flex items-center gap-3">
                         <div
@@ -423,16 +423,16 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                               ? 'bg-rose-600/30 text-rose-300 border border-rose-500/40'
                               : item.status === 'atestado'
                               ? 'bg-cyan-600/30 text-cyan-300 border border-cyan-500/40'
-                              : 'bg-slate-800 text-slate-400 border border-slate-700'
+                              : 'bg-slate-800 text-[#77766F] border border-[#CFCDC5]'
                           }`}
                         >
                           {item.initials}
                         </div>
                         <div>
-                          <div className="font-bold text-white group-hover:text-purple-300 transition-colors">
+                          <div className="font-bold text-[#171717] group-hover:text-purple-300 transition-colors">
                             {item.name}
                           </div>
-                          <div className="font-mono text-[11px] text-slate-400 flex items-center gap-1">
+                          <div className="font-mono text-[11px] text-[#77766F] flex items-center gap-1">
                             <span>{item.matricula}</span> •{' '}
                             <span className={item.type === 'CLT' ? 'text-emerald-400' : 'text-cyan-400'}>
                               {item.type}
@@ -441,27 +441,27 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                         </div>
                       </div>
                     </td>
-                    <td className="py-3.5 px-4 text-slate-300">{item.squad}</td>
+                    <td className="py-3.5 px-4 text-[#222222] font-medium">{item.squad}</td>
                     <td className="py-3.5 px-4">
-                      <div className="flex items-center gap-1.5 text-slate-200">
-                        <span className="w-5 h-5 rounded-full bg-[#131722] border border-[#1e2433] flex items-center justify-center text-[10px] font-mono text-cyan-300 font-bold">
+                      <div className="flex items-center gap-1.5 text-[#222222]">
+                        <span className="w-5 h-5 rounded-full bg-[#EAE8E2] border border-[#CFCDC5] flex items-center justify-center text-[10px] font-mono text-[#087F9C] font-bold">
                           {item.supervisor ? item.supervisor.split(' ').map((n) => n[0]).join('') : '--'}
                         </span>
                         <span>{item.supervisor || 'Não atribuído'}</span>
                       </div>
                     </td>
-                    <td className="py-3.5 px-4 text-slate-400">{item.city}, {item.state}</td>
+                    <td className="py-3.5 px-4 text-[#5F5F5F]">{item.city}, {item.state}</td>
                     <td className="py-3.5 px-4">
                       <div className="flex items-center gap-2">
                         <span
                           className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full font-mono text-[10px] font-bold ${
                             item.status === 'presente'
-                              ? 'bg-emerald-500/15 border border-emerald-500/30 text-emerald-400'
+                              ? 'bg-emerald-50 text-emerald-800 border border-emerald-300'
                               : item.status === 'falta'
-                              ? 'bg-rose-500/15 border border-rose-500/30 text-rose-400'
+                              ? 'bg-rose-50 text-rose-800 border border-rose-300'
                               : item.status === 'atestado'
-                              ? 'bg-cyan-500/15 border border-cyan-500/30 text-cyan-400'
-                              : 'bg-slate-800 border border-slate-700 text-slate-400'
+                              ? 'bg-cyan-50 text-cyan-800 border border-cyan-300'
+                              : 'bg-[#E4E2DB] border border-[#CFCDC5] text-[#5F5F5F]'
                           }`}
                         >
                           <span className="w-1.5 h-1.5 rounded-full bg-current" />
@@ -469,7 +469,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                         </span>
                         <button
                           onClick={() => openStatusModal(item)}
-                          className="p-1 rounded bg-[#131722] hover:bg-[#1f2433] text-slate-400 hover:text-white border border-[#1e2433]"
+                          className="p-1 rounded bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#5F5F5F] hover:text-[#171717] border border-[#CFCDC5]"
                           title="Alterar status rápido"
                         >
                           <span className="material-symbols-outlined text-[14px]">edit</span>
@@ -477,14 +477,14 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                       </div>
                     </td>
                     <td className="py-3.5 px-4">
-                      <div className="font-mono text-xs text-white">{item.telemetryTime}</div>
-                      <div className="text-[11px] text-slate-400">{item.telemetryDetail}</div>
+                      <div className="font-mono text-xs text-[#171717] font-semibold">{item.telemetryTime}</div>
+                      <div className="text-[11px] text-[#77766F]">{item.telemetryDetail}</div>
                     </td>
                     <td className="py-3.5 px-4 text-right">
                       <div className="flex items-center justify-end gap-1">
                         <button
                           onClick={() => onShowToast({ title: 'Espelho de Ponto', message: `Histórico biométrico de ${item.name}.`, type: 'info' })}
-                          className="p-1.5 rounded-lg text-slate-400 hover:text-cyan-400 hover:bg-[#131722]"
+                          className="p-1.5 rounded-lg text-[#77766F] hover:text-cyan-400 hover:bg-[#EAE8E2]"
                           title="Espelho de Ponto"
                         >
                           <span className="material-symbols-outlined text-base">history</span>
@@ -494,7 +494,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                             href={`https://wa.me/${item.phone.replace(/\D/g, '')}`}
                             target="_blank"
                             rel="noreferrer"
-                            className="p-1.5 rounded-lg text-slate-400 hover:text-emerald-400 hover:bg-[#131722]"
+                            className="p-1.5 rounded-lg text-[#77766F] hover:text-emerald-400 hover:bg-[#EAE8E2]"
                             title="Conversar no WhatsApp"
                           >
                             <span className="material-symbols-outlined text-base">chat</span>
@@ -509,27 +509,27 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
           </div>
 
           {/* Table Footer */}
-          <div className="p-3 bg-[#10141f] border-t border-[#1e2433] flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
-            <div className="flex items-center gap-1.5 font-mono text-slate-400">
+          <div className="p-3 bg-[#E4E2DB] border-t border-[#CFCDC5] flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-1.5 font-mono text-[#5F5F5F]">
               <span>Exibindo</span>
-              <strong className="text-white">{filteredItems.length > 0 ? `1-${filteredItems.length}` : '0'}</strong>
+              <strong className="text-[#171717]">{filteredItems.length > 0 ? `1-${filteredItems.length}` : '0'}</strong>
               <span>de</span>
-              <strong className="text-white">{items.length}</strong>
+              <strong className="text-[#171717]">{items.length}</strong>
               <span>promotores</span>
             </div>
 
             <div className="flex items-center gap-1 font-mono">
-              <button disabled className="w-7 h-7 rounded bg-[#171b26] border border-[#1e2433] text-slate-600 cursor-not-allowed flex items-center justify-center">
+              <button disabled className="w-7 h-7 rounded bg-[#F7F6F2] border border-[#CFCDC5] text-slate-600 cursor-not-allowed flex items-center justify-center">
                 <span className="material-symbols-outlined text-sm">first_page</span>
               </button>
-              <button disabled className="w-7 h-7 rounded bg-[#171b26] border border-[#1e2433] text-slate-600 cursor-not-allowed flex items-center justify-center">
+              <button disabled className="w-7 h-7 rounded bg-[#F7F6F2] border border-[#CFCDC5] text-slate-600 cursor-not-allowed flex items-center justify-center">
                 <span className="material-symbols-outlined text-sm">chevron_left</span>
               </button>
-              <button className="w-7 h-7 rounded bg-purple-600 text-white font-bold neon-purple-glow flex items-center justify-center">1</button>
-              <button disabled className="w-7 h-7 rounded bg-[#171b26] border border-[#1e2433] text-slate-600 cursor-not-allowed flex items-center justify-center">
+              <button className="w-7 h-7 rounded bg-[#222222] text-white font-bold shadow-xs flex items-center justify-center">1</button>
+              <button disabled className="w-7 h-7 rounded bg-[#F7F6F2] border border-[#CFCDC5] text-slate-600 cursor-not-allowed flex items-center justify-center">
                 <span className="material-symbols-outlined text-sm">chevron_right</span>
               </button>
-              <button disabled className="w-7 h-7 rounded bg-[#171b26] border border-[#1e2433] text-slate-600 cursor-not-allowed flex items-center justify-center">
+              <button disabled className="w-7 h-7 rounded bg-[#F7F6F2] border border-[#CFCDC5] text-slate-600 cursor-not-allowed flex items-center justify-center">
                 <span className="material-symbols-outlined text-sm">last_page</span>
               </button>
             </div>
@@ -540,25 +540,25 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
       {/* Modal Alterar Status de Presença */}
       {modalOpen && selectedItem && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
-          <div className="relative w-full max-w-md bg-[#171b26] border border-[#1e2433] rounded-2xl shadow-2xl p-6 overflow-hidden">
-            <div className="flex items-center justify-between pb-4 border-b border-[#1e2433]">
+          <div className="relative w-full max-w-md bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl shadow-2xl p-6 overflow-hidden">
+            <div className="flex items-center justify-between pb-4 border-b border-[#CFCDC5]">
               <div className="flex items-center gap-2.5">
                 <div className="w-9 h-9 rounded-lg bg-purple-600/20 text-purple-400 border border-purple-500/30 flex items-center justify-center font-bold">
                   {selectedItem.initials}
                 </div>
                 <div>
-                  <h3 className="text-base font-bold text-white">{selectedItem.name}</h3>
-                  <p className="text-[11px] font-mono text-slate-400">{selectedItem.matricula} • {selectedItem.squad}</p>
+                  <h3 className="text-base font-bold text-[#171717]">{selectedItem.name}</h3>
+                  <p className="text-[11px] font-mono text-[#77766F]">{selectedItem.matricula} • {selectedItem.squad}</p>
                 </div>
               </div>
-              <button onClick={() => setModalOpen(false)} className="text-slate-400 hover:text-white p-1">
+              <button onClick={() => setModalOpen(false)} className="text-[#77766F] hover:text-white p-1">
                 <span className="material-symbols-outlined text-lg">close</span>
               </button>
             </div>
 
             <form onSubmit={handleSaveStatus} className="space-y-4 py-4 text-xs">
               <div className="space-y-1.5">
-                <label className="font-bold text-slate-300">Novo Status de Presença</label>
+                <label className="font-bold text-[#171717]">Novo Status de Presença</label>
                 <div className="grid grid-cols-2 gap-2">
                   <button
                     type="button"
@@ -566,7 +566,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                     className={`p-2.5 rounded-lg border text-left font-bold transition-all ${
                       newStatus === 'presente'
                         ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500'
-                        : 'bg-[#10141f] text-slate-400 border-[#1e2433]'
+                        : 'bg-[#E4E2DB] text-[#77766F] border-[#CFCDC5]'
                     }`}
                   >
                     ✔ PRESENTE
@@ -577,7 +577,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                     className={`p-2.5 rounded-lg border text-left font-bold transition-all ${
                       newStatus === 'falta'
                         ? 'bg-rose-500/20 text-rose-400 border-rose-500'
-                        : 'bg-[#10141f] text-slate-400 border-[#1e2433]'
+                        : 'bg-[#E4E2DB] text-[#77766F] border-[#CFCDC5]'
                     }`}
                   >
                     ✖ FALTA
@@ -588,7 +588,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                     className={`p-2.5 rounded-lg border text-left font-bold transition-all ${
                       newStatus === 'atestado'
                         ? 'bg-cyan-500/20 text-cyan-400 border-cyan-500'
-                        : 'bg-[#10141f] text-slate-400 border-[#1e2433]'
+                        : 'bg-[#E4E2DB] text-[#77766F] border-[#CFCDC5]'
                     }`}
                   >
                     🏥 ATESTADO
@@ -599,7 +599,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                     className={`p-2.5 rounded-lg border text-left font-bold transition-all ${
                       newStatus === 'sem_registro'
                         ? 'bg-purple-500/20 text-purple-400 border-purple-500'
-                        : 'bg-[#10141f] text-slate-400 border-[#1e2433]'
+                        : 'bg-[#E4E2DB] text-[#77766F] border-[#CFCDC5]'
                     }`}
                   >
                     ⏳ SEM REGISTRO
@@ -608,7 +608,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
               </div>
 
               {newStatus === 'atestado' && (
-                <div className="space-y-1 bg-[#10141f] p-3 rounded-lg border border-[#1e2433]">
+                <div className="space-y-1 bg-[#E4E2DB] p-3 rounded-lg border border-[#CFCDC5]">
                   <label className="font-bold text-cyan-300">Dias de Afastamento (CID Médico)</label>
                   <input
                     type="number"
@@ -616,33 +616,33 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                     max={30}
                     value={medicalDays}
                     onChange={(e) => setMedicalDays(Number(e.target.value))}
-                    className="w-full h-9 px-3 bg-[#171b26] border border-[#1e2433] rounded-lg text-white font-mono"
+                    className="w-full h-9 px-3 bg-[#F7F6F2] border border-[#CFCDC5] rounded-lg text-[#171717] font-mono"
                   />
                 </div>
               )}
 
               <div className="space-y-1">
-                <label className="font-bold text-slate-300">Justificativa Operacional / Observações</label>
+                <label className="font-bold text-[#171717]">Justificativa Operacional / Observações</label>
                 <textarea
                   rows={2}
                   value={justification}
                   onChange={(e) => setJustification(e.target.value)}
                   placeholder="ex: Contato efetuado por telefone; validação de atestado médico com RH..."
-                  className="w-full p-2.5 bg-[#10141f] border border-[#1e2433] rounded-lg text-slate-100 focus:outline-none focus:border-purple-500 resize-none"
+                  className="w-full p-2.5 bg-[#E4E2DB] border border-[#CFCDC5] rounded-lg text-[#171717] focus:outline-none focus:border-purple-500 resize-none"
                 />
               </div>
 
-              <div className="pt-3 border-t border-[#1e2433] flex items-center justify-end gap-2">
+              <div className="pt-3 border-t border-[#CFCDC5] flex items-center justify-end gap-2">
                 <button
                   type="button"
                   onClick={() => setModalOpen(false)}
-                  className="px-4 py-2 rounded-lg bg-[#131722] hover:bg-[#1f2433] text-slate-300 border border-[#1e2433] font-semibold"
+                  className="px-4 py-2 rounded-lg bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] border border-[#CFCDC5] font-semibold"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-bold neon-purple-glow"
+                  className="px-5 py-2 rounded-lg bg-[#222222] hover:bg-black text-white font-bold shadow-xs"
                 >
                   Salvar Presença
                 </button>

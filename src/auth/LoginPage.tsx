@@ -19,7 +19,6 @@ export function LoginPage() {
   const [message, setMessage] = useState<{ text: string; type: 'error' | 'success' } | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  // Check if current user is logged in with first access flag
   const isFirstAccess = Boolean(session?.user?.user_metadata?.must_change_password);
 
   useEffect(() => {
@@ -28,7 +27,6 @@ export function LoginPage() {
     }
   }, [session, isPasswordRecovery, navigate]);
 
-  // 1. Handle Standard Login
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     setMessage(null);
@@ -41,7 +39,6 @@ export function LoginPage() {
     }
   }
 
-  // 2. Handle Password Change (First Access or Recovery)
   async function handleSaveNewPassword(event: FormEvent) {
     event.preventDefault();
     setMessage(null);
@@ -70,7 +67,6 @@ export function LoginPage() {
     }
   }
 
-  // 3. Handle Forgot Password Request
   async function handleForgotPasswordRequest(event: FormEvent) {
     event.preventDefault();
     setMessage(null);
@@ -88,57 +84,59 @@ export function LoginPage() {
       setMessage({ text: `Falha ao enviar e-mail: ${error.message}`, type: 'error' });
     } else {
       setMessage({
-        text: 'E-mail de recuperação enviado com sucesso! Verifique sua caixa de entrada ou spam.',
+        text: 'E-mail de recuperação enviado com sucesso! Verifique sua caixa de entrada.',
         type: 'success'
       });
     }
   }
 
   return (
-    <main className="min-h-screen bg-[#0a0d14] text-slate-100 flex items-center justify-center px-6">
-      <section className="w-full max-w-md rounded-2xl border border-[#2a3042] bg-[#111522] p-8 shadow-2xl shadow-purple-950/30">
-        <div className="mb-8 flex items-center gap-3">
-          <div className="h-11 w-11 rounded-xl bg-gradient-to-tr from-purple-600 to-indigo-500 flex items-center justify-center font-extrabold shadow-[0_0_18px_rgba(147,51,234,0.55)]">
-            MK
+    <main className="min-h-screen bg-[#EAE8E2] text-[#171717] flex items-center justify-center px-6 font-sans">
+      <section className="w-full max-w-md rounded-2xl border border-[#CFCDC5] bg-[#F7F6F2] p-8 shadow-xl">
+        <div className="mb-8 flex items-center justify-between pb-4 border-b border-[#CFCDC5]">
+          <div className="flex items-center gap-2">
+            <span className="text-2xl font-extrabold tracking-tight text-[#171717]">MK9</span>
+            <span className="text-xs font-bold text-[#286FF5] tracking-widest font-mono uppercase bg-[#EBF2FE] px-2 py-0.5 rounded border border-[#C3D9FD]">
+              DATE
+            </span>
           </div>
-          <div>
-            <h1 className="text-lg font-extrabold tracking-wide">MK9 COMMAND CENTER</h1>
-            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-cyan-400">Trade Marketing Ops</p>
-          </div>
+          <span className="text-[10px] font-bold text-[#737373] tracking-widest uppercase font-mono">
+            TRADE OPS
+          </span>
         </div>
 
         {!configured && (
-          <div className="mb-6 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200">
+          <div className="mb-6 rounded-lg border border-[#FCE19B] bg-[#FFF8E6] p-3 text-xs text-[#D98A00] font-mono">
             Configure `VITE_SUPABASE_URL` e `VITE_SUPABASE_PUBLISHABLE_KEY` no `.env.local` para ativar o login.
           </div>
         )}
 
         {message && (
           <div
-            className={`mb-6 rounded-lg border p-3 text-xs ${
+            className={`mb-6 rounded-lg border p-3 text-xs font-medium ${
               message.type === 'error'
-                ? 'border-rose-500/30 bg-rose-500/10 text-rose-200'
-                : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+                ? 'border-[#F8C8C8] bg-[#FDF2F2] text-[#D93636]'
+                : 'border-[#B9E5D0] bg-[#E8F5EE] text-[#16845B]'
             }`}
           >
             {message.text}
           </div>
         )}
 
-        {/* MODE A: Primeiro Acesso (Obrigatório trocar senha temporária) */}
+        {/* MODE A: Primeiro Acesso */}
         {isFirstAccess ? (
           <div>
-            <div className="flex items-center gap-2 text-amber-400 mb-1">
+            <div className="flex items-center gap-2 text-[#D98A00] mb-1">
               <span className="material-symbols-outlined text-lg">shield_lock</span>
               <span className="text-xs font-mono uppercase tracking-wider font-bold">Primeiro Acesso</span>
             </div>
-            <h2 className="text-2xl font-bold">Por segurança, crie sua nova senha</h2>
-            <p className="mt-2 text-sm text-slate-400">
-              Você está acessando com uma senha temporária. Cadastre sua senha pessoal definitiva para continuar.
+            <h2 className="text-xl font-bold text-[#171717]">Crie sua nova senha</h2>
+            <p className="mt-1 text-xs text-[#737373]">
+              Cadastre sua senha pessoal definitiva para acessar a plataforma.
             </p>
 
-            <form onSubmit={handleSaveNewPassword} className="mt-6 space-y-4">
-              <label className="block text-sm text-slate-300">
+            <form onSubmit={handleSaveNewPassword} className="mt-6 space-y-4 text-xs font-mono">
+              <label className="block text-[#171717] font-semibold">
                 Nova senha (mínimo 6 caracteres)
                 <input
                   required
@@ -147,11 +145,11 @@ export function LoginPage() {
                   value={newPassword}
                   onChange={(event) => setNewPassword(event.target.value)}
                   placeholder="••••••••"
-                  className="mt-2 h-11 w-full rounded-lg border border-[#2a3042] bg-[#0a0d14] px-3 text-sm outline-none focus:border-purple-500"
+                  className="mt-1.5 h-10 w-full rounded-lg border border-[#CFCDC5] bg-[#EAE8E2] px-3 text-xs text-[#171717] outline-none focus:border-[#111114] focus:bg-white font-sans"
                 />
               </label>
 
-              <label className="block text-sm text-slate-300">
+              <label className="block text-[#171717] font-semibold">
                 Confirmar nova senha
                 <input
                   required
@@ -160,26 +158,26 @@ export function LoginPage() {
                   value={confirmPassword}
                   onChange={(event) => setConfirmPassword(event.target.value)}
                   placeholder="••••••••"
-                  className="mt-2 h-11 w-full rounded-lg border border-[#2a3042] bg-[#0a0d14] px-3 text-sm outline-none focus:border-purple-500"
+                  className="mt-1.5 h-10 w-full rounded-lg border border-[#CFCDC5] bg-[#EAE8E2] px-3 text-xs text-[#171717] outline-none focus:border-[#111114] focus:bg-white font-sans"
                 />
               </label>
 
               <button
                 disabled={!configured || submitting}
-                className="h-11 w-full rounded-lg bg-purple-600 text-sm font-bold text-white transition hover:bg-purple-500 disabled:cursor-not-allowed disabled:opacity-50"
+                className="h-10 w-full rounded-lg bg-[#111114] hover:bg-black text-xs font-bold text-white transition disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer shadow-xs"
               >
-                {submitting ? 'Salvando nova senha...' : 'Salvar nova senha'}
+                {submitting ? 'Salvando...' : 'Salvar nova senha'}
               </button>
             </form>
           </div>
         ) : isPasswordRecovery ? (
-          /* MODE B: Redefinição de Senha via Link de Recuperação */
+          /* MODE B: Redefinição de Senha */
           <div>
-            <h2 className="text-2xl font-bold">Redefinir senha</h2>
-            <p className="mt-2 text-sm text-slate-400">Cadastre uma nova senha de acesso para sua conta MK9.</p>
+            <h2 className="text-xl font-bold text-[#171717]">Redefinir senha</h2>
+            <p className="mt-1 text-xs text-[#737373]">Cadastre uma nova senha de acesso para sua conta MK9.</p>
 
-            <form onSubmit={handleSaveNewPassword} className="mt-6 space-y-4">
-              <label className="block text-sm text-slate-300">
+            <form onSubmit={handleSaveNewPassword} className="mt-6 space-y-4 text-xs font-mono">
+              <label className="block text-[#171717] font-semibold">
                 Nova senha (mínimo 6 caracteres)
                 <input
                   required
@@ -188,11 +186,11 @@ export function LoginPage() {
                   value={newPassword}
                   onChange={(event) => setNewPassword(event.target.value)}
                   placeholder="••••••••"
-                  className="mt-2 h-11 w-full rounded-lg border border-[#2a3042] bg-[#0a0d14] px-3 text-sm outline-none focus:border-purple-500"
+                  className="mt-1.5 h-10 w-full rounded-lg border border-[#CFCDC5] bg-[#EAE8E2] px-3 text-xs text-[#171717] outline-none focus:border-[#111114] focus:bg-white font-sans"
                 />
               </label>
 
-              <label className="block text-sm text-slate-300">
+              <label className="block text-[#171717] font-semibold">
                 Confirmar nova senha
                 <input
                   required
@@ -201,26 +199,26 @@ export function LoginPage() {
                   value={confirmPassword}
                   onChange={(event) => setConfirmPassword(event.target.value)}
                   placeholder="••••••••"
-                  className="mt-2 h-11 w-full rounded-lg border border-[#2a3042] bg-[#0a0d14] px-3 text-sm outline-none focus:border-purple-500"
+                  className="mt-1.5 h-10 w-full rounded-lg border border-[#CFCDC5] bg-[#EAE8E2] px-3 text-xs text-[#171717] outline-none focus:border-[#111114] focus:bg-white font-sans"
                 />
               </label>
 
               <button
                 disabled={!configured || submitting}
-                className="h-11 w-full rounded-lg bg-purple-600 text-sm font-bold text-white transition hover:bg-purple-500 disabled:cursor-not-allowed disabled:opacity-50"
+                className="h-10 w-full rounded-lg bg-[#111114] hover:bg-black text-xs font-bold text-white transition disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer shadow-xs"
               >
-                {submitting ? 'Salvando nova senha...' : 'Salvar nova senha'}
+                {submitting ? 'Salvando...' : 'Salvar nova senha'}
               </button>
             </form>
           </div>
         ) : isForgotMode ? (
-          /* MODE C: Solicitar E-mail de Recuperação */
+          /* MODE C: Recuperar Senha */
           <div>
-            <h2 className="text-2xl font-bold">Recuperar senha</h2>
-            <p className="mt-2 text-sm text-slate-400">Informe seu e-mail para receber o link de redefinição.</p>
+            <h2 className="text-xl font-bold text-[#171717]">Recuperar senha</h2>
+            <p className="mt-1 text-xs text-[#737373]">Informe seu e-mail para receber o link de redefinição.</p>
 
-            <form onSubmit={handleForgotPasswordRequest} className="mt-6 space-y-4">
-              <label className="block text-sm text-slate-300">
+            <form onSubmit={handleForgotPasswordRequest} className="mt-6 space-y-4 text-xs font-mono">
+              <label className="block text-[#171717] font-semibold">
                 E-mail cadastrado
                 <input
                   required
@@ -228,15 +226,15 @@ export function LoginPage() {
                   value={email}
                   onChange={(event) => setEmail(event.target.value)}
                   placeholder="seuemail@mk9.com"
-                  className="mt-2 h-11 w-full rounded-lg border border-[#2a3042] bg-[#0a0d14] px-3 text-sm outline-none focus:border-purple-500"
+                  className="mt-1.5 h-10 w-full rounded-lg border border-[#CFCDC5] bg-[#EAE8E2] px-3 text-xs text-[#171717] outline-none focus:border-[#111114] focus:bg-white font-sans"
                 />
               </label>
 
               <button
                 disabled={!configured || submitting}
-                className="h-11 w-full rounded-lg bg-purple-600 text-sm font-bold text-white transition hover:bg-purple-500 disabled:cursor-not-allowed disabled:opacity-50"
+                className="h-10 w-full rounded-lg bg-[#111114] hover:bg-black text-xs font-bold text-white transition disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer shadow-xs"
               >
-                {submitting ? 'Enviando e-mail...' : 'Enviar e-mail de recuperação'}
+                {submitting ? 'Enviando...' : 'Enviar e-mail de recuperação'}
               </button>
 
               <div className="pt-2 text-center">
@@ -246,7 +244,7 @@ export function LoginPage() {
                     setIsForgotMode(false);
                     setMessage(null);
                   }}
-                  className="text-xs text-slate-400 hover:text-white transition"
+                  className="text-xs text-[#737373] hover:text-[#171717] transition cursor-pointer font-sans"
                 >
                   Voltar para o login
                 </button>
@@ -256,22 +254,23 @@ export function LoginPage() {
         ) : (
           /* MODE D: Login Normal */
           <div>
-            <h2 className="text-2xl font-bold">Entrar no sistema</h2>
-            <p className="mt-2 text-sm text-slate-400">Acesse seu painel operacional com segurança.</p>
+            <h2 className="text-xl font-bold text-[#171717]">Entrar no sistema</h2>
+            <p className="mt-1 text-xs text-[#737373]">Acesse sua conta operacional com segurança.</p>
 
-            <form onSubmit={handleSubmit} className="mt-6 space-y-4">
-              <label className="block text-sm text-slate-300">
+            <form onSubmit={handleSubmit} className="mt-6 space-y-4 text-xs font-mono">
+              <label className="block text-[#171717] font-semibold">
                 E-mail
                 <input
                   required
                   type="email"
                   value={email}
                   onChange={(event) => setEmail(event.target.value)}
-                  className="mt-2 h-11 w-full rounded-lg border border-[#2a3042] bg-[#0a0d14] px-3 text-sm outline-none focus:border-purple-500"
+                  placeholder="seuemail@mk9.com"
+                  className="mt-1.5 h-10 w-full rounded-lg border border-[#CFCDC5] bg-[#EAE8E2] px-3 text-xs text-[#171717] outline-none focus:border-[#111114] focus:bg-white font-sans"
                 />
               </label>
               
-              <label className="block text-sm text-slate-300">
+              <label className="block text-[#171717] font-semibold">
                 <div className="flex items-center justify-between">
                   <span>Senha</span>
                   <button
@@ -280,7 +279,7 @@ export function LoginPage() {
                       setIsForgotMode(true);
                       setMessage(null);
                     }}
-                    className="text-xs text-purple-400 hover:text-purple-300 transition"
+                    className="text-xs text-[#286FF5] hover:underline transition font-sans cursor-pointer"
                   >
                     Esqueci minha senha
                   </button>
@@ -290,15 +289,16 @@ export function LoginPage() {
                   type="password"
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
-                  className="mt-2 h-11 w-full rounded-lg border border-[#2a3042] bg-[#0a0d14] px-3 text-sm outline-none focus:border-purple-500"
+                  placeholder="••••••••"
+                  className="mt-1.5 h-10 w-full rounded-lg border border-[#CFCDC5] bg-[#EAE8E2] px-3 text-xs text-[#171717] outline-none focus:border-[#111114] focus:bg-white font-sans"
                 />
               </label>
               
               <button
                 disabled={!configured || submitting}
-                className="h-11 w-full rounded-lg bg-purple-600 text-sm font-bold text-white transition hover:bg-purple-500 disabled:cursor-not-allowed disabled:opacity-50"
+                className="h-10 w-full rounded-lg bg-[#111114] hover:bg-black text-xs font-bold text-white transition disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer shadow-xs"
               >
-                {submitting ? 'Entrando...' : 'Entrar'}
+                {submitting ? 'Entrando...' : 'Entrar na Plataforma'}
               </button>
             </form>
           </div>

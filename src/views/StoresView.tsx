@@ -259,17 +259,17 @@ export const StoresView: React.FC<StoresViewProps> = ({ onShowToast }) => {
   return (
     <div className="w-full px-4 lg:px-8 py-6 max-w-[1720px] mx-auto space-y-8 font-sans">
       {/* HEADER */}
-      <section className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-[#1e2433] pb-6">
+      <section className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-[#CFCDC5] pb-6">
         <div>
           <div className="flex items-center gap-2.5">
             <div className="w-9 h-9 rounded-lg bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center font-bold text-white shadow-[0_0_14px_rgba(6,182,212,0.5)]">
               <span className="material-symbols-outlined text-[20px]">store</span>
             </div>
-            <h1 className="text-3xl font-extrabold text-white tracking-tight">
+            <h1 className="text-3xl font-extrabold text-[#171717] tracking-tight">
               Cadastro de Lojas / PDVs
             </h1>
           </div>
-          <p className="text-xs sm:text-sm text-slate-400 mt-1 max-w-3xl">
+          <p className="text-xs sm:text-sm text-[#77766F] mt-1 max-w-3xl">
             Gestão dos pontos de venda, redes de supermercados e localizações geográficas atendidas.
           </p>
         </div>
@@ -278,7 +278,7 @@ export const StoresView: React.FC<StoresViewProps> = ({ onShowToast }) => {
           <button
             onClick={fetchStores}
             disabled={loading}
-            className="px-4 py-2 rounded-xl bg-[#171b26] border border-[#1e2433] text-xs font-semibold text-slate-300 hover:text-white hover:border-cyan-500/40 transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+            className="px-4 py-2 rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] text-xs font-semibold text-[#171717] hover:text-white hover:border-cyan-500/40 transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
           >
             <span className={`material-symbols-outlined text-[18px] ${loading ? 'animate-spin' : ''}`}>
               refresh
@@ -300,15 +300,15 @@ export const StoresView: React.FC<StoresViewProps> = ({ onShowToast }) => {
 
       {/* METRICAS */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
-        <div className="p-5 rounded-2xl bg-[#171b26] border border-[#1e2433] shadow-xl">
-          <div className="flex items-center justify-between text-slate-400 font-mono text-xs">
+        <div className="p-5 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5] shadow-xl">
+          <div className="flex items-center justify-between text-[#77766F] font-mono text-xs">
             <span>TOTAL DE LOJAS</span>
             <span className="material-symbols-outlined text-cyan-400">store</span>
           </div>
-          <div className="text-3xl font-extrabold text-white font-mono mt-2">{stores.length}</div>
+          <div className="text-3xl font-extrabold text-[#171717] font-mono mt-2">{stores.length}</div>
         </div>
 
-        <div className="p-5 rounded-2xl bg-[#171b26] border border-emerald-500/30 shadow-xl">
+        <div className="p-5 rounded-2xl bg-[#F7F6F2] border border-emerald-500/30 shadow-xl">
           <div className="flex items-center justify-between text-emerald-400 font-mono text-xs font-bold">
             <span>LOJAS ATIVAS</span>
             <span className="material-symbols-outlined">check_circle</span>
@@ -318,8 +318,8 @@ export const StoresView: React.FC<StoresViewProps> = ({ onShowToast }) => {
           </div>
         </div>
 
-        <div className="p-5 rounded-2xl bg-[#171b26] border border-[#1e2433] shadow-xl">
-          <div className="flex items-center justify-between text-slate-400 font-mono text-xs">
+        <div className="p-5 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5] shadow-xl">
+          <div className="flex items-center justify-between text-[#77766F] font-mono text-xs">
             <span>UFS ATENDIDAS</span>
             <span className="material-symbols-outlined text-purple-400">map</span>
           </div>
@@ -330,10 +330,10 @@ export const StoresView: React.FC<StoresViewProps> = ({ onShowToast }) => {
       </div>
 
       {/* FILTROS */}
-      <div className="bg-[#171b26] border border-[#1e2433] rounded-2xl p-5 shadow-2xl space-y-4">
+      <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-5 shadow-2xl space-y-4">
         <div className="grid grid-cols-1 sm:grid-cols-12 gap-4">
           <div className="sm:col-span-6 relative">
-            <span className="material-symbols-outlined absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-lg">
+            <span className="material-symbols-outlined absolute left-3.5 top-1/2 -translate-y-1/2 text-[#77766F] text-lg">
               search
             </span>
             <input
@@ -341,7 +341,7 @@ export const StoresView: React.FC<StoresViewProps> = ({ onShowToast }) => {
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               placeholder="Buscar por código, nome, cidade, rede ou UF..."
-              className="w-full h-10 pl-10 pr-4 bg-[#131722] border border-[#1e2433] rounded-xl text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-cyan-500 transition-all font-sans"
+              className="w-full h-10 pl-10 pr-4 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-xs text-[#171717] placeholder:text-[#5F5F5F] focus:outline-none focus:border-cyan-500 transition-all font-sans"
             />
           </div>
 
@@ -349,7 +349,7 @@ export const StoresView: React.FC<StoresViewProps> = ({ onShowToast }) => {
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value as any)}
-              className="w-full h-10 px-3 bg-[#131722] border border-[#1e2433] rounded-xl text-xs text-slate-200 focus:outline-none focus:border-cyan-500 font-mono"
+              className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-xs text-[#171717] focus:outline-none focus:border-cyan-500 font-mono"
             >
               <option value="todos">Status: Todos</option>
               <option value="ativo">Ativas</option>
@@ -361,7 +361,7 @@ export const StoresView: React.FC<StoresViewProps> = ({ onShowToast }) => {
             <select
               value={ufFilter}
               onChange={(e) => setUfFilter(e.target.value)}
-              className="w-full h-10 px-3 bg-[#131722] border border-[#1e2433] rounded-xl text-xs text-slate-200 focus:outline-none focus:border-cyan-500 font-mono"
+              className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-xs text-[#171717] focus:outline-none focus:border-cyan-500 font-mono"
             >
               <option value="todas">UF: Todas</option>
               {availableUFs.map((uf) => (
@@ -373,9 +373,9 @@ export const StoresView: React.FC<StoresViewProps> = ({ onShowToast }) => {
       </div>
 
       {/* TABELA DE REGISTROS */}
-      <section className="bg-[#171b26] border border-[#1e2433] rounded-2xl p-6 shadow-2xl space-y-4">
+      <section className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-6 shadow-2xl space-y-4">
         <div className="flex items-center justify-between">
-          <h3 className="text-sm font-bold text-white uppercase tracking-wider font-mono flex items-center gap-2">
+          <h3 className="text-sm font-bold text-[#171717] uppercase tracking-wider font-mono flex items-center gap-2">
             <span className="material-symbols-outlined text-cyan-400">table_chart</span>
             Lojas Cadastradas ({filteredStores.length})
           </h3>
@@ -385,7 +385,7 @@ export const StoresView: React.FC<StoresViewProps> = ({ onShowToast }) => {
         {loading && (
           <div className="py-16 text-center space-y-3">
             <div className="w-10 h-10 border-4 border-cyan-500/20 border-t-cyan-500 rounded-full animate-spin mx-auto"></div>
-            <p className="text-xs font-mono text-slate-400">Carregando lojas do Supabase...</p>
+            <p className="text-xs font-mono text-[#77766F]">Carregando lojas do Supabase...</p>
           </div>
         )}
 
@@ -394,18 +394,18 @@ export const StoresView: React.FC<StoresViewProps> = ({ onShowToast }) => {
           <div className="p-6 bg-rose-500/10 border border-rose-500/30 rounded-xl text-center space-y-3">
             <span className="material-symbols-outlined text-rose-400 text-3xl">warning</span>
             <h4 className="text-sm font-bold text-rose-300">Erro de Carregamento</h4>
-            <p className="text-xs text-slate-400 font-mono">{error}</p>
+            <p className="text-xs text-[#77766F] font-mono">{error}</p>
           </div>
         )}
 
         {/* VAZIO */}
         {!loading && !error && filteredStores.length === 0 && (
           <div className="py-16 text-center space-y-3">
-            <div className="w-14 h-14 rounded-full bg-[#131722] border border-[#1e2433] flex items-center justify-center text-slate-500 mx-auto">
+            <div className="w-14 h-14 rounded-full bg-[#EAE8E2] border border-[#CFCDC5] flex items-center justify-center text-[#5F5F5F] mx-auto">
               <span className="material-symbols-outlined text-3xl">search_off</span>
             </div>
-            <h4 className="text-sm font-bold text-white">Nenhuma Loja Encontrada</h4>
-            <p className="text-xs text-slate-400 max-w-sm mx-auto">
+            <h4 className="text-sm font-bold text-[#171717]">Nenhuma Loja Encontrada</h4>
+            <p className="text-xs text-[#77766F] max-w-sm mx-auto">
               Não há registros de lojas/PDVs correspondentes aos filtros aplicados.
             </p>
           </div>
@@ -413,10 +413,10 @@ export const StoresView: React.FC<StoresViewProps> = ({ onShowToast }) => {
 
         {/* LISTA */}
         {!loading && !error && filteredStores.length > 0 && (
-          <div className="overflow-x-auto rounded-xl border border-[#1e2433]">
+          <div className="overflow-x-auto rounded-xl border border-[#CFCDC5]">
             <table className="w-full text-left text-xs border-collapse">
               <thead>
-                <tr className="bg-[#131722] border-b border-[#1e2433] text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono">
+                <tr className="bg-[#E3E1DA] border-b border-[#CFCDC5] text-[11px] font-bold text-[#171717] uppercase tracking-wider font-mono">
                   <th className="py-3.5 px-4">Código</th>
                   <th className="py-3.5 px-4">Nome da Loja</th>
                   <th className="py-3.5 px-4">Rede</th>
@@ -426,16 +426,16 @@ export const StoresView: React.FC<StoresViewProps> = ({ onShowToast }) => {
                   <th className="py-3.5 px-4 text-right">Ações</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-[#1e2433] text-slate-300 font-mono">
+              <tbody className="divide-y divide-[#CFCDC5] text-[#171717] font-mono">
                 {filteredStores.map((store) => (
-                  <tr key={store.id} className="hover:bg-[#131722]/60 transition-colors">
+                  <tr key={store.id} className="hover:bg-[#EAE8E1] transition-colors">
                     <td className="py-3.5 px-4 font-bold text-cyan-400">{store.codigo}</td>
                     <td className="py-3.5 px-4 font-bold text-white">{store.nome}</td>
-                    <td className="py-3.5 px-4 text-slate-300">{store.rede || '—'}</td>
-                    <td className="py-3.5 px-4 text-slate-300">
+                    <td className="py-3.5 px-4 text-[#171717]">{store.rede || '—'}</td>
+                    <td className="py-3.5 px-4 text-[#171717]">
                       {store.cidade} / <span className="font-bold text-amber-400">{store.uf}</span>
                     </td>
-                    <td className="py-3.5 px-4 text-slate-400">{store.cnpj || '—'}</td>
+                    <td className="py-3.5 px-4 text-[#77766F]">{store.cnpj || '—'}</td>
                     <td className="py-3.5 px-4">
                       <span
                         className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${
@@ -450,7 +450,7 @@ export const StoresView: React.FC<StoresViewProps> = ({ onShowToast }) => {
                     <td className="py-3.5 px-4 text-right space-x-2">
                       <button
                         onClick={() => setViewingItem(store)}
-                        className="p-1.5 rounded-lg bg-[#131722] hover:bg-[#1f2433] text-slate-300 border border-[#1e2433] cursor-pointer"
+                        className="p-1.5 rounded-lg bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] border border-[#CFCDC5] cursor-pointer"
                         title="Ver Detalhes"
                       >
                         <span className="material-symbols-outlined text-[16px]">visibility</span>
@@ -492,54 +492,54 @@ export const StoresView: React.FC<StoresViewProps> = ({ onShowToast }) => {
       {/* MODAL DETALHES */}
       {viewingItem && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-[#171b26] border border-[#1e2433] rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5">
-            <div className="flex items-center justify-between border-b border-[#1e2433] pb-3">
-              <h3 className="text-sm font-bold text-white font-mono flex items-center gap-2">
+          <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5">
+            <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-3">
+              <h3 className="text-sm font-bold text-[#171717] font-mono flex items-center gap-2">
                 <span className="material-symbols-outlined text-cyan-400">store</span>
                 Detalhes da Loja / PDV
               </h3>
-              <button onClick={() => setViewingItem(null)} className="text-slate-400 hover:text-white">
+              <button onClick={() => setViewingItem(null)} className="text-[#77766F] hover:text-white">
                 <span className="material-symbols-outlined">close</span>
               </button>
             </div>
 
             <div className="space-y-3 text-xs font-mono">
               <div>
-                <span className="text-slate-500 block">CÓDIGO DA LOJA:</span>
+                <span className="text-[#5F5F5F] block">CÓDIGO DA LOJA:</span>
                 <span className="text-cyan-400 font-bold text-sm">{viewingItem.codigo}</span>
               </div>
               <div>
-                <span className="text-slate-500 block">NOME DA LOJA:</span>
-                <span className="text-white font-bold">{viewingItem.nome}</span>
+                <span className="text-[#5F5F5F] block">NOME DA LOJA:</span>
+                <span className="text-[#171717] font-bold">{viewingItem.nome}</span>
               </div>
               <div>
-                <span className="text-slate-500 block">REDE:</span>
-                <span className="text-slate-300">{viewingItem.rede || '—'}</span>
+                <span className="text-[#5F5F5F] block">REDE:</span>
+                <span className="text-[#171717]">{viewingItem.rede || '—'}</span>
               </div>
               <div>
-                <span className="text-slate-500 block">CIDADE / UF:</span>
-                <span className="text-slate-300">{viewingItem.cidade} - {viewingItem.uf}</span>
+                <span className="text-[#5F5F5F] block">CIDADE / UF:</span>
+                <span className="text-[#171717]">{viewingItem.cidade} - {viewingItem.uf}</span>
               </div>
               <div>
-                <span className="text-slate-500 block">ENDEREÇO:</span>
-                <span className="text-slate-300">{viewingItem.endereco || '—'}</span>
+                <span className="text-[#5F5F5F] block">ENDEREÇO:</span>
+                <span className="text-[#171717]">{viewingItem.endereco || '—'}</span>
               </div>
               <div>
-                <span className="text-slate-500 block">CNPJ:</span>
-                <span className="text-slate-300">{viewingItem.cnpj || '—'}</span>
+                <span className="text-[#5F5F5F] block">CNPJ:</span>
+                <span className="text-[#171717]">{viewingItem.cnpj || '—'}</span>
               </div>
               <div>
-                <span className="text-slate-500 block">STATUS:</span>
+                <span className="text-[#5F5F5F] block">STATUS:</span>
                 <span className={`font-bold uppercase ${viewingItem.status === 'ativo' ? 'text-emerald-400' : 'text-rose-400'}`}>
                   {viewingItem.status}
                 </span>
               </div>
             </div>
 
-            <div className="pt-3 border-t border-[#1e2433] flex justify-end">
+            <div className="pt-3 border-t border-[#CFCDC5] flex justify-end">
               <button
                 onClick={() => setViewingItem(null)}
-                className="px-4 py-2 rounded-xl bg-[#131722] hover:bg-[#1f2433] text-slate-300 border border-[#1e2433] text-xs font-semibold"
+                className="px-4 py-2 rounded-xl bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] border border-[#CFCDC5] text-xs font-semibold"
               >
                 Fechar
               </button>
@@ -553,10 +553,10 @@ export const StoresView: React.FC<StoresViewProps> = ({ onShowToast }) => {
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <form
             onSubmit={handleSave}
-            className="bg-[#171b26] border border-[#1e2433] rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-5"
+            className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-5"
           >
-            <div className="flex items-center justify-between border-b border-[#1e2433] pb-3">
-              <h3 className="text-sm font-bold text-white font-mono flex items-center gap-2">
+            <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-3">
+              <h3 className="text-sm font-bold text-[#171717] font-mono flex items-center gap-2">
                 <span className="material-symbols-outlined text-cyan-400">
                   {editingItem ? 'edit' : 'add'}
                 </span>
@@ -565,7 +565,7 @@ export const StoresView: React.FC<StoresViewProps> = ({ onShowToast }) => {
               <button
                 type="button"
                 onClick={() => setShowModal(false)}
-                className="text-slate-400 hover:text-white"
+                className="text-[#77766F] hover:text-white"
               >
                 <span className="material-symbols-outlined">close</span>
               </button>
@@ -573,68 +573,68 @@ export const StoresView: React.FC<StoresViewProps> = ({ onShowToast }) => {
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs font-mono">
               <div className="sm:col-span-2">
-                <label className="text-slate-300 block mb-1">CÓDIGO DA LOJA</label>
+                <label className="text-[#171717] block mb-1">CÓDIGO DA LOJA</label>
                 <input
                   type="text"
                   readOnly
                   disabled
                   value={formData.codigo || 'Gerando...'}
-                  className="w-full h-10 px-3 bg-[#131722] border border-[#1e2433] rounded-xl text-cyan-400 font-bold focus:outline-none disabled:opacity-70 cursor-not-allowed"
+                  className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-cyan-400 font-bold focus:outline-none disabled:opacity-70 cursor-not-allowed"
                 />
               </div>
 
               <div className="sm:col-span-2">
-                <label className="text-slate-300 block mb-1">NOME DA LOJA / ESTABELECIMENTO (*)</label>
+                <label className="text-[#171717] block mb-1">NOME DA LOJA / ESTABELECIMENTO (*)</label>
                 <input
                   type="text"
                   required
                   value={formData.nome}
                   onChange={(e) => setFormData({ ...formData, nome: e.target.value })}
                   placeholder="Ex: Supermercado Carrefour Centro"
-                  className="w-full h-10 px-3 bg-[#131722] border border-[#1e2433] rounded-xl text-slate-200 focus:outline-none focus:border-cyan-500"
+                  className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-cyan-500"
                 />
               </div>
 
               <div>
-                <label className="text-slate-300 block mb-1">REDE (OPCIONAL)</label>
+                <label className="text-[#171717] block mb-1">REDE (OPCIONAL)</label>
                 <input
                   type="text"
                   value={formData.rede}
                   onChange={(e) => setFormData({ ...formData, rede: e.target.value })}
                   placeholder="Ex: Carrefour"
-                  className="w-full h-10 px-3 bg-[#131722] border border-[#1e2433] rounded-xl text-slate-200 focus:outline-none focus:border-cyan-500"
+                  className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-cyan-500"
                 />
               </div>
 
               <div>
-                <label className="text-slate-300 block mb-1">CNPJ (OPCIONAL)</label>
+                <label className="text-[#171717] block mb-1">CNPJ (OPCIONAL)</label>
                 <input
                   type="text"
                   value={formData.cnpj}
                   onChange={(e) => setFormData({ ...formData, cnpj: e.target.value })}
                   placeholder="Ex: 12345678000195"
-                  className="w-full h-10 px-3 bg-[#131722] border border-[#1e2433] rounded-xl text-slate-200 focus:outline-none focus:border-cyan-500"
+                  className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-cyan-500"
                 />
               </div>
 
               <div>
-                <label className="text-slate-300 block mb-1">CIDADE (*)</label>
+                <label className="text-[#171717] block mb-1">CIDADE (*)</label>
                 <input
                   type="text"
                   required
                   value={formData.cidade}
                   onChange={(e) => setFormData({ ...formData, cidade: e.target.value })}
                   placeholder="Ex: São Paulo"
-                  className="w-full h-10 px-3 bg-[#131722] border border-[#1e2433] rounded-xl text-slate-200 focus:outline-none focus:border-cyan-500"
+                  className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-cyan-500"
                 />
               </div>
 
               <div>
-                <label className="text-slate-300 block mb-1">UF (*)</label>
+                <label className="text-[#171717] block mb-1">UF (*)</label>
                 <select
                   value={formData.uf}
                   onChange={(e) => setFormData({ ...formData, uf: e.target.value })}
-                  className="w-full h-10 px-3 bg-[#131722] border border-[#1e2433] rounded-xl text-slate-200 focus:outline-none focus:border-cyan-500"
+                  className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-cyan-500"
                 >
                   {validUFs.map((uf) => (
                     <option key={uf} value={uf}>{uf}</option>
@@ -643,22 +643,22 @@ export const StoresView: React.FC<StoresViewProps> = ({ onShowToast }) => {
               </div>
 
               <div className="sm:col-span-2">
-                <label className="text-slate-300 block mb-1">ENDEREÇO COMPLETO</label>
+                <label className="text-[#171717] block mb-1">ENDEREÇO COMPLETO</label>
                 <input
                   type="text"
                   value={formData.endereco}
                   onChange={(e) => setFormData({ ...formData, endereco: e.target.value })}
                   placeholder="Ex: Av. Paulista, 1000 - Bela Vista"
-                  className="w-full h-10 px-3 bg-[#131722] border border-[#1e2433] rounded-xl text-slate-200 focus:outline-none focus:border-cyan-500"
+                  className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-cyan-500"
                 />
               </div>
 
               <div className="sm:col-span-2">
-                <label className="text-slate-300 block mb-1">STATUS</label>
+                <label className="text-[#171717] block mb-1">STATUS</label>
                 <select
                   value={formData.status}
                   onChange={(e) => setFormData({ ...formData, status: e.target.value as any })}
-                  className="w-full h-10 px-3 bg-[#131722] border border-[#1e2433] rounded-xl text-slate-200 focus:outline-none focus:border-cyan-500"
+                  className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-cyan-500"
                 >
                   <option value="ativo">ATIVO</option>
                   <option value="inativo">INATIVO</option>
@@ -666,11 +666,11 @@ export const StoresView: React.FC<StoresViewProps> = ({ onShowToast }) => {
               </div>
             </div>
 
-            <div className="pt-3 border-t border-[#1e2433] flex items-center justify-end gap-3">
+            <div className="pt-3 border-t border-[#CFCDC5] flex items-center justify-end gap-3">
               <button
                 type="button"
                 onClick={() => setShowModal(false)}
-                className="px-4 py-2 rounded-xl bg-[#131722] hover:bg-[#1f2433] text-slate-300 border border-[#1e2433] text-xs font-semibold cursor-pointer"
+                className="px-4 py-2 rounded-xl bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] border border-[#CFCDC5] text-xs font-semibold cursor-pointer"
               >
                 Cancelar
               </button>

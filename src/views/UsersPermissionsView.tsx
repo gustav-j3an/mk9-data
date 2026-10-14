@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../auth/AuthProvider';
 import { supabase } from '../lib/supabase';
-import type { ToastMessage, UserProfile, UserRole } from '../types';
+import type { ToastMessage, UserProfile, UserRole, PromoterOperationAuthorization } from '../types';
 
 interface UsersPermissionsViewProps {
   onShowToast: (toast: Omit<ToastMessage, 'id'>) => void;
@@ -59,6 +59,18 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
   const [editIndustriaCodigo, setEditIndustriaCodigo] = useState<string>('');
   const [savingEdit, setSavingEdit] = useState(false);
 
+  // Tab State: Usuários vs Liberação de Promotores (Etapa 4.1)
+  const [activeTab, setActiveTab] = useState<'users' | 'pilot_auth'>('users');
+  const [authorizationsMap, setAuthorizationsMap] = useState<Map<string, PromoterOperationAuthorization>>(new Map());
+  const [authorizingMatricula, setAuthorizingMatricula] = useState<string | null>(null);
+  const [promoterRoutesCount, setPromoterRoutesCount] = useState<Map<string, number>>(new Map());
+
+  // Modal de Liberação/Revogação
+  const [authModalPromoter, setAuthModalPromoter] = useState<PromoterRecord | null>(null);
+  const [authModalAction, setAuthModalAction] = useState<'liberar' | 'bloquear'>('liberar');
+  const [authJustification, setAuthJustification] = useState('');
+  const [submittingAuth, setSubmittingAuth] = useState(false);
+
   // Confirmation Modal for Link Change
   const [confirmModalData, setConfirmModalData] = useState<{
     user: ExtendedUserProfile;
@@ -86,7 +98,7 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
 
     try {
       // Execute relational query between profiles and promotores using profiles.promotor_matricula = promotores.matricula
-      const [profilesRes, promotoresRes, industriasRes] = await Promise.all([
+      const [profilesRes, promotoresRes, industriasRes, authRes, rotasRes] = await Promise.all([
         supabase
           .from('profiles')
           .select(`
@@ -108,12 +120,37 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
         supabase
           .from('industrias')
           .select('codigo, nome')
-          .order('nome')
+          .order('nome'),
+        // Tabela de autorizações de teste (tratamento defensivo se tabela ainda não criada)
+        supabase.from('promoter_operation_authorizations').select('*'),
+        // Rotas para contagem por promotor
+        supabase.from('rotas').select('promotor_matricula')
       ]);
 
       if (industriasRes.data) {
         setIndustriasOptions(industriasRes.data);
       }
+
+      // Mapear autorizações existentes
+      const authMap = new Map<string, PromoterOperationAuthorization>();
+      if (authRes.data && Array.isArray(authRes.data)) {
+        authRes.data.forEach((a: any) => {
+          authMap.set(a.promotor_matricula, a as PromoterOperationAuthorization);
+        });
+      }
+      setAuthorizationsMap(authMap);
+
+      // Mapear contagem de rotas por promotor
+      const rCountMap = new Map<string, number>();
+      if (rotasRes.data && Array.isArray(rotasRes.data)) {
+        rotasRes.data.forEach((r: any) => {
+          const mat = r.promotor_matricula;
+          if (mat) {
+            rCountMap.set(mat, (rCountMap.get(mat) || 0) + 1);
+          }
+        });
+      }
+      setPromoterRoutesCount(rCountMap);
 
       let rawProfiles: any[] = [];
       if (profilesRes.error) {
@@ -220,6 +257,68 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
         message: `Status de ${targetUser.name} alterado para ${newStatus.toUpperCase()}.`,
         type: 'success'
       });
+    }
+  };
+
+  // Handler para Salvar Autorização Individual de Promotor (Etapa 4.1)
+  const handleSavePromoterAuthorization = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!authModalPromoter || !supabase) return;
+
+    if (role !== 'admin' && role !== 'gestor') {
+      onShowToast({
+        title: 'Acesso Negado',
+        message: 'Apenas administradores e gestores podem liberar ou revogar promotores.',
+        type: 'warning'
+      });
+      return;
+    }
+
+    const justificationText = authJustification.trim();
+    if (justificationText.length < 5) {
+      onShowToast({
+        title: 'Justificativa Obrigatória',
+        message: 'A justificativa operacional deve ter pelo menos 5 caracteres.',
+        type: 'warning'
+      });
+      return;
+    }
+
+    setSubmittingAuth(true);
+
+    try {
+      const matricula = authModalPromoter.matricula;
+      const statusToSet = authModalAction === 'liberar' ? 'liberado' : 'bloqueado';
+
+      // Executar exclusivamente via RPC set_promoter_authorization (com gravação no audit log)
+      const { data: rpcData, error: rpcErr } = await supabase.rpc('set_promoter_authorization', {
+        p_matricula: matricula,
+        p_status: statusToSet,
+        p_justification: justificationText
+      });
+
+      if (rpcErr) {
+        throw new Error(rpcErr.message || 'Falha ao processar autorização pela função RPC.');
+      }
+
+      onShowToast({
+        title: authModalAction === 'liberar' ? 'Promotor Liberado! 🚀' : 'Autorização Revogada 🔒',
+        message: `O promotor ${authModalPromoter.nome} (${matricula}) está agora ${statusToSet.toUpperCase()} para a operação.`,
+        type: authModalAction === 'liberar' ? 'success' : 'info'
+      });
+
+      setAuthModalPromoter(null);
+      setAuthJustification('');
+      await fetchUsers();
+    } catch (err: any) {
+      console.error('Erro ao atualizar autorização do promotor:', err);
+      onShowToast({
+        title: 'Erro de Autorização',
+        message: err.message || 'Falha ao persistir autorização do promotor.',
+        type: 'error'
+      });
+    } finally {
+      setSubmittingAuth(false);
     }
   };
 
@@ -542,17 +641,17 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
   return (
     <div className="w-full px-4 lg:px-8 py-6 max-w-[1720px] mx-auto space-y-8 font-sans">
       {/* Header */}
-      <section className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-[#1e2433] pb-6">
+      <section className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-[#CFCDC5] pb-6">
         <div>
           <div className="flex items-center gap-2.5">
             <div className="w-9 h-9 rounded-lg bg-gradient-to-tr from-purple-600 to-indigo-500 flex items-center justify-center font-bold text-white shadow-[0_0_14px_rgba(147,51,234,0.6)]">
               <span className="material-symbols-outlined text-[20px]">admin_panel_settings</span>
             </div>
-            <h1 className="text-3xl font-extrabold text-white tracking-tight">
+            <h1 className="text-3xl font-extrabold text-[#171717] tracking-tight">
               Perfis &amp; Permissões de Acesso
             </h1>
           </div>
-          <p className="text-xs sm:text-sm text-slate-400 mt-1 max-w-4xl">
+          <p className="text-xs sm:text-sm text-[#77766F] mt-1 max-w-4xl">
             Associação dos logins de acesso à tabela de promotores (<code className="text-amber-400 font-mono">profiles.promotor_matricula = promotores.matricula</code>).
           </p>
         </div>
@@ -560,7 +659,7 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
         <div className="flex items-center gap-3">
           <button
             onClick={fetchUsers}
-            className="px-3.5 py-2 rounded-xl bg-[#131722] border border-[#1e2433] text-xs font-semibold text-slate-300 hover:text-white hover:border-purple-500/40 transition-colors flex items-center gap-1.5"
+            className="px-3.5 py-2 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] text-xs font-semibold text-[#171717] hover:text-white hover:border-purple-500/40 transition-colors flex items-center gap-1.5"
           >
             <span className="material-symbols-outlined text-[16px]">refresh</span>
             Atualizar Lista
@@ -569,7 +668,7 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
           {role === 'admin' && (
             <button
               onClick={() => setIsInviteModalOpen(true)}
-              className="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs neon-purple-glow transition-all active:scale-95 shadow-md flex items-center gap-1.5 cursor-pointer"
+              className="px-4 py-2 rounded-xl bg-[#222222] hover:bg-black text-white font-bold text-xs shadow-xs transition-all active:scale-95 shadow-md flex items-center gap-1.5 cursor-pointer"
             >
               <span className="material-symbols-outlined text-[18px]">person_add</span>
               <span>Convidar Usuário</span>
@@ -578,8 +677,39 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
         </div>
       </section>
 
-      {/* Controles de Filtros e Busca */}
-      <section className="bg-[#171b26] border border-[#1e2433] rounded-2xl p-6 shadow-2xl space-y-6">
+      {/* NAVEGAÇÃO ENTRE ABAS: PERFIS DE ACESSO VS LIBERAÇÃO DE PROMOTORES */}
+      <div className="flex items-center gap-3 border-b border-[#CFCDC5] pb-4 font-mono text-xs">
+        <button
+          onClick={() => setActiveTab('users')}
+          className={`px-4 py-2.5 rounded-xl font-bold transition-all flex items-center gap-2 cursor-pointer ${
+            activeTab === 'users'
+              ? 'bg-[#222222] text-white shadow-lg'
+              : 'bg-[#EAE8E2] text-[#77766F] hover:text-white border border-[#CFCDC5]'
+          }`}
+        >
+          <span className="material-symbols-outlined text-sm">badge</span>
+          <span>Perfis & Logins de Acesso</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('pilot_auth')}
+          className={`px-4 py-2.5 rounded-xl font-bold transition-all flex items-center gap-2 cursor-pointer ${
+            activeTab === 'pilot_auth'
+              ? 'bg-amber-600 text-white shadow-lg'
+              : 'bg-[#EAE8E2] text-[#77766F] hover:text-white border border-[#CFCDC5]'
+          }`}
+        >
+          <span className="material-symbols-outlined text-sm">verified_user</span>
+          <span>Liberação de Promotores (Piloto / Teste)</span>
+          <span className="px-1.5 py-0.5 rounded bg-[#E4E2DB] text-amber-300 text-[10px] font-bold border border-amber-500/30">
+            {authorizationsMap.size} reg.
+          </span>
+        </button>
+      </div>
+
+      {activeTab === 'users' ? (
+        /* Controles de Filtros e Busca */
+        <section className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-6 shadow-2xl space-y-6">
         {errorMessage && (
           <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs font-mono flex items-center gap-2">
             <span className="material-symbols-outlined text-lg text-rose-400">error</span>
@@ -590,7 +720,7 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
         <div className="flex flex-col lg:flex-row items-center justify-between gap-4">
           {/* Busca por E-mail, Nome ou Matrícula */}
           <div className="relative w-full lg:w-96">
-            <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-[18px]">
+            <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-[#77766F] text-[18px]">
               search
             </span>
             <input
@@ -598,18 +728,18 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               placeholder="Buscar por e-mail, nome ou matrícula..."
-              className="w-full h-10 pl-9 pr-4 bg-[#131722] border border-[#1e2433] rounded-xl text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-purple-500 transition-all font-sans"
+              className="w-full h-10 pl-9 pr-4 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-xs text-[#171717] placeholder:text-[#5F5F5F] focus:outline-none focus:border-purple-500 transition-all font-sans"
             />
           </div>
 
           <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto">
             {/* Filtro por Papel */}
             <div className="flex items-center gap-2">
-              <span className="text-xs text-slate-400 font-mono">Papel:</span>
+              <span className="text-xs text-[#77766F] font-mono">Papel:</span>
               <select
                 value={roleFilter}
                 onChange={(e) => setRoleFilter(e.target.value as 'all' | UserRole)}
-                className="h-10 px-3 bg-[#131722] border border-[#1e2433] rounded-xl text-xs text-slate-200 focus:outline-none focus:border-purple-500 transition-all font-mono cursor-pointer"
+                className="h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-xs text-[#171717] focus:outline-none focus:border-purple-500 transition-all font-mono cursor-pointer"
               >
                 <option value="all">Todos os Papéis</option>
                 <option value="admin">Administrador</option>
@@ -622,11 +752,11 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
 
             {/* Filtro por Vínculo */}
             <div className="flex items-center gap-2">
-              <span className="text-xs text-slate-400 font-mono">Vínculo:</span>
+              <span className="text-xs text-[#77766F] font-mono">Vínculo:</span>
               <select
                 value={promotorFilter}
                 onChange={(e) => setPromotorFilter(e.target.value as any)}
-                className="h-10 px-3 bg-[#131722] border border-[#1e2433] rounded-xl text-xs text-slate-200 focus:outline-none focus:border-purple-500 transition-all font-mono cursor-pointer"
+                className="h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-xs text-[#171717] focus:outline-none focus:border-purple-500 transition-all font-mono cursor-pointer"
               >
                 <option value="all">Todos</option>
                 <option value="linked">Vinculados</option>
@@ -636,11 +766,11 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
 
             {/* Filtro por Status */}
             <div className="flex items-center gap-2">
-              <span className="text-xs text-slate-400 font-mono">Status:</span>
+              <span className="text-xs text-[#77766F] font-mono">Status:</span>
               <select
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value as 'all' | 'ativo' | 'inativo')}
-                className="h-10 px-3 bg-[#131722] border border-[#1e2433] rounded-xl text-xs text-slate-200 focus:outline-none focus:border-purple-500 transition-all font-mono cursor-pointer"
+                className="h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-xs text-[#171717] focus:outline-none focus:border-purple-500 transition-all font-mono cursor-pointer"
               >
                 <option value="all">Todos os Status</option>
                 <option value="ativo">Ativos</option>
@@ -651,10 +781,10 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
         </div>
 
         {/* Tabela de Perfis com as Colunas Solicitadas */}
-        <div className="overflow-x-auto rounded-xl border border-[#1e2433]">
+        <div className="overflow-x-auto rounded-xl border border-[#CFCDC5]">
           <table className="w-full text-left text-xs border-collapse">
             <thead>
-              <tr className="bg-[#131722] border-b border-[#1e2433] text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono">
+              <tr className="bg-[#E3E1DA] border-b border-[#CFCDC5] text-[11px] font-bold text-[#171717] uppercase tracking-wider font-mono">
                 <th className="py-3.5 px-4">Login/E-mail</th>
                 <th className="py-3.5 px-4">Papel</th>
                 <th className="py-3.5 px-4">Status</th>
@@ -662,16 +792,16 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                 <th className="py-3.5 px-4 text-right">Ações</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-[#1e2433] text-slate-300">
+            <tbody className="divide-y divide-[#CFCDC5] text-[#171717]">
               {loading ? (
                 <tr>
-                  <td colSpan={5} className="py-12 text-center text-slate-400 font-mono text-xs">
+                  <td colSpan={5} className="py-12 text-center text-[#77766F] font-mono text-xs">
                     Carregando tabela de perfis e permissões...
                   </td>
                 </tr>
               ) : filteredUsers.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="py-12 text-center text-slate-400 font-mono text-xs">
+                  <td colSpan={5} className="py-12 text-center text-[#77766F] font-mono text-xs">
                     Nenhum perfil encontrado com os critérios de busca.
                   </td>
                 </tr>
@@ -696,13 +826,13 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                       className={`transition-colors ${
                         isPromotorRole && !hasMatricula
                           ? 'bg-amber-950/20 border-l-4 border-l-amber-500 hover:bg-amber-950/35'
-                          : 'hover:bg-[#131722]/60'
+                          : 'hover:bg-[#EAE8E1]'
                       }`}
                     >
                       {/* 1. Login/E-mail */}
                       <td className="py-4 px-4 font-mono text-xs">
-                        <div className="font-bold text-white leading-tight">{u.email}</div>
-                        <div className="text-[11px] text-slate-400 font-sans mt-0.5">{u.name}</div>
+                        <div className="font-bold text-[#171717] leading-tight">{u.email}</div>
+                        <div className="text-[11px] text-[#77766F] font-sans mt-0.5">{u.name}</div>
                       </td>
 
                       {/* 2. Papel */}
@@ -733,7 +863,7 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                       </td>
 
                       {/* 4. Último Acesso */}
-                      <td className="py-4 px-4 font-mono text-slate-400 text-xs">
+                      <td className="py-4 px-4 font-mono text-[#77766F] text-xs">
                         {formattedDate}
                       </td>
 
@@ -745,7 +875,7 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                               disabled={savingUserId === u.id}
                               value={u.role}
                               onChange={(e) => handleRoleChange(u.id, u.name, e.target.value as UserRole)}
-                              className="h-8 px-2 bg-[#131722] border border-[#2a3042] rounded-lg text-xs font-mono text-slate-200 focus:outline-none focus:border-purple-500 transition-colors disabled:opacity-50 cursor-pointer"
+                              className="h-8 px-2 bg-[#EAE8E2] border border-[#CFCDC5] rounded-lg text-xs font-mono text-[#171717] focus:outline-none focus:border-purple-500 transition-colors disabled:opacity-50 cursor-pointer"
                               title="Alterar papel de acesso (Somente Admin)"
                             >
                               <option value="admin">Admin</option>
@@ -757,7 +887,7 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
 
                             <button
                               onClick={() => handleOpenEditModal(u)}
-                              className="p-1.5 rounded-lg bg-[#131722] hover:bg-[#1f2433] text-slate-300 hover:text-white border border-[#1e2433] transition-colors"
+                              className="p-1.5 rounded-lg bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] hover:text-white border border-[#CFCDC5] transition-colors"
                               title="Editar Vínculo Visual de Matrícula"
                             >
                               <span className="material-symbols-outlined text-[16px]">edit</span>
@@ -788,7 +918,7 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                             </button>
                           </div>
                         ) : (
-                          <span className="text-[10px] text-slate-500 font-mono italic">
+                          <span className="text-[10px] text-[#5F5F5F] font-mono italic">
                             Somente Admin
                           </span>
                         )}
@@ -801,24 +931,159 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
           </table>
         </div>
       </section>
+      ) : (
+        /* ========================================================================= */
+        /* ABA 2: LIBERAÇÃO OPERACIONAL DE PROMOTORES PARA FASE PILOTO (Etapa 4.1)   */
+        /* ========================================================================= */
+        <section className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-6 shadow-2xl space-y-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#CFCDC5] pb-4">
+            <div>
+              <h2 className="text-lg font-bold text-[#171717] flex items-center gap-2">
+                <span className="material-symbols-outlined text-amber-400">verified_user</span>
+                Controle de Liberação Individual de Promotores
+              </h2>
+              <p className="text-xs text-[#77766F] mt-1">
+                Durante a fase de <strong className="text-amber-300">IMPLANTAÇÃO</strong>, apenas os promotores explicitamente liberados aqui conseguem iniciar atendimentos nas suas rotas.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2 text-xs font-mono">
+              <span className="px-3 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 font-bold">
+                Piloto Controlado
+              </span>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto rounded-xl border border-[#CFCDC5]">
+            <table className="w-full text-left text-xs border-collapse">
+              <thead>
+                <tr className="bg-[#E3E1DA] border-b border-[#CFCDC5] text-[11px] font-bold text-[#171717] uppercase tracking-wider font-mono">
+                  <th className="py-3.5 px-4">Promotor</th>
+                  <th className="py-3.5 px-4">Matrícula</th>
+                  <th className="py-3.5 px-4">Rotas Cadastradas</th>
+                  <th className="py-3.5 px-4">Status no Piloto</th>
+                  <th className="py-3.5 px-4">Última Autorização</th>
+                  <th className="py-3.5 px-4 text-right">Ação</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#CFCDC5] text-[#171717]">
+                {promotoresOptions.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="py-12 text-center text-[#77766F] font-mono text-xs">
+                      Nenhum promotor cadastrado em public.promotores.
+                    </td>
+                  </tr>
+                ) : (
+                  promotoresOptions.map((p) => {
+                    const auth = authorizationsMap.get(p.matricula);
+                    const isLiberado = auth?.status === 'liberado';
+                    const routesCount = promoterRoutesCount.get(p.matricula) || 0;
+
+                    return (
+                      <tr key={p.matricula} className="hover:bg-[#EAE8E1] transition-colors">
+                        <td className="py-4 px-4 font-mono text-xs">
+                          <div className="font-bold text-[#171717]">{p.nome}</div>
+                          <div className="text-[11px] text-[#77766F] font-sans mt-0.5">
+                            Supervisor: {p.supervisor || '—'} • Equipe: {p.equipe || '—'}
+                          </div>
+                        </td>
+
+                        <td className="py-4 px-4 font-mono">
+                          <span className="px-2.5 py-1 rounded bg-[#E4E2DB] border border-[#CFCDC5] text-amber-300 font-bold">
+                            {p.matricula}
+                          </span>
+                        </td>
+
+                        <td className="py-4 px-4 font-mono">
+                          <span className="text-[#171717] font-bold">{routesCount}</span>
+                          <span className="text-[#5F5F5F] text-[11px] ml-1">rotas ativas</span>
+                        </td>
+
+                        <td className="py-4 px-4 font-mono">
+                          {isLiberado ? (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 font-bold text-[10px]">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                              🟢 LIBERADO PARA TESTE
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-800 border border-[#CFCDC5] text-[#77766F] font-bold text-[10px]">
+                              <span className="w-1.5 h-1.5 rounded-full bg-slate-500" />
+                              🔒 BLOQUEADO (PRÉ-SLA)
+                            </span>
+                          )}
+                        </td>
+
+                        <td className="py-4 px-4 font-mono text-[11px] text-[#77766F]">
+                          {auth ? (
+                            <div>
+                              <span className="text-[#171717] font-bold">
+                                {new Date(auth.authorized_at).toLocaleDateString('pt-BR')}
+                              </span>
+                              <span className="block text-[10px] text-[#5F5F5F] truncate max-w-xs">
+                                Por: {auth.authorized_by_name || 'Admin'} ({auth.justification})
+                              </span>
+                            </div>
+                          ) : (
+                            <span className="text-slate-600 italic">Sem registro</span>
+                          )}
+                        </td>
+
+                        <td className="py-4 px-4 text-right">
+                          {role === 'admin' || role === 'gestor' ? (
+                            isLiberado ? (
+                              <button
+                                onClick={() => {
+                                  setAuthModalPromoter(p);
+                                  setAuthModalAction('bloquear');
+                                  setAuthJustification('');
+                                }}
+                                className="px-3 py-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 font-bold text-xs transition-colors cursor-pointer"
+                              >
+                                Revogar Acesso
+                              </button>
+                            ) : (
+                              <button
+                                onClick={() => {
+                                  setAuthModalPromoter(p);
+                                  setAuthModalAction('liberar');
+                                  setAuthJustification('');
+                                }}
+                                className="px-3 py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 font-bold text-xs transition-colors cursor-pointer"
+                              >
+                                Liberar para Teste
+                              </button>
+                            )
+                          ) : (
+                            <span className="text-[10px] text-[#5F5F5F] font-mono italic">Somente Gestor</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
 
       {/* Modal Convidar Usuário */}
       {isInviteModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
-          <div className="relative w-full max-w-md bg-[#171b26] border border-[#1e2433] rounded-2xl shadow-2xl p-6 overflow-hidden">
-            <div className="flex items-center justify-between pb-4 border-b border-[#1e2433]">
+          <div className="relative w-full max-w-md bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl shadow-2xl p-6 overflow-hidden">
+            <div className="flex items-center justify-between pb-4 border-b border-[#CFCDC5]">
               <div className="flex items-center gap-2.5">
                 <div className="w-9 h-9 rounded-lg bg-purple-600/20 text-purple-400 border border-purple-500/30 flex items-center justify-center font-bold">
                   <span className="material-symbols-outlined text-xl">person_add</span>
                 </div>
                 <div>
-                  <h3 className="text-base font-bold text-white">Convidar Novo Usuário</h3>
-                  <p className="text-[11px] font-mono text-slate-400">Conceda acesso à plataforma via convite seguro</p>
+                  <h3 className="text-base font-bold text-[#171717]">Convidar Novo Usuário</h3>
+                  <p className="text-[11px] font-mono text-[#77766F]">Conceda acesso à plataforma via convite seguro</p>
                 </div>
               </div>
               <button
                 onClick={() => setIsInviteModalOpen(false)}
-                className="text-slate-400 hover:text-white p-1"
+                className="text-[#77766F] hover:text-white p-1"
               >
                 <span className="material-symbols-outlined text-lg">close</span>
               </button>
@@ -826,46 +1091,46 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
 
             <form onSubmit={handleSendInvite} className="space-y-4 py-4 text-xs">
               <div className="space-y-1.5">
-                <label className="font-bold text-slate-300">Nome Completo</label>
+                <label className="font-bold text-[#171717]">Nome Completo</label>
                 <input
                   type="text"
                   required
                   value={inviteName}
                   onChange={(e) => setInviteName(e.target.value)}
                   placeholder="ex: Kayque de Jesus Oliveira"
-                  className="w-full h-10 px-3 bg-[#10141f] border border-[#1e2433] rounded-xl text-white placeholder:text-slate-500 focus:outline-none focus:border-purple-500"
+                  className="w-full h-10 px-3 bg-[#E4E2DB] border border-[#CFCDC5] rounded-xl text-[#171717] placeholder:text-[#5F5F5F] focus:outline-none focus:border-purple-500"
                 />
               </div>
 
               <div className="space-y-1.5">
-                <label className="font-bold text-slate-300">E-mail Corporativo</label>
+                <label className="font-bold text-[#171717]">E-mail Corporativo</label>
                 <input
                   type="email"
                   required
                   value={inviteEmail}
                   onChange={(e) => setInviteEmail(e.target.value)}
                   placeholder="ex: promotormk9@gmail.com"
-                  className="w-full h-10 px-3 bg-[#10141f] border border-[#1e2433] rounded-xl text-white placeholder:text-slate-500 focus:outline-none focus:border-purple-500"
+                  className="w-full h-10 px-3 bg-[#E4E2DB] border border-[#CFCDC5] rounded-xl text-[#171717] placeholder:text-[#5F5F5F] focus:outline-none focus:border-purple-500"
                 />
               </div>
 
               <div className="space-y-1.5">
-                <label className="font-bold text-slate-300">Departamento / Área</label>
+                <label className="font-bold text-[#171717]">Departamento / Área</label>
                 <input
                   type="text"
                   value={inviteDepartment}
                   onChange={(e) => setInviteDepartment(e.target.value)}
                   placeholder="ex: Campo SP"
-                  className="w-full h-10 px-3 bg-[#10141f] border border-[#1e2433] rounded-xl text-white placeholder:text-slate-500 focus:outline-none focus:border-purple-500"
+                  className="w-full h-10 px-3 bg-[#E4E2DB] border border-[#CFCDC5] rounded-xl text-[#171717] placeholder:text-[#5F5F5F] focus:outline-none focus:border-purple-500"
                 />
               </div>
 
               <div className="space-y-1.5">
-                <label className="font-bold text-slate-300">Papel Inicial</label>
+                <label className="font-bold text-[#171717]">Papel Inicial</label>
                 <select
                   value={inviteRole}
                   onChange={(e) => setInviteRole(e.target.value as UserRole)}
-                  className="w-full h-10 px-3 bg-[#10141f] border border-[#1e2433] rounded-xl text-white font-mono focus:outline-none focus:border-purple-500 cursor-pointer"
+                  className="w-full h-10 px-3 bg-[#E4E2DB] border border-[#CFCDC5] rounded-xl text-[#171717] font-mono focus:outline-none focus:border-purple-500 cursor-pointer"
                 >
                   <option value="promotor">Promotor de Campo</option>
                   <option value="operador">Operador de Campo</option>
@@ -877,7 +1142,7 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
 
               {/* Seção Vínculo de Indústria (Quando inviteRole === 'client_industry') */}
               {inviteRole === 'client_industry' && (
-                <div className="p-4 rounded-xl bg-[#10141f] border border-cyan-500/30 space-y-3">
+                <div className="p-4 rounded-xl bg-[#E4E2DB] border border-cyan-500/30 space-y-3">
                   <div className="flex items-center justify-between">
                     <label className="font-bold text-cyan-300 flex items-center gap-1.5">
                       <span className="material-symbols-outlined text-sm">factory</span>
@@ -890,7 +1155,7 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                     value={inviteIndustriaCodigo}
                     onChange={(e) => setInviteIndustriaCodigo(e.target.value)}
                     required
-                    className="w-full h-10 px-3 bg-[#171b26] border border-[#1e2433] rounded-xl text-white font-mono text-xs focus:outline-none focus:border-cyan-500 cursor-pointer"
+                    className="w-full h-10 px-3 bg-[#F7F6F2] border border-[#CFCDC5] rounded-xl text-[#171717] font-mono text-xs focus:outline-none focus:border-cyan-500 cursor-pointer"
                   >
                     <option value="">-- Selecione uma Indústria --</option>
                     {industriasOptions.map((ind) => (
@@ -899,24 +1164,24 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                       </option>
                     ))}
                   </select>
-                  <p className="text-[11px] text-slate-400">
+                  <p className="text-[11px] text-[#77766F]">
                     Vincular o usuário à indústria cadastrada em <code className="text-cyan-300 font-mono">public.industrias</code> para restringir o portal.
                   </p>
                 </div>
               )}
 
-              <div className="pt-3 border-t border-[#1e2433] flex items-center justify-end gap-2">
+              <div className="pt-3 border-t border-[#CFCDC5] flex items-center justify-end gap-2">
                 <button
                   type="button"
                   onClick={() => setIsInviteModalOpen(false)}
-                  className="px-4 py-2 rounded-xl bg-[#131722] hover:bg-[#1f2433] text-slate-300 border border-[#1e2433] font-semibold"
+                  className="px-4 py-2 rounded-xl bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] border border-[#CFCDC5] font-semibold"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
                   disabled={inviting}
-                  className="px-5 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold neon-purple-glow disabled:opacity-50 flex items-center gap-1.5"
+                  className="px-5 py-2 rounded-xl bg-[#222222] hover:bg-black text-white font-bold shadow-xs disabled:opacity-50 flex items-center gap-1.5"
                 >
                   {inviting ? (
                     <span>Enviando...</span>
@@ -936,20 +1201,20 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
       {/* Modal Editar Perfil e Vínculo Visual */}
       {editingUser && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
-          <div className="relative w-full max-w-lg bg-[#171b26] border border-[#1e2433] rounded-2xl shadow-2xl p-6 overflow-hidden">
-            <div className="flex items-center justify-between pb-4 border-b border-[#1e2433]">
+          <div className="relative w-full max-w-lg bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl shadow-2xl p-6 overflow-hidden">
+            <div className="flex items-center justify-between pb-4 border-b border-[#CFCDC5]">
               <div className="flex items-center gap-2.5">
                 <div className="w-9 h-9 rounded-lg bg-purple-600/20 text-purple-400 border border-purple-500/30 flex items-center justify-center font-bold">
                   <span className="material-symbols-outlined text-xl">manage_accounts</span>
                 </div>
                 <div>
-                  <h3 className="text-base font-bold text-white">Editar Vínculo Visual</h3>
-                  <p className="text-[11px] font-mono text-slate-400">{editingUser.email}</p>
+                  <h3 className="text-base font-bold text-[#171717]">Editar Vínculo Visual</h3>
+                  <p className="text-[11px] font-mono text-[#77766F]">{editingUser.email}</p>
                 </div>
               </div>
               <button
                 onClick={() => setEditingUser(null)}
-                className="text-slate-400 hover:text-white p-1"
+                className="text-[#77766F] hover:text-white p-1"
               >
                 <span className="material-symbols-outlined text-lg">close</span>
               </button>
@@ -957,23 +1222,23 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
 
             <form onSubmit={handlePreSaveEdit} className="space-y-4 py-4 text-xs">
               <div className="space-y-1.5">
-                <label className="font-bold text-slate-300">Login / E-mail</label>
+                <label className="font-bold text-[#171717]">Login / E-mail</label>
                 <input
                   type="text"
                   disabled
                   value={editingUser.email}
-                  className="w-full h-10 px-3 bg-[#10141f] border border-[#1e2433] rounded-xl text-slate-400 cursor-not-allowed font-mono text-xs"
+                  className="w-full h-10 px-3 bg-[#E4E2DB] border border-[#CFCDC5] rounded-xl text-[#77766F] cursor-not-allowed font-mono text-xs"
                 />
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1.5">
-                  <label className="font-bold text-slate-300">Papel RBAC</label>
+                  <label className="font-bold text-[#171717]">Papel RBAC</label>
                   <select
                     disabled={role !== 'admin'}
                     value={editRole}
                     onChange={(e) => setEditRole(e.target.value as UserRole)}
-                    className="w-full h-10 px-3 bg-[#10141f] border border-[#1e2433] rounded-xl text-white font-mono focus:outline-none focus:border-purple-500 cursor-pointer disabled:opacity-50"
+                    className="w-full h-10 px-3 bg-[#E4E2DB] border border-[#CFCDC5] rounded-xl text-[#171717] font-mono focus:outline-none focus:border-purple-500 cursor-pointer disabled:opacity-50"
                   >
                     <option value="admin">Administrador</option>
                     <option value="gestor">Gestor de Operação</option>
@@ -984,11 +1249,11 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="font-bold text-slate-300">Status do Acesso</label>
+                  <label className="font-bold text-[#171717]">Status do Acesso</label>
                   <select
                     value={editStatus}
                     onChange={(e) => setEditStatus(e.target.value as 'ativo' | 'inativo')}
-                    className="w-full h-10 px-3 bg-[#10141f] border border-[#1e2433] rounded-xl text-white font-mono focus:outline-none focus:border-purple-500 cursor-pointer"
+                    className="w-full h-10 px-3 bg-[#E4E2DB] border border-[#CFCDC5] rounded-xl text-[#171717] font-mono focus:outline-none focus:border-purple-500 cursor-pointer"
                   >
                     <option value="ativo">Ativo (Acesso Liberado)</option>
                     <option value="inativo">Inativo (Acesso Bloqueado)</option>
@@ -998,7 +1263,7 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
 
               {/* Seção Vínculo de Indústria (Quando editRole === 'client_industry') */}
               {editRole === 'client_industry' && (
-                <div className="p-4 rounded-xl bg-[#10141f] border border-cyan-500/30 space-y-3">
+                <div className="p-4 rounded-xl bg-[#E4E2DB] border border-cyan-500/30 space-y-3">
                   <div className="flex items-center justify-between">
                     <label className="font-bold text-cyan-300 flex items-center gap-1.5">
                       <span className="material-symbols-outlined text-sm">factory</span>
@@ -1010,7 +1275,7 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                   <select
                     value={editIndustriaCodigo}
                     onChange={(e) => setEditIndustriaCodigo(e.target.value)}
-                    className="w-full h-10 px-3 bg-[#171b26] border border-[#1e2433] rounded-xl text-white font-mono text-xs focus:outline-none focus:border-cyan-500 cursor-pointer"
+                    className="w-full h-10 px-3 bg-[#F7F6F2] border border-[#CFCDC5] rounded-xl text-[#171717] font-mono text-xs focus:outline-none focus:border-cyan-500 cursor-pointer"
                   >
                     <option value="">-- Selecione uma Indústria --</option>
                     {industriasOptions.map((ind) => (
@@ -1019,7 +1284,7 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                       </option>
                     ))}
                   </select>
-                  <p className="text-[11px] text-slate-400">
+                  <p className="text-[11px] text-[#77766F]">
                     Define qual indústria em <code className="text-cyan-300 font-mono">public.industrias</code> este usuário poderá acessar no Portal da Indústria.
                   </p>
                 </div>
@@ -1027,7 +1292,7 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
 
               {/* Seção Vínculo de Matrícula (Quando editRole === 'promotor') */}
               {editRole === 'promotor' && (
-                <div className="p-4 rounded-xl bg-[#10141f] border border-amber-500/30 space-y-3">
+                <div className="p-4 rounded-xl bg-[#E4E2DB] border border-amber-500/30 space-y-3">
                   <div className="flex items-center justify-between">
                     <label className="font-bold text-amber-300 flex items-center gap-1.5">
                       <span className="material-symbols-outlined text-sm">badge</span>
@@ -1039,7 +1304,7 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                   <select
                     value={editPromotorMatricula}
                     onChange={(e) => setEditPromotorMatricula(e.target.value)}
-                    className="w-full h-10 px-3 bg-[#171b26] border border-[#1e2433] rounded-xl text-white font-mono text-xs focus:outline-none focus:border-amber-500 cursor-pointer"
+                    className="w-full h-10 px-3 bg-[#F7F6F2] border border-[#CFCDC5] rounded-xl text-[#171717] font-mono text-xs focus:outline-none focus:border-amber-500 cursor-pointer"
                   >
                     <option value="">-- Não vinculado --</option>
                     {promotoresOptions.map((p) => (
@@ -1048,24 +1313,24 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                       </option>
                     ))}
                   </select>
-                  <p className="text-[11px] text-slate-400">
+                  <p className="text-[11px] text-[#77766F]">
                     Associa o login aos dados de rotas, supervisor e equipe do registro em <code className="text-amber-300 font-mono">public.promotores</code>.
                   </p>
                 </div>
               )}
 
-              <div className="pt-3 border-t border-[#1e2433] flex items-center justify-end gap-2">
+              <div className="pt-3 border-t border-[#CFCDC5] flex items-center justify-end gap-2">
                 <button
                   type="button"
                   onClick={() => setEditingUser(null)}
-                  className="px-4 py-2 rounded-xl bg-[#131722] hover:bg-[#1f2433] text-slate-300 border border-[#1e2433] font-semibold"
+                  className="px-4 py-2 rounded-xl bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] border border-[#CFCDC5] font-semibold"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
                   disabled={savingEdit}
-                  className="px-5 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold neon-purple-glow disabled:opacity-50"
+                  className="px-5 py-2 rounded-xl bg-[#222222] hover:bg-black text-white font-bold shadow-xs disabled:opacity-50"
                 >
                   Salvar Vínculo
                 </button>
@@ -1078,25 +1343,25 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
       {/* Modal de Confirmação de Vínculo */}
       {confirmModalData && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-fadeIn">
-          <div className="relative w-full max-w-md bg-[#171b26] border border-amber-500/40 rounded-2xl shadow-2xl p-6 overflow-hidden space-y-4">
+          <div className="relative w-full max-w-md bg-[#F7F6F2] border border-amber-500/40 rounded-2xl shadow-2xl p-6 overflow-hidden space-y-4">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/40 flex items-center justify-center font-bold shrink-0">
                 <span className="material-symbols-outlined text-2xl">help</span>
               </div>
               <div>
-                <h3 className="text-base font-bold text-white">Confirmar Vínculo</h3>
-                <p className="text-[11px] text-slate-400 font-mono">Atualização de relacionamento em tempo real</p>
+                <h3 className="text-base font-bold text-[#171717]">Confirmar Vínculo</h3>
+                <p className="text-[11px] text-[#77766F] font-mono">Atualização de relacionamento em tempo real</p>
               </div>
             </div>
 
-            <div className="p-4 rounded-xl bg-[#10141f] border border-[#1e2433] space-y-2 text-xs">
-              <div className="flex justify-between border-b border-[#1e2433] pb-2">
-                <span className="text-slate-400">Login / E-mail:</span>
-                <span className="font-bold text-white font-mono">{confirmModalData.user.email}</span>
+            <div className="p-4 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5] space-y-2 text-xs">
+              <div className="flex justify-between border-b border-[#CFCDC5] pb-2">
+                <span className="text-[#77766F]">Login / E-mail:</span>
+                <span className="font-bold text-[#171717] font-mono">{confirmModalData.user.email}</span>
               </div>
-              <div className="flex justify-between border-b border-[#1e2433] pb-2">
-                <span className="text-slate-400">Matrícula Anterior:</span>
-                <span className="font-mono text-slate-300">
+              <div className="flex justify-between border-b border-[#CFCDC5] pb-2">
+                <span className="text-[#77766F]">Matrícula Anterior:</span>
+                <span className="font-mono text-[#171717]">
                   {confirmModalData.user.promotor_matricula || 'Não vinculado'}
                 </span>
               </div>
@@ -1112,7 +1377,7 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
               <button
                 type="button"
                 onClick={() => setConfirmModalData(null)}
-                className="px-4 py-2 rounded-xl bg-[#131722] hover:bg-[#1f2433] text-slate-300 border border-[#1e2433] text-xs font-semibold"
+                className="px-4 py-2 rounded-xl bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] border border-[#CFCDC5] text-xs font-semibold"
               >
                 Cancelar
               </button>
@@ -1144,19 +1409,19 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
           <div className="bg-[#0b0e14] border border-red-500/30 rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4">
             <div className="flex items-center gap-3 text-red-400">
               <span className="material-symbols-outlined text-2xl">warning</span>
-              <h3 className="text-base font-bold text-white">Excluir usuário?</h3>
+              <h3 className="text-base font-bold text-[#171717]">Excluir usuário?</h3>
             </div>
 
-            <p className="text-xs text-slate-300 leading-relaxed">
-              Essa ação excluirá permanentemente o usuário <strong className="text-white">{deleteModalUser.name}</strong> ({deleteModalUser.email}) e o acesso dele ao sistema. Essa operação não pode ser desfeita.
+            <p className="text-xs text-[#171717] leading-relaxed">
+              Essa ação excluirá permanentemente o usuário <strong className="text-[#171717]">{deleteModalUser.name}</strong> ({deleteModalUser.email}) e o acesso dele ao sistema. Essa operação não pode ser desfeita.
             </p>
 
-            <div className="pt-3 border-t border-[#1e2433] flex items-center justify-end gap-2 text-xs">
+            <div className="pt-3 border-t border-[#CFCDC5] flex items-center justify-end gap-2 text-xs">
               <button
                 type="button"
                 disabled={deletingUser}
                 onClick={() => setDeleteModalUser(null)}
-                className="px-4 py-2 rounded-xl bg-[#131722] hover:bg-[#1f2433] text-slate-300 border border-[#1e2433] font-semibold"
+                className="px-4 py-2 rounded-xl bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] border border-[#CFCDC5] font-semibold"
               >
                 Cancelar
               </button>
@@ -1186,18 +1451,18 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
           <div className="bg-[#0b0e14] border border-purple-500/30 rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4">
             <div className="flex items-center gap-3 text-purple-400">
               <span className="material-symbols-outlined text-2xl">check_circle</span>
-              <h3 className="text-base font-bold text-white">Usuário criado com sucesso</h3>
+              <h3 className="text-base font-bold text-[#171717]">Usuário criado com sucesso</h3>
             </div>
 
             {createdCredentials.emailSent ? (
               <>
                 <div className="p-4 bg-emerald-950/20 border border-emerald-500/30 rounded-xl text-xs space-y-3">
                   <div>
-                    <span className="text-slate-400 font-sans block mb-1">As credenciais foram enviadas para:</span>
+                    <span className="text-[#77766F] font-sans block mb-1">As credenciais foram enviadas para:</span>
                     <div className="text-emerald-300 font-bold font-mono text-sm select-all">{createdCredentials.email}</div>
                   </div>
                   <div>
-                    <span className="text-slate-400 font-sans block mb-1">Link de acesso:</span>
+                    <span className="text-[#77766F] font-sans block mb-1">Link de acesso:</span>
                     <a
                       href="https://mk9-date.vercel.app/login"
                       target="_blank"
@@ -1209,11 +1474,11 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                   </div>
                 </div>
 
-                <div className="pt-2 border-t border-[#1e2433]">
+                <div className="pt-2 border-t border-[#CFCDC5]">
                   <button
                     type="button"
                     onClick={() => setShowContingencyPassword((prev) => !prev)}
-                    className="text-[11px] text-slate-400 hover:text-amber-400 flex items-center gap-1 transition-colors font-mono"
+                    className="text-[11px] text-[#77766F] hover:text-amber-400 flex items-center gap-1 transition-colors font-mono"
                   >
                     <span className="material-symbols-outlined text-sm">
                       {showContingencyPassword ? 'expand_less' : 'key'}
@@ -1224,7 +1489,7 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                   </button>
 
                   {showContingencyPassword && createdCredentials.tempPassword && (
-                    <div className="mt-2.5 p-3 bg-[#131722] border border-amber-500/30 rounded-xl text-xs font-mono space-y-1">
+                    <div className="mt-2.5 p-3 bg-[#EAE8E2] border border-amber-500/30 rounded-xl text-xs font-mono space-y-1">
                       <span className="text-amber-400 text-[11px] font-bold block">Senha Temporária (Contingência):</span>
                       <div className="text-amber-300 font-bold bg-amber-500/10 border border-amber-500/20 px-2.5 py-1.5 rounded select-all text-sm tracking-wider">
                         {createdCredentials.tempPassword}
@@ -1240,15 +1505,15 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                     <span className="material-symbols-outlined text-lg">warning</span>
                     <span>Usuário criado, mas não foi possível enviar o e-mail.</span>
                   </div>
-                  <p className="text-slate-300 font-sans text-[11px] leading-relaxed">
+                  <p className="text-[#171717] font-sans text-[11px] leading-relaxed">
                     Repasse a senha temporária manualmente para o usuário poder realizar o primeiro acesso.
                   </p>
                   <div>
-                    <span className="text-slate-400 font-sans block mb-1">Login / E-mail:</span>
+                    <span className="text-[#77766F] font-sans block mb-1">Login / E-mail:</span>
                     <div className="text-white font-bold font-mono">{createdCredentials.email}</div>
                   </div>
                   <div>
-                    <span className="text-slate-400 font-sans block mb-1">Link de acesso:</span>
+                    <span className="text-[#77766F] font-sans block mb-1">Link de acesso:</span>
                     <a
                       href="https://mk9-date.vercel.app/login"
                       target="_blank"
@@ -1274,11 +1539,109 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
               <button
                 type="button"
                 onClick={() => setCreatedCredentials(null)}
-                className="px-5 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs shadow-md"
+                className="px-5 py-2 rounded-xl bg-[#222222] hover:bg-black text-white font-bold text-xs shadow-md"
               >
                 Concluído
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Liberação / Revogação de Promotor (Etapa 4.1) */}
+      {authModalPromoter && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+          <div className="relative w-full max-w-md bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl shadow-2xl p-6 overflow-hidden space-y-4">
+            <div className="flex items-center justify-between pb-4 border-b border-[#CFCDC5]">
+              <div className="flex items-center gap-2.5">
+                <div className={`w-9 h-9 rounded-lg flex items-center justify-center font-bold ${
+                  authModalAction === 'liberar'
+                    ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                    : 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
+                }`}>
+                  <span className="material-symbols-outlined text-xl">
+                    {authModalAction === 'liberar' ? 'verified_user' : 'lock_reset'}
+                  </span>
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-[#171717]">
+                    {authModalAction === 'liberar' ? 'Liberar Promotor para Piloto' : 'Revogar Acesso Operacional'}
+                  </h3>
+                  <p className="text-[11px] font-mono text-[#77766F]">
+                    Matrícula: {authModalPromoter.matricula}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setAuthModalPromoter(null)}
+                className="text-[#77766F] hover:text-white p-1"
+              >
+                <span className="material-symbols-outlined text-lg">close</span>
+              </button>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5] space-y-1.5 text-xs font-mono">
+              <div className="flex justify-between">
+                <span className="text-[#77766F]">Nome:</span>
+                <span className="font-bold text-white">{authModalPromoter.nome}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-[#77766F]">Rotas cadastradas:</span>
+                <span className="text-amber-300 font-bold">
+                  {promoterRoutesCount.get(authModalPromoter.matricula) || 0} rotas
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-[#77766F]">Modo global:</span>
+                <span className="text-[#171717]">IMPLANTAÇÃO (Pré-SLA)</span>
+              </div>
+            </div>
+
+            <form onSubmit={handleSavePromoterAuthorization} className="space-y-4 text-xs">
+              <div className="space-y-1.5">
+                <label className="font-bold text-[#171717]">Justificativa Operacional *</label>
+                <textarea
+                  required
+                  rows={3}
+                  value={authJustification}
+                  onChange={(e) => setAuthJustification(e.target.value)}
+                  placeholder={
+                    authModalAction === 'liberar'
+                      ? 'Ex: Autorizado para validação de rota piloto na regional Sul.'
+                      : 'Ex: Conclusão do período de testes / solicitação da supervisão.'
+                  }
+                  className="w-full p-3 bg-[#E4E2DB] border border-[#CFCDC5] rounded-xl text-[#171717] placeholder:text-[#5F5F5F] focus:outline-none focus:border-amber-500 resize-none font-sans"
+                />
+                <span className="text-[11px] text-[#5F5F5F] block">
+                  Ficará registrado para auditoria com seu usuário ({profile?.name || 'Administrador'}).
+                </span>
+              </div>
+
+              <div className="pt-3 border-t border-[#CFCDC5] flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setAuthModalPromoter(null)}
+                  className="px-4 py-2 rounded-xl bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] border border-[#CFCDC5] font-semibold cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={submittingAuth}
+                  className={`px-5 py-2 rounded-xl text-white font-bold transition-all shadow-md cursor-pointer disabled:opacity-50 ${
+                    authModalAction === 'liberar'
+                      ? 'bg-amber-600 hover:bg-amber-500'
+                      : 'bg-rose-600 hover:bg-rose-500'
+                  }`}
+                >
+                  {submittingAuth
+                    ? 'Salvando...'
+                    : authModalAction === 'liberar'
+                    ? 'Confirmar Liberação'
+                    : 'Confirmar Revogação'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { ScreenId, ToastMessage, Visit, RouteItem, AlertItem } from '../types';
+import { ScreenId, ToastMessage, Visit, RouteItem, AlertItem, SystemSettingsState } from '../types';
 import { supabase } from '../lib/supabase';
+import { fetchSystemSettings } from '../lib/systemSettings';
 import { useAuth } from '../auth/AuthProvider';
 import {
   calculateOperationalVisits,
@@ -23,6 +24,14 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Configurações do Sistema (Modo Operacional e Data Oficial)
+  const [systemSettings, setSystemSettings] = useState<SystemSettingsState>({
+    mode: 'IMPLANTACAO',
+    officialStartDate: null,
+    status: 'loading',
+    error: null
+  });
 
   // Filtro de Período Simples (today | week | month)
   const [periodFilter, setPeriodFilter] = useState<'today' | 'week' | 'month'>('today');
@@ -109,8 +118,8 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
         visitsQuery = visitsQuery.gte('data_visita', startDateStr);
       }
 
-      // 2. Rotas, Promotores e Indústrias
-      const [visitsRes, rotasRes, promotoresRes, industriasRes] = await Promise.all([
+      // 2. Rotas, Promotores, Indústrias e Configurações Operacionais
+      const [visitsRes, rotasRes, promotoresRes, industriasRes, settingsData] = await Promise.all([
         visitsQuery,
         supabase.from('rotas').select(`
           *,
@@ -119,7 +128,8 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
           promotor:promotores(matricula, nome)
         `),
         supabase.from('promotores').select('*'),
-        supabase.from('industrias').select('*')
+        supabase.from('industrias').select('*'),
+        fetchSystemSettings()
       ]);
 
       if (visitsRes.error) throw visitsRes.error;
@@ -132,6 +142,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
       setRoutes(realRoutes);
       setPromotoresList(promotoresRes.data || []);
       setIndustriasList(industriasRes.data || []);
+      setSystemSettings(settingsData);
 
       // Gerar URLs assinadas para fotos com tipo_foto = 'ruptura'
       const signedMap: Record<string, string> = {};
@@ -298,9 +309,11 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
       promotoresList,
       industriasList,
       daysRange: periodDaysRange,
-      todayStr
+      todayStr,
+      operationMode: systemSettings.mode,
+      officialStartDate: systemSettings.officialStartDate
     });
-  }, [routes, visits, promotoresList, industriasList, periodDaysRange, todayStr]);
+  }, [routes, visits, promotoresList, industriasList, periodDaysRange, todayStr, systemSettings]);
 
   const pendenciasKpis = useMemo(() => {
     const pendentesHoje = allOperationalVisits.filter(v => v.status === 'pendente' && v.dataStr === todayStr).length;
@@ -1025,8 +1038,9 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
       }
     });
 
-    // 5. Aderência por Promotor (🔴 CRÍTICO / 🟡 PENDENTE)
-    promotoresList.forEach((p) => {
+    // 5. Aderência por Promotor (🔴 CRÍTICO / 🟡 PENDENTE) — Ativo apenas em OPERACAO_OFICIAL
+    if (systemSettings.mode === 'OPERACAO_OFICIAL' && systemSettings.status === 'loaded') {
+      promotoresList.forEach((p) => {
       const pPlanned = totalPlannedItems.filter((pi) => pi.promotorMatricula === p.matricula);
       if (pPlanned.length > 0) {
         const pConcluidas = visits.filter(
@@ -1069,6 +1083,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
         }
       }
     });
+  }
 
     const priorityWeight: Record<string, number> = {
       critico: 1,
@@ -1083,7 +1098,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
       if (wA !== wB) return wA - wB;
       return (b.createdAtTimestamp || 0) - (a.createdAtTimestamp || 0);
     });
-  }, [visits, routes, promotoresList, industriasList, totalPlannedItems, visitsMapByRouteKey, periodFilter]);
+  }, [visits, routes, promotoresList, industriasList, totalPlannedItems, visitsMapByRouteKey, periodFilter, systemSettings]);
 
   // Filtragem dos Alertas da Central
   const centralAlertsFiltrados = useMemo(() => {
@@ -1262,41 +1277,41 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
   return (
     <div className="w-full px-4 lg:px-8 py-6 max-w-[1720px] mx-auto space-y-6 font-sans">
       {/* HEADER OPERACIONAL */}
-      <section className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6 bg-[#171b26] border border-[#1e2433] p-5 sm:p-6 rounded-2xl shadow-xl relative overflow-hidden">
+      <section className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6 bg-[#F7F6F2] border border-[#CFCDC5] p-5 sm:p-6 rounded-2xl shadow-xl relative overflow-hidden">
         <div className="absolute -right-16 -top-16 w-80 h-80 rounded-full bg-gradient-to-br from-purple-600/15 via-cyan-500/10 to-transparent blur-3xl pointer-events-none" />
         <div className="flex flex-col space-y-1.5 z-10">
           <div className="flex items-center gap-2">
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-slate-800 border border-slate-700 text-slate-400 font-mono text-[11px] font-bold">
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-slate-800 border border-[#CFCDC5] text-[#77766F] font-mono text-[11px] font-bold">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
               TELEMETRIA OPERACIONAL REALTIME
             </span>
           </div>
-          <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
+          <h1 className="text-2xl sm:text-3xl font-extrabold text-[#171717] tracking-tight">
             Painel Operacional de Trade Marketing
           </h1>
-          <p className="text-xs sm:text-sm text-slate-400 max-w-3xl">
+          <p className="text-xs sm:text-sm text-[#77766F] max-w-3xl">
             Indicadores gerenciais consolidados em tempo real a partir da execução do Portal do Promotor.
           </p>
         </div>
 
         {/* Action Bar & Filtro de Período */}
         <div className="flex flex-wrap items-center gap-3 z-10 font-mono text-xs">
-          <div className="flex items-center bg-[#131722] border border-[#1e2433] rounded-xl p-1">
+          <div className="flex items-center bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl p-1">
             <button
               onClick={() => setPeriodFilter('today')}
-              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${periodFilter === 'today' ? 'bg-purple-600 text-white shadow-md' : 'text-slate-400 hover:text-white'}`}
+              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${periodFilter === 'today' ? 'bg-[#222222] text-white shadow-md' : 'text-[#77766F] hover:text-white'}`}
             >
               Hoje
             </button>
             <button
               onClick={() => setPeriodFilter('week')}
-              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${periodFilter === 'week' ? 'bg-purple-600 text-white shadow-md' : 'text-slate-400 hover:text-white'}`}
+              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${periodFilter === 'week' ? 'bg-[#222222] text-white shadow-md' : 'text-[#77766F] hover:text-white'}`}
             >
               Últimos 7 dias
             </button>
             <button
               onClick={() => setPeriodFilter('month')}
-              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${periodFilter === 'month' ? 'bg-purple-600 text-white shadow-md' : 'text-slate-400 hover:text-white'}`}
+              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${periodFilter === 'month' ? 'bg-[#222222] text-white shadow-md' : 'text-[#77766F] hover:text-white'}`}
             >
               Este Mês
             </button>
@@ -1305,7 +1320,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
           <button
             onClick={fetchOperationalData}
             disabled={loading}
-            className="flex items-center gap-2 bg-purple-600 hover:bg-purple-500 text-white font-bold px-4 py-2 rounded-xl neon-purple-glow transition-all active:scale-95 shadow-md cursor-pointer disabled:opacity-50"
+            className="flex items-center gap-2 bg-[#222222] hover:bg-black text-white font-bold px-4 py-2 rounded-xl shadow-xs transition-all active:scale-95 shadow-md cursor-pointer disabled:opacity-50"
           >
             <span className={`material-symbols-outlined text-[18px] ${loading ? 'animate-spin' : ''}`}>
               refresh
@@ -1313,25 +1328,96 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
             <span>Atualizar</span>
           </button>
 
-          <div className="px-3 py-2 bg-[#131722] border border-[#1e2433] rounded-xl text-slate-400">
-            Sincronizado: <strong className="text-white">{lastUpdate}</strong>
+          <div className="px-3 py-2 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#77766F]">
+            Sincronizado: <strong className="text-[#171717]">{lastUpdate}</strong>
           </div>
         </div>
       </section>
 
+      {/* BANNER DE IDENTIFICAÇÃO DO MODO OPERACIONAL */}
+      {systemSettings.status === 'loading' ? (
+        <section className="bg-[#F7F6F2] border border-[#CFCDC5]/60 rounded-2xl p-4 flex items-center justify-between gap-4 font-mono text-xs text-[#77766F] shadow-md">
+          <div className="flex items-center gap-3">
+            <span className="material-symbols-outlined text-[#77766F] text-xl animate-spin">sync</span>
+            <span>Carregando configurações operacionais e diretrizes de SLA...</span>
+          </div>
+        </section>
+      ) : systemSettings.status !== 'loaded' || systemSettings.mode === 'DESCONHECIDO' ? (
+        <section className="bg-rose-950/30 border border-rose-500/40 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 font-mono text-xs text-rose-200 shadow-md">
+          <div className="flex items-center gap-3">
+            <span className="material-symbols-outlined text-rose-400 text-xl">shield_locked</span>
+            <div>
+              <strong className="text-[#171717] block font-sans text-sm">CONFIGURAÇÃO OPERACIONAL INDISPONÍVEL</strong>
+              <span>Não foi possível confirmar o modo do sistema. Operando em modo seguro restritivo (SLA desativado).</span>
+            </div>
+          </div>
+          <span className="px-2.5 py-1 rounded bg-rose-500/20 text-rose-300 font-bold border border-rose-500/30 self-start sm:self-auto">
+            Fallback Seguro
+          </span>
+        </section>
+      ) : systemSettings.mode === 'IMPLANTACAO' ? (
+        <section className="bg-amber-950/25 border border-amber-500/40 rounded-2xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 font-mono text-xs shadow-md">
+          <div className="flex items-start md:items-center gap-3">
+            <span className="material-symbols-outlined text-amber-400 text-2xl mt-0.5 md:mt-0">handshake</span>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="font-bold text-amber-300 uppercase tracking-wider text-[11px] bg-amber-500/20 px-2 py-0.5 rounded border border-amber-500/30">
+                  FASE DE IMPLANTAÇÃO
+                </span>
+                <span className="text-[#77766F] text-[11px]">• SLA Não Ativo</span>
+              </div>
+              <p className="text-[#171717] text-xs mt-1 font-sans">
+                O sistema está operando em período de calibração e treinamento. Visitas reais registradas são auditadas com evidências, enquanto rotas planejadas sem atendimento <strong>não constituem atrasos operacionais oficiais</strong>.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 self-start md:self-auto shrink-0">
+            <span className="text-[10px] text-amber-400/80 bg-[#E4E2DB] border border-amber-500/30 px-3 py-1.5 rounded-xl font-bold">
+              Telemetria Operacional Pré-SLA
+            </span>
+          </div>
+        </section>
+      ) : (
+        <section className="bg-emerald-950/25 border border-emerald-500/40 rounded-2xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 font-mono text-xs shadow-md">
+          <div className="flex items-start md:items-center gap-3">
+            <span className="material-symbols-outlined text-emerald-400 text-2xl mt-0.5 md:mt-0">verified</span>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="font-bold text-emerald-300 uppercase tracking-wider text-[11px] bg-emerald-500/20 px-2 py-0.5 rounded border border-emerald-500/30">
+                  OPERAÇÃO OFICIAL ATIVA
+                </span>
+                {systemSettings.officialStartDate && (
+                  <span className="text-[#171717] text-[11px]">
+                    • Início Oficial: <strong>{systemSettings.officialStartDate}</strong>
+                  </span>
+                )}
+              </div>
+              <p className="text-[#171717] text-xs mt-1 font-sans">
+                SLA de atendimento em vigor. Todas as rotas planejadas a partir da data de início oficial geram cálculo de conformidade, pendências e telemetria de desempenho em tempo real.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 self-start md:self-auto shrink-0">
+            <span className="text-[10px] text-emerald-400 bg-[#E4E2DB] border border-emerald-500/30 px-3 py-1.5 rounded-xl font-bold">
+              SLA Operacional em Produção
+            </span>
+          </div>
+        </section>
+      )}
+
       {/* BARRA DE FILTROS GLOBAIS OPERACIONAIS */}
-      <section className="bg-[#171b26] border border-[#1e2433] rounded-2xl p-4 shadow-md font-mono text-xs flex flex-wrap items-center gap-4">
-        <span className="text-slate-400 font-bold uppercase text-[11px] flex items-center gap-1">
+      <section className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-4 shadow-md font-mono text-xs flex flex-wrap items-center gap-4">
+        <span className="text-[#77766F] font-bold uppercase text-[11px] flex items-center gap-1">
           <span className="material-symbols-outlined text-purple-400 text-[16px]">filter_alt</span>
           Filtros Operacionais:
         </span>
 
         <div className="flex items-center gap-2">
-          <label className="text-slate-500 text-[10px] uppercase">Indústria:</label>
+          <label className="text-[#5F5F5F] text-[10px] uppercase">Indústria:</label>
           <select
             value={filterIndustria}
             onChange={(e) => setFilterIndustria(e.target.value)}
-            className="h-8 px-3 bg-[#131722] border border-[#1e2433] rounded-lg text-slate-200 focus:outline-none focus:border-purple-500"
+            className="h-8 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-lg text-[#171717] focus:outline-none focus:border-purple-500"
           >
             <option value="all">Todas ({industriasList.length})</option>
             {industriasList.map((ind) => (
@@ -1343,11 +1429,11 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
         </div>
 
         <div className="flex items-center gap-2">
-          <label className="text-slate-500 text-[10px] uppercase">Promotor:</label>
+          <label className="text-[#5F5F5F] text-[10px] uppercase">Promotor:</label>
           <select
             value={filterPromotor}
             onChange={(e) => setFilterPromotor(e.target.value)}
-            className="h-8 px-3 bg-[#131722] border border-[#1e2433] rounded-lg text-slate-200 focus:outline-none focus:border-purple-500"
+            className="h-8 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-lg text-[#171717] focus:outline-none focus:border-purple-500"
           >
             <option value="all">Todos ({promotoresList.length})</option>
             {promotoresList.map((p) => (
@@ -1359,11 +1445,11 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
         </div>
 
         <div className="flex items-center gap-2">
-          <label className="text-slate-500 text-[10px] uppercase">Loja / PDV:</label>
+          <label className="text-[#5F5F5F] text-[10px] uppercase">Loja / PDV:</label>
           <select
             value={filterLoja}
             onChange={(e) => setFilterLoja(e.target.value)}
-            className="h-8 px-3 bg-[#131722] border border-[#1e2433] rounded-lg text-slate-200 focus:outline-none focus:border-purple-500 max-w-[200px]"
+            className="h-8 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-lg text-[#171717] focus:outline-none focus:border-purple-500 max-w-[200px]"
           >
             <option value="all">Todas as Lojas</option>
             {lojasComRuptura.map((l) => (
@@ -1375,11 +1461,11 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
         </div>
 
         <div className="flex items-center gap-2">
-          <label className="text-slate-500 text-[10px] uppercase">Situação Validade:</label>
+          <label className="text-[#5F5F5F] text-[10px] uppercase">Situação Validade:</label>
           <select
             value={filterValidadeStatus}
             onChange={(e) => setFilterValidadeStatus(e.target.value)}
-            className="h-8 px-3 bg-[#131722] border border-[#1e2433] rounded-lg text-slate-200 focus:outline-none focus:border-purple-500 font-bold"
+            className="h-8 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-lg text-[#171717] focus:outline-none focus:border-purple-500 font-bold"
           >
             <option value="all">Todas ({todasValidades.length})</option>
             <option value="vencidos">🔴 Vencidos ({validadeCountVencidos})</option>
@@ -1391,11 +1477,11 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
         </div>
 
         <div className="flex items-center gap-2">
-          <label className="text-slate-500 text-[10px] uppercase">Status Agenda:</label>
+          <label className="text-[#5F5F5F] text-[10px] uppercase">Status Agenda:</label>
           <select
             value={filterAgendaStatus}
             onChange={(e) => setFilterAgendaStatus(e.target.value)}
-            className="h-8 px-3 bg-[#131722] border border-[#1e2433] rounded-lg text-slate-200 focus:outline-none focus:border-purple-500 font-bold"
+            className="h-8 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-lg text-[#171717] focus:outline-none focus:border-purple-500 font-bold"
           >
             <option value="all">Status: Todos</option>
             <option value="em_andamento">🔵 Em andamento</option>
@@ -1414,7 +1500,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
               setFilterValidadeStatus('all');
               setFilterAgendaStatus('all');
             }}
-            className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-bold transition-all cursor-pointer"
+            className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-[#171717] text-[10px] font-bold transition-all cursor-pointer"
           >
             Limpar Filtros
           </button>
@@ -1434,65 +1520,120 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
         </div>
       )}
 
-      {/* CARDS DE KPIS OPERACIONAIS REAIS */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3 font-mono">
-        <div className="p-4 rounded-2xl bg-[#171b26] border border-[#1e2433] shadow-lg">
-          <span className="text-[10px] text-slate-400 block font-bold uppercase">Planejadas</span>
-          <span className="text-2xl font-extrabold text-white mt-1 block">{rotasPlanejadasCount}</span>
+      {/* SEÇÃO 1: EXECUÇÃO REAL EM CAMPO (EVIDÊNCIAS E ATENDIMENTOS REAIS) */}
+      <div className="space-y-2 font-mono">
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-bold text-[#171717] uppercase tracking-wider flex items-center gap-1.5">
+            <span className="material-symbols-outlined text-emerald-400 text-sm">fact_check</span>
+            Execução Real em Campo (Atendimentos Efetivos)
+          </span>
+          <span className="text-[10px] text-[#77766F]">
+            Baseado exclusivamente nos registros auditados no sistema
+          </span>
         </div>
 
-        <div className="p-4 rounded-2xl bg-[#171b26] border border-emerald-500/30 shadow-lg">
-          <span className="text-[10px] text-emerald-400 block font-bold uppercase">Concluídas</span>
-          <span className="text-2xl font-extrabold text-emerald-400 mt-1 block">{concluidasCount}</span>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-emerald-500/30 shadow-lg">
+            <span className="text-[10px] text-emerald-400 block font-bold uppercase">Concluídas</span>
+            <span className="text-2xl font-extrabold text-emerald-400 mt-1 block">{concluidasCount}</span>
+            <span className="text-[10px] text-[#77766F] block mt-0.5">Check-outs finalizados</span>
+          </div>
+
+          <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-amber-500/30 shadow-lg">
+            <span className="text-[10px] text-amber-400 block font-bold uppercase">Em Andamento</span>
+            <span className="text-2xl font-extrabold text-amber-400 mt-1 block">{iniciadasCount}</span>
+            <span className="text-[10px] text-[#77766F] block mt-0.5">Promotores em loja agora</span>
+          </div>
+
+          <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-rose-500/30 shadow-lg">
+            <span className="text-[10px] text-rose-400 block font-bold uppercase">Não Realizadas</span>
+            <span className="text-2xl font-extrabold text-rose-400 mt-1 block">{naoRealizadasCount}</span>
+            <span className="text-[10px] text-[#77766F] block mt-0.5">Justificativas registradas</span>
+          </div>
+
+          <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-cyan-500/30 shadow-lg">
+            <span className="text-[10px] text-cyan-400 block font-bold uppercase">Fotos & Evidências</span>
+            <span className="text-2xl font-extrabold text-cyan-200 mt-1 block">{totalFotos}</span>
+            <span className="text-[10px] text-[#77766F] block mt-0.5">Fotos armazenadas</span>
+          </div>
+        </div>
+      </div>
+
+      {/* SEÇÃO 2: PLANEJAMENTO CADASTRADO & SLA */}
+      <div className="space-y-2 font-mono">
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-bold text-[#171717] uppercase tracking-wider flex items-center gap-1.5">
+            <span className="material-symbols-outlined text-purple-400 text-sm">calendar_month</span>
+            Planejamento Cadastrado & Indicadores de SLA
+          </span>
+          <span className="text-[10px] text-[#77766F]">
+            {systemSettings.mode === 'OPERACAO_OFICIAL' && systemSettings.status === 'loaded'
+              ? 'Métricas oficiais vigentes'
+              : 'Fase de implantação — Sem penalidade de SLA'}
+          </span>
         </div>
 
-        <div className="p-4 rounded-2xl bg-[#171b26] border border-amber-500/30 shadow-lg">
-          <span className="text-[10px] text-amber-400 block font-bold uppercase">Em Andamento</span>
-          <span className="text-2xl font-extrabold text-amber-400 mt-1 block">{iniciadasCount}</span>
-        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5] shadow-lg">
+            <span className="text-[10px] text-[#77766F] block font-bold uppercase">Planejamento no Período</span>
+            <span className="text-2xl font-extrabold text-[#171717] mt-1 block">{rotasPlanejadasCount}</span>
+            <span className="text-[10px] text-[#5F5F5F] block mt-0.5">Ocorrências de rota programadas</span>
+          </div>
 
-        <div className="p-4 rounded-2xl bg-[#171b26] border border-cyan-500/30 shadow-lg">
-          <span className="text-[10px] text-cyan-400 block font-bold uppercase">Pendentes</span>
-          <span className="text-2xl font-extrabold text-cyan-300 mt-1 block">{pendentesCount}</span>
-        </div>
+          <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-cyan-500/30 shadow-lg">
+            <span className="text-[10px] text-cyan-400 block font-bold uppercase">
+              {systemSettings.mode === 'OPERACAO_OFICIAL' && systemSettings.status === 'loaded'
+                ? 'Pendências Operacionais'
+                : 'Agendas Previstas (SLA n/a)'}
+            </span>
+            <span className="text-2xl font-extrabold text-cyan-300 mt-1 block">{pendentesCount}</span>
+            <span className="text-[10px] text-[#77766F] block mt-0.5">
+              {systemSettings.mode === 'OPERACAO_OFICIAL' && systemSettings.status === 'loaded'
+                ? 'Rotas aguardando execução oficial'
+                : 'Rotas cadastradas sem visita registrada'}
+            </span>
+          </div>
 
-        <div className="p-4 rounded-2xl bg-[#171b26] border border-rose-500/30 shadow-lg">
-          <span className="text-[10px] text-rose-400 block font-bold uppercase">Não Realizadas</span>
-          <span className="text-2xl font-extrabold text-rose-400 mt-1 block">{naoRealizadasCount}</span>
-        </div>
-
-        <div className="p-4 rounded-2xl bg-[#171b26] border border-purple-500/40 shadow-lg">
-          <span className="text-[10px] text-purple-300 block font-bold uppercase">% Aderência</span>
-          <span className="text-2xl font-extrabold text-purple-300 mt-1 block">{taxaExecucao}%</span>
-        </div>
-
-        <div className="p-4 rounded-2xl bg-[#171b26] border border-slate-700 shadow-lg">
-          <span className="text-[10px] text-slate-400 block font-bold uppercase">Fotos Enviadas</span>
-          <span className="text-2xl font-extrabold text-slate-200 mt-1 block">{totalFotos}</span>
+          <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-purple-500/40 shadow-lg">
+            <span className="text-[10px] text-purple-300 block font-bold uppercase">% Aderência Operacional</span>
+            {systemSettings.status === 'loading' ? (
+              <span className="text-sm font-bold text-[#77766F] mt-2 block">Carregando configuração...</span>
+            ) : systemSettings.mode !== 'OPERACAO_OFICIAL' || systemSettings.status !== 'loaded' ? (
+              <div className="mt-1">
+                <span className="text-xs font-bold text-amber-300 block leading-tight">Fase de implantação — SLA não ativo</span>
+                <span className="text-[9px] text-[#77766F] block mt-0.5">Indicador oficial desativado</span>
+              </div>
+            ) : (
+              <span className="text-2xl font-extrabold text-purple-300 mt-1 block">{taxaExecucao}%</span>
+            )}
+            <span className="text-[10px] text-purple-400/70 block mt-0.5">Conformidade com o planejado</span>
+          </div>
         </div>
       </div>
 
       {/* ========================================================= */}
       {/* ETAPA 7.2 — CENTRAL DE PENDÊNCIAS OPERACIONAIS             */}
       {/* ========================================================= */}
-      <section className="bg-[#171b26] border border-cyan-500/40 rounded-2xl p-6 shadow-2xl space-y-6 font-mono">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#1e2433] pb-4">
+      <section className="bg-[#F7F6F2] border border-cyan-500/40 rounded-2xl p-6 shadow-2xl space-y-6 font-mono">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#CFCDC5] pb-4">
           <div className="space-y-1">
-            <h2 className="text-lg font-bold text-white uppercase tracking-wider flex items-center gap-2">
+            <h2 className="text-lg font-bold text-[#171717] uppercase tracking-wider flex items-center gap-2">
               <span className="material-symbols-outlined text-cyan-400 text-2xl animate-pulse">pending_actions</span>
-              🔔 Central de Pendências Operacionais
+              🔔 Central de Pendências & Agendas
             </h2>
-            <p className="text-xs text-slate-400">
-              Acompanhamento unificado das visitas planejadas em aberto, atrasadas e pendentes de execução em campo.
+            <p className="text-xs text-[#77766F]">
+              {systemSettings.mode === 'OPERACAO_OFICIAL' && systemSettings.status === 'loaded'
+                ? 'Acompanhamento unificado das visitas planejadas em aberto, atrasadas e pendentes de execução oficial.'
+                : 'Acompanhamento de agendas programadas no período de implantação. Rotas sem visita realizada não constituem atrasos punitivos de SLA.'}
             </p>
           </div>
 
           <div className="flex items-center gap-2">
-            <span className="text-xs text-slate-300 font-bold bg-[#131722] border border-[#1e2433] px-3 py-1.5 rounded-xl">
-              Pendentes Hoje: <strong className="text-rose-400">{pendenciasKpis.pendentesHoje}</strong>
+            <span className="text-xs text-[#171717] font-bold bg-[#EAE8E2] border border-[#CFCDC5] px-3 py-1.5 rounded-xl">
+              Previstas Hoje: <strong className="text-cyan-400">{pendenciasKpis.pendentesHoje}</strong>
             </span>
-            <span className="text-xs text-slate-300 font-bold bg-[#131722] border border-[#1e2433] px-3 py-1.5 rounded-xl">
-              Total Pendentes: <strong className="text-amber-400">{pendenciasKpis.pendentesTotal}</strong>
+            <span className="text-xs text-[#171717] font-bold bg-[#EAE8E2] border border-[#CFCDC5] px-3 py-1.5 rounded-xl">
+              Total Previsto: <strong className="text-amber-400">{pendenciasKpis.pendentesTotal}</strong>
             </span>
           </div>
         </div>
@@ -1503,13 +1644,21 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
             onClick={() => setPendenciaStatusFilter('pendente')}
             className={`p-4 rounded-xl border transition-all cursor-pointer ${
               pendenciaStatusFilter === 'pendente'
-                ? 'bg-rose-950/60 border-rose-500 shadow-lg scale-[1.02]'
-                : 'bg-[#131722] border-rose-500/30 hover:border-rose-500/60'
+                ? 'bg-cyan-950/60 border-cyan-500 shadow-lg scale-[1.02]'
+                : 'bg-[#EAE8E2] border-cyan-500/30 hover:border-cyan-500/60'
             }`}
           >
-            <span className="text-[10px] text-rose-400 block font-bold uppercase">🔴 Pendentes Hoje</span>
-            <span className="text-2xl font-extrabold text-rose-300 mt-1 block">{pendenciasKpis.pendentesHoje}</span>
-            <span className="text-[10px] text-rose-400/80 block mt-1">Requer Ação</span>
+            <span className="text-[10px] text-cyan-400 block font-bold uppercase">
+              {systemSettings.mode === 'OPERACAO_OFICIAL' && systemSettings.status === 'loaded'
+                ? '🔴 Pendentes Hoje'
+                : '🗓️ Previstas Hoje'}
+            </span>
+            <span className="text-2xl font-extrabold text-cyan-300 mt-1 block">{pendenciasKpis.pendentesHoje}</span>
+            <span className="text-[10px] text-cyan-400/80 block mt-1">
+              {systemSettings.mode === 'OPERACAO_OFICIAL' && systemSettings.status === 'loaded'
+                ? 'Requer Ação'
+                : 'Agenda do Dia'}
+            </span>
           </div>
 
           <div
@@ -1517,12 +1666,20 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
             className={`p-4 rounded-xl border transition-all cursor-pointer ${
               pendenciaStatusFilter === 'pendente'
                 ? 'bg-amber-950/60 border-amber-500 shadow-lg scale-[1.02]'
-                : 'bg-[#131722] border-amber-500/30 hover:border-amber-500/60'
+                : 'bg-[#EAE8E2] border-amber-500/30 hover:border-amber-500/60'
             }`}
           >
-            <span className="text-[10px] text-amber-400 block font-bold uppercase">🚨 Atrasadas</span>
+            <span className="text-[10px] text-amber-400 block font-bold uppercase">
+              {systemSettings.mode === 'OPERACAO_OFICIAL' && systemSettings.status === 'loaded'
+                ? '🚨 Atrasadas'
+                : '📅 Não Executadas (Pré-SLA)'}
+            </span>
             <span className="text-2xl font-extrabold text-amber-300 mt-1 block">{pendenciasKpis.pendentesAtrasadas}</span>
-            <span className="text-[10px] text-amber-400/80 block mt-1">Dias Anteriores</span>
+            <span className="text-[10px] text-amber-400/80 block mt-1">
+              {systemSettings.mode === 'OPERACAO_OFICIAL' && systemSettings.status === 'loaded'
+                ? 'Dias Anteriores'
+                : 'Sem registro de visita'}
+            </span>
           </div>
 
           <div
@@ -1530,7 +1687,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
             className={`p-4 rounded-xl border transition-all cursor-pointer ${
               pendenciaStatusFilter === 'em_andamento'
                 ? 'bg-blue-950/60 border-blue-500 shadow-lg scale-[1.02]'
-                : 'bg-[#131722] border-blue-500/30 hover:border-blue-500/60'
+                : 'bg-[#EAE8E2] border-blue-500/30 hover:border-blue-500/60'
             }`}
           >
             <span className="text-[10px] text-blue-400 block font-bold uppercase">🔵 Em Andamento</span>
@@ -1543,7 +1700,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
             className={`p-4 rounded-xl border transition-all cursor-pointer ${
               pendenciaStatusFilter === 'nao_realizada'
                 ? 'bg-orange-950/60 border-orange-500 shadow-lg scale-[1.02]'
-                : 'bg-[#131722] border-orange-500/30 hover:border-orange-500/60'
+                : 'bg-[#EAE8E2] border-orange-500/30 hover:border-orange-500/60'
             }`}
           >
             <span className="text-[10px] text-orange-400 block font-bold uppercase">🟠 Não Realizadas</span>
@@ -1556,7 +1713,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
             className={`p-4 rounded-xl border transition-all cursor-pointer ${
               pendenciaStatusFilter === 'concluida'
                 ? 'bg-emerald-950/60 border-emerald-500 shadow-lg scale-[1.02]'
-                : 'bg-[#131722] border-emerald-500/30 hover:border-emerald-500/60'
+                : 'bg-[#EAE8E2] border-emerald-500/30 hover:border-emerald-500/60'
             }`}
           >
             <span className="text-[10px] text-emerald-400 block font-bold uppercase">🟢 Concluídas</span>
@@ -1569,44 +1726,61 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
             className={`p-4 rounded-xl border transition-all cursor-pointer ${
               pendenciaStatusFilter === 'todas'
                 ? 'bg-cyan-950/60 border-cyan-500 shadow-lg scale-[1.02]'
-                : 'bg-[#131722] border-cyan-500/30 hover:border-cyan-500/60'
+                : 'bg-[#EAE8E2] border-cyan-500/30 hover:border-cyan-500/60'
             }`}
           >
             <span className="text-[10px] text-cyan-300 block font-bold uppercase">📊 Aderência</span>
-            <span className="text-2xl font-extrabold text-cyan-200 mt-1 block">{pendenciasKpis.aderencia}%</span>
+            {systemSettings.status === 'loading' ? (
+              <span className="text-sm font-bold text-[#77766F] mt-2 block">Carregando...</span>
+            ) : systemSettings.mode !== 'OPERACAO_OFICIAL' || systemSettings.status !== 'loaded' ? (
+              <div className="mt-1">
+                <span className="text-xs font-bold text-amber-300 block leading-tight">Fase de implantação — SLA não ativo</span>
+                <span className="text-[9px] text-[#77766F] block mt-0.5">Indicador oficial desativado</span>
+              </div>
+            ) : (
+              <span className="text-2xl font-extrabold text-cyan-200 mt-1 block">{pendenciasKpis.aderencia}%</span>
+            )}
             <span className="text-[10px] text-cyan-400/80 block mt-1">Taxa Geral</span>
           </div>
         </div>
 
         {/* VISÃO POR PROMOTOR (RANKING DE PENDÊNCIAS) */}
-        <div className="bg-[#131722] border border-[#1e2433] rounded-xl p-4 space-y-3">
-          <h3 className="text-xs font-bold text-white uppercase tracking-wider flex items-center justify-between">
+        <div className="bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl p-4 space-y-3">
+          <h3 className="text-xs font-bold text-[#171717] uppercase tracking-wider flex items-center justify-between">
             <span className="flex items-center gap-2">
               <span className="material-symbols-outlined text-cyan-400 text-sm">leaderboard</span>
-              Resumo por Promotor — Ranking de Pendências
+              {systemSettings.mode === 'OPERACAO_OFICIAL' && systemSettings.status === 'loaded'
+                ? 'Resumo por Promotor — Ranking de Pendências Operacionais'
+                : 'Resumo por Promotor — Agendas Programadas e Execução em Campo'}
             </span>
-            <span className="text-[10px] text-slate-400 font-normal">
-              Ordenado por promotores com mais pendências
+            <span className="text-[10px] text-[#77766F] font-normal">
+              {systemSettings.mode === 'OPERACAO_OFICIAL' && systemSettings.status === 'loaded'
+                ? 'Ordenado por promotores com mais pendências'
+                : 'Fase de Implantação — Sem penalidade de SLA'}
             </span>
           </h3>
 
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
               <thead>
-                <tr className="border-b border-[#1e2433] text-slate-400 text-[10px] uppercase font-mono">
+                <tr className="border-b border-[#CFCDC5] text-[#77766F] text-[10px] uppercase font-mono">
                   <th className="py-2 px-3">Promotor</th>
                   <th className="py-2 px-3 text-center">Planejadas</th>
-                  <th className="py-2 px-3 text-center">Pendentes</th>
+                  <th className="py-2 px-3 text-center">
+                    {systemSettings.mode === 'OPERACAO_OFICIAL' && systemSettings.status === 'loaded'
+                      ? 'Pendentes'
+                      : 'Previstas (Sem Visita)'}
+                  </th>
                   <th className="py-2 px-3 text-center">Em Andamento</th>
                   <th className="py-2 px-3 text-center">Não Realizadas</th>
                   <th className="py-2 px-3 text-center">Concluídas</th>
                   <th className="py-2 px-3 text-right">Aderência</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-[#1e2433]/50 text-slate-300">
+              <tbody className="divide-y divide-[#CFCDC5]/50 text-[#171717]">
                 {promotoresPendingSummary.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="py-4 text-center text-slate-500">
+                    <td colSpan={7} className="py-4 text-center text-[#5F5F5F]">
                       Nenhum promotor encontrado com rotas no período.
                     </td>
                   </tr>
@@ -1615,15 +1789,15 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
                     <tr
                       key={p.matricula}
                       onClick={() => setFilterPromotor(p.matricula)}
-                      className="hover:bg-[#1f2433]/60 cursor-pointer transition-colors"
+                      className="hover:bg-[#E4E2DB]/60 cursor-pointer transition-colors"
                     >
-                      <td className="py-2.5 px-3 font-bold text-white flex items-center gap-2">
-                        <span className="material-symbols-outlined text-slate-400 text-base">person</span>
+                      <td className="py-2.5 px-3 font-bold text-[#171717] flex items-center gap-2">
+                        <span className="material-symbols-outlined text-[#77766F] text-base">person</span>
                         {p.nome}
                       </td>
                       <td className="py-2.5 px-3 text-center font-mono">{p.totalPlanned}</td>
                       <td className="py-2.5 px-3 text-center font-mono font-bold">
-                        <span className={p.pendentes > 0 ? 'text-rose-400 bg-rose-500/10 px-2 py-0.5 rounded border border-rose-500/30' : 'text-slate-400'}>
+                        <span className={p.pendentes > 0 ? 'text-rose-400 bg-rose-500/10 px-2 py-0.5 rounded border border-rose-500/30' : 'text-[#77766F]'}>
                           {p.pendentes}
                         </span>
                       </td>
@@ -1631,9 +1805,13 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
                       <td className="py-2.5 px-3 text-center font-mono text-orange-400">{p.naoRealizadas}</td>
                       <td className="py-2.5 px-3 text-center font-mono text-emerald-400 font-bold">{p.concluidas}</td>
                       <td className="py-2.5 px-3 text-right font-mono font-bold">
-                        <span className={p.aderencia < 50 ? 'text-rose-400' : p.aderencia < 80 ? 'text-amber-400' : 'text-emerald-400'}>
-                          {p.aderencia}%
-                        </span>
+                        {systemSettings.mode !== 'OPERACAO_OFICIAL' || systemSettings.status !== 'loaded' ? (
+                          <span className="text-[10px] text-[#5F5F5F] font-normal">SLA n/a</span>
+                        ) : (
+                          <span className={p.aderencia < 50 ? 'text-rose-400' : p.aderencia < 80 ? 'text-amber-400' : 'text-emerald-400'}>
+                            {p.aderencia}%
+                          </span>
+                        )}
                       </td>
                     </tr>
                   ))
@@ -1644,12 +1822,12 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
         </div>
 
         {/* FILTROS E LISTA DE PENDÊNCIAS */}
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs pt-2 border-t border-[#1e2433]">
-          <div className="flex flex-wrap items-center gap-1.5 bg-[#131722] border border-[#1e2433] rounded-xl p-1">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs pt-2 border-t border-[#CFCDC5]">
+          <div className="flex flex-wrap items-center gap-1.5 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl p-1">
             <button
               onClick={() => setPendenciaStatusFilter('pendente')}
               className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
-                pendenciaStatusFilter === 'pendente' ? 'bg-rose-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+                pendenciaStatusFilter === 'pendente' ? 'bg-rose-600 text-white shadow-md' : 'text-[#77766F] hover:text-white'
               }`}
             >
               🔴 Pendentes ({pendenciasKpis.pendentesTotal})
@@ -1657,7 +1835,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
             <button
               onClick={() => setPendenciaStatusFilter('em_andamento')}
               className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
-                pendenciaStatusFilter === 'em_andamento' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+                pendenciaStatusFilter === 'em_andamento' ? 'bg-blue-600 text-white shadow-md' : 'text-[#77766F] hover:text-white'
               }`}
             >
               🔵 Em Andamento ({pendenciasKpis.emAndamento})
@@ -1665,7 +1843,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
             <button
               onClick={() => setPendenciaStatusFilter('nao_realizada')}
               className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
-                pendenciaStatusFilter === 'nao_realizada' ? 'bg-orange-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+                pendenciaStatusFilter === 'nao_realizada' ? 'bg-orange-600 text-white shadow-md' : 'text-[#77766F] hover:text-white'
               }`}
             >
               🟠 Não Realizadas ({pendenciasKpis.naoRealizadas})
@@ -1673,7 +1851,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
             <button
               onClick={() => setPendenciaStatusFilter('concluida')}
               className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
-                pendenciaStatusFilter === 'concluida' ? 'bg-emerald-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+                pendenciaStatusFilter === 'concluida' ? 'bg-emerald-600 text-white shadow-md' : 'text-[#77766F] hover:text-white'
               }`}
             >
               🟢 Concluídas ({pendenciasKpis.concluidas})
@@ -1681,30 +1859,30 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
             <button
               onClick={() => setPendenciaStatusFilter('todas')}
               className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
-                pendenciaStatusFilter === 'todas' ? 'bg-slate-700 text-white shadow-md' : 'text-slate-400 hover:text-white'
+                pendenciaStatusFilter === 'todas' ? 'bg-slate-700 text-white shadow-md' : 'text-[#77766F] hover:text-white'
               }`}
             >
               Todas ({pendenciasKpis.totalPlanejadas})
             </button>
           </div>
 
-          <span className="text-[11px] text-slate-400">
+          <span className="text-[11px] text-[#77766F]">
             Exibindo <strong>{pendenciasFiltradas.length}</strong> registro(s)
           </span>
         </div>
 
         {/* TABELA / CARDS DA CENTRAL DE PENDÊNCIAS */}
         {pendenciasFiltradas.length === 0 ? (
-          <div className="py-10 text-center space-y-2 bg-[#131722]/50 rounded-xl border border-[#1e2433]">
+          <div className="py-10 text-center space-y-2 bg-[#EAE8E2]/50 rounded-xl border border-[#CFCDC5]">
             <span className="material-symbols-outlined text-emerald-400 text-3xl">check_circle</span>
-            <p className="text-xs text-slate-300 font-bold">Nenhuma pendência encontrada nesta visualização.</p>
-            <p className="text-[11px] text-slate-500">Todas as visitas do filtro selecionado estão em conformidade.</p>
+            <p className="text-xs text-[#171717] font-bold">Nenhuma pendência encontrada nesta visualização.</p>
+            <p className="text-[11px] text-[#5F5F5F]">Todas as visitas do filtro selecionado estão em conformidade.</p>
           </div>
         ) : (
-          <div className="overflow-x-auto rounded-xl border border-[#1e2433]">
+          <div className="overflow-x-auto rounded-xl border border-[#CFCDC5]">
             <table className="w-full text-left text-xs">
               <thead>
-                <tr className="bg-[#131722] border-b border-[#1e2433] text-slate-400 text-[10px] uppercase font-mono">
+                <tr className="bg-[#EAE8E2] border-b border-[#CFCDC5] text-[#77766F] text-[10px] uppercase font-mono">
                   <th className="py-3 px-4">Data Prevista</th>
                   <th className="py-3 px-4">Promotor</th>
                   <th className="py-3 px-4">Loja / PDV</th>
@@ -1714,7 +1892,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
                   <th className="py-3 px-4 text-right">Ação</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-[#1e2433] text-slate-300 font-mono">
+              <tbody className="divide-y divide-[#CFCDC5] text-[#171717] font-mono">
                 {pendenciasFiltradas.map((item) => {
                   let badge = { label: '🔴 PENDENTE', style: 'bg-rose-500/10 text-rose-400 border-rose-500/30' };
                   if (item.isPastOverdue) {
@@ -1730,20 +1908,20 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
                   }
 
                   return (
-                    <tr key={item.key} className="hover:bg-[#131722]/80 transition-colors">
+                    <tr key={item.key} className="hover:bg-[#EAE8E1] transition-colors">
                       <td className="py-3 px-4">
-                        <div className="font-bold text-white">{item.dataStr}</div>
-                        <div className="text-[10px] text-slate-400">{item.dayOfWeekLabel}</div>
+                        <div className="font-bold text-[#171717]">{item.dataStr}</div>
+                        <div className="text-[10px] text-[#77766F]">{item.dayOfWeekLabel}</div>
                       </td>
                       <td className="py-3 px-4 font-bold text-cyan-400">{item.promotorNome}</td>
                       <td className="py-3 px-4">
-                        <div className="font-bold text-white">{item.lojaNome}</div>
+                        <div className="font-bold text-[#171717]">{item.lojaNome}</div>
                         {item.lojaCidade && (
-                          <div className="text-[10px] text-slate-400">{item.lojaCidade} - {item.lojaUf}</div>
+                          <div className="text-[10px] text-[#77766F]">{item.lojaCidade} - {item.lojaUf}</div>
                         )}
                       </td>
-                      <td className="py-3 px-4 text-purple-300 font-bold">{item.industriaNome}</td>
-                      <td className="py-3 px-4 text-slate-400">{item.frequencia}</td>
+                      <td className="py-3 px-4 text-[#7E22CE] font-bold">{item.industriaNome}</td>
+                      <td className="py-3 px-4 text-[#77766F]">{item.frequencia}</td>
                       <td className="py-3 px-4">
                         <span className={`px-2 py-0.5 rounded text-[10px] border ${badge.style}`}>
                           {badge.label}
@@ -1752,7 +1930,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
                       <td className="py-3 px-4 text-right">
                         <button
                           onClick={() => setSelectedPendingItem(item)}
-                          className="px-3 py-1.5 rounded-lg bg-[#131722] hover:bg-[#1f2433] text-cyan-400 border border-cyan-500/30 font-bold text-[11px] transition-all cursor-pointer"
+                          className="px-3 py-1.5 rounded-lg bg-[#EAE8E2] hover:bg-[#E4E2DB] text-cyan-400 border border-cyan-500/30 font-bold text-[11px] transition-all cursor-pointer"
                         >
                           Ver Detalhes
                         </button>
@@ -1769,44 +1947,44 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
       {/* MODAL DETALHES DA PENDÊNCIA OPERACIONAL */}
       {selectedPendingItem && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-[#171b26] border border-[#1e2433] rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5 font-mono">
-            <div className="flex items-center justify-between border-b border-[#1e2433] pb-3">
-              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+          <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5 font-mono">
+            <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-3">
+              <h3 className="text-sm font-bold text-[#171717] flex items-center gap-2">
                 <span className="material-symbols-outlined text-cyan-400">pending_actions</span>
                 VISITA PENDENTE — DETALHES
               </h3>
-              <button onClick={() => setSelectedPendingItem(null)} className="text-slate-400 hover:text-white">
+              <button onClick={() => setSelectedPendingItem(null)} className="text-[#77766F] hover:text-white">
                 <span className="material-symbols-outlined">close</span>
               </button>
             </div>
 
             <div className="space-y-3 text-xs">
               <div>
-                <span className="text-slate-500 block">PROMOTOR:</span>
+                <span className="text-[#5F5F5F] block">PROMOTOR:</span>
                 <span className="text-cyan-400 font-bold text-sm">{selectedPendingItem.promotorNome}</span>
-                <span className="text-[10px] text-slate-500 block">Matrícula: {selectedPendingItem.promotorMatricula}</span>
+                <span className="text-[10px] text-[#5F5F5F] block">Matrícula: {selectedPendingItem.promotorMatricula}</span>
               </div>
               <div>
-                <span className="text-slate-500 block">LOJA / PDV:</span>
-                <span className="text-white font-bold">{selectedPendingItem.lojaNome}</span>
+                <span className="text-[#5F5F5F] block">LOJA / PDV:</span>
+                <span className="text-[#171717] font-bold">{selectedPendingItem.lojaNome}</span>
                 {selectedPendingItem.lojaCidade && (
-                  <span className="text-[10px] text-slate-400 block">{selectedPendingItem.lojaCidade} - {selectedPendingItem.lojaUf}</span>
+                  <span className="text-[10px] text-[#77766F] block">{selectedPendingItem.lojaCidade} - {selectedPendingItem.lojaUf}</span>
                 )}
               </div>
               <div>
-                <span className="text-slate-500 block">INDÚSTRIA:</span>
-                <span className="text-purple-300 font-bold">{selectedPendingItem.industriaNome}</span>
+                <span className="text-[#5F5F5F] block">INDÚSTRIA:</span>
+                <span className="text-[#7E22CE] font-bold">{selectedPendingItem.industriaNome}</span>
               </div>
               <div>
-                <span className="text-slate-500 block">DATA PREVISTA / DIA:</span>
-                <span className="text-white font-bold">{selectedPendingItem.dataStr} ({selectedPendingItem.dayOfWeekLabel})</span>
+                <span className="text-[#5F5F5F] block">DATA PREVISTA / DIA:</span>
+                <span className="text-[#171717] font-bold">{selectedPendingItem.dataStr} ({selectedPendingItem.dayOfWeekLabel})</span>
               </div>
               <div>
-                <span className="text-slate-500 block">FREQUÊNCIA:</span>
-                <span className="text-slate-300">{selectedPendingItem.frequencia}</span>
+                <span className="text-[#5F5F5F] block">FREQUÊNCIA:</span>
+                <span className="text-[#171717]">{selectedPendingItem.frequencia}</span>
               </div>
               <div>
-                <span className="text-slate-500 block">SITUAÇÃO ATUAL:</span>
+                <span className="text-[#5F5F5F] block">SITUAÇÃO ATUAL:</span>
                 <span className={`font-bold uppercase ${
                   selectedPendingItem.status === 'concluida' ? 'text-emerald-400' :
                   selectedPendingItem.status === 'em_andamento' ? 'text-blue-400' :
@@ -1817,16 +1995,16 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
               </div>
               {selectedPendingItem.motivoNaoRealizada && (
                 <div>
-                  <span className="text-slate-500 block">MOTIVO NÃO REALIZADA:</span>
+                  <span className="text-[#5F5F5F] block">MOTIVO NÃO REALIZADA:</span>
                   <span className="text-orange-300">{selectedPendingItem.motivoNaoRealizada}</span>
                 </div>
               )}
             </div>
 
-            <div className="pt-3 border-t border-[#1e2433] flex justify-end gap-2">
+            <div className="pt-3 border-t border-[#CFCDC5] flex justify-end gap-2">
               <button
                 onClick={() => setSelectedPendingItem(null)}
-                className="px-4 py-2 rounded-xl bg-[#131722] hover:bg-[#1f2433] text-slate-300 border border-[#1e2433] text-xs font-semibold"
+                className="px-4 py-2 rounded-xl bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] border border-[#CFCDC5] text-xs font-semibold"
               >
                 Fechar
               </button>
@@ -1849,19 +2027,19 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
       {/* ========================================================= */}
       {/* ETAPA 5 — CENTRAL DE ALERTAS OPERACIONAIS                 */}
       {/* ========================================================= */}
-      <section className="bg-[#171b26] border border-purple-500/40 rounded-2xl p-6 shadow-2xl space-y-6 font-mono">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#1e2433] pb-4">
+      <section className="bg-[#F7F6F2] border border-purple-500/40 rounded-2xl p-6 shadow-2xl space-y-6 font-mono">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#CFCDC5] pb-4">
           <div className="space-y-1">
-            <h2 className="text-lg font-bold text-white uppercase tracking-wider flex items-center gap-2">
+            <h2 className="text-lg font-bold text-[#171717] uppercase tracking-wider flex items-center gap-2">
               <span className="material-symbols-outlined text-purple-400 text-2xl animate-pulse">notifications_active</span>
               🚨 Central de Alertas Operacionais
             </h2>
-            <p className="text-xs text-slate-400">
+            <p className="text-xs text-[#77766F]">
               Consolidação em tempo real de situações que exigem ação preventiva ou corretiva do gestor.
             </p>
           </div>
 
-          <span className="text-xs text-slate-400 font-bold bg-[#131722] border border-[#1e2433] px-3 py-1.5 rounded-xl">
+          <span className="text-xs text-[#77766F] font-bold bg-[#EAE8E2] border border-[#CFCDC5] px-3 py-1.5 rounded-xl">
             Alertas Ativos: <strong className="text-purple-300">{alertCounts.totalAtivos}</strong>
           </span>
         </div>
@@ -1873,7 +2051,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
             className={`p-4 rounded-xl border transition-all cursor-pointer ${
               filterAlertPriority === 'critico'
                 ? 'bg-rose-950/60 border-rose-500 shadow-lg scale-[1.02]'
-                : 'bg-[#131722] border-rose-500/30 hover:border-rose-500/60'
+                : 'bg-[#EAE8E2] border-rose-500/30 hover:border-rose-500/60'
             }`}
           >
             <span className="text-[10px] text-rose-400 block font-bold uppercase">🔴 Críticos</span>
@@ -1886,7 +2064,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
             className={`p-4 rounded-xl border transition-all cursor-pointer ${
               filterAlertPriority === 'atencao'
                 ? 'bg-amber-950/60 border-amber-500 shadow-lg scale-[1.02]'
-                : 'bg-[#131722] border-amber-500/30 hover:border-amber-500/60'
+                : 'bg-[#EAE8E2] border-amber-500/30 hover:border-amber-500/60'
             }`}
           >
             <span className="text-[10px] text-amber-400 block font-bold uppercase">🟠 Atenção</span>
@@ -1899,7 +2077,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
             className={`p-4 rounded-xl border transition-all cursor-pointer ${
               filterAlertPriority === 'pendente'
                 ? 'bg-yellow-950/60 border-yellow-500 shadow-lg scale-[1.02]'
-                : 'bg-[#131722] border-yellow-500/30 hover:border-yellow-500/60'
+                : 'bg-[#EAE8E2] border-yellow-500/30 hover:border-yellow-500/60'
             }`}
           >
             <span className="text-[10px] text-yellow-400 block font-bold uppercase">🟡 Pendentes</span>
@@ -1912,7 +2090,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
             className={`p-4 rounded-xl border transition-all cursor-pointer ${
               filterAlertPriority === 'active'
                 ? 'bg-purple-950/60 border-purple-500 shadow-lg scale-[1.02]'
-                : 'bg-[#131722] border-purple-500/30 hover:border-purple-500/60'
+                : 'bg-[#EAE8E2] border-purple-500/30 hover:border-purple-500/60'
             }`}
           >
             <span className="text-[10px] text-purple-300 block font-bold uppercase">Total Ativos</span>
@@ -1923,11 +2101,11 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
 
         {/* FILTROS ESPECÍFICOS DA CENTRAL */}
         <div className="flex items-center justify-between flex-wrap gap-3 text-xs">
-          <div className="flex flex-wrap items-center gap-2 bg-[#131722] border border-[#1e2433] rounded-xl p-1">
+          <div className="flex flex-wrap items-center gap-2 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl p-1">
             <button
               onClick={() => setFilterAlertPriority('active')}
               className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
-                filterAlertPriority === 'active' ? 'bg-purple-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+                filterAlertPriority === 'active' ? 'bg-[#222222] text-white shadow-md' : 'text-[#77766F] hover:text-white'
               }`}
             >
               Ativos ({alertCounts.totalAtivos})
@@ -1935,7 +2113,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
             <button
               onClick={() => setFilterAlertPriority('critico')}
               className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
-                filterAlertPriority === 'critico' ? 'bg-rose-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+                filterAlertPriority === 'critico' ? 'bg-rose-600 text-white shadow-md' : 'text-[#77766F] hover:text-white'
               }`}
             >
               🔴 Críticos ({alertCounts.criticos})
@@ -1943,7 +2121,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
             <button
               onClick={() => setFilterAlertPriority('atencao')}
               className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
-                filterAlertPriority === 'atencao' ? 'bg-amber-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+                filterAlertPriority === 'atencao' ? 'bg-amber-600 text-white shadow-md' : 'text-[#77766F] hover:text-white'
               }`}
             >
               🟠 Atenção ({alertCounts.atencao})
@@ -1951,7 +2129,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
             <button
               onClick={() => setFilterAlertPriority('pendente')}
               className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
-                filterAlertPriority === 'pendente' ? 'bg-yellow-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+                filterAlertPriority === 'pendente' ? 'bg-yellow-600 text-white shadow-md' : 'text-[#77766F] hover:text-white'
               }`}
             >
               🟡 Pendentes ({alertCounts.pendentes})
@@ -1959,7 +2137,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
             <button
               onClick={() => setFilterAlertPriority('resolvido')}
               className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
-                filterAlertPriority === 'resolvido' ? 'bg-emerald-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+                filterAlertPriority === 'resolvido' ? 'bg-emerald-600 text-white shadow-md' : 'text-[#77766F] hover:text-white'
               }`}
             >
               🟢 Resolvidos ({alertCounts.resolvidos})
@@ -1967,24 +2145,24 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
             <button
               onClick={() => setFilterAlertPriority('all')}
               className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
-                filterAlertPriority === 'all' ? 'bg-slate-700 text-white shadow-md' : 'text-slate-400 hover:text-white'
+                filterAlertPriority === 'all' ? 'bg-slate-700 text-white shadow-md' : 'text-[#77766F] hover:text-white'
               }`}
             >
               Todos ({alertCounts.totalGeral})
             </button>
           </div>
 
-          <span className="text-[11px] text-slate-400">
+          <span className="text-[11px] text-[#77766F]">
             Exibindo <strong>{centralAlertsFiltrados.length}</strong> alerta(s)
           </span>
         </div>
 
         {/* LISTA DE ALERTAS (MOBILE CARDS / DESKTOP TABLE) */}
         {centralAlertsFiltrados.length === 0 ? (
-          <div className="py-12 text-center space-y-2 bg-[#131722]/50 rounded-xl border border-[#1e2433]">
+          <div className="py-12 text-center space-y-2 bg-[#EAE8E2]/50 rounded-xl border border-[#CFCDC5]">
             <span className="material-symbols-outlined text-emerald-400 text-3xl">verified_user</span>
-            <p className="text-xs text-slate-300 font-bold">Nenhum alerta operacional encontrado nesta visualização.</p>
-            <p className="text-[11px] text-slate-500 max-w-md mx-auto">
+            <p className="text-xs text-[#171717] font-bold">Nenhum alerta operacional encontrado nesta visualização.</p>
+            <p className="text-[11px] text-[#5F5F5F] max-w-md mx-auto">
               Operação em conformidade ou nenhuma ocorrência correspondente aos filtros selecionados.
             </p>
           </div>
@@ -1993,45 +2171,45 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
             {/* CARDS MOBILE (sm:hidden) */}
             <div className="grid grid-cols-1 gap-3 sm:hidden">
               {centralAlertsFiltrados.map((item) => {
-                let prioBadge = { label: '🔴 CRÍTICO', color: 'bg-rose-500/20 text-rose-300 border-rose-500/40 animate-pulse' };
+                let prioBadge = { label: '🔴 CRÍTICO', color: 'bg-rose-50 text-rose-800 border-rose-300 font-bold' };
                 if (item.prioridade === 'atencao') {
-                  prioBadge = { label: '🟠 ATENÇÃO', color: 'bg-amber-500/20 text-amber-300 border-amber-500/40' };
+                  prioBadge = { label: '🟠 ATENÇÃO', color: 'bg-amber-50 text-amber-900 border-amber-300 font-bold' };
                 } else if (item.prioridade === 'pendente') {
-                  prioBadge = { label: '🟡 PENDENTE', color: 'bg-yellow-500/20 text-yellow-300 border-yellow-500/40' };
+                  prioBadge = { label: '🟡 PENDENTE', color: 'bg-yellow-50 text-yellow-900 border-yellow-300 font-bold' };
                 } else if (item.prioridade === 'resolvido') {
-                  prioBadge = { label: '🟢 RESOLVIDO', color: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' };
+                  prioBadge = { label: '🟢 RESOLVIDO', color: 'bg-emerald-50 text-emerald-800 border-emerald-300 font-bold' };
                 }
 
                 return (
                   <div
                     key={item.id}
-                    className="p-4 rounded-xl bg-[#131722] border border-[#1e2433] space-y-3"
+                    className="p-4 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] space-y-3"
                   >
                     <div className="flex items-center justify-between">
                       <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${prioBadge.color}`}>
                         {prioBadge.label}
                       </span>
-                      <span className="text-[10px] text-slate-400 font-bold uppercase px-2 py-0.5 rounded bg-slate-800 border border-slate-700">
+                      <span className="text-[10px] text-[#77766F] font-bold uppercase px-2 py-0.5 rounded bg-slate-800 border border-[#CFCDC5]">
                         {item.tipo}
                       </span>
                     </div>
 
                     <div>
-                      <div className="font-extrabold text-white text-sm flex items-center gap-1.5">
+                      <div className="font-extrabold text-[#171717] text-sm flex items-center gap-1.5">
                         {item.titulo}
                       </div>
-                      <p className="text-xs text-slate-300 mt-1 leading-relaxed">{item.descricao}</p>
+                      <p className="text-xs text-[#171717] mt-1 leading-relaxed">{item.descricao}</p>
                     </div>
 
-                    <div className="text-[11px] text-slate-400 space-y-1 font-mono pt-2 border-t border-[#1e2433]">
+                    <div className="text-[11px] text-[#77766F] space-y-1 font-mono pt-2 border-t border-[#CFCDC5]">
                       <div><strong>Loja:</strong> <span className="text-white">{item.loja}</span></div>
-                      <div><strong>Indústria:</strong> <span className="text-purple-300 font-bold">{item.industria}</span></div>
-                      <div><strong>Promotor:</strong> <span className="text-slate-300">{item.promotor}</span></div>
-                      <div><strong>Data:</strong> <span className="text-slate-300">{new Date(item.data + 'T00:00:00').toLocaleDateString('pt-BR')}</span></div>
+                      <div><strong>Indústria:</strong> <span className="text-[#7E22CE] font-bold">{item.industria}</span></div>
+                      <div><strong>Promotor:</strong> <span className="text-[#171717]">{item.promotor}</span></div>
+                      <div><strong>Data:</strong> <span className="text-[#171717]">{new Date(item.data + 'T00:00:00').toLocaleDateString('pt-BR')}</span></div>
                     </div>
 
-                    <div className="flex items-center justify-between pt-2 border-t border-[#1e2433]">
-                      <span className="text-[10px] text-slate-500 italic">Origem: {item.origem}</span>
+                    <div className="flex items-center justify-between pt-2 border-t border-[#CFCDC5]">
+                      <span className="text-[10px] text-[#5F5F5F] italic">Origem: {item.origem}</span>
 
                       <div className="flex items-center gap-2">
                         {item.occurrenceId && item.prioridade !== 'resolvido' && (
@@ -2062,7 +2240,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
             </div>
 
             {/* TABELA DESKTOP & TABLET (hidden sm:block) */}
-            <div className="hidden sm:block overflow-x-auto rounded-xl border border-[#1e2433]">
+            <div className="hidden sm:block overflow-x-auto rounded-xl border border-[#CFCDC5]">
               <table className="w-full text-left text-xs border-collapse align-middle">
                 <colgroup>
                   <col className="w-[110px]" />
@@ -2076,7 +2254,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
                   <col className="w-[125px]" />
                 </colgroup>
                 <thead>
-                  <tr className="bg-[#131722] border-b border-[#1e2433] text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                  <tr className="bg-[#E3E1DA] border-b border-[#CFCDC5] text-[11px] font-bold text-[#171717] uppercase tracking-wider">
                     <th className="py-3 px-3 text-center">Prioridade</th>
                     <th className="py-3 px-3">Tipo</th>
                     <th className="py-3 px-3">Data</th>
@@ -2088,48 +2266,48 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
                     <th className="py-3 px-3 text-right">Ação</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-[#1e2433] text-slate-300">
+                <tbody className="divide-y divide-[#CFCDC5] text-[#171717]">
                   {centralAlertsFiltrados.map((item) => {
-                    let prioBadge = { label: '🔴 CRÍTICO', color: 'bg-rose-500/20 text-rose-300 border-rose-500/40 animate-pulse' };
+                    let prioBadge = { label: '🔴 CRÍTICO', color: 'bg-rose-50 text-rose-800 border-rose-300 font-bold' };
                     if (item.prioridade === 'atencao') {
-                      prioBadge = { label: '🟠 ATENÇÃO', color: 'bg-amber-500/20 text-amber-300 border-amber-500/40' };
+                      prioBadge = { label: '🟠 ATENÇÃO', color: 'bg-amber-50 text-amber-900 border-amber-300 font-bold' };
                     } else if (item.prioridade === 'pendente') {
-                      prioBadge = { label: '🟡 PENDENTE', color: 'bg-yellow-500/20 text-yellow-300 border-yellow-500/40' };
+                      prioBadge = { label: '🟡 PENDENTE', color: 'bg-yellow-50 text-yellow-900 border-yellow-300 font-bold' };
                     } else if (item.prioridade === 'resolvido') {
-                      prioBadge = { label: '🟢 RESOLVIDO', color: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' };
+                      prioBadge = { label: '🟢 RESOLVIDO', color: 'bg-emerald-50 text-emerald-800 border-emerald-300 font-bold' };
                     }
 
                     return (
-                      <tr key={item.id} className="hover:bg-[#131722]/70 transition-colors">
+                      <tr key={item.id} className="hover:bg-[#EAE8E1] transition-colors">
                         <td className="py-3 px-3 text-center whitespace-nowrap">
                           <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold border uppercase ${prioBadge.color}`}>
                             {prioBadge.label}
                           </span>
                         </td>
 
-                        <td className="py-3 px-3 font-bold text-slate-300 uppercase text-[11px] whitespace-nowrap">
+                        <td className="py-3 px-3 font-bold text-[#171717] uppercase text-[11px] whitespace-nowrap">
                           {item.tipo}
                         </td>
 
-                        <td className="py-3 px-3 text-slate-400 font-bold whitespace-nowrap">
+                        <td className="py-3 px-3 text-[#77766F] font-bold whitespace-nowrap">
                           {new Date(item.data + 'T00:00:00').toLocaleDateString('pt-BR')}
                         </td>
 
                         <td className="py-3 px-3">
-                          <div className="font-bold text-white text-[12px] leading-snug whitespace-normal break-words">{item.promotor}</div>
+                          <div className="font-bold text-[#171717] text-[12px] leading-snug whitespace-normal break-words">{item.promotor}</div>
                         </td>
 
                         <td className="py-3 px-3">
-                          <div className="font-bold text-white text-[12px] leading-snug whitespace-normal break-words" title={item.loja}>{item.loja}</div>
+                          <div className="font-bold text-[#171717] text-[12px] leading-snug whitespace-normal break-words" title={item.loja}>{item.loja}</div>
                         </td>
 
                         <td className="py-3 px-3">
-                          <div className="font-bold text-purple-300 text-[12px] leading-snug whitespace-normal break-words">{item.industria}</div>
+                          <div className="font-bold text-[#7E22CE] text-[12px] leading-snug whitespace-normal break-words">{item.industria}</div>
                         </td>
 
                         <td className="py-3 px-4">
-                          <div className="font-extrabold text-white text-[12px] leading-snug">{item.titulo}</div>
-                          <div className="text-[11px] text-slate-400 leading-relaxed mt-1 line-clamp-2" title={item.descricao}>{item.descricao}</div>
+                          <div className="font-extrabold text-[#171717] text-[12px] leading-snug">{item.titulo}</div>
+                          <div className="text-[11px] text-[#77766F] leading-relaxed mt-1 line-clamp-2" title={item.descricao}>{item.descricao}</div>
                         </td>
 
                         <td className="py-3 px-3 text-center font-bold text-[11px] whitespace-nowrap">
@@ -2158,7 +2336,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
                                 Ver visita
                               </button>
                             ) : (
-                              <span className="text-[10px] text-slate-500 italic">—</span>
+                              <span className="text-[10px] text-[#5F5F5F] italic">—</span>
                             )}
                           </div>
                         </td>
@@ -2175,31 +2353,31 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
       {/* ========================================================= */}
       {/* ETAPA 4.5 — AGENDA OPERACIONAL DO DIA                     */}
       {/* ========================================================= */}
-      <section className="bg-[#171b26] border border-cyan-500/40 rounded-2xl p-6 shadow-2xl space-y-6 font-mono">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#1e2433] pb-4">
+      <section className="bg-[#F7F6F2] border border-cyan-500/40 rounded-2xl p-6 shadow-2xl space-y-6 font-mono">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#CFCDC5] pb-4">
           <div className="space-y-1">
-            <h2 className="text-lg font-bold text-white uppercase tracking-wider flex items-center gap-2">
+            <h2 className="text-lg font-bold text-[#171717] uppercase tracking-wider flex items-center gap-2">
               <span className="material-symbols-outlined text-cyan-400 text-2xl">calendar_today</span>
               📅 Visitas de Hoje
             </h2>
-            <p className="text-xs text-slate-400">
+            <p className="text-xs text-[#77766F]">
               Agenda operacional de atendimento planejada para hoje ({new Date().toLocaleDateString('pt-BR')}) com status e tempo real de execução.
             </p>
           </div>
 
           <div className="flex items-center gap-2 text-xs">
-            <span className="px-3 py-1 rounded-lg bg-[#131722] border border-[#1e2433] text-slate-300 font-bold">
-              Total Planejado: <strong className="text-white">{plannedItemsToday.length}</strong>
+            <span className="px-3 py-1 rounded-lg bg-[#EAE8E2] border border-[#CFCDC5] text-[#171717] font-bold">
+              Total Planejado: <strong className="text-[#171717]">{plannedItemsToday.length}</strong>
             </span>
           </div>
         </div>
 
         {/* AGENDA DESKTOP & TABLET / CARDS MOBILE */}
         {agendaFiltrada.length === 0 ? (
-          <div className="py-12 text-center space-y-2 bg-[#131722]/50 rounded-xl border border-[#1e2433]">
+          <div className="py-12 text-center space-y-2 bg-[#EAE8E2]/50 rounded-xl border border-[#CFCDC5]">
             <span className="material-symbols-outlined text-cyan-400 text-3xl">event_busy</span>
-            <p className="text-xs text-slate-300 font-bold">Nenhuma visita de hoje encontrada nesta visualização.</p>
-            <p className="text-[11px] text-slate-500 max-w-md mx-auto">
+            <p className="text-xs text-[#171717] font-bold">Nenhuma visita de hoje encontrada nesta visualização.</p>
+            <p className="text-[11px] text-[#5F5F5F] max-w-md mx-auto">
               Não foram encontradas rotas planejadas ou visitas correspondentes aos filtros selecionados.
             </p>
           </div>
@@ -2208,20 +2386,20 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
             {/* CARDS RESPONSIVOS PARA MOBILE (sm:hidden) */}
             <div className="grid grid-cols-1 gap-3 sm:hidden">
               {agendaFiltrada.map((item) => {
-                let badge = { label: '🟡 Pendente', color: 'bg-amber-500/20 text-amber-300 border-amber-500/40' };
+                let badge = { label: '🟡 Pendente', color: 'bg-yellow-50 text-yellow-900 border-yellow-300 font-bold' };
                 if (item.status === 'em_andamento') {
-                  badge = { label: '🔵 Em andamento', color: 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40 animate-pulse' };
+                  badge = { label: '🔵 Em andamento', color: 'bg-cyan-50 text-cyan-900 border-cyan-300 font-bold' };
                 } else if (item.status === 'nao_realizada') {
-                  badge = { label: '🔴 Não realizada', color: 'bg-rose-500/20 text-rose-300 border-rose-500/40' };
+                  badge = { label: '🔴 Não realizada', color: 'bg-rose-50 text-rose-800 border-rose-300 font-bold' };
                 } else if (item.status === 'concluida') {
-                  badge = { label: '🟢 Concluída', color: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' };
+                  badge = { label: '🟢 Concluída', color: 'bg-emerald-50 text-emerald-800 border-emerald-300 font-bold' };
                 }
 
                 return (
                   <div
                     key={item.key}
                     onClick={() => item.visitObj && setSelectedVisit(item.visitObj)}
-                    className={`p-4 rounded-xl bg-[#131722] border border-[#1e2433] space-y-2.5 ${
+                    className={`p-4 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] space-y-2.5 ${
                       item.visitObj ? 'cursor-pointer hover:border-cyan-500/50' : ''
                     }`}
                   >
@@ -2229,18 +2407,18 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
                       <span className={`px-2.5 py-0.5 rounded text-[10px] font-bold border ${badge.color}`}>
                         {badge.label}
                       </span>
-                      <span className="text-[10px] text-slate-500">{item.dataStr}</span>
+                      <span className="text-[10px] text-[#5F5F5F]">{item.dataStr}</span>
                     </div>
 
                     <div>
-                      <div className="font-bold text-white text-sm">{item.lojaNome}</div>
-                      <div className="text-[11px] text-purple-300 font-bold">Ind: {item.industriaNome}</div>
-                      <div className="text-[11px] text-slate-400">Promotor: {item.promotorNome}</div>
+                      <div className="font-bold text-[#171717] text-sm">{item.lojaNome}</div>
+                      <div className="text-[11px] text-[#7E22CE] font-bold">Ind: {item.industriaNome}</div>
+                      <div className="text-[11px] text-[#77766F]">Promotor: {item.promotorNome}</div>
                     </div>
 
-                    <div className="pt-2 border-t border-[#1e2433]/60 flex items-center justify-between text-[11px] text-slate-400 font-mono">
-                      <div>Início: <strong className="text-white">{item.startedAt ? new Date(item.startedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—'}</strong></div>
-                      <div>Fim: <strong className="text-white">{item.completedAt ? new Date(item.completedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—'}</strong></div>
+                    <div className="pt-2 border-t border-[#CFCDC5]/60 flex items-center justify-between text-[11px] text-[#77766F] font-mono">
+                      <div>Início: <strong className="text-[#171717]">{item.startedAt ? new Date(item.startedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—'}</strong></div>
+                      <div>Fim: <strong className="text-[#171717]">{item.completedAt ? new Date(item.completedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—'}</strong></div>
                       {item.duracaoFormatada && (
                         <div className="text-emerald-400 font-bold">Dur: {item.duracaoFormatada}</div>
                       )}
@@ -2257,10 +2435,10 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
             </div>
 
             {/* TABELA ESTRUTURADA PARA TABLET & DESKTOP (hidden sm:block) */}
-            <div className="hidden sm:block overflow-x-auto rounded-xl border border-[#1e2433]">
+            <div className="hidden sm:block overflow-x-auto rounded-xl border border-[#CFCDC5]">
               <table className="w-full text-left text-xs border-collapse">
                 <thead>
-                  <tr className="bg-[#131722] border-b border-[#1e2433] text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                  <tr className="bg-[#E3E1DA] border-b border-[#CFCDC5] text-[11px] font-bold text-[#171717] uppercase tracking-wider">
                     <th className="py-3.5 px-4 text-center">Status</th>
                     <th className="py-3.5 px-4">Promotor</th>
                     <th className="py-3.5 px-4">Loja / PDV</th>
@@ -2272,19 +2450,19 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
                     <th className="py-3.5 px-4 text-right">Detalhe</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-[#1e2433] text-slate-300">
+                <tbody className="divide-y divide-[#CFCDC5] text-[#171717]">
                   {agendaFiltrada.map((item) => {
-                    let badge = { label: '🟡 Pendente', color: 'bg-amber-500/20 text-amber-300 border-amber-500/40' };
+                    let badge = { label: '🟡 Pendente', color: 'bg-yellow-50 text-yellow-900 border-yellow-300 font-bold' };
                     if (item.status === 'em_andamento') {
-                      badge = { label: '🔵 Em andamento', color: 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40 animate-pulse' };
+                      badge = { label: '🔵 Em andamento', color: 'bg-cyan-50 text-cyan-900 border-cyan-300 font-bold' };
                     } else if (item.status === 'nao_realizada') {
-                      badge = { label: '🔴 Não realizada', color: 'bg-rose-500/20 text-rose-300 border-rose-500/40' };
+                      badge = { label: '🔴 Não realizada', color: 'bg-rose-50 text-rose-800 border-rose-300 font-bold' };
                     } else if (item.status === 'concluida') {
-                      badge = { label: '🟢 Concluída', color: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' };
+                      badge = { label: '🟢 Concluída', color: 'bg-emerald-50 text-emerald-800 border-emerald-300 font-bold' };
                     }
 
                     return (
-                      <tr key={item.key} className="hover:bg-[#131722]/70 transition-colors">
+                      <tr key={item.key} className="hover:bg-[#EAE8E1] transition-colors">
                         <td className="py-3.5 px-4 text-center whitespace-nowrap">
                           <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold border uppercase ${badge.color}`}>
                             {badge.label}
@@ -2292,28 +2470,28 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
                         </td>
 
                         <td className="py-3.5 px-4">
-                          <div className="font-bold text-white">{item.promotorNome}</div>
-                          <div className="text-[10px] text-slate-500 font-normal">Mat: {item.promotorMatricula}</div>
+                          <div className="font-bold text-[#171717]">{item.promotorNome}</div>
+                          <div className="text-[10px] text-[#5F5F5F] font-normal">Mat: {item.promotorMatricula}</div>
                         </td>
 
                         <td className="py-3.5 px-4">
-                          <div className="font-bold text-white">{item.lojaNome}</div>
-                          <div className="text-[10px] text-slate-500 font-normal">Cód: {item.lojaCodigo}</div>
+                          <div className="font-bold text-[#171717]">{item.lojaNome}</div>
+                          <div className="text-[10px] text-[#5F5F5F] font-normal">Cód: {item.lojaCodigo}</div>
                         </td>
 
-                        <td className="py-3.5 px-4 font-bold text-purple-300">
+                        <td className="py-3.5 px-4 font-bold text-[#7E22CE]">
                           {item.industriaNome}
                         </td>
 
-                        <td className="py-3.5 px-4 text-slate-400 font-bold whitespace-nowrap">
+                        <td className="py-3.5 px-4 text-[#77766F] font-bold whitespace-nowrap">
                           {new Date(item.dataStr + 'T00:00:00').toLocaleDateString('pt-BR')}
                         </td>
 
-                        <td className="py-3.5 px-4 text-slate-300 font-mono whitespace-nowrap">
+                        <td className="py-3.5 px-4 text-[#171717] font-mono whitespace-nowrap">
                           {item.startedAt ? new Date(item.startedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—'}
                         </td>
 
-                        <td className="py-3.5 px-4 text-slate-300 font-mono whitespace-nowrap">
+                        <td className="py-3.5 px-4 text-[#171717] font-mono whitespace-nowrap">
                           {item.completedAt ? new Date(item.completedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—'}
                         </td>
 
@@ -2325,13 +2503,13 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
                           {item.visitObj ? (
                             <button
                               onClick={() => setSelectedVisit(item.visitObj!)}
-                              className="p-1.5 rounded-lg bg-[#131722] hover:bg-[#1f2433] text-cyan-300 border border-[#1e2433] cursor-pointer"
+                              className="p-1.5 rounded-lg bg-[#EAE8E2] hover:bg-[#E4E2DB] text-cyan-300 border border-[#CFCDC5] cursor-pointer"
                               title="Ver Detalhes da Visita"
                             >
                               <span className="material-symbols-outlined text-[16px]">visibility</span>
                             </button>
                           ) : (
-                            <span className="text-[10px] text-slate-500 italic">Pendente</span>
+                            <span className="text-[10px] text-[#5F5F5F] italic">Pendente</span>
                           )}
                         </td>
                       </tr>
@@ -2347,26 +2525,26 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
       {/* ========================================================= */}
       {/* ETAPA 3 — PAINEL OPERACIONAL DE RUPTURAS                  */}
       {/* ========================================================= */}
-      <section className="bg-[#171b26] border border-rose-500/40 rounded-2xl p-6 shadow-2xl space-y-6 font-mono">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#1e2433] pb-4">
+      <section className="bg-[#F7F6F2] border border-rose-500/40 rounded-2xl p-6 shadow-2xl space-y-6 font-mono">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#CFCDC5] pb-4">
           <div className="space-y-1">
-            <h2 className="text-lg font-bold text-white uppercase tracking-wider flex items-center gap-2">
+            <h2 className="text-lg font-bold text-[#171717] uppercase tracking-wider flex items-center gap-2">
               <span className="material-symbols-outlined text-rose-500 text-2xl animate-pulse">report_problem</span>
               🚨 Rupturas Operacionais
             </h2>
-            <p className="text-xs text-slate-400">
+            <p className="text-xs text-[#77766F]">
               Ocorrências de falta de produto na gôndola registradas pelos promotores em tempo real.
             </p>
           </div>
 
           {/* METRICAS DE RUPTURA CONSOLIDADA */}
           <div className="flex items-center gap-3 text-xs">
-            <div className="px-3.5 py-2 rounded-xl bg-[#131722] border border-[#1e2433] text-center">
-              <span className="text-[10px] text-slate-400 block font-bold uppercase">Total</span>
-              <span className="text-base font-extrabold text-white">{totalRupturasCount} Rupturas</span>
+            <div className="px-3.5 py-2 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] text-center">
+              <span className="text-[10px] text-[#77766F] block font-bold uppercase">Total</span>
+              <span className="text-base font-extrabold text-[#171717]">{totalRupturasCount} Rupturas</span>
             </div>
 
-            <div className="px-3.5 py-2 rounded-xl bg-rose-950/40 border border-rose-500/40 text-center">
+            <div className="px-3.5 py-2 rounded-xl bg-[#FDF2F2] border border-rose-500/40 text-center">
               <span className="text-[10px] text-rose-400 block font-bold uppercase">Abertas</span>
               <span className="text-base font-extrabold text-rose-300">{rupturasAbertasCount} 🔴 Abertas</span>
             </div>
@@ -2380,11 +2558,11 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
 
         {/* FILTRO DE STATUS DA TABELA DE RUPTURAS */}
         <div className="flex items-center justify-between flex-wrap gap-3 text-xs">
-          <div className="flex items-center gap-2 bg-[#131722] border border-[#1e2433] rounded-xl p-1">
+          <div className="flex items-center gap-2 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl p-1">
             <button
               onClick={() => setFilterRupturaStatus('abertas')}
               className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
-                filterRupturaStatus === 'abertas' ? 'bg-rose-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+                filterRupturaStatus === 'abertas' ? 'bg-rose-600 text-white shadow-md' : 'text-[#77766F] hover:text-white'
               }`}
             >
               🔴 Abertas ({rupturasAbertasCount})
@@ -2392,7 +2570,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
             <button
               onClick={() => setFilterRupturaStatus('resolvidas')}
               className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
-                filterRupturaStatus === 'resolvidas' ? 'bg-emerald-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+                filterRupturaStatus === 'resolvidas' ? 'bg-emerald-600 text-white shadow-md' : 'text-[#77766F] hover:text-white'
               }`}
             >
               🟢 Resolvidas ({rupturasResolvidasCount})
@@ -2400,32 +2578,32 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
             <button
               onClick={() => setFilterRupturaStatus('all')}
               className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
-                filterRupturaStatus === 'all' ? 'bg-purple-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+                filterRupturaStatus === 'all' ? 'bg-[#222222] text-white shadow-md' : 'text-[#77766F] hover:text-white'
               }`}
             >
               Todas ({totalRupturasCount})
             </button>
           </div>
 
-          <span className="text-[11px] text-slate-400">
+          <span className="text-[11px] text-[#77766F]">
             Exibindo <strong>{rupturasFiltradas.length}</strong> ocorrência(s)
           </span>
         </div>
 
         {/* TABELA DE RUPTURAS */}
         {rupturasFiltradas.length === 0 ? (
-          <div className="py-12 text-center space-y-2 bg-[#131722]/50 rounded-xl border border-[#1e2433]">
+          <div className="py-12 text-center space-y-2 bg-[#EAE8E2]/50 rounded-xl border border-[#CFCDC5]">
             <span className="material-symbols-outlined text-emerald-400 text-3xl">check_circle</span>
-            <p className="text-xs text-slate-300 font-bold">Nenhuma ruptura encontrada nesta visualização.</p>
-            <p className="text-[11px] text-slate-500 max-w-md mx-auto">
+            <p className="text-xs text-[#171717] font-bold">Nenhuma ruptura encontrada nesta visualização.</p>
+            <p className="text-[11px] text-[#5F5F5F] max-w-md mx-auto">
               Todas as ocorrências registradas estao tratadas ou não correspondem aos filtros selecionados.
             </p>
           </div>
         ) : (
-          <div className="overflow-x-auto rounded-xl border border-[#1e2433]">
+          <div className="overflow-x-auto rounded-xl border border-[#CFCDC5]">
             <table className="w-full text-left text-xs border-collapse">
               <thead>
-                <tr className="bg-[#131722] border-b border-[#1e2433] text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                <tr className="bg-[#E3E1DA] border-b border-[#CFCDC5] text-[11px] font-bold text-[#171717] uppercase tracking-wider">
                   <th className="py-3 px-4">Data</th>
                   <th className="py-3 px-4">Loja</th>
                   <th className="py-3 px-4">Indústria</th>
@@ -2436,28 +2614,28 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
                   <th className="py-3 px-4 text-right">Ação</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-[#1e2433] text-slate-300">
+              <tbody className="divide-y divide-[#CFCDC5] text-[#171717]">
                 {rupturasFiltradas.map((r) => (
-                  <tr key={r.id} className="hover:bg-[#131722]/70 transition-colors">
-                    <td className="py-3 px-4 text-slate-400 font-bold whitespace-nowrap">
+                  <tr key={r.id} className="hover:bg-[#EAE8E1] transition-colors">
+                    <td className="py-3 px-4 text-[#77766F] font-bold whitespace-nowrap">
                       {new Date(r.createdAt || r.dataVisita).toLocaleDateString('pt-BR')}
-                      <span className="text-[10px] text-slate-500 block font-normal">
+                      <span className="text-[10px] text-[#5F5F5F] block font-normal">
                         {r.createdAt ? new Date(r.createdAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : ''}
                       </span>
                     </td>
 
-                    <td className="py-3 px-4 font-bold text-white">
+                    <td className="py-3 px-4 font-bold text-[#171717]">
                       {r.lojaNome}
-                      <span className="text-[10px] text-slate-500 block font-normal">Cód: {r.lojaCodigo}</span>
+                      <span className="text-[10px] text-[#5F5F5F] block font-normal">Cód: {r.lojaCodigo}</span>
                     </td>
 
-                    <td className="py-3 px-4 font-bold text-purple-300">
+                    <td className="py-3 px-4 font-bold text-[#7E22CE]">
                       {r.industriaNome}
                     </td>
 
-                    <td className="py-3 px-4 text-slate-300">
+                    <td className="py-3 px-4 text-[#171717]">
                       {r.promotorNome}
-                      <span className="text-[10px] text-slate-500 block font-normal">Mat: {r.promotorMatricula}</span>
+                      <span className="text-[10px] text-[#5F5F5F] block font-normal">Mat: {r.promotorMatricula}</span>
                     </td>
 
                     <td className="py-3 px-4 text-slate-200 max-w-xs leading-relaxed">
@@ -2476,7 +2654,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
                           Ver Foto
                         </a>
                       ) : (
-                        <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-500 text-[10px]">
+                        <span className="px-2 py-0.5 rounded bg-slate-800 text-[#5F5F5F] text-[10px]">
                           Sem foto
                         </span>
                       )}
@@ -2505,7 +2683,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
                             {resolvingId === r.id ? 'Salvando...' : 'Marcar como resolvida'}
                           </button>
                         ) : (
-                          <span className="text-[10px] text-slate-500 italic" title="Apenas ADM/GESTOR podem marcar como resolvida">
+                          <span className="text-[10px] text-[#5F5F5F] italic" title="Apenas ADM/GESTOR podem marcar como resolvida">
                             Apenas Gestor
                           </span>
                         )
@@ -2524,20 +2702,20 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
       {/* ========================================================= */}
       {/* ETAPA 4 — CONTROLE DE VALIDADE E VENCIMENTO DE PRODUTOS   */}
       {/* ========================================================= */}
-      <section className="bg-[#171b26] border border-amber-500/40 rounded-2xl p-6 shadow-2xl space-y-6 font-mono">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#1e2433] pb-4">
+      <section className="bg-[#F7F6F2] border border-amber-500/40 rounded-2xl p-6 shadow-2xl space-y-6 font-mono">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#CFCDC5] pb-4">
           <div className="space-y-1">
-            <h2 className="text-lg font-bold text-white uppercase tracking-wider flex items-center gap-2">
+            <h2 className="text-lg font-bold text-[#171717] uppercase tracking-wider flex items-center gap-2">
               <span className="material-symbols-outlined text-amber-500 text-2xl">inventory_2</span>
               ⏰ Validade / Vencimentos
             </h2>
-            <p className="text-xs text-slate-400">
+            <p className="text-xs text-[#77766F]">
               Produtos cadastrados pelos promotores agrupados por urgência e proximidade da data de vencimento.
             </p>
           </div>
 
-          <div className="text-xs text-slate-400">
-            Total Monitorado: <strong className="text-white font-bold">{todasValidades.length} produto(s)</strong>
+          <div className="text-xs text-[#77766F]">
+            Total Monitorado: <strong className="text-[#171717] font-bold">{todasValidades.length} produto(s)</strong>
           </div>
         </div>
 
@@ -2548,7 +2726,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
             className={`p-4 rounded-xl border transition-all cursor-pointer ${
               filterValidadeStatus === 'vencidos'
                 ? 'bg-rose-950/60 border-rose-500 shadow-lg scale-[1.02]'
-                : 'bg-[#131722] border-rose-500/30 hover:border-rose-500/60'
+                : 'bg-[#EAE8E2] border-rose-500/30 hover:border-rose-500/60'
             }`}
           >
             <span className="text-[10px] text-rose-400 block font-bold uppercase">🔴 Vencidos</span>
@@ -2560,8 +2738,8 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
             onClick={() => setFilterValidadeStatus(filterValidadeStatus === 'ate3' ? 'all' : 'ate3')}
             className={`p-4 rounded-xl border transition-all cursor-pointer ${
               filterValidadeStatus === 'ate3'
-                ? 'bg-rose-950/40 border-rose-400 shadow-lg scale-[1.02]'
-                : 'bg-[#131722] border-rose-400/30 hover:border-rose-400/60'
+                ? 'bg-[#FDF2F2] border-rose-400 shadow-lg scale-[1.02]'
+                : 'bg-[#EAE8E2] border-rose-400/30 hover:border-rose-400/60'
             }`}
           >
             <span className="text-[10px] text-rose-300 block font-bold uppercase">🚨 Vence em até 3 dias</span>
@@ -2573,8 +2751,8 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
             onClick={() => setFilterValidadeStatus(filterValidadeStatus === 'ate7' ? 'all' : 'ate7')}
             className={`p-4 rounded-xl border transition-all cursor-pointer ${
               filterValidadeStatus === 'ate7'
-                ? 'bg-amber-950/40 border-amber-500 shadow-lg scale-[1.02]'
-                : 'bg-[#131722] border-amber-500/30 hover:border-amber-500/60'
+                ? 'bg-[#FFF8E6] border-amber-500 shadow-lg scale-[1.02]'
+                : 'bg-[#EAE8E2] border-amber-500/30 hover:border-amber-500/60'
             }`}
           >
             <span className="text-[10px] text-amber-400 block font-bold uppercase">🟠 Vence em 4–7 dias</span>
@@ -2587,7 +2765,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
             className={`p-4 rounded-xl border transition-all cursor-pointer ${
               filterValidadeStatus === 'ate30'
                 ? 'bg-yellow-950/40 border-yellow-500 shadow-lg scale-[1.02]'
-                : 'bg-[#131722] border-yellow-500/30 hover:border-yellow-500/60'
+                : 'bg-[#EAE8E2] border-yellow-500/30 hover:border-yellow-500/60'
             }`}
           >
             <span className="text-[10px] text-yellow-400 block font-bold uppercase">🟡 Vence em 8–30 dias</span>
@@ -2598,18 +2776,18 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
 
         {/* TABELA DE VALIDADES E VENCIMENTOS */}
         {validadesFiltradas.length === 0 ? (
-          <div className="py-12 text-center space-y-2 bg-[#131722]/50 rounded-xl border border-[#1e2433]">
+          <div className="py-12 text-center space-y-2 bg-[#EAE8E2]/50 rounded-xl border border-[#CFCDC5]">
             <span className="material-symbols-outlined text-emerald-400 text-3xl">verified</span>
-            <p className="text-xs text-slate-300 font-bold">Nenhum registro de validade nesta visualização.</p>
-            <p className="text-[11px] text-slate-500 max-w-md mx-auto">
+            <p className="text-xs text-[#171717] font-bold">Nenhum registro de validade nesta visualização.</p>
+            <p className="text-[11px] text-[#5F5F5F] max-w-md mx-auto">
               Não foram encontrados produtos com problemas de vencimento para os filtros selecionados.
             </p>
           </div>
         ) : (
-          <div className="overflow-x-auto rounded-xl border border-[#1e2433]">
+          <div className="overflow-x-auto rounded-xl border border-[#CFCDC5]">
             <table className="w-full text-left text-xs border-collapse">
               <thead>
-                <tr className="bg-[#131722] border-b border-[#1e2433] text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                <tr className="bg-[#E3E1DA] border-b border-[#CFCDC5] text-[11px] font-bold text-[#171717] uppercase tracking-wider">
                   <th className="py-3 px-4">Validade</th>
                   <th className="py-3 px-4">Produto</th>
                   <th className="py-3 px-4 text-right">Qtd.</th>
@@ -2620,7 +2798,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
                   <th className="py-3 px-4 text-right">Situação</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-[#1e2433] text-slate-300">
+              <tbody className="divide-y divide-[#CFCDC5] text-[#171717]">
                 {validadesFiltradas.map((val) => {
                   const [vYear, vMonth, vDay] = val.dataVencimento.split('-').map(Number);
                   const vencDate = new Date(vYear, vMonth - 1, vDay);
@@ -2637,38 +2815,38 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
                   }
 
                   return (
-                    <tr key={val.id} className="hover:bg-[#131722]/70 transition-colors">
+                    <tr key={val.id} className="hover:bg-[#EAE8E1] transition-colors">
                       <td className="py-3 px-4 font-bold text-white whitespace-nowrap">
                         {new Date(vencDate).toLocaleDateString('pt-BR')}
-                        <span className="text-[10px] text-slate-500 block font-normal">
+                        <span className="text-[10px] text-[#5F5F5F] block font-normal">
                           {val.diffDays < 0 ? `${Math.abs(val.diffDays)} dia(s) atrás` : `em ${val.diffDays} dia(s)`}
                         </span>
                       </td>
 
-                      <td className="py-3 px-4 font-bold text-white">
+                      <td className="py-3 px-4 font-bold text-[#171717]">
                         {val.produtoNome}
-                        {val.observacao && <span className="text-[10px] text-slate-400 block font-normal">{val.observacao}</span>}
+                        {val.observacao && <span className="text-[10px] text-[#77766F] block font-normal">{val.observacao}</span>}
                       </td>
 
                       <td className="py-3 px-4 text-right font-bold text-amber-300">
                         {val.quantidade}
                       </td>
 
-                      <td className="py-3 px-4 text-slate-300 font-bold">
+                      <td className="py-3 px-4 text-[#171717] font-bold">
                         {val.lojaNome}
-                        <span className="text-[10px] text-slate-500 block font-normal">Cód: {val.lojaCodigo}</span>
+                        <span className="text-[10px] text-[#5F5F5F] block font-normal">Cód: {val.lojaCodigo}</span>
                       </td>
 
-                      <td className="py-3 px-4 font-bold text-purple-300">
+                      <td className="py-3 px-4 font-bold text-[#7E22CE]">
                         {val.industriaNome}
                       </td>
 
-                      <td className="py-3 px-4 text-slate-300">
+                      <td className="py-3 px-4 text-[#171717]">
                         {val.promotorNome}
-                        <span className="text-[10px] text-slate-500 block font-normal">Mat: {val.promotorMatricula}</span>
+                        <span className="text-[10px] text-[#5F5F5F] block font-normal">Mat: {val.promotorMatricula}</span>
                       </td>
 
-                      <td className="py-3 px-4 text-slate-400 font-mono">
+                      <td className="py-3 px-4 text-[#77766F] font-mono">
                         {val.lote || '—'}
                       </td>
 
@@ -2689,9 +2867,9 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
       {/* SEÇÃO 2: CHECKLIST & DISTRIBUIÇÃO DE OCORRÊNCIAS */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Desempenho de Checklist */}
-        <div className="p-6 rounded-2xl bg-[#171b26] border border-[#1e2433] shadow-xl space-y-4 font-mono">
-          <div className="flex items-center justify-between border-b border-[#1e2433] pb-3">
-            <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
+        <div className="p-6 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5] shadow-xl space-y-4 font-mono">
+          <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-3">
+            <h3 className="text-sm font-bold text-[#171717] uppercase tracking-wider flex items-center gap-2">
               <span className="material-symbols-outlined text-amber-400">fact_check</span>
               Validação de Checklist em Campo
             </h3>
@@ -2701,21 +2879,21 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
           </div>
 
           <div className="grid grid-cols-3 gap-3 text-center">
-            <div className="p-3 rounded-xl bg-[#131722] border border-[#1e2433]">
-              <span className="text-[10px] text-slate-400 block font-bold">TOTAL ITENS</span>
-              <span className="text-xl font-extrabold text-white">{totalChecklistItems}</span>
+            <div className="p-3 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5]">
+              <span className="text-[10px] text-[#77766F] block font-bold">TOTAL ITENS</span>
+              <span className="text-xl font-extrabold text-[#171717]">{totalChecklistItems}</span>
             </div>
-            <div className="p-3 rounded-xl bg-[#131722] border border-emerald-500/30">
+            <div className="p-3 rounded-xl bg-[#EAE8E2] border border-emerald-500/30">
               <span className="text-[10px] text-emerald-400 block font-bold">CONCLUÍDOS</span>
               <span className="text-xl font-extrabold text-emerald-400">{totalChecklistChecked}</span>
             </div>
-            <div className="p-3 rounded-xl bg-[#131722] border border-slate-700">
-              <span className="text-[10px] text-slate-400 block font-bold">PENDENTES</span>
-              <span className="text-xl font-extrabold text-slate-300">{totalChecklistItems - totalChecklistChecked}</span>
+            <div className="p-3 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5]">
+              <span className="text-[10px] text-[#77766F] block font-bold">PENDENTES</span>
+              <span className="text-xl font-extrabold text-[#171717]">{totalChecklistItems - totalChecklistChecked}</span>
             </div>
           </div>
 
-          <div className="w-full bg-[#10141f] h-3 rounded-full overflow-hidden p-0.5 border border-[#1e2433]">
+          <div className="w-full bg-[#E4E2DB] h-3 rounded-full overflow-hidden p-0.5 border border-[#CFCDC5]">
             <div
               className="bg-gradient-to-r from-amber-500 to-emerald-400 h-2 rounded-full transition-all duration-500"
               style={{ width: `${checklistPerc}%` }}
@@ -2724,9 +2902,9 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
         </div>
 
         {/* Distribuição por Tipo de Ocorrência */}
-        <div className="p-6 rounded-2xl bg-[#171b26] border border-[#1e2433] shadow-xl space-y-4 font-mono">
-          <div className="flex items-center justify-between border-b border-[#1e2433] pb-3">
-            <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
+        <div className="p-6 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5] shadow-xl space-y-4 font-mono">
+          <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-3">
+            <h3 className="text-sm font-bold text-[#171717] uppercase tracking-wider flex items-center gap-2">
               <span className="material-symbols-outlined text-rose-400">report_problem</span>
               Incidentes &amp; Rupturas ({totalOcorrencias})
             </h3>
@@ -2749,9 +2927,9 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
               <span className="text-xl font-extrabold text-cyan-300">{ocorrenciasPorTipo.falta_espaco}</span>
             </div>
 
-            <div className="p-3 rounded-xl bg-slate-900 border border-slate-700">
-              <span className="text-[10px] text-slate-400 block font-bold uppercase">Outros</span>
-              <span className="text-xl font-extrabold text-slate-300">{ocorrenciasPorTipo.outro}</span>
+            <div className="p-3 rounded-xl bg-slate-900 border border-[#CFCDC5]">
+              <span className="text-[10px] text-[#77766F] block font-bold uppercase">Outros</span>
+              <span className="text-xl font-extrabold text-[#171717]">{ocorrenciasPorTipo.outro}</span>
             </div>
           </div>
         </div>
@@ -2761,20 +2939,20 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
       {/* BLOCO 4 — PROBLEMAS OPERACIONAIS & LOJAS CRÍTICAS         */}
       {/* ========================================================= */}
       <section className="space-y-6">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#1e2433] pb-3">
-          <h2 className="text-lg font-bold text-white uppercase tracking-wider font-mono flex items-center gap-2">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#CFCDC5] pb-3">
+          <h2 className="text-lg font-bold text-[#171717] uppercase tracking-wider font-mono flex items-center gap-2">
             <span className="material-symbols-outlined text-rose-500 text-2xl">grid_view</span>
             ⚠️ Problemas Operacionais &amp; Lojas Críticas
           </h2>
-          <span className="text-xs font-mono text-slate-400">
+          <span className="text-xs font-mono text-[#77766F]">
             Lojas com pendências de atendimento, rupturas ou produtos em risco de vencimento
           </span>
         </div>
 
         {/* LOJAS CRÍTICAS */}
-        <div className="p-6 rounded-2xl bg-[#171b26] border border-rose-500/30 shadow-xl space-y-4 font-mono text-xs">
-          <div className="flex items-center justify-between border-b border-[#1e2433] pb-3">
-            <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
+        <div className="p-6 rounded-2xl bg-[#F7F6F2] border border-rose-500/30 shadow-xl space-y-4 font-mono text-xs">
+          <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-3">
+            <h3 className="text-sm font-bold text-[#171717] uppercase tracking-wider flex items-center gap-2">
               <span className="material-symbols-outlined text-rose-400">storefront</span>
               Lojas Críticas ({lojasCriticas.length})
             </h3>
@@ -2788,7 +2966,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
           ) : (
             <div className="overflow-x-auto max-h-[320px] overflow-y-auto">
               <table className="w-full text-left border-collapse">
-                <thead className="sticky top-0 bg-[#171b26] border-b border-[#1e2433] text-[10px] text-slate-400 uppercase">
+                <thead className="sticky top-0 bg-[#F7F6F2] border-b border-[#CFCDC5] text-[10px] text-[#77766F] uppercase">
                   <tr>
                     <th className="py-2.5 px-3">Loja / PDV</th>
                     <th className="py-2.5 px-3 text-center">Rupturas</th>
@@ -2798,12 +2976,12 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
                     <th className="py-2.5 px-3 text-right">Total Ocorrências</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-[#1e2433] text-slate-300">
+                <tbody className="divide-y divide-[#CFCDC5] text-[#171717]">
                   {lojasCriticas.slice(0, 15).map((s) => (
-                    <tr key={s.codigo} className="hover:bg-[#131722]/60 transition-colors">
-                      <td className="py-2.5 px-3 font-bold text-white">
+                    <tr key={s.codigo} className="hover:bg-[#EAE8E1] transition-colors">
+                      <td className="py-2.5 px-3 font-bold text-[#171717]">
                         {s.nome}
-                        <span className="text-[10px] text-slate-500 block font-normal">Cód: {s.codigo}</span>
+                        <span className="text-[10px] text-[#5F5F5F] block font-normal">Cód: {s.codigo}</span>
                       </td>
                       <td className="py-2.5 px-3 text-center font-bold text-rose-400">
                         {s.rupturasAbertas > 0 ? `🔴 ${s.rupturasAbertas}` : '—'}
@@ -2835,18 +3013,18 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
       {/* BLOCO 5 — PERFORMANCE DA OPERAÇÃO                         */}
       {/* ========================================================= */}
       <section className="space-y-6">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#1e2433] pb-3">
-          <h2 className="text-lg font-bold text-white uppercase tracking-wider font-mono flex items-center gap-2">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#CFCDC5] pb-3">
+          <h2 className="text-lg font-bold text-[#171717] uppercase tracking-wider font-mono flex items-center gap-2">
             <span className="material-symbols-outlined text-purple-400 text-2xl">leaderboard</span>
             📊 Performance da Operação
           </h2>
-          <span className="text-xs font-mono text-slate-400">
+          <span className="text-xs font-mono text-[#77766F]">
             Desempenho por equipe de promotores e marcas/indústrias
           </span>
         </div>
 
-        {/* PROMOTORES CRÍTICOS (Aderência < 50%) */}
-        {promotoresCriticos.length > 0 && (
+        {/* PROMOTORES CRÍTICOS (Aderência < 50%) — Visível apenas na Operação Oficial */}
+        {systemSettings.mode === 'OPERACAO_OFICIAL' && systemSettings.status === 'loaded' && promotoresCriticos.length > 0 && (
           <div className="p-4 rounded-2xl bg-rose-950/20 border border-rose-500/30 font-mono text-xs space-y-3">
             <div className="flex items-center justify-between">
               <span className="text-rose-400 font-extrabold uppercase flex items-center gap-1.5 text-xs">
@@ -2858,11 +3036,11 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
 
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
               {promotoresCriticos.slice(0, 8).map((p) => (
-                <div key={p.matricula} className="p-3 rounded-xl bg-[#131722] border border-rose-500/30 space-y-1">
-                  <div className="font-extrabold text-white truncate">{p.nome}</div>
-                  <div className="text-[10px] text-slate-400">Mat: {p.matricula} • {p.cidade || '—'}</div>
-                  <div className="flex items-center justify-between pt-1 border-t border-[#1e2433] text-[11px]">
-                    <span className="text-slate-400">Rotas: <strong className="text-white">{p.concluidas}/{p.planejadas}</strong></span>
+                <div key={p.matricula} className="p-3 rounded-xl bg-[#EAE8E2] border border-rose-500/30 space-y-1">
+                  <div className="font-extrabold text-[#171717] truncate">{p.nome}</div>
+                  <div className="text-[10px] text-[#77766F]">Mat: {p.matricula} • {p.cidade || '—'}</div>
+                  <div className="flex items-center justify-between pt-1 border-t border-[#CFCDC5] text-[11px]">
+                    <span className="text-[#77766F]">Rotas: <strong className="text-[#171717]">{p.concluidas}/{p.planejadas}</strong></span>
                     <span className="px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 font-bold border border-rose-500/40">
                       {p.taxa}%
                     </span>
@@ -2875,21 +3053,21 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 font-mono text-xs">
           {/* TABELA RANKING DE PROMOTORES */}
-          <div className="lg:col-span-2 p-6 rounded-2xl bg-[#171b26] border border-[#1e2433] shadow-xl space-y-4">
-            <div className="flex items-center justify-between border-b border-[#1e2433] pb-3">
-              <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
+          <div className="lg:col-span-2 p-6 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5] shadow-xl space-y-4">
+            <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-3">
+              <h3 className="text-sm font-bold text-[#171717] uppercase tracking-wider flex items-center gap-2">
                 <span className="material-symbols-outlined text-amber-400">badge</span>
                 Desempenho dos Promotores
               </h3>
-              <span className="text-[10px] text-slate-400">Ordenado por pendências</span>
+              <span className="text-[10px] text-[#77766F]">Ordenado por pendências</span>
             </div>
 
             {rankingPromotores.length === 0 ? (
-              <p className="text-slate-500 italic text-center py-6">Nenhum promotor com rota no período.</p>
+              <p className="text-[#5F5F5F] italic text-center py-6">Nenhum promotor com rota no período.</p>
             ) : (
               <div className="overflow-x-auto max-h-[360px] overflow-y-auto">
                 <table className="w-full text-left border-collapse">
-                  <thead className="sticky top-0 bg-[#171b26] border-b border-[#1e2433] text-[10px] text-slate-400 uppercase">
+                  <thead className="sticky top-0 bg-[#F7F6F2] border-b border-[#CFCDC5] text-[10px] text-[#77766F] uppercase">
                     <tr>
                       <th className="py-2.5 px-3">Promotor</th>
                       <th className="py-2.5 px-2 text-center">Plan.</th>
@@ -2900,7 +3078,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
                       <th className="py-2.5 px-3 text-right">Aderência</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-[#1e2433]">
+                  <tbody className="divide-y divide-[#CFCDC5]">
                     {rankingPromotores.map((p) => {
                       let badgeColor = 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40';
                       if (p.taxa < 50) {
@@ -2910,20 +3088,24 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
                       }
 
                       return (
-                        <tr key={p.matricula} className="hover:bg-[#131722]/50 transition-colors">
-                          <td className="py-2.5 px-3 font-bold text-white">
+                        <tr key={p.matricula} className="hover:bg-[#EAE8E2]/50 transition-colors">
+                          <td className="py-2.5 px-3 font-bold text-[#171717]">
                             {p.nome}
-                            <span className="text-[10px] text-slate-500 block font-normal">Mat: {p.matricula}</span>
+                            <span className="text-[10px] text-[#5F5F5F] block font-normal">Mat: {p.matricula}</span>
                           </td>
-                          <td className="py-2.5 px-2 text-center text-slate-300 font-bold">{p.planejadas}</td>
+                          <td className="py-2.5 px-2 text-center text-[#171717] font-bold">{p.planejadas}</td>
                           <td className="py-2.5 px-2 text-center font-bold text-emerald-400">{p.concluidas}</td>
                           <td className="py-2.5 px-2 text-center text-cyan-300">{p.emAndamento}</td>
                           <td className="py-2.5 px-2 text-center text-rose-400 font-bold">{p.naoRealizadas}</td>
                           <td className="py-2.5 px-2 text-center text-amber-300 font-bold">{p.pendentes}</td>
                           <td className="py-2.5 px-3 text-right font-bold">
-                            <span className={`px-2 py-0.5 rounded border text-[11px] ${badgeColor}`}>
-                              {p.taxa}%
-                            </span>
+                            {systemSettings.mode !== 'OPERACAO_OFICIAL' || systemSettings.status !== 'loaded' ? (
+                              <span className="text-[10px] text-[#5F5F5F] font-normal">SLA n/a</span>
+                            ) : (
+                              <span className={`px-2 py-0.5 rounded border text-[11px] ${badgeColor}`}>
+                                {p.taxa}%
+                              </span>
+                            )}
                           </td>
                         </tr>
                       );
@@ -2935,21 +3117,21 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
           </div>
 
           {/* TABELA COBERTURA POR INDÚSTRIA */}
-          <div className="p-6 rounded-2xl bg-[#171b26] border border-[#1e2433] shadow-xl space-y-4">
-            <div className="flex items-center justify-between border-b border-[#1e2433] pb-3">
-              <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
+          <div className="p-6 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5] shadow-xl space-y-4">
+            <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-3">
+              <h3 className="text-sm font-bold text-[#171717] uppercase tracking-wider flex items-center gap-2">
                 <span className="material-symbols-outlined text-purple-400">factory</span>
                 Cobertura por Indústria
               </h3>
-              <span className="text-[10px] text-purple-300 font-bold">Top Indústrias</span>
+              <span className="text-[10px] text-[#7E22CE] font-bold">Top Indústrias</span>
             </div>
 
             {rankingIndustrias.length === 0 ? (
-              <p className="text-slate-500 italic text-center py-6">Nenhuma indústria no período.</p>
+              <p className="text-[#5F5F5F] italic text-center py-6">Nenhuma indústria no período.</p>
             ) : (
               <div className="overflow-x-auto max-h-[360px] overflow-y-auto">
                 <table className="w-full text-left border-collapse">
-                  <thead className="sticky top-0 bg-[#171b26] border-b border-[#1e2433] text-[10px] text-slate-400 uppercase">
+                  <thead className="sticky top-0 bg-[#F7F6F2] border-b border-[#CFCDC5] text-[10px] text-[#77766F] uppercase">
                     <tr>
                       <th className="py-2.5 px-2">Indústria</th>
                       <th className="py-2.5 px-2 text-center">Plan.</th>
@@ -2957,19 +3139,19 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
                       <th className="py-2.5 px-2 text-right">Ocorr.</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-[#1e2433]">
+                  <tbody className="divide-y divide-[#CFCDC5]">
                     {rankingIndustrias.map((ind) => {
                       const perc = ind.planejadas > 0 ? Math.round((ind.concluidas / ind.planejadas) * 100) : 0;
                       return (
-                        <tr key={ind.codigo} className="hover:bg-[#131722]/50 transition-colors">
+                        <tr key={ind.codigo} className="hover:bg-[#EAE8E2]/50 transition-colors">
                           <td className="py-2.5 px-2 font-bold text-purple-300">
                             {ind.nome}
-                            <span className="text-[10px] text-slate-500 block font-normal">Cód: {ind.codigo}</span>
+                            <span className="text-[10px] text-[#5F5F5F] block font-normal">Cód: {ind.codigo}</span>
                           </td>
-                          <td className="py-2.5 px-2 text-center text-slate-300 font-bold">{ind.planejadas}</td>
+                          <td className="py-2.5 px-2 text-center text-[#171717] font-bold">{ind.planejadas}</td>
                           <td className="py-2.5 px-2 text-center font-bold text-emerald-400">
                             {ind.concluidas}
-                            <span className="text-[9px] text-slate-500 block">({perc}%)</span>
+                            <span className="text-[9px] text-[#5F5F5F] block">({perc}%)</span>
                           </td>
                           <td className="py-2.5 px-2 text-right font-bold text-rose-400">
                             {ind.ocorrencias > 0 ? ind.ocorrencias : '0'}
@@ -2987,28 +3169,28 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
 
       {/* SEÇÃO 4: OCORRÊNCIAS CRÍTICAS RECENTES */}
       {listaOcorrenciasCriticas.length > 0 && (
-        <section className="bg-[#171b26] border border-rose-500/30 rounded-2xl p-6 shadow-2xl space-y-3 font-mono text-xs">
-          <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
+        <section className="bg-[#F7F6F2] border border-rose-500/30 rounded-2xl p-6 shadow-2xl space-y-3 font-mono text-xs">
+          <h3 className="text-sm font-bold text-[#171717] uppercase tracking-wider flex items-center gap-2">
             <span className="material-symbols-outlined text-rose-400">warning</span>
             Últimas Ocorrências Críticas Registradas em Campo ({listaOcorrenciasCriticas.length})
           </h3>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {listaOcorrenciasCriticas.slice(0, 6).map((occ) => (
-              <div key={occ.id} className="p-3.5 rounded-xl bg-[#131722] border border-rose-500/20 space-y-1">
+              <div key={occ.id} className="p-3.5 rounded-xl bg-[#EAE8E2] border border-rose-500/20 space-y-1">
                 <div className="flex justify-between items-center text-[10px]">
                   <span className="px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 font-bold uppercase">
                     {occ.tipo.replace('_', ' ')}
                   </span>
                   {occ.dataHora && (
-                    <span className="text-slate-500">
+                    <span className="text-[#5F5F5F]">
                       {new Date(occ.dataHora).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
                     </span>
                   )}
                 </div>
-                <div className="font-bold text-white truncate">{occ.loja}</div>
-                <div className="text-slate-400 text-[11px] truncate">Ind: {occ.industria} • Promotor: {occ.promotor}</div>
-                <p className="text-slate-300 text-[11px] pt-1">{occ.descricao}</p>
+                <div className="font-bold text-[#171717] truncate">{occ.loja}</div>
+                <div className="text-[#77766F] text-[11px] truncate">Ind: {occ.industria} • Promotor: {occ.promotor}</div>
+                <p className="text-[#171717] text-[11px] pt-1">{occ.descricao}</p>
               </div>
             ))}
           </div>
@@ -3016,9 +3198,9 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
       )}
 
       {/* FILTROS E TABELA DE VISITAS */}
-      <section className="bg-[#171b26] border border-[#1e2433] rounded-2xl p-6 shadow-2xl space-y-4">
+      <section className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-6 shadow-2xl space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <h3 className="text-sm font-bold text-white uppercase tracking-wider font-mono flex items-center gap-2">
+          <h3 className="text-sm font-bold text-[#171717] uppercase tracking-wider font-mono flex items-center gap-2">
             <span className="material-symbols-outlined text-purple-400">checklist</span>
             Visitas Registradas ({filteredVisits.length})
           </h3>
@@ -3029,13 +3211,13 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
               value={tableSearch}
               onChange={(e) => setTableSearch(e.target.value)}
               placeholder="Buscar por promotor, loja ou indústria..."
-              className="h-9 px-3 bg-[#131722] border border-[#1e2433] rounded-xl text-slate-200 focus:outline-none focus:border-purple-500 min-w-[240px]"
+              className="h-9 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-purple-500 min-w-[240px]"
             />
 
             <select
               value={tableStatus}
               onChange={(e) => setTableStatus(e.target.value)}
-              className="h-9 px-3 bg-[#131722] border border-[#1e2433] rounded-xl text-slate-200 focus:outline-none focus:border-purple-500"
+              className="h-9 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-purple-500"
             >
               <option value="all">Status: Todos</option>
               <option value="em_andamento">Em Andamento</option>
@@ -3050,18 +3232,18 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
         {loading && (
           <div className="py-16 text-center space-y-3 font-mono">
             <div className="w-10 h-10 border-4 border-purple-500/20 border-t-purple-500 rounded-full animate-spin mx-auto"></div>
-            <p className="text-xs text-slate-400">Carregando telemetria de visitas do Supabase...</p>
+            <p className="text-xs text-[#77766F]">Carregando telemetria de visitas do Supabase...</p>
           </div>
         )}
 
         {/* VAZIO */}
         {!loading && filteredVisits.length === 0 && (
           <div className="py-16 text-center space-y-3 font-mono">
-            <div className="w-14 h-14 rounded-full bg-[#131722] border border-[#1e2433] flex items-center justify-center text-slate-500 mx-auto">
+            <div className="w-14 h-14 rounded-full bg-[#EAE8E2] border border-[#CFCDC5] flex items-center justify-center text-[#5F5F5F] mx-auto">
               <span className="material-symbols-outlined text-3xl">inbox</span>
             </div>
-            <h4 className="text-sm font-bold text-white">Nenhuma Visita Encontrada</h4>
-            <p className="text-xs text-slate-400 max-w-md mx-auto">
+            <h4 className="text-sm font-bold text-[#171717]">Nenhuma Visita Encontrada</h4>
+            <p className="text-xs text-[#77766F] max-w-md mx-auto">
               Não foram encontradas visitas de campo registradas. O promotor pode iniciar os atendimentos pelo <strong>Portal do Promotor</strong>.
             </p>
           </div>
@@ -3069,10 +3251,10 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
 
         {/* TABELA REALS */}
         {!loading && filteredVisits.length > 0 && (
-          <div className="overflow-x-auto rounded-xl border border-[#1e2433]">
+          <div className="overflow-x-auto rounded-xl border border-[#CFCDC5]">
             <table className="w-full text-left text-xs border-collapse font-mono">
               <thead>
-                <tr className="bg-[#131722] border-b border-[#1e2433] text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                <tr className="bg-[#E3E1DA] border-b border-[#CFCDC5] text-[11px] font-bold text-[#171717] uppercase tracking-wider">
                   <th className="py-3.5 px-4">Promotor</th>
                   <th className="py-3.5 px-4">Loja / PDV</th>
                   <th className="py-3.5 px-4">Indústria</th>
@@ -3082,24 +3264,24 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
                   <th className="py-3.5 px-4 text-right">Ação</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-[#1e2433] text-slate-300">
+              <tbody className="divide-y divide-[#CFCDC5] text-[#171717]">
                 {filteredVisits.map((v) => (
-                  <tr key={v.id} className="hover:bg-[#131722]/60 transition-colors">
+                  <tr key={v.id} className="hover:bg-[#EAE8E1] transition-colors">
                     <td className="py-3.5 px-4">
-                      <div className="font-bold text-white">{v.promotor?.nome || v.promotor_matricula}</div>
-                      <div className="text-[10px] text-slate-500">Mat: {v.promotor_matricula}</div>
+                      <div className="font-bold text-[#171717]">{v.promotor?.nome || v.promotor_matricula}</div>
+                      <div className="text-[10px] text-[#5F5F5F]">Mat: {v.promotor_matricula}</div>
                     </td>
 
                     <td className="py-3.5 px-4">
-                      <div className="font-bold text-white">{v.loja?.nome || v.loja_codigo}</div>
-                      <div className="text-[10px] text-slate-500">{v.loja?.cidade || '—'}</div>
+                      <div className="font-bold text-[#171717]">{v.loja?.nome || v.loja_codigo}</div>
+                      <div className="text-[10px] text-[#5F5F5F]">{v.loja?.cidade || '—'}</div>
                     </td>
 
-                    <td className="py-3.5 px-4 font-bold text-purple-300">
+                    <td className="py-3.5 px-4 font-bold text-[#7E22CE]">
                       {v.industria?.nome || v.industria_codigo}
                     </td>
 
-                    <td className="py-3.5 px-4 text-slate-400 text-[11px]">
+                    <td className="py-3.5 px-4 text-[#77766F] text-[11px]">
                       <div>Início: {v.started_at ? new Date(v.started_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—'}</div>
                       <div>Fim: {v.completed_at ? new Date(v.completed_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—'}</div>
                     </td>
@@ -3113,14 +3295,14 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
                             ? 'bg-amber-500/10 text-amber-300 border-amber-500/30 animate-pulse'
                             : v.status === 'nao_realizada'
                             ? 'bg-rose-500/10 text-rose-400 border-rose-500/30'
-                            : 'bg-slate-800 text-slate-400 border-slate-700'
+                            : 'bg-slate-800 text-[#77766F] border-[#CFCDC5]'
                         }`}
                       >
                         {v.status.replace('_', ' ')}
                       </span>
                     </td>
 
-                    <td className="py-3.5 px-4 text-slate-300 text-[11px]">
+                    <td className="py-3.5 px-4 text-[#171717] text-[11px]">
                       <div>Checklist: {v.checklist_items?.filter((c) => c.checked).length || 0} ok</div>
                       <div>Fotos: {v.photos?.length || 0} anexadas</div>
                     </td>
@@ -3128,7 +3310,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
                     <td className="py-3.5 px-4 text-right">
                       <button
                         onClick={() => setSelectedVisit(v)}
-                        className="p-1.5 rounded-lg bg-[#131722] hover:bg-[#1f2433] text-cyan-300 border border-[#1e2433] cursor-pointer"
+                        className="p-1.5 rounded-lg bg-[#EAE8E2] hover:bg-[#E4E2DB] text-cyan-300 border border-[#CFCDC5] cursor-pointer"
                         title="Ver Detalhes da Visita"
                       >
                         <span className="material-symbols-outlined text-[16px]">visibility</span>
@@ -3145,37 +3327,37 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
       {/* MODAL DETALHE COMPLETO DA VISITA */}
       {selectedVisit && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-[#171b26] border border-[#1e2433] rounded-2xl max-w-2xl w-full p-6 shadow-2xl space-y-6 max-h-[85vh] overflow-y-auto">
-            <div className="flex items-center justify-between border-b border-[#1e2433] pb-4">
+          <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl max-w-2xl w-full p-6 shadow-2xl space-y-6 max-h-[85vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-4">
               <div className="flex items-center gap-2 font-mono">
                 <span className="material-symbols-outlined text-purple-400 text-xl">assignment</span>
-                <h3 className="text-base font-bold text-white">
+                <h3 className="text-base font-bold text-[#171717]">
                   Ficha Completa da Visita ({selectedVisit.id.substring(0, 8)})
                 </h3>
               </div>
-              <button onClick={() => setSelectedVisit(null)} className="text-slate-400 hover:text-white">
+              <button onClick={() => setSelectedVisit(null)} className="text-[#77766F] hover:text-white">
                 <span className="material-symbols-outlined">close</span>
               </button>
             </div>
 
             <div className="grid grid-cols-2 gap-3 text-xs font-mono">
-              <div className="p-3 rounded-xl bg-[#131722] border border-[#1e2433]">
-                <span className="text-slate-500 block">PROMOTOR:</span>
-                <span className="text-white font-bold">{selectedVisit.promotor?.nome || selectedVisit.promotor_matricula}</span>
+              <div className="p-3 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5]">
+                <span className="text-[#5F5F5F] block">PROMOTOR:</span>
+                <span className="text-[#171717] font-bold">{selectedVisit.promotor?.nome || selectedVisit.promotor_matricula}</span>
               </div>
 
-              <div className="p-3 rounded-xl bg-[#131722] border border-[#1e2433]">
-                <span className="text-slate-500 block">LOJA / PDV:</span>
-                <span className="text-white font-bold">{selectedVisit.loja?.nome || selectedVisit.loja_codigo}</span>
+              <div className="p-3 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5]">
+                <span className="text-[#5F5F5F] block">LOJA / PDV:</span>
+                <span className="text-[#171717] font-bold">{selectedVisit.loja?.nome || selectedVisit.loja_codigo}</span>
               </div>
 
-              <div className="p-3 rounded-xl bg-[#131722] border border-[#1e2433]">
-                <span className="text-slate-500 block">INDÚSTRIA:</span>
-                <span className="text-purple-300 font-bold">{selectedVisit.industria?.nome || selectedVisit.industria_codigo}</span>
+              <div className="p-3 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5]">
+                <span className="text-[#5F5F5F] block">INDÚSTRIA:</span>
+                <span className="text-[#7E22CE] font-bold">{selectedVisit.industria?.nome || selectedVisit.industria_codigo}</span>
               </div>
 
-              <div className="p-3 rounded-xl bg-[#131722] border border-[#1e2433]">
-                <span className="text-slate-500 block">STATUS DA VISITA:</span>
+              <div className="p-3 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5]">
+                <span className="text-[#5F5F5F] block">STATUS DA VISITA:</span>
                 <span className="text-emerald-400 font-bold uppercase">{selectedVisit.status}</span>
               </div>
             </div>
@@ -3183,11 +3365,11 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
             {/* Checklist */}
             {selectedVisit.checklist_items && selectedVisit.checklist_items.length > 0 && (
               <div className="space-y-2 font-mono text-xs">
-                <span className="text-slate-400 font-bold uppercase block">Itens do Checklist Validados:</span>
+                <span className="text-[#77766F] font-bold uppercase block">Itens do Checklist Validados:</span>
                 <div className="space-y-1">
                   {selectedVisit.checklist_items.map((item, idx) => (
-                    <div key={idx} className="p-2 rounded bg-[#131722] border border-[#1e2433] flex justify-between items-center">
-                      <span className={item.checked ? 'text-emerald-300 font-bold' : 'text-slate-400'}>
+                    <div key={idx} className="p-2 rounded bg-[#EAE8E2] border border-[#CFCDC5] flex justify-between items-center">
+                      <span className={item.checked ? 'text-emerald-300 font-bold' : 'text-[#77766F]'}>
                         {item.checked ? '✓' : '✗'} {item.item_label}
                       </span>
                       {item.valor_texto && <span className="text-cyan-300 font-bold">{item.valor_texto}</span>}
@@ -3203,10 +3385,10 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
                 <span className="text-amber-400 font-bold uppercase block">Controle de Validade de Produtos:</span>
                 <div className="space-y-1">
                   {selectedVisit.validity_items.map((val, idx) => (
-                    <div key={idx} className="p-2.5 rounded bg-[#131722] border border-[#1e2433] flex justify-between items-center text-slate-200">
+                    <div key={idx} className="p-2.5 rounded bg-[#EAE8E2] border border-[#CFCDC5] flex justify-between items-center text-[#171717]">
                       <div>
                         <strong>{val.produto_nome}</strong> (Qtd: {val.quantidade})
-                        {val.lote && <span className="text-slate-400 text-[10px] block font-mono">Lote: {val.lote}</span>}
+                        {val.lote && <span className="text-[#77766F] text-[10px] block font-mono">Lote: {val.lote}</span>}
                       </div>
                       <span className="text-amber-300 font-bold">
                         Venc: {new Date(val.data_vencimento).toLocaleDateString('pt-BR')}
@@ -3223,7 +3405,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
                 <span className="text-cyan-400 font-bold uppercase block">Galeria de Fotos Anexadas:</span>
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                   {selectedVisit.photos.map((p, idx) => (
-                    <div key={idx} className="p-2 rounded bg-[#131722] border border-[#1e2433] space-y-1">
+                    <div key={idx} className="p-2 rounded bg-[#EAE8E2] border border-[#CFCDC5] space-y-1">
                       <span className="px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 text-[9px] font-bold block uppercase">
                         {p.tipo_foto}
                       </span>
@@ -3247,10 +3429,10 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
               </div>
             )}
 
-            <div className="pt-3 border-t border-[#1e2433] flex justify-end font-mono">
+            <div className="pt-3 border-t border-[#CFCDC5] flex justify-end font-mono">
               <button
                 onClick={() => setSelectedVisit(null)}
-                className="px-5 py-2 rounded-xl bg-[#131722] hover:bg-[#1f2433] text-slate-300 border border-[#1e2433] text-xs font-semibold"
+                className="px-5 py-2 rounded-xl bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] border border-[#CFCDC5] text-xs font-semibold"
               >
                 Fechar
               </button>

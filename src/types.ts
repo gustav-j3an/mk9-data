@@ -88,6 +88,30 @@ export interface ImportHistoryRecord {
   created_at: string;
 }
 
+export type OperationMode = 'IMPLANTACAO' | 'OPERACAO_OFICIAL';
+
+export interface SystemSettingsState {
+  mode: OperationMode | 'DESCONHECIDO';
+  officialStartDate: string | null;
+  status: 'loading' | 'loaded' | 'error';
+  error: string | null;
+  updatedAt?: string | null;
+  updatedBy?: string | null;
+}
+
+export interface SystemSettingsAuditRecord {
+  id: string;
+  changed_at: string;
+  changed_by?: string | null;
+  changed_by_name?: string | null;
+  changed_by_email?: string | null;
+  previous_mode: string;
+  new_mode: string;
+  previous_start_date?: string | null;
+  new_start_date?: string | null;
+  justification: string;
+}
+
 export type UserRole = 'admin' | 'gestor' | 'operador' | 'promotor' | 'client_industry';
 
 export interface UserProfile {
@@ -106,6 +130,26 @@ export interface UserProfile {
   avatar_url?: string;
   department?: string;
   status?: 'ativo' | 'inativo';
+  created_at?: string;
+  updated_at?: string;
+}
+
+export type PromoterAuthorizationStatus = 'liberado' | 'bloqueado';
+
+export interface PromoterOperationAuthorization {
+  id: string;
+  promotor_matricula: string;
+  status: PromoterAuthorizationStatus;
+  authorized_at: string;
+  authorized_by?: string | null;
+  authorized_by_name?: string | null;
+  authorized_by_email?: string | null;
+  justification: string;
+  revoked_at?: string | null;
+  revoked_by?: string | null;
+  revoked_by_name?: string | null;
+  revoked_by_email?: string | null;
+  revocation_reason?: string | null;
   created_at?: string;
   updated_at?: string;
 }

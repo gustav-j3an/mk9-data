@@ -2,7 +2,8 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useAuth } from '../auth/AuthProvider';
 import { supabase } from '../lib/supabase';
 import * as XLSX from 'xlsx';
-import type { Visit, RouteItem, ToastMessage, VisitPhoto } from '../types';
+import type { Visit, RouteItem, ToastMessage, VisitPhoto, SystemSettingsState } from '../types';
+import { fetchSystemSettings } from '../lib/systemSettings';
 import {
   calculateOperationalVisits,
   getLocalDateString,
@@ -44,6 +45,15 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Configurações Globais de Operação
+  const [systemSettings, setSystemSettings] = useState<SystemSettingsState>({
+    mode: 'IMPLANTACAO',
+    officialStartDate: null,
+    status: 'loading',
+    error: null
+  });
+
   const [periodFilter, setPeriodFilter] = useState<'today' | 'week' | 'month'>('today');
 
   const [visits, setVisits] = useState<Visit[]>([]);
@@ -161,12 +171,13 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
         rotasQuery = rotasQuery.eq('industria_codigo', activeIndCode);
       }
 
-      // Executar consultas com RLS ativo no Supabase
-      const [visitsRes, rotasRes, promotoresRes, lojasRes] = await Promise.all([
+      // Executar consultas com RLS ativo no Supabase e buscar configurações operacionais
+      const [visitsRes, rotasRes, promotoresRes, lojasRes, settingsData] = await Promise.all([
         visitsQuery,
         rotasQuery,
         supabase.from('promotores').select('*'),
-        supabase.from('lojas').select('*')
+        supabase.from('lojas').select('*'),
+        fetchSystemSettings()
       ]);
 
       if (visitsRes.error) throw visitsRes.error;
@@ -179,6 +190,7 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
       setRoutes(realRoutes);
       setPromotoresList(promotoresRes.data || []);
       setLojasList(lojasRes.data || []);
+      setSystemSettings(settingsData);
 
       setLastUpdate(new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
     } catch (err: any) {
@@ -263,9 +275,11 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
       promotoresList,
       industriasList: [],
       daysRange: periodDaysRange,
-      todayStr
+      todayStr,
+      operationMode: systemSettings.mode,
+      officialStartDate: systemSettings.officialStartDate
     }).filter((v) => !activeIndCode || v.industriaCodigo === activeIndCode);
-  }, [routes, visits, promotoresList, periodDaysRange, todayStr, activeIndCode]);
+  }, [routes, visits, promotoresList, periodDaysRange, todayStr, activeIndCode, systemSettings]);
 
   // Lojas contratadas únicas da indústria (ou de todas no modo GLOBAL)
   const contratadasLojasCount = useMemo(() => {
@@ -651,11 +665,13 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
       promotoresList,
       industriasList: [],
       daysRange: historyDaysRange,
-      todayStr
+      todayStr,
+      operationMode: systemSettings.mode,
+      officialStartDate: systemSettings.officialStartDate
     });
     // Ordenar do mais recente para o mais antigo
     return items.sort((a, b) => b.dataStr.localeCompare(a.dataStr));
-  }, [selectedStoreCode, selectedStoreRoutes, historyVisitsData, promotoresList, historyDaysRange, todayStr]);
+  }, [selectedStoreCode, selectedStoreRoutes, historyVisitsData, promotoresList, historyDaysRange, todayStr, systemSettings]);
 
   // Resumo de KPIs do Histórico da Loja
   const storeHistoryKPIs = useMemo(() => {
@@ -888,7 +904,7 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
         ['Visitas Pendentes', kpis.pendentes, `${kpis.atrasadas} atrasadas • ${kpis.pendentesHoje} para hoje`],
         ['Visitas Atrasadas', kpis.atrasadas, 'Excederam a data limite de atendimento'],
         ['Não Realizadas', kpis.naoRealizadas, 'Visitas com justificativa registrada'],
-        ['Aderência Operacional (%)', `${kpis.aderencia}%`, 'Taxa de execução em relação ao planejado'],
+        ['Aderência Operacional (%)', systemSettings.mode !== 'OPERACAO_OFICIAL' || systemSettings.status !== 'loaded' ? 'Fase de implantação — SLA não ativo' : `${kpis.aderencia}%`, systemSettings.mode !== 'OPERACAO_OFICIAL' || systemSettings.status !== 'loaded' ? 'SLA oficial não ativo na fase de implantação' : 'Taxa de execução em relação ao planejado'],
         ['Cobertura de PDVs (%)', `${kpis.lojas > 0 ? Math.round((kpis.lojasComVisita / kpis.lojas) * 100) : 0}%`, `${kpis.lojasComVisita} de ${kpis.lojas} PDVs atendidos no período`],
         [''],
         ['RESUMO DE CAMPO'],
@@ -1021,14 +1037,14 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
   return (
     <div className="w-full px-4 sm:px-6 py-6 max-w-7xl mx-auto space-y-6 font-sans">
       {/* 2. CABEÇALHO DO PORTAL DA INDÚSTRIA */}
-      <section className="bg-[#171b26] border border-indigo-500/40 rounded-2xl p-6 shadow-2xl flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <section className="bg-[#F7F6F2] border border-indigo-500/40 rounded-2xl p-6 shadow-2xl flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="flex flex-col sm:flex-row sm:items-center gap-3">
           <div className="w-12 h-12 rounded-2xl bg-indigo-500/20 text-indigo-400 border border-indigo-500/40 flex items-center justify-center font-bold text-2xl shadow-[0_0_15px_rgba(99,102,241,0.3)] shrink-0">
             <span className="material-symbols-outlined text-3xl">domain</span>
           </div>
           <div>
             <div className="flex flex-wrap items-center gap-2">
-              <h1 className="text-2xl font-extrabold text-white tracking-tight font-mono">
+              <h1 className="text-2xl font-extrabold text-[#171717] tracking-tight font-mono">
                 Portal da Indústria
               </h1>
 
@@ -1038,7 +1054,7 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                   <select
                     value={selectedIndFilter}
                     onChange={(e) => setSelectedIndFilter(e.target.value)}
-                    className="bg-[#10141f] text-indigo-300 border border-indigo-500/40 rounded-xl px-3 py-1 font-mono font-bold text-xs cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-500 shadow-lg"
+                    className="bg-[#E4E2DB] text-indigo-300 border border-indigo-500/40 rounded-xl px-3 py-1 font-mono font-bold text-xs cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-500 shadow-lg"
                   >
                     <option value="">GLOBAL (Todas as Indústrias)</option>
                     {industriasList.map((ind) => (
@@ -1055,14 +1071,14 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
               )}
             </div>
 
-            <p className="text-xs text-slate-300 font-mono mt-1">
+            <p className="text-xs text-[#171717] font-mono mt-1">
               Parceiro: <strong className="text-indigo-400 font-bold">{activeIndName}</strong> • Telemetria em Tempo Real MK9
             </p>
           </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-3 self-end md:self-auto font-mono text-xs">
-          <span className="text-slate-400 bg-[#10141f] border border-[#1e2433] px-3 py-2 rounded-xl">
+          <span className="text-[#77766F] bg-[#E4E2DB] border border-[#CFCDC5] px-3 py-2 rounded-xl">
             Atualizado às: <strong className="text-slate-200">{lastUpdate}</strong>
           </span>
 
@@ -1080,15 +1096,15 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
       </section>
 
       {/* 3. FILTRO DE ABAS E PERÍODO */}
-      <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-3 bg-[#171b26] border border-[#1e2433] rounded-2xl p-4 font-mono text-xs">
+      <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-3 bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-4 font-mono text-xs">
         {/* NAVEGAÇÃO DE ABAS */}
-        <div className="flex items-center gap-1.5 bg-[#10141f] border border-[#1e2433] rounded-xl p-1 w-full md:w-auto">
+        <div className="flex items-center gap-1.5 bg-[#E4E2DB] border border-[#CFCDC5] rounded-xl p-1 w-full md:w-auto">
           <button
             onClick={() => setActiveTab('operacional')}
             className={`flex-1 md:flex-initial px-4 py-2 rounded-lg font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
               activeTab === 'operacional'
                 ? 'bg-indigo-600 text-white shadow-md'
-                : 'text-slate-400 hover:text-white'
+                : 'text-[#77766F] hover:text-white'
             }`}
           >
             <span className="material-symbols-outlined text-base">analytics</span>
@@ -1100,7 +1116,7 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
             className={`flex-1 md:flex-initial px-4 py-2 rounded-lg font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
               activeTab === 'evidencias'
                 ? 'bg-indigo-600 text-white shadow-md'
-                : 'text-slate-400 hover:text-white'
+                : 'text-[#77766F] hover:text-white'
             }`}
           >
             <span className="material-symbols-outlined text-base">photo_library</span>
@@ -1112,7 +1128,7 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
             className={`flex-1 md:flex-initial px-4 py-2 rounded-lg font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
               activeTab === 'relatorio'
                 ? 'bg-indigo-600 text-white shadow-md'
-                : 'text-slate-400 hover:text-white'
+                : 'text-[#77766F] hover:text-white'
             }`}
           >
             <span className="material-symbols-outlined text-base">assessment</span>
@@ -1122,14 +1138,14 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
 
         {/* PERÍODO GLOBAL (EXIBIDO NA ABA OPERACIONAL E RELATÓRIO) */}
         {(activeTab === 'operacional' || activeTab === 'relatorio') && (
-          <div className="flex items-center gap-1.5 bg-[#10141f] border border-[#1e2433] rounded-xl p-1 w-full md:w-auto">
+          <div className="flex items-center gap-1.5 bg-[#E4E2DB] border border-[#CFCDC5] rounded-xl p-1 w-full md:w-auto">
             {activeTab === 'operacional' && (
               <button
                 onClick={() => setPeriodFilter('today')}
                 className={`flex-1 md:flex-initial px-3.5 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
                   periodFilter === 'today'
                     ? 'bg-indigo-600/40 text-indigo-200 border border-indigo-500/40 shadow-sm'
-                    : 'text-slate-400 hover:text-white'
+                    : 'text-[#77766F] hover:text-white'
                 }`}
               >
                 Hoje
@@ -1140,7 +1156,7 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
               className={`flex-1 md:flex-initial px-3.5 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
                 periodFilter === 'week'
                   ? 'bg-indigo-600/40 text-indigo-200 border border-indigo-500/40 shadow-sm'
-                  : 'text-slate-400 hover:text-white'
+                  : 'text-[#77766F] hover:text-white'
               }`}
             >
               7 Dias
@@ -1150,7 +1166,7 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
               className={`flex-1 md:flex-initial px-3.5 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
                 periodFilter === 'month'
                   ? 'bg-indigo-600/40 text-indigo-200 border border-indigo-500/40 shadow-sm'
-                  : 'text-slate-400 hover:text-white'
+                  : 'text-[#77766F] hover:text-white'
               }`}
             >
               30 Dias
@@ -1164,7 +1180,7 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
         <>
           {/* ESTADO DE ERRO */}
           {error && (
-            <div className="p-4 rounded-2xl bg-rose-950/40 border border-rose-500/50 text-rose-300 font-mono text-xs flex items-center justify-between gap-3">
+            <div className="p-4 rounded-2xl bg-[#FDF2F2] border border-rose-500/50 text-rose-300 font-mono text-xs flex items-center justify-between gap-3">
               <div className="flex items-center gap-2">
                 <span className="material-symbols-outlined text-xl text-rose-400">error</span>
                 <span>Não foi possível carregar os dados. Tente novamente. ({error})</span>
@@ -1177,53 +1193,62 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
 
           {/* 4. CARDS DE KPIS PRINCIPAIS DA INDÚSTRIA */}
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3 font-mono text-xs">
-            <div className="p-4 rounded-2xl bg-[#171b26] border border-[#1e2433]">
-              <span className="text-[10px] text-slate-400 block font-bold uppercase">PDVs CONTRATADOS</span>
-              <span className="text-2xl font-extrabold text-white mt-1 block">{loading ? '...' : kpis.lojas}</span>
-              <span className="text-[10px] text-slate-500 block mt-0.5">{loading ? '...' : `${kpis.lojasComVisita} com visita realizada`}</span>
+            <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5]">
+              <span className="text-[10px] text-[#77766F] block font-bold uppercase">PDVs CONTRATADOS</span>
+              <span className="text-2xl font-extrabold text-[#171717] mt-1 block">{loading ? '...' : kpis.lojas}</span>
+              <span className="text-[10px] text-[#5F5F5F] block mt-0.5">{loading ? '...' : `${kpis.lojasComVisita} com visita realizada`}</span>
             </div>
 
-            <div className="p-4 rounded-2xl bg-[#171b26] border border-purple-500/30 bg-purple-950/10">
+            <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-purple-500/30 bg-purple-950/10">
               <span className="text-[10px] text-purple-400 block font-bold uppercase">VISITAS PLANEJADAS</span>
               <span className="text-2xl font-extrabold text-purple-300 mt-1 block">{loading ? '...' : kpis.planejadas}</span>
               <span className="text-[10px] text-purple-400/70 block mt-0.5">Atendimentos previstos no período</span>
             </div>
 
-            <div className="p-4 rounded-2xl bg-[#171b26] border border-emerald-500/30 bg-emerald-950/10">
+            <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-emerald-500/30 bg-emerald-950/10">
               <span className="text-[10px] text-emerald-400 block font-bold uppercase">VISITAS CONCLUÍDAS</span>
               <span className="text-2xl font-extrabold text-emerald-300 mt-1 block">{loading ? '...' : kpis.concluidas}</span>
               <span className="text-[10px] text-emerald-400/70 block mt-0.5">Check-outs realizados</span>
             </div>
 
-            <div className="p-4 rounded-2xl bg-[#171b26] border border-rose-500/30 bg-rose-950/10">
+            <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-rose-500/30 bg-rose-950/10">
               <span className="text-[10px] text-rose-400 block font-bold uppercase">VISITAS PENDENTES</span>
               <span className="text-2xl font-extrabold text-rose-300 mt-1 block">{loading ? '...' : kpis.pendentes}</span>
               <span className="text-[10px] text-rose-400/70 block mt-0.5 truncate">{loading ? '...' : `${kpis.atrasadas} atrasadas • ${kpis.pendentesHoje} para hoje`}</span>
             </div>
 
-            <div className="p-4 rounded-2xl bg-[#171b26] border border-orange-500/30 bg-orange-950/10">
+            <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-orange-500/30 bg-orange-950/10">
               <span className="text-[10px] text-orange-400 block font-bold uppercase">NÃO REALIZADAS</span>
               <span className="text-2xl font-extrabold text-orange-300 mt-1 block">{loading ? '...' : kpis.naoRealizadas}</span>
               <span className="text-[10px] text-orange-400/70 block mt-0.5">Visitas não realizadas</span>
             </div>
 
-            <div className="p-4 rounded-2xl bg-[#171b26] border border-indigo-500/40 bg-indigo-950/20">
+            <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-indigo-500/40 bg-indigo-950/20">
               <span className="text-[10px] text-indigo-300 block font-bold uppercase">ADERÊNCIA</span>
-              <span className="text-2xl font-extrabold text-indigo-200 mt-1 block">{loading ? '...' : `${kpis.aderencia}%`}</span>
+              {loading || systemSettings.status === 'loading' ? (
+                <span className="text-sm font-bold text-[#77766F] mt-2 block">Carregando...</span>
+              ) : systemSettings.mode !== 'OPERACAO_OFICIAL' || systemSettings.status !== 'loaded' ? (
+                <div className="mt-1">
+                  <span className="text-xs font-bold text-amber-300 block leading-tight">Fase de implantação — SLA não ativo</span>
+                  <span className="text-[9px] text-[#77766F] block mt-0.5">Indicador oficial desativado</span>
+                </div>
+              ) : (
+                <span className="text-2xl font-extrabold text-indigo-200 mt-1 block">{`${kpis.aderencia}%`}</span>
+              )}
               <span className="text-[10px] text-indigo-400/70 block mt-0.5">Taxa de Execução</span>
             </div>
           </div>
 
           {/* 8. SEÇÃO DESTACADA: PENDÊNCIAS DE ATENDIMENTO DA INDÚSTRIA */}
-          <section className="bg-[#171b26] border border-rose-500/40 rounded-2xl p-5 shadow-2xl space-y-4 font-mono">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-[#1e2433] pb-3 gap-2">
+          <section className="bg-[#F7F6F2] border border-rose-500/40 rounded-2xl p-5 shadow-2xl space-y-4 font-mono">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-[#CFCDC5] pb-3 gap-2">
               <div className="flex items-center gap-2">
                 <span className="material-symbols-outlined text-rose-400 text-xl animate-pulse">warning</span>
                 <div>
-                  <h2 className="text-sm font-bold text-white uppercase tracking-wider">
+                  <h2 className="text-sm font-bold text-[#171717] uppercase tracking-wider">
                     PENDÊNCIAS DE ATENDIMENTO ({pendenciasList.length})
                   </h2>
-                  <p className="text-[11px] text-slate-400 font-normal">
+                  <p className="text-[11px] text-[#77766F] font-normal">
                     Atendimentos previstos que ainda precisam de execução no campo.
                   </p>
                 </div>
@@ -1234,16 +1259,16 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
             </div>
 
             {pendenciasList.length === 0 ? (
-              <div className="py-8 text-center space-y-1 bg-[#10141f]/50 rounded-xl border border-[#1e2433]">
+              <div className="py-8 text-center space-y-1 bg-[#E4E2DB]/50 rounded-xl border border-[#CFCDC5]">
                 <span className="material-symbols-outlined text-emerald-400 text-3xl">check_circle</span>
-                <p className="text-xs text-slate-300 font-bold">Nenhuma pendência encontrada para o período selecionado.</p>
-                <p className="text-[11px] text-slate-500">Todos os atendimentos das suas lojas foram executados no prazo.</p>
+                <p className="text-xs text-[#171717] font-bold">Nenhuma pendência encontrada para o período selecionado.</p>
+                <p className="text-[11px] text-[#5F5F5F]">Todos os atendimentos das suas lojas foram executados no prazo.</p>
               </div>
             ) : (
-              <div className="overflow-x-auto rounded-xl border border-[#1e2433]">
+              <div className="overflow-x-auto rounded-xl border border-[#CFCDC5]">
                 <table className="w-full text-left text-xs">
                   <thead>
-                    <tr className="bg-[#10141f] border-b border-[#1e2433] text-slate-400 text-[10px] uppercase">
+                    <tr className="bg-[#E4E2DB] border-b border-[#CFCDC5] text-[#77766F] text-[10px] uppercase">
                       <th className="py-2.5 px-3">Data Prevista</th>
                       <th className="py-2.5 px-3">Loja / PDV</th>
                       <th className="py-2.5 px-3">Promotor</th>
@@ -1252,19 +1277,19 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                       <th className="py-2.5 px-3 text-right">Ação</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-[#1e2433] text-slate-300">
+                  <tbody className="divide-y divide-[#CFCDC5] text-[#171717]">
                     {pendenciasList.map((item) => (
-                      <tr key={item.key} className="hover:bg-[#10141f]/80 transition-colors">
+                      <tr key={item.key} className="hover:bg-[#E4E2DB]/80 transition-colors">
                         <td className="py-2.5 px-3">
-                          <div className="font-bold text-white">{item.dataStr}</div>
-                          <div className="text-[10px] text-slate-500">{item.dayOfWeekLabel}</div>
+                          <div className="font-bold text-[#171717]">{item.dataStr}</div>
+                          <div className="text-[10px] text-[#5F5F5F]">{item.dayOfWeekLabel}</div>
                         </td>
-                        <td className="py-2.5 px-3 font-bold text-white">
+                        <td className="py-2.5 px-3 font-bold text-[#171717]">
                           {item.lojaNome}
-                          {item.lojaCidade && <span className="text-[10px] text-slate-400 block font-normal">{item.lojaCidade} - {item.lojaUf}</span>}
+                          {item.lojaCidade && <span className="text-[10px] text-[#77766F] block font-normal">{item.lojaCidade} - {item.lojaUf}</span>}
                         </td>
                         <td className="py-2.5 px-3 font-bold text-cyan-400">{item.promotorNome}</td>
-                        <td className="py-2.5 px-3 text-slate-400">{item.frequencia}</td>
+                        <td className="py-2.5 px-3 text-[#77766F]">{item.frequencia}</td>
                         <td className="py-2.5 px-3">
                           <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
                             item.isPastOverdue
@@ -1277,7 +1302,7 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                         <td className="py-2.5 px-3 text-right">
                           <button
                             onClick={() => handleOpenVisitDetails(item)}
-                            className="px-3 py-1 rounded-lg bg-[#10141f] hover:bg-[#1e2433] text-indigo-300 border border-indigo-500/30 text-[11px] font-bold transition-all cursor-pointer"
+                            className="px-3 py-1 rounded-lg bg-[#E4E2DB] hover:bg-[#CFCDC5] text-indigo-300 border border-indigo-500/30 text-[11px] font-bold transition-all cursor-pointer"
                           >
                             Ver Detalhes
                           </button>
@@ -1291,18 +1316,18 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
           </section>
 
           {/* 7. CENTRAL DE ACOMPANHAMENTO: STATUS DOS ATENDIMENTOS DA INDÚSTRIA */}
-          <section className="bg-[#171b26] border border-[#1e2433] rounded-2xl p-5 shadow-2xl space-y-4 font-mono">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#1e2433] pb-3">
+          <section className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-5 shadow-2xl space-y-4 font-mono">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#CFCDC5] pb-3">
               <div>
-                <h2 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
+                <h2 className="text-sm font-bold text-[#171717] uppercase tracking-wider flex items-center gap-2">
                   <span className="material-symbols-outlined text-indigo-400 text-xl">store</span>
                   STATUS DOS ATENDIMENTOS DO PERÍODO ({allOperationalVisits.length})
                 </h2>
-                <p className="text-[11px] text-slate-400 mt-0.5">
+                <p className="text-[11px] text-[#77766F] mt-0.5">
                   Atendimentos previstos no período selecionado e situação de execução em tempo real.
                 </p>
               </div>
-              <span className="text-[11px] text-slate-400">
+              <span className="text-[11px] text-[#77766F]">
                 Exibindo <strong>{allOperationalVisits.length}</strong> atendimento(s)
               </span>
             </div>
@@ -1310,20 +1335,20 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
             {loading ? (
               <div className="py-12 text-center space-y-3">
                 <span className="material-symbols-outlined text-indigo-400 text-3xl animate-spin">sync</span>
-                <p className="text-xs text-slate-400">Carregando operação da indústria...</p>
+                <p className="text-xs text-[#77766F]">Carregando operação da indústria...</p>
               </div>
             ) : allOperationalVisits.length === 0 ? (
-              <div className="py-12 text-center space-y-2 bg-[#10141f]/50 rounded-xl border border-[#1e2433]">
+              <div className="py-12 text-center space-y-2 bg-[#E4E2DB]/50 rounded-xl border border-[#CFCDC5]">
                 <span className="material-symbols-outlined text-slate-600 text-3xl">event_busy</span>
-                <p className="text-xs text-slate-300 font-bold">Nenhuma operação encontrada para o período.</p>
+                <p className="text-xs text-[#171717] font-bold">Nenhuma operação encontrada para o período.</p>
               </div>
             ) : (
               <>
                 {/* TABELA DESKTOP */}
-                <div className="hidden md:block overflow-x-auto rounded-xl border border-[#1e2433]">
+                <div className="hidden md:block overflow-x-auto rounded-xl border border-[#CFCDC5]">
                   <table className="w-full text-left text-xs">
                     <thead>
-                      <tr className="bg-[#10141f] border-b border-[#1e2433] text-slate-400 text-[10px] uppercase">
+                      <tr className="bg-[#E4E2DB] border-b border-[#CFCDC5] text-[#77766F] text-[10px] uppercase">
                         <th className="py-3 px-4">Loja / PDV</th>
                         <th className="py-3 px-4">Cidade/UF</th>
                         <th className="py-3 px-4">Frequência</th>
@@ -1333,7 +1358,7 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                         <th className="py-3 px-4 text-right">Detalhes</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-[#1e2433] text-slate-300">
+                    <tbody className="divide-y divide-[#CFCDC5] text-[#171717]">
                       {allOperationalVisits.map((item) => {
                         let badge = { label: '🔴 PENDENTE', style: 'bg-rose-500/10 text-rose-400 border-rose-500/30' };
                         if (item.isPastOverdue) {
@@ -1345,12 +1370,12 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                         } else if (item.status === 'concluida') {
                           badge = { label: '🟢 CONCLUÍDA', style: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' };
                         } else if (item.status === 'planejada') {
-                          badge = { label: '⚪ PLANEJADA', style: 'bg-slate-800 text-slate-300 border-slate-700' };
+                          badge = { label: '⚪ PLANEJADA', style: 'bg-slate-800 text-slate-300 border-[#CFCDC5]' };
                         }
 
                         return (
-                          <tr key={item.key} className="hover:bg-[#10141f]/80 transition-colors">
-                            <td className="py-3 px-4 font-bold text-white">
+                          <tr key={item.key} className="hover:bg-[#E4E2DB]/80 transition-colors">
+                            <td className="py-3 px-4 font-bold text-[#171717]">
                               <button
                                 onClick={() => handleOpenStoreHistory(item.lojaCodigo)}
                                 className="text-left font-bold text-white hover:text-indigo-400 underline decoration-indigo-500/40 cursor-pointer transition-colors flex items-center gap-1.5"
@@ -1359,12 +1384,12 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                                 <span>{item.lojaNome}</span>
                               </button>
                             </td>
-                            <td className="py-3 px-4 text-slate-400">{item.lojaCidade || '—'}/{item.lojaUf || '-'}</td>
-                            <td className="py-3 px-4 text-slate-400">{item.frequencia}</td>
+                            <td className="py-3 px-4 text-[#77766F]">{item.lojaCidade || '—'}/{item.lojaUf || '-'}</td>
+                            <td className="py-3 px-4 text-[#77766F]">{item.frequencia}</td>
                             <td className="py-3 px-4 font-bold text-cyan-400">{item.promotorNome}</td>
                             <td className="py-3 px-4">
-                              <div className="font-bold text-white">{item.dataStr}</div>
-                              <div className="text-[10px] text-slate-500">{item.dayOfWeekLabel}</div>
+                              <div className="font-bold text-[#171717]">{item.dataStr}</div>
+                              <div className="text-[10px] text-[#5F5F5F]">{item.dayOfWeekLabel}</div>
                             </td>
                             <td className="py-3 px-4">
                               <span className={`px-2 py-0.5 rounded text-[10px] border ${badge.style}`}>
@@ -1374,7 +1399,7 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                             <td className="py-3 px-4 text-right flex items-center justify-end gap-2">
                               <button
                                 onClick={() => handleOpenStoreHistory(item.lojaCodigo)}
-                                className="px-2.5 py-1.5 rounded-lg bg-[#10141f] hover:bg-indigo-950/40 text-indigo-300 border border-indigo-500/30 text-xs font-bold transition-all cursor-pointer flex items-center gap-1"
+                                className="px-2.5 py-1.5 rounded-lg bg-[#E4E2DB] hover:bg-indigo-950/40 text-indigo-300 border border-indigo-500/30 text-xs font-bold transition-all cursor-pointer flex items-center gap-1"
                                 title="Ver Histórico Completo da Loja"
                               >
                                 <span className="material-symbols-outlined text-sm">history</span>
@@ -1382,7 +1407,7 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                               </button>
                               <button
                                 onClick={() => handleOpenVisitDetails(item)}
-                                className="px-2.5 py-1.5 rounded-lg bg-[#10141f] hover:bg-[#1e2433] text-slate-300 border border-[#1e2433] text-xs font-bold transition-all cursor-pointer"
+                                className="px-2.5 py-1.5 rounded-lg bg-[#E4E2DB] hover:bg-[#CFCDC5] text-[#171717] border border-[#CFCDC5] text-xs font-bold transition-all cursor-pointer"
                               >
                                 Relatório
                               </button>
@@ -1397,9 +1422,9 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                 {/* CARDS MOBILE (390px / 768px) */}
                 <div className="md:hidden space-y-3">
                   {allOperationalVisits.map((item) => (
-                    <div key={item.key} className="p-4 rounded-xl bg-[#10141f] border border-[#1e2433] space-y-2">
+                    <div key={item.key} className="p-4 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5] space-y-2">
                       <div className="flex items-center justify-between">
-                        <span className="text-[10px] text-slate-400">{item.dataStr} • {item.dayOfWeekLabel}</span>
+                        <span className="text-[10px] text-[#77766F]">{item.dataStr} • {item.dayOfWeekLabel}</span>
                         <span className={`px-2 py-0.5 rounded text-[9px] font-bold border ${
                           item.status === 'concluida' ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' :
                           item.status === 'em_andamento' ? 'bg-blue-500/20 text-blue-300 border-blue-500/30' :
@@ -1418,19 +1443,19 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                         <span className="material-symbols-outlined text-xs text-indigo-400">history</span>
                         <span>{item.lojaNome}</span>
                       </h3>
-                      <p className="text-xs text-slate-400">Cidade: {item.lojaCidade}/{item.lojaUf} • Promotor: <strong className="text-cyan-300">{item.promotorNome}</strong></p>
+                      <p className="text-xs text-[#77766F]">Cidade: {item.lojaCidade}/{item.lojaUf} • Promotor: <strong className="text-cyan-300">{item.promotorNome}</strong></p>
 
-                      <div className="pt-2 border-t border-[#1e2433] flex justify-end gap-2">
+                      <div className="pt-2 border-t border-[#CFCDC5] flex justify-end gap-2">
                         <button
                           onClick={() => handleOpenStoreHistory(item.lojaCodigo)}
-                          className="px-3 py-1.5 rounded-lg bg-[#171b26] text-indigo-300 border border-indigo-500/30 text-xs font-bold flex items-center gap-1"
+                          className="px-3 py-1.5 rounded-lg bg-[#F7F6F2] text-indigo-300 border border-indigo-500/30 text-xs font-bold flex items-center gap-1"
                         >
                           <span className="material-symbols-outlined text-sm">history</span>
                           <span>Histórico Loja</span>
                         </button>
                         <button
                           onClick={() => handleOpenVisitDetails(item)}
-                          className="px-3 py-1.5 rounded-lg bg-[#171b26] text-slate-300 border border-[#1e2433] text-xs font-bold"
+                          className="px-3 py-1.5 rounded-lg bg-[#F7F6F2] text-[#171717] border border-[#CFCDC5] text-xs font-bold"
                         >
                           Relatório
                         </button>
@@ -1446,17 +1471,17 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
 
       {/* RENDERIZAÇÃO DA ABA CENTRAL DE EVIDÊNCIAS */}
       {activeTab === 'evidencias' && (
-        <section className="bg-[#171b26] border border-indigo-500/40 rounded-2xl p-6 shadow-2xl space-y-6 font-mono">
+        <section className="bg-[#F7F6F2] border border-indigo-500/40 rounded-2xl p-6 shadow-2xl space-y-6 font-mono">
           {/* CABEÇALHO DA CENTRAL DE EVIDÊNCIAS E REINICIAR FILTROS */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-[#1e2433] pb-4 gap-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-[#CFCDC5] pb-4 gap-3">
             <div>
               <div className="flex items-center gap-2">
                 <span className="material-symbols-outlined text-indigo-400 text-2xl">photo_library</span>
-                <h2 className="text-lg font-extrabold text-white tracking-wide">
+                <h2 className="text-lg font-extrabold text-[#171717] tracking-wide">
                   Central de Evidências Fotográficas
                 </h2>
               </div>
-              <p className="text-xs text-slate-400 mt-1">
+              <p className="text-xs text-[#77766F] mt-1">
                 {activeIndCode ? `Exibindo evidências reais do parceiro ${activeIndName}` : 'Exibindo evidências consolidadas do ecossistema (GLOBAL)'}
               </p>
             </div>
@@ -1468,7 +1493,7 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
 
               <button
                 onClick={handleClearEvidenciasFilters}
-                className="px-3 py-1.5 rounded-xl bg-[#10141f] hover:bg-[#1e2433] text-slate-300 border border-[#1e2433] text-xs font-bold transition-all cursor-pointer flex items-center gap-1"
+                className="px-3 py-1.5 rounded-xl bg-[#E4E2DB] hover:bg-[#CFCDC5] text-[#171717] border border-[#CFCDC5] text-xs font-bold transition-all cursor-pointer flex items-center gap-1"
                 title="Limpar todos os filtros"
               >
                 <span className="material-symbols-outlined text-sm">filter_alt_off</span>
@@ -1478,14 +1503,14 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
           </div>
 
           {/* BARRA DE FILTROS DA CENTRAL DE EVIDÊNCIAS */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 text-xs bg-[#10141f] p-4 rounded-xl border border-[#1e2433]">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 text-xs bg-[#E4E2DB] p-4 rounded-xl border border-[#CFCDC5]">
             {/* FILTRO DE PERÍODO */}
             <div>
-              <label className="text-[10px] text-slate-400 font-bold uppercase block mb-1">Período da Visita</label>
+              <label className="text-[10px] text-[#77766F] font-bold uppercase block mb-1">Período da Visita</label>
               <select
                 value={evidenciasPeriod}
                 onChange={(e) => { setEvidenciasPeriod(e.target.value as any); setEvidenciasPage(1); }}
-                className="w-full bg-[#171b26] text-white border border-[#1e2433] rounded-lg px-2.5 py-1.5 font-bold cursor-pointer focus:outline-none focus:border-indigo-500"
+                className="w-full bg-[#F7F6F2] text-[#171717] border border-[#CFCDC5] rounded-lg px-2.5 py-1.5 font-bold cursor-pointer focus:outline-none focus:border-indigo-500"
               >
                 <option value="7">Últimos 7 dias</option>
                 <option value="30">Últimos 30 dias</option>
@@ -1496,11 +1521,11 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
 
             {/* FILTRO DE LOJA */}
             <div>
-              <label className="text-[10px] text-slate-400 font-bold uppercase block mb-1">Loja / PDV</label>
+              <label className="text-[10px] text-[#77766F] font-bold uppercase block mb-1">Loja / PDV</label>
               <select
                 value={evidenciasLoja}
                 onChange={(e) => { setEvidenciasLoja(e.target.value); setEvidenciasPage(1); }}
-                className="w-full bg-[#171b26] text-white border border-[#1e2433] rounded-lg px-2.5 py-1.5 font-bold cursor-pointer focus:outline-none focus:border-indigo-500"
+                className="w-full bg-[#F7F6F2] text-[#171717] border border-[#CFCDC5] rounded-lg px-2.5 py-1.5 font-bold cursor-pointer focus:outline-none focus:border-indigo-500"
               >
                 <option value="all">Todas as Lojas</option>
                 {lojasList
@@ -1515,11 +1540,11 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
 
             {/* FILTRO DE PROMOTOR */}
             <div>
-              <label className="text-[10px] text-slate-400 font-bold uppercase block mb-1">Promotor Responsável</label>
+              <label className="text-[10px] text-[#77766F] font-bold uppercase block mb-1">Promotor Responsável</label>
               <select
                 value={evidenciasPromotor}
                 onChange={(e) => { setEvidenciasPromotor(e.target.value); setEvidenciasPage(1); }}
-                className="w-full bg-[#171b26] text-white border border-[#1e2433] rounded-lg px-2.5 py-1.5 font-bold cursor-pointer focus:outline-none focus:border-indigo-500"
+                className="w-full bg-[#F7F6F2] text-[#171717] border border-[#CFCDC5] rounded-lg px-2.5 py-1.5 font-bold cursor-pointer focus:outline-none focus:border-indigo-500"
               >
                 <option value="all">Todos os Promotores</option>
                 {promotoresList
@@ -1534,11 +1559,11 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
 
             {/* FILTRO DE TIPO DE EVIDÊNCIA */}
             <div>
-              <label className="text-[10px] text-slate-400 font-bold uppercase block mb-1">Tipo de Evidência</label>
+              <label className="text-[10px] text-[#77766F] font-bold uppercase block mb-1">Tipo de Evidência</label>
               <select
                 value={evidenciasTipo}
                 onChange={(e) => { setEvidenciasTipo(e.target.value); setEvidenciasPage(1); }}
-                className="w-full bg-[#171b26] text-white border border-[#1e2433] rounded-lg px-2.5 py-1.5 font-bold cursor-pointer focus:outline-none focus:border-indigo-500"
+                className="w-full bg-[#F7F6F2] text-[#171717] border border-[#CFCDC5] rounded-lg px-2.5 py-1.5 font-bold cursor-pointer focus:outline-none focus:border-indigo-500"
               >
                 <option value="all">Todos os Tipos</option>
                 <option value="fachada">Fachada</option>
@@ -1555,13 +1580,13 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
           {loadingEvidencias ? (
             <div className="py-16 text-center space-y-3">
               <span className="material-symbols-outlined text-indigo-400 text-3xl animate-spin">sync</span>
-              <p className="text-xs text-slate-400">Carregando galeria paginada da Central de Evidências...</p>
+              <p className="text-xs text-[#77766F]">Carregando galeria paginada da Central de Evidências...</p>
             </div>
           ) : evidenciasPhotos.length === 0 ? (
-            <div className="py-16 text-center bg-[#10141f]/50 rounded-xl border border-[#1e2433] space-y-2">
+            <div className="py-16 text-center bg-[#E4E2DB]/50 rounded-xl border border-[#CFCDC5] space-y-2">
               <span className="material-symbols-outlined text-slate-600 text-4xl">no_photography</span>
-              <p className="text-xs text-slate-300 font-bold">Nenhuma evidência encontrada para os filtros selecionados.</p>
-              <p className="text-[11px] text-slate-500">Tente ajustar o período ou selecionar outros critérios de pesquisa.</p>
+              <p className="text-xs text-[#171717] font-bold">Nenhuma evidência encontrada para os filtros selecionados.</p>
+              <p className="text-[11px] text-[#5F5F5F]">Tente ajustar o período ou selecionar outros critérios de pesquisa.</p>
             </div>
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
@@ -1577,9 +1602,9 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                   <div
                     key={photo.id}
                     onClick={() => setZoomedEvidencia(photo)}
-                    className="p-2.5 rounded-xl bg-[#10141f] border border-[#1e2433] hover:border-indigo-500/50 transition-all cursor-pointer flex flex-col justify-between space-y-2 group"
+                    className="p-2.5 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5] hover:border-indigo-500/50 transition-all cursor-pointer flex flex-col justify-between space-y-2 group"
                   >
-                    <div className="relative aspect-square rounded-lg bg-[#171b26] overflow-hidden border border-[#1e2433] flex items-center justify-center">
+                    <div className="relative aspect-square rounded-lg bg-[#F7F6F2] overflow-hidden border border-[#CFCDC5] flex items-center justify-center">
                       {signedUrl ? (
                         <img
                           src={signedUrl}
@@ -1596,14 +1621,14 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                     </div>
 
                     <div className="space-y-1 text-left">
-                      <h4 className="text-xs font-bold text-white truncate" title={lojaNome}>
+                      <h4 className="text-xs font-bold text-[#171717] truncate" title={lojaNome}>
                         {lojaNome}
                       </h4>
-                      <p className="text-[10px] text-slate-400">
+                      <p className="text-[10px] text-[#77766F]">
                         {visitObj?.data_visita} • <strong className="text-cyan-300">{promotorNome}</strong>
                       </p>
                       {photo.legenda && (
-                        <p className="text-[10px] text-slate-300 truncate italic" title={photo.legenda}>
+                        <p className="text-[10px] text-[#171717] truncate italic" title={photo.legenda}>
                           "{photo.legenda}"
                         </p>
                       )}
@@ -1616,8 +1641,8 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
 
           {/* CONTROLES DE PAGINAÇÃO (12 EVIDÊNCIAS POR PÁGINA) */}
           {evidenciasTotalCount > 12 && (
-            <div className="flex items-center justify-between pt-4 border-t border-[#1e2433]">
-              <span className="text-xs text-slate-400">
+            <div className="flex items-center justify-between pt-4 border-t border-[#CFCDC5]">
+              <span className="text-xs text-[#77766F]">
                 Página <strong>{evidenciasPage}</strong> de <strong>{Math.ceil(evidenciasTotalCount / 12)}</strong>
               </span>
 
@@ -1625,14 +1650,14 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                 <button
                   onClick={() => setEvidenciasPage((p) => Math.max(1, p - 1))}
                   disabled={evidenciasPage === 1}
-                  className="px-3 py-1.5 rounded-lg bg-[#10141f] border border-[#1e2433] text-slate-300 hover:text-white font-bold text-xs disabled:opacity-40 cursor-pointer"
+                  className="px-3 py-1.5 rounded-lg bg-[#E4E2DB] border border-[#CFCDC5] text-[#171717] hover:text-white font-bold text-xs disabled:opacity-40 cursor-pointer"
                 >
                   Anterior
                 </button>
                 <button
                   onClick={() => setEvidenciasPage((p) => (p * 12 < evidenciasTotalCount ? p + 1 : p))}
                   disabled={evidenciasPage * 12 >= evidenciasTotalCount}
-                  className="px-3 py-1.5 rounded-lg bg-[#10141f] border border-[#1e2433] text-slate-300 hover:text-white font-bold text-xs disabled:opacity-40 cursor-pointer"
+                  className="px-3 py-1.5 rounded-lg bg-[#E4E2DB] border border-[#CFCDC5] text-[#171717] hover:text-white font-bold text-xs disabled:opacity-40 cursor-pointer"
                 >
                   Próxima
                 </button>
@@ -1646,22 +1671,22 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
       {activeTab === 'relatorio' && (
         <section className="space-y-6 animate-fadeIn print-executive-report">
           {/* 1. CABEÇALHO DA SEÇÃO EXECUTIVA */}
-          <div className="bg-[#171b26] border border-indigo-500/30 rounded-2xl p-5 shadow-xl flex flex-col sm:flex-row sm:items-center justify-between gap-4 font-mono">
+          <div className="bg-[#F7F6F2] border border-indigo-500/30 rounded-2xl p-5 shadow-xl flex flex-col sm:flex-row sm:items-center justify-between gap-4 font-mono">
             <div>
               <div className="flex items-center gap-2">
                 <span className="material-symbols-outlined text-indigo-400 text-2xl">assessment</span>
-                <h2 className="text-xl font-extrabold text-white tracking-tight uppercase">
+                <h2 className="text-xl font-extrabold text-[#171717] tracking-tight uppercase">
                   RELATÓRIO EXECUTIVO
                 </h2>
               </div>
-              <p className="text-xs text-slate-300 mt-1">
+              <p className="text-xs text-[#171717] mt-1">
                 Indústria: <strong className="text-indigo-400 font-bold">{activeIndName}</strong> • Período: <span className="text-cyan-300 font-bold uppercase">{periodFilter === 'today' ? 'Hoje' : periodFilter === 'week' ? 'Últimos 7 dias' : 'Últimos 30 dias'}</span>
               </p>
             </div>
 
             <div className="flex flex-wrap items-center gap-2 text-xs no-print">
-              <span className="px-3 py-1.5 rounded-xl bg-[#10141f] border border-[#1e2433] text-slate-400">
-                Atualizado às: <strong className="text-white">{lastUpdate}</strong>
+              <span className="px-3 py-1.5 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5] text-[#77766F]">
+                Atualizado às: <strong className="text-[#171717]">{lastUpdate}</strong>
               </span>
 
               <button
@@ -1687,27 +1712,27 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
           {/* 2. KPIS PRINCIPAIS EXECUTIVOS (GRID DE 8 CARDS) */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 font-mono">
             {/* Card 1: PDVs Contratados */}
-            <div className="bg-[#171b26] border border-[#1e2433] rounded-2xl p-4 flex flex-col justify-between shadow-lg">
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">PDVs Contratados</span>
+            <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-4 flex flex-col justify-between shadow-lg">
+              <span className="text-[10px] font-bold text-[#77766F] uppercase tracking-wider">PDVs Contratados</span>
               <div className="flex items-baseline justify-between mt-2">
-                <span className="text-2xl font-black text-white">{kpis.lojas}</span>
+                <span className="text-2xl font-black text-[#171717]">{kpis.lojas}</span>
                 <span className="material-symbols-outlined text-indigo-400 text-xl">store</span>
               </div>
-              <span className="text-[10px] text-slate-500 mt-1">Lojas ativas na escala</span>
+              <span className="text-[10px] text-[#5F5F5F] mt-1">Lojas ativas na escala</span>
             </div>
 
             {/* Card 2: Visitas Planejadas */}
-            <div className="bg-[#171b26] border border-[#1e2433] rounded-2xl p-4 flex flex-col justify-between shadow-lg">
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Visitas Planejadas</span>
+            <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-4 flex flex-col justify-between shadow-lg">
+              <span className="text-[10px] font-bold text-[#77766F] uppercase tracking-wider">Visitas Planejadas</span>
               <div className="flex items-baseline justify-between mt-2">
                 <span className="text-2xl font-black text-cyan-300">{kpis.planejadas}</span>
                 <span className="material-symbols-outlined text-cyan-400 text-xl">calendar_month</span>
               </div>
-              <span className="text-[10px] text-slate-500 mt-1">Total no período</span>
+              <span className="text-[10px] text-[#5F5F5F] mt-1">Total no período</span>
             </div>
 
             {/* Card 3: Visitas Realizadas */}
-            <div className="bg-[#171b26] border border-emerald-500/30 rounded-2xl p-4 flex flex-col justify-between shadow-lg">
+            <div className="bg-[#F7F6F2] border border-emerald-500/30 rounded-2xl p-4 flex flex-col justify-between shadow-lg">
               <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider">Visitas Realizadas</span>
               <div className="flex items-baseline justify-between mt-2">
                 <span className="text-2xl font-black text-emerald-400">{kpis.concluidas}</span>
@@ -1717,7 +1742,7 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
             </div>
 
             {/* Card 4: Visitas Pendentes */}
-            <div className="bg-[#171b26] border border-amber-500/30 rounded-2xl p-4 flex flex-col justify-between shadow-lg">
+            <div className="bg-[#F7F6F2] border border-amber-500/30 rounded-2xl p-4 flex flex-col justify-between shadow-lg">
               <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wider">Visitas Pendentes</span>
               <div className="flex items-baseline justify-between mt-2">
                 <span className="text-2xl font-black text-amber-400">{kpis.pendentes}</span>
@@ -1729,7 +1754,7 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
             </div>
 
             {/* Card 5: Visitas Atrasadas */}
-            <div className="bg-[#171b26] border border-rose-500/30 rounded-2xl p-4 flex flex-col justify-between shadow-lg">
+            <div className="bg-[#F7F6F2] border border-rose-500/30 rounded-2xl p-4 flex flex-col justify-between shadow-lg">
               <span className="text-[10px] font-bold text-rose-400 uppercase tracking-wider">Visitas Atrasadas</span>
               <div className="flex items-baseline justify-between mt-2">
                 <span className="text-2xl font-black text-rose-400">{kpis.atrasadas}</span>
@@ -1739,29 +1764,40 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
             </div>
 
             {/* Card 6: Visitas Não Realizadas */}
-            <div className="bg-[#171b26] border border-slate-600 rounded-2xl p-4 flex flex-col justify-between shadow-lg">
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Não Realizadas</span>
+            <div className="bg-[#F7F6F2] border border-slate-600 rounded-2xl p-4 flex flex-col justify-between shadow-lg">
+              <span className="text-[10px] font-bold text-[#77766F] uppercase tracking-wider">Não Realizadas</span>
               <div className="flex items-baseline justify-between mt-2">
-                <span className="text-2xl font-black text-slate-300">{kpis.naoRealizadas}</span>
-                <span className="material-symbols-outlined text-slate-400 text-xl">block</span>
+                <span className="text-2xl font-black text-[#171717]">{kpis.naoRealizadas}</span>
+                <span className="material-symbols-outlined text-[#77766F] text-xl">block</span>
               </div>
-              <span className="text-[10px] text-slate-500 mt-1">Justificativa informada</span>
+              <span className="text-[10px] text-[#5F5F5F] mt-1">Justificativa informada</span>
             </div>
 
             {/* Card 7: Aderência Operacional */}
-            <div className="bg-[#171b26] border border-purple-500/40 rounded-2xl p-4 flex flex-col justify-between shadow-lg">
+            <div className="bg-[#F7F6F2] border border-purple-500/40 rounded-2xl p-4 flex flex-col justify-between shadow-lg">
               <span className="text-[10px] font-bold text-purple-300 uppercase tracking-wider">Aderência Operacional</span>
-              <div className="flex items-baseline justify-between mt-2">
-                <span className="text-2xl font-black text-purple-300">{kpis.aderencia}%</span>
-                <span className="material-symbols-outlined text-purple-400 text-xl">speed</span>
-              </div>
-              <div className="w-full bg-[#10141f] h-1.5 rounded-full overflow-hidden mt-1.5 border border-[#1e2433]">
-                <div className="bg-purple-500 h-full rounded-full transition-all duration-500" style={{ width: `${Math.min(100, kpis.aderencia)}%` }} />
-              </div>
+              {loading || systemSettings.status === 'loading' ? (
+                <span className="text-sm font-bold text-[#77766F] mt-2 block">Carregando...</span>
+              ) : systemSettings.mode !== 'OPERACAO_OFICIAL' || systemSettings.status !== 'loaded' ? (
+                <div className="mt-2">
+                  <span className="text-xs font-bold text-amber-300 block leading-tight">Fase de implantação — SLA não ativo</span>
+                  <span className="text-[9px] text-[#77766F] block mt-0.5">Indicador oficial desativado</span>
+                </div>
+              ) : (
+                <>
+                  <div className="flex items-baseline justify-between mt-2">
+                    <span className="text-2xl font-black text-purple-300">{kpis.aderencia}%</span>
+                    <span className="material-symbols-outlined text-purple-400 text-xl">speed</span>
+                  </div>
+                  <div className="w-full bg-[#E4E2DB] h-1.5 rounded-full overflow-hidden mt-1.5 border border-[#CFCDC5]">
+                    <div className="bg-purple-500 h-full rounded-full transition-all duration-500" style={{ width: `${Math.min(100, kpis.aderencia)}%` }} />
+                  </div>
+                </>
+              )}
             </div>
 
             {/* Card 8: Cobertura de PDVs */}
-            <div className="bg-[#171b26] border border-indigo-500/40 rounded-2xl p-4 flex flex-col justify-between shadow-lg">
+            <div className="bg-[#F7F6F2] border border-indigo-500/40 rounded-2xl p-4 flex flex-col justify-between shadow-lg">
               <span className="text-[10px] font-bold text-indigo-300 uppercase tracking-wider">Cobertura de PDVs</span>
               <div className="flex items-baseline justify-between mt-2">
                 <span className="text-2xl font-black text-indigo-300">
@@ -1786,13 +1822,13 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
           {/* 3. EVOLUÇÃO TEMPORAL & STATUS DA OPERAÇÃO (GRID 2 COLUNAS) */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 font-mono">
             {/* EVOLUÇÃO TEMPORAL */}
-            <div className="lg:col-span-2 bg-[#171b26] border border-[#1e2433] rounded-2xl p-5 space-y-4 shadow-xl">
-              <div className="flex items-center justify-between border-b border-[#1e2433] pb-3">
-                <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
+            <div className="lg:col-span-2 bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-5 space-y-4 shadow-xl">
+              <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-3">
+                <h3 className="text-sm font-bold text-[#171717] uppercase tracking-wider flex items-center gap-2">
                   <span className="material-symbols-outlined text-cyan-400 text-base">show_chart</span>
                   Evolução Temporal das Visitas
                 </h3>
-                <span className="text-[10px] text-slate-400">Total no período ({periodFilter === 'today' ? 'Hoje' : periodFilter === 'week' ? '7d' : '30d'})</span>
+                <span className="text-[10px] text-[#77766F]">Total no período ({periodFilter === 'today' ? 'Hoje' : periodFilter === 'week' ? '7d' : '30d'})</span>
               </div>
 
               {/* BARRAS SIMPLES DE EVOLUÇÃO TEMPORAL */}
@@ -1805,15 +1841,15 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                   return (
                     <div key={idx} className="space-y-1">
                       <div className="flex items-center justify-between text-[11px]">
-                        <span className="text-slate-300 font-bold">{item.dateStr} ({item.dayShort})</span>
+                        <span className="text-[#171717] font-bold">{item.dateStr} ({item.dayShort})</span>
                         <div className="flex items-center gap-3 text-[10px]">
                           <span className="text-emerald-400">Realizadas: {item.realizadas}</span>
                           <span className="text-amber-400">Pendentes: {item.pendentes}</span>
-                          <span className="text-slate-400">Total: {item.planejadas}</span>
+                          <span className="text-[#77766F]">Total: {item.planejadas}</span>
                         </div>
                       </div>
 
-                      <div className="w-full bg-[#10141f] h-2.5 rounded-full overflow-hidden flex border border-[#1e2433]">
+                      <div className="w-full bg-[#E4E2DB] h-2.5 rounded-full overflow-hidden flex border border-[#CFCDC5]">
                         <div className="bg-emerald-500 h-full transition-all" style={{ width: `${realPct}%` }} title={`Realizadas: ${item.realizadas}`} />
                         <div className="bg-amber-500 h-full transition-all" style={{ width: `${pendPct}%` }} title={`Pendentes: ${item.pendentes}`} />
                       </div>
@@ -1824,16 +1860,16 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
             </div>
 
             {/* ALERTAS EXECUTIVOS & STATUS DA OPERAÇÃO */}
-            <div className="bg-[#171b26] border border-[#1e2433] rounded-2xl p-5 space-y-4 shadow-xl flex flex-col justify-between">
+            <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-5 space-y-4 shadow-xl flex flex-col justify-between">
               <div>
-                <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2 border-b border-[#1e2433] pb-3">
+                <h3 className="text-sm font-bold text-[#171717] uppercase tracking-wider flex items-center gap-2 border-b border-[#CFCDC5] pb-3">
                   <span className="material-symbols-outlined text-rose-400 text-base">warning</span>
                   Atenção na Operação
                 </h3>
 
                 <div className="space-y-2.5 mt-3 text-xs">
                   {kpis.atrasadas > 0 ? (
-                    <div className="p-3 rounded-xl bg-rose-950/40 border border-rose-500/40 text-rose-300 flex items-start gap-2">
+                    <div className="p-3 rounded-xl bg-[#FDF2F2] border border-rose-500/40 text-rose-300 flex items-start gap-2">
                       <span className="material-symbols-outlined text-rose-400 text-base shrink-0 mt-0.5">error</span>
                       <div>
                         <strong className="block font-bold">{kpis.atrasadas} visita(s) atrasada(s)</strong>
@@ -1848,7 +1884,7 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                   )}
 
                   {kpis.lojas - kpis.lojasComVisita > 0 && (
-                    <div className="p-3 rounded-xl bg-amber-950/40 border border-amber-500/40 text-amber-300 flex items-start gap-2">
+                    <div className="p-3 rounded-xl bg-[#FFF8E6] border border-amber-500/40 text-amber-300 flex items-start gap-2">
                       <span className="material-symbols-outlined text-amber-400 text-base shrink-0 mt-0.5">store</span>
                       <div>
                         <strong className="block font-bold">{kpis.lojas - kpis.lojasComVisita} PDV(s) sem atendimento</strong>
@@ -1858,7 +1894,7 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                   )}
 
                   {occurrencesSummary.rupturas > 0 && (
-                    <div className="p-3 rounded-xl bg-rose-950/40 border border-rose-500/40 text-rose-300 flex items-start gap-2">
+                    <div className="p-3 rounded-xl bg-[#FDF2F2] border border-rose-500/40 text-rose-300 flex items-start gap-2">
                       <span className="material-symbols-outlined text-rose-400 text-base shrink-0 mt-0.5">report</span>
                       <div>
                         <strong className="block font-bold">{occurrencesSummary.rupturas} ocorrência(s) de ruptura</strong>
@@ -1868,7 +1904,7 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                   )}
 
                   {validitySummary.vencidos > 0 && (
-                    <div className="p-3 rounded-xl bg-rose-950/40 border border-rose-500/40 text-rose-300 flex items-start gap-2">
+                    <div className="p-3 rounded-xl bg-[#FDF2F2] border border-rose-500/40 text-rose-300 flex items-start gap-2">
                       <span className="material-symbols-outlined text-rose-400 text-base shrink-0 mt-0.5">event_busy</span>
                       <div>
                         <strong className="block font-bold">{validitySummary.vencidos} produto(s) vencido(s)</strong>
@@ -1893,78 +1929,78 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
           {/* 4. MÓDULOS DE RESUMO: OCORRÊNCIAS, VALIDADE & EVIDÊNCIAS (GRID 3 COLUNAS) */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 font-mono text-xs">
             {/* OCORRÊNCIAS */}
-            <div className="bg-[#171b26] border border-[#1e2433] rounded-2xl p-5 space-y-3 shadow-xl">
-              <h3 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-2 border-b border-[#1e2433] pb-2.5">
+            <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-5 space-y-3 shadow-xl">
+              <h3 className="text-xs font-bold text-[#171717] uppercase tracking-wider flex items-center gap-2 border-b border-[#CFCDC5] pb-2.5">
                 <span className="material-symbols-outlined text-rose-400 text-base">report</span>
                 Principais Ocorrências ({occurrencesSummary.total})
               </h3>
               <div className="space-y-2">
-                <div className="flex items-center justify-between p-2 rounded-xl bg-[#10141f] border border-[#1e2433]">
-                  <span className="text-slate-300">Rupturas de Estoque</span>
+                <div className="flex items-center justify-between p-2 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5]">
+                  <span className="text-[#171717]">Rupturas de Estoque</span>
                   <span className="font-bold text-rose-400">{occurrencesSummary.rupturas}</span>
                 </div>
-                <div className="flex items-center justify-between p-2 rounded-xl bg-[#10141f] border border-[#1e2433]">
-                  <span className="text-slate-300">Divergências de Preço</span>
+                <div className="flex items-center justify-between p-2 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5]">
+                  <span className="text-[#171717]">Divergências de Preço</span>
                   <span className="font-bold text-amber-400">{occurrencesSummary.preco}</span>
                 </div>
-                <div className="flex items-center justify-between p-2 rounded-xl bg-[#10141f] border border-[#1e2433]">
-                  <span className="text-slate-300">Falta de Espaço</span>
+                <div className="flex items-center justify-between p-2 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5]">
+                  <span className="text-[#171717]">Falta de Espaço</span>
                   <span className="font-bold text-cyan-400">{occurrencesSummary.espaco}</span>
                 </div>
-                <div className="flex items-center justify-between p-2 rounded-xl bg-[#10141f] border border-[#1e2433]">
-                  <span className="text-slate-300">Outras Ocorrências</span>
-                  <span className="font-bold text-slate-400">{occurrencesSummary.outros}</span>
+                <div className="flex items-center justify-between p-2 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5]">
+                  <span className="text-[#171717]">Outras Ocorrências</span>
+                  <span className="font-bold text-[#77766F]">{occurrencesSummary.outros}</span>
                 </div>
               </div>
             </div>
 
             {/* VALIDADE */}
-            <div className="bg-[#171b26] border border-[#1e2433] rounded-2xl p-5 space-y-3 shadow-xl">
-              <h3 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-2 border-b border-[#1e2433] pb-2.5">
+            <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-5 space-y-3 shadow-xl">
+              <h3 className="text-xs font-bold text-[#171717] uppercase tracking-wider flex items-center gap-2 border-b border-[#CFCDC5] pb-2.5">
                 <span className="material-symbols-outlined text-amber-400 text-base">event</span>
                 Validade de Produtos ({validitySummary.totalAuditados})
               </h3>
               <div className="space-y-2">
-                <div className="flex items-center justify-between p-2 rounded-xl bg-[#10141f] border border-[#1e2433]">
-                  <span className="text-slate-300">Produtos Vencidos</span>
+                <div className="flex items-center justify-between p-2 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5]">
+                  <span className="text-[#171717]">Produtos Vencidos</span>
                   <span className={`font-bold ${validitySummary.vencidos > 0 ? 'text-rose-400 animate-pulse' : 'text-emerald-400'}`}>{validitySummary.vencidos}</span>
                 </div>
-                <div className="flex items-center justify-between p-2 rounded-xl bg-[#10141f] border border-[#1e2433]">
-                  <span className="text-slate-300">Vencendo em ≤ 3 dias</span>
+                <div className="flex items-center justify-between p-2 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5]">
+                  <span className="text-[#171717]">Vencendo em ≤ 3 dias</span>
                   <span className="font-bold text-rose-400">{validitySummary.vencendo3d}</span>
                 </div>
-                <div className="flex items-center justify-between p-2 rounded-xl bg-[#10141f] border border-[#1e2433]">
-                  <span className="text-slate-300">Vencendo em 4–7 dias</span>
+                <div className="flex items-center justify-between p-2 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5]">
+                  <span className="text-[#171717]">Vencendo em 4–7 dias</span>
                   <span className="font-bold text-amber-400">{validitySummary.vencendo7d}</span>
                 </div>
-                <div className="flex items-center justify-between p-2 rounded-xl bg-[#10141f] border border-[#1e2433]">
-                  <span className="text-slate-300">Vencendo em 8–30 dias</span>
+                <div className="flex items-center justify-between p-2 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5]">
+                  <span className="text-[#171717]">Vencendo em 8–30 dias</span>
                   <span className="font-bold text-yellow-400">{validitySummary.vencendo30d}</span>
                 </div>
               </div>
             </div>
 
             {/* EVIDÊNCIAS */}
-            <div className="bg-[#171b26] border border-[#1e2433] rounded-2xl p-5 space-y-3 shadow-xl">
-              <h3 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-2 border-b border-[#1e2433] pb-2.5">
+            <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-5 space-y-3 shadow-xl">
+              <h3 className="text-xs font-bold text-[#171717] uppercase tracking-wider flex items-center gap-2 border-b border-[#CFCDC5] pb-2.5">
                 <span className="material-symbols-outlined text-cyan-400 text-base">photo_camera</span>
                 Evidências por Tipo ({photosSummary.total})
               </h3>
               <div className="space-y-2">
-                <div className="flex items-center justify-between p-2 rounded-xl bg-[#10141f] border border-[#1e2433]">
-                  <span className="text-slate-300">Gôndola / Exposição</span>
+                <div className="flex items-center justify-between p-2 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5]">
+                  <span className="text-[#171717]">Gôndola / Exposição</span>
                   <span className="font-bold text-cyan-400">{photosSummary.gondola}</span>
                 </div>
-                <div className="flex items-center justify-between p-2 rounded-xl bg-[#10141f] border border-[#1e2433]">
-                  <span className="text-slate-300">Fachada / Entrada</span>
+                <div className="flex items-center justify-between p-2 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5]">
+                  <span className="text-[#171717]">Fachada / Entrada</span>
                   <span className="font-bold text-indigo-400">{photosSummary.fachada}</span>
                 </div>
-                <div className="flex items-center justify-between p-2 rounded-xl bg-[#10141f] border border-[#1e2433]">
-                  <span className="text-slate-300">Etiqueta de Preço</span>
+                <div className="flex items-center justify-between p-2 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5]">
+                  <span className="text-[#171717]">Etiqueta de Preço</span>
                   <span className="font-bold text-amber-400">{photosSummary.preco}</span>
                 </div>
-                <div className="flex items-center justify-between p-2 rounded-xl bg-[#10141f] border border-[#1e2433]">
-                  <span className="text-slate-300">Ponto Extra / Ruptura</span>
+                <div className="flex items-center justify-between p-2 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5]">
+                  <span className="text-[#171717]">Ponto Extra / Ruptura</span>
                   <span className="font-bold text-rose-400">{photosSummary.ponto_extra + photosSummary.ruptura}</span>
                 </div>
               </div>
@@ -1972,22 +2008,22 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
           </div>
 
           {/* 5. TABELA DE DESEMPENHO POR LOJA */}
-          <div className="bg-[#171b26] border border-[#1e2433] rounded-2xl p-5 space-y-4 shadow-xl font-mono text-xs">
-            <div className="flex items-center justify-between border-b border-[#1e2433] pb-3">
+          <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-5 space-y-4 shadow-xl font-mono text-xs">
+            <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-3">
               <div>
-                <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
+                <h3 className="text-sm font-bold text-[#171717] uppercase tracking-wider flex items-center gap-2">
                   <span className="material-symbols-outlined text-indigo-400 text-base">store</span>
                   Desempenho por PDV / Loja ({lojasPerformance.length})
                 </h3>
-                <p className="text-[10px] text-slate-400 mt-0.5">Clique em qualquer loja para abrir o histórico operacional detalhado.</p>
+                <p className="text-[10px] text-[#77766F] mt-0.5">Clique em qualquer loja para abrir o histórico operacional detalhado.</p>
               </div>
-              <span className="text-[10px] text-slate-500 hidden sm:inline">Ordenado por atrasos e menor aderência</span>
+              <span className="text-[10px] text-[#5F5F5F] hidden sm:inline">Ordenado por atrasos e menor aderência</span>
             </div>
 
-            <div className="overflow-x-auto rounded-xl border border-[#1e2433]">
+            <div className="overflow-x-auto rounded-xl border border-[#CFCDC5]">
               <table className="w-full text-left">
                 <thead>
-                  <tr className="bg-[#10141f] text-slate-400 text-[10px] uppercase border-b border-[#1e2433]">
+                  <tr className="bg-[#E4E2DB] text-[#77766F] text-[10px] uppercase border-b border-[#CFCDC5]">
                     <th className="py-2.5 px-3">PDV / Loja</th>
                     <th className="py-2.5 px-3 text-center">Planejadas</th>
                     <th className="py-2.5 px-3 text-center">Realizadas</th>
@@ -1997,33 +2033,37 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                     <th className="py-2.5 px-3 text-center">Ocorrências</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-[#1e2433] text-slate-300">
+                <tbody className="divide-y divide-[#CFCDC5] text-[#171717]">
                   {lojasPerformance.map((loja) => (
                     <tr
                       key={loja.codigo}
                       onClick={() => handleOpenStoreHistory(loja.codigo)}
-                      className="hover:bg-[#10141f]/70 cursor-pointer transition-colors"
+                      className="hover:bg-[#E4E2DB]/70 cursor-pointer transition-colors"
                     >
                       <td className="py-2.5 px-3">
-                        <strong className="text-white block">{loja.nome}</strong>
-                        <span className="text-[10px] text-slate-400">{loja.cidade} - {loja.uf} ({loja.codigo})</span>
+                        <strong className="text-[#171717] block">{loja.nome}</strong>
+                        <span className="text-[10px] text-[#77766F]">{loja.cidade} - {loja.uf} ({loja.codigo})</span>
                       </td>
                       <td className="py-2.5 px-3 text-center text-cyan-300 font-bold">{loja.planejadas}</td>
                       <td className="py-2.5 px-3 text-center text-emerald-400 font-bold">{loja.concluidas}</td>
                       <td className="py-2.5 px-3 text-center text-amber-400 font-bold">{loja.pendentes}</td>
                       <td className="py-2.5 px-3 text-center">
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${loja.atrasadas > 0 ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40' : 'text-slate-500'}`}>
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${loja.atrasadas > 0 ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40' : 'text-[#5F5F5F]'}`}>
                           {loja.atrasadas}
                         </span>
                       </td>
                       <td className="py-2.5 px-3 text-center">
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                          loja.aderencia >= 80 ? 'bg-emerald-500/20 text-emerald-300' : loja.aderencia >= 50 ? 'bg-amber-500/20 text-amber-300' : 'bg-rose-500/20 text-rose-300'
-                        }`}>
-                          {loja.aderencia}%
-                        </span>
+                        {systemSettings.mode !== 'OPERACAO_OFICIAL' || systemSettings.status !== 'loaded' ? (
+                          <span className="text-[10px] text-[#5F5F5F] font-normal">SLA n/a</span>
+                        ) : (
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                            loja.aderencia >= 80 ? 'bg-emerald-500/20 text-emerald-300' : loja.aderencia >= 50 ? 'bg-amber-500/20 text-amber-300' : 'bg-rose-500/20 text-rose-300'
+                          }`}>
+                            {loja.aderencia}%
+                          </span>
+                        )}
                       </td>
-                      <td className="py-2.5 px-3 text-center text-slate-400">{loja.ocorrencias}</td>
+                      <td className="py-2.5 px-3 text-center text-[#77766F]">{loja.ocorrencias}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -2032,21 +2072,21 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
           </div>
 
           {/* 6. TABELA DE DESEMPENHO POR PROMOTOR */}
-          <div className="bg-[#171b26] border border-[#1e2433] rounded-2xl p-5 space-y-4 shadow-xl font-mono text-xs">
-            <div className="flex items-center justify-between border-b border-[#1e2433] pb-3">
+          <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-5 space-y-4 shadow-xl font-mono text-xs">
+            <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-3">
               <div>
-                <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
+                <h3 className="text-sm font-bold text-[#171717] uppercase tracking-wider flex items-center gap-2">
                   <span className="material-symbols-outlined text-purple-400 text-base">badge</span>
                   Desempenho por Promotor ({promotoresPerformance.length})
                 </h3>
-                <p className="text-[10px] text-slate-400 mt-0.5">Produtividade e aderência da equipe no período.</p>
+                <p className="text-[10px] text-[#77766F] mt-0.5">Produtividade e aderência da equipe no período.</p>
               </div>
             </div>
 
-            <div className="overflow-x-auto rounded-xl border border-[#1e2433]">
+            <div className="overflow-x-auto rounded-xl border border-[#CFCDC5]">
               <table className="w-full text-left">
                 <thead>
-                  <tr className="bg-[#10141f] text-slate-400 text-[10px] uppercase border-b border-[#1e2433]">
+                  <tr className="bg-[#E4E2DB] text-[#77766F] text-[10px] uppercase border-b border-[#CFCDC5]">
                     <th className="py-2.5 px-3">Promotor</th>
                     <th className="py-2.5 px-3 text-center">Planejadas</th>
                     <th className="py-2.5 px-3 text-center">Realizadas</th>
@@ -2055,23 +2095,27 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                     <th className="py-2.5 px-3 text-center">Aderência</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-[#1e2433] text-slate-300">
+                <tbody className="divide-y divide-[#CFCDC5] text-[#171717]">
                   {promotoresPerformance.map((prom) => (
-                    <tr key={prom.matricula} className="hover:bg-[#10141f]/70 transition-colors">
+                    <tr key={prom.matricula} className="hover:bg-[#E4E2DB]/70 transition-colors">
                       <td className="py-2.5 px-3">
-                        <strong className="text-white block">{prom.nome}</strong>
-                        <span className="text-[10px] text-slate-400">Matrícula: {prom.matricula}</span>
+                        <strong className="text-[#171717] block">{prom.nome}</strong>
+                        <span className="text-[10px] text-[#77766F]">Matrícula: {prom.matricula}</span>
                       </td>
                       <td className="py-2.5 px-3 text-center text-cyan-300 font-bold">{prom.planejadas}</td>
                       <td className="py-2.5 px-3 text-center text-emerald-400 font-bold">{prom.concluidas}</td>
                       <td className="py-2.5 px-3 text-center text-amber-400 font-bold">{prom.pendentes}</td>
                       <td className="py-2.5 px-3 text-center font-bold text-rose-400">{prom.atrasadas}</td>
                       <td className="py-2.5 px-3 text-center">
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                          prom.aderencia >= 80 ? 'bg-emerald-500/20 text-emerald-300' : prom.aderencia >= 50 ? 'bg-amber-500/20 text-amber-300' : 'bg-rose-500/20 text-rose-300'
-                        }`}>
-                          {prom.aderencia}%
-                        </span>
+                        {systemSettings.mode !== 'OPERACAO_OFICIAL' || systemSettings.status !== 'loaded' ? (
+                          <span className="text-[10px] text-[#5F5F5F] font-normal">SLA n/a</span>
+                        ) : (
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                            prom.aderencia >= 80 ? 'bg-emerald-500/20 text-emerald-300' : prom.aderencia >= 50 ? 'bg-amber-500/20 text-amber-300' : 'bg-rose-500/20 text-rose-300'
+                          }`}>
+                            {prom.aderencia}%
+                          </span>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -2081,7 +2125,7 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
           </div>
 
           {/* RODAPÉ DO RELATÓRIO IMPRESSO */}
-          <div className="hidden print:flex items-center justify-between border-t border-slate-300 pt-3 text-[10px] text-slate-500 font-mono mt-6">
+          <div className="hidden print:flex items-center justify-between border-t border-slate-300 pt-3 text-[10px] text-[#5F5F5F] font-mono mt-6">
             <span>MK9 Trade Marketing • Relatório Executivo Operacional</span>
             <span>Parceiro: {activeIndName}</span>
             <span>Página Gerada em {new Date().toLocaleDateString('pt-BR')}</span>
@@ -2092,26 +2136,26 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
       {/* MODAL DE FOTO AMPLIADA DA CENTRAL DE EVIDÊNCIAS */}
       {zoomedEvidencia && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 font-mono">
-          <div className="bg-[#171b26] border border-indigo-500/40 rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl space-y-4 p-5">
-            <div className="flex items-center justify-between border-b border-[#1e2433] pb-3">
+          <div className="bg-[#F7F6F2] border border-indigo-500/40 rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl space-y-4 p-5">
+            <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-3">
               <div>
                 <span className="px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 text-[10px] font-bold border border-cyan-500/30 uppercase">
                   {zoomedEvidencia.tipo_foto}
                 </span>
-                <h3 className="text-sm font-bold text-white mt-1">
+                <h3 className="text-sm font-bold text-[#171717] mt-1">
                   {zoomedEvidencia.visit?.loja?.nome || 'PDV'}
                 </h3>
               </div>
               <button
                 onClick={() => setZoomedEvidencia(null)}
-                className="p-1.5 rounded-xl bg-[#10141f] text-slate-400 hover:text-white cursor-pointer"
+                className="p-1.5 rounded-xl bg-[#E4E2DB] text-[#77766F] hover:text-[#171717] cursor-pointer"
               >
                 <span className="material-symbols-outlined text-lg">close</span>
               </button>
             </div>
 
             {/* FOTO GRANDE */}
-            <div className="relative aspect-video rounded-xl bg-[#10141f] overflow-hidden border border-[#1e2433] flex items-center justify-center">
+            <div className="relative aspect-video rounded-xl bg-[#E4E2DB] overflow-hidden border border-[#CFCDC5] flex items-center justify-center">
               {evidenciasSignedUrls[zoomedEvidencia.storage_path] ? (
                 <img
                   src={evidenciasSignedUrls[zoomedEvidencia.storage_path]}
@@ -2124,21 +2168,21 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
             </div>
 
             {/* DADOS DA FOTO E BOTÃO DE ATENDIMENTO COMPLETO */}
-            <div className="text-xs space-y-2 bg-[#10141f] p-3 rounded-xl border border-[#1e2433]">
-              <p className="text-slate-300">
-                Data do Atendimento: <strong className="text-white">{zoomedEvidencia.visit?.data_visita}</strong>
+            <div className="text-xs space-y-2 bg-[#E4E2DB] p-3 rounded-xl border border-[#CFCDC5]">
+              <p className="text-[#171717]">
+                Data do Atendimento: <strong className="text-[#171717]">{zoomedEvidencia.visit?.data_visita}</strong>
               </p>
-              <p className="text-slate-300">
+              <p className="text-[#171717]">
                 Promotor: <strong className="text-cyan-300">{zoomedEvidencia.visit?.promotor?.nome || zoomedEvidencia.visit?.promotor_matricula}</strong>
               </p>
               {zoomedEvidencia.legenda && (
-                <p className="text-slate-400 italic">
+                <p className="text-[#77766F] italic">
                   Legenda: "{zoomedEvidencia.legenda}"
                 </p>
               )}
             </div>
 
-            <div className="pt-2 flex justify-between items-center border-t border-[#1e2433]">
+            <div className="pt-2 flex justify-between items-center border-t border-[#CFCDC5]">
               <button
                 onClick={() => handleOpenFullReportFromEvidencia(zoomedEvidencia)}
                 className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-md cursor-pointer"
@@ -2149,7 +2193,7 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
 
               <button
                 onClick={() => setZoomedEvidencia(null)}
-                className="px-4 py-2 rounded-xl bg-[#10141f] hover:bg-[#1e2433] text-slate-300 font-bold text-xs cursor-pointer"
+                className="px-4 py-2 rounded-xl bg-[#E4E2DB] hover:bg-[#CFCDC5] text-[#171717] font-bold text-xs cursor-pointer"
               >
                 Fechar Zoom
               </button>
@@ -2160,7 +2204,7 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
 
       {/* ESTADO DE ERRO */}
       {error && (
-        <div className="p-4 rounded-2xl bg-rose-950/40 border border-rose-500/50 text-rose-300 font-mono text-xs flex items-center justify-between gap-3">
+        <div className="p-4 rounded-2xl bg-[#FDF2F2] border border-rose-500/50 text-rose-300 font-mono text-xs flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <span className="material-symbols-outlined text-xl text-rose-400">error</span>
             <span>Não foi possível carregar os dados. Tente novamente. ({error})</span>
@@ -2173,49 +2217,58 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
 
       {/* 4. CARDS DE KPIS PRINCIPAIS DA INDÚSTRIA */}
       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3 font-mono text-xs">
-        <div className="p-4 rounded-2xl bg-[#171b26] border border-[#1e2433]">
-          <span className="text-[10px] text-slate-400 block font-bold uppercase">PDVs CONTRATADOS</span>
-          <span className="text-2xl font-extrabold text-white mt-1 block">{loading ? '...' : kpis.lojas}</span>
-          <span className="text-[10px] text-slate-500 block mt-0.5">{loading ? '...' : `${kpis.lojasComVisita} com visita realizada`}</span>
+        <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5]">
+          <span className="text-[10px] text-[#77766F] block font-bold uppercase">PDVs CONTRATADOS</span>
+          <span className="text-2xl font-extrabold text-[#171717] mt-1 block">{loading ? '...' : kpis.lojas}</span>
+          <span className="text-[10px] text-[#5F5F5F] block mt-0.5">{loading ? '...' : `${kpis.lojasComVisita} com visita realizada`}</span>
         </div>
 
-        <div className="p-4 rounded-2xl bg-[#171b26] border border-purple-500/30 bg-purple-950/10">
+        <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-purple-500/30 bg-purple-950/10">
           <span className="text-[10px] text-purple-400 block font-bold uppercase">VISITAS PLANEJADAS</span>
           <span className="text-2xl font-extrabold text-purple-300 mt-1 block">{loading ? '...' : kpis.planejadas}</span>
           <span className="text-[10px] text-purple-400/70 block mt-0.5">Ocorrências Rota</span>
         </div>
 
-        <div className="p-4 rounded-2xl bg-[#171b26] border border-emerald-500/30 bg-emerald-950/10">
+        <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-emerald-500/30 bg-emerald-950/10">
           <span className="text-[10px] text-emerald-400 block font-bold uppercase">VISITAS CONCLUÍDAS</span>
           <span className="text-2xl font-extrabold text-emerald-300 mt-1 block">{loading ? '...' : kpis.concluidas}</span>
           <span className="text-[10px] text-emerald-400/70 block mt-0.5">Check-outs Ok</span>
         </div>
 
-        <div className="p-4 rounded-2xl bg-[#171b26] border border-rose-500/30 bg-rose-950/10">
+        <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-rose-500/30 bg-rose-950/10">
           <span className="text-[10px] text-rose-400 block font-bold uppercase">VISITAS PENDENTES</span>
           <span className="text-2xl font-extrabold text-rose-300 mt-1 block">{loading ? '...' : kpis.pendentes}</span>
           <span className="text-[10px] text-rose-400/70 block mt-0.5 truncate">{loading ? '...' : `${kpis.atrasadas} atrasadas • ${kpis.pendentesHoje} para hoje`}</span>
         </div>
 
-        <div className="p-4 rounded-2xl bg-[#171b26] border border-orange-500/30 bg-orange-950/10">
+        <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-orange-500/30 bg-orange-950/10">
           <span className="text-[10px] text-orange-400 block font-bold uppercase">NÃO REALIZADAS</span>
           <span className="text-2xl font-extrabold text-orange-300 mt-1 block">{loading ? '...' : kpis.naoRealizadas}</span>
           <span className="text-[10px] text-orange-400/70 block mt-0.5">Com Motivo</span>
         </div>
 
-        <div className="p-4 rounded-2xl bg-[#171b26] border border-indigo-500/40 bg-indigo-950/20">
+        <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-indigo-500/40 bg-indigo-950/20">
           <span className="text-[10px] text-indigo-300 block font-bold uppercase">ADERÊNCIA</span>
-          <span className="text-2xl font-extrabold text-indigo-200 mt-1 block">{loading ? '...' : `${kpis.aderencia}%`}</span>
+          {loading || systemSettings.status === 'loading' ? (
+            <span className="text-sm font-bold text-[#77766F] mt-2 block">Carregando...</span>
+          ) : systemSettings.mode !== 'OPERACAO_OFICIAL' || systemSettings.status !== 'loaded' ? (
+            <div className="mt-1">
+              <span className="text-xs font-bold text-amber-300 block leading-tight">Fase de implantação — SLA não ativo</span>
+              <span className="text-[9px] text-[#77766F] block mt-0.5">Indicador oficial desativado</span>
+            </div>
+          ) : (
+            <span className="text-2xl font-extrabold text-indigo-200 mt-1 block">{loading ? '...' : `${kpis.aderencia}%`}</span>
+          )}
           <span className="text-[10px] text-indigo-400/70 block mt-0.5">Taxa de Execução</span>
         </div>
       </div>
 
       {/* 8. SEÇÃO DESTACADA: PENDÊNCIAS DE ATENDIMENTO DA INDÚSTRIA */}
-      <section className="bg-[#171b26] border border-rose-500/40 rounded-2xl p-5 shadow-2xl space-y-4 font-mono">
-        <div className="flex items-center justify-between border-b border-[#1e2433] pb-3">
+      <section className="bg-[#F7F6F2] border border-rose-500/40 rounded-2xl p-5 shadow-2xl space-y-4 font-mono">
+        <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-3">
           <div className="flex items-center gap-2">
             <span className="material-symbols-outlined text-rose-400 text-xl animate-pulse">warning</span>
-            <h2 className="text-sm font-bold text-white uppercase tracking-wider">
+            <h2 className="text-sm font-bold text-[#171717] uppercase tracking-wider">
               Pendências de Atendimento ({pendenciasList.length})
             </h2>
           </div>
@@ -2225,16 +2278,16 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
         </div>
 
         {pendenciasList.length === 0 ? (
-          <div className="py-8 text-center space-y-1 bg-[#10141f]/50 rounded-xl border border-[#1e2433]">
+          <div className="py-8 text-center space-y-1 bg-[#E4E2DB]/50 rounded-xl border border-[#CFCDC5]">
             <span className="material-symbols-outlined text-emerald-400 text-3xl">check_circle</span>
-            <p className="text-xs text-slate-300 font-bold">Nenhuma pendência encontrada para o período selecionado.</p>
-            <p className="text-[11px] text-slate-500">Todos os atendimentos das suas lojas foram executados no prazo.</p>
+            <p className="text-xs text-[#171717] font-bold">Nenhuma pendência encontrada para o período selecionado.</p>
+            <p className="text-[11px] text-[#5F5F5F]">Todos os atendimentos das suas lojas foram executados no prazo.</p>
           </div>
         ) : (
-          <div className="overflow-x-auto rounded-xl border border-[#1e2433]">
+          <div className="overflow-x-auto rounded-xl border border-[#CFCDC5]">
             <table className="w-full text-left text-xs">
               <thead>
-                <tr className="bg-[#10141f] border-b border-[#1e2433] text-slate-400 text-[10px] uppercase">
+                <tr className="bg-[#E4E2DB] border-b border-[#CFCDC5] text-[#77766F] text-[10px] uppercase">
                   <th className="py-2.5 px-3">Data Prevista</th>
                   <th className="py-2.5 px-3">Loja / PDV</th>
                   <th className="py-2.5 px-3">Promotor</th>
@@ -2243,19 +2296,19 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                   <th className="py-2.5 px-3 text-right">Ação</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-[#1e2433] text-slate-300">
+              <tbody className="divide-y divide-[#CFCDC5] text-[#171717]">
                 {pendenciasList.map((item) => (
-                  <tr key={item.key} className="hover:bg-[#10141f]/80 transition-colors">
+                  <tr key={item.key} className="hover:bg-[#E4E2DB]/80 transition-colors">
                     <td className="py-2.5 px-3">
-                      <div className="font-bold text-white">{item.dataStr}</div>
-                      <div className="text-[10px] text-slate-500">{item.dayOfWeekLabel}</div>
+                      <div className="font-bold text-[#171717]">{item.dataStr}</div>
+                      <div className="text-[10px] text-[#5F5F5F]">{item.dayOfWeekLabel}</div>
                     </td>
-                    <td className="py-2.5 px-3 font-bold text-white">
+                    <td className="py-2.5 px-3 font-bold text-[#171717]">
                       {item.lojaNome}
-                      {item.lojaCidade && <span className="text-[10px] text-slate-400 block font-normal">{item.lojaCidade} - {item.lojaUf}</span>}
+                      {item.lojaCidade && <span className="text-[10px] text-[#77766F] block font-normal">{item.lojaCidade} - {item.lojaUf}</span>}
                     </td>
                     <td className="py-2.5 px-3 font-bold text-cyan-400">{item.promotorNome}</td>
-                    <td className="py-2.5 px-3 text-slate-400">{item.frequencia}</td>
+                    <td className="py-2.5 px-3 text-[#77766F]">{item.frequencia}</td>
                     <td className="py-2.5 px-3">
                       <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
                         item.isPastOverdue
@@ -2268,7 +2321,7 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                     <td className="py-2.5 px-3 text-right">
                       <button
                         onClick={() => handleOpenVisitDetails(item)}
-                        className="px-3 py-1 rounded-lg bg-[#10141f] hover:bg-[#1e2433] text-indigo-300 border border-indigo-500/30 text-[11px] font-bold transition-all cursor-pointer"
+                        className="px-3 py-1 rounded-lg bg-[#E4E2DB] hover:bg-[#CFCDC5] text-indigo-300 border border-indigo-500/30 text-[11px] font-bold transition-all cursor-pointer"
                       >
                         Ver Detalhes
                       </button>
@@ -2282,18 +2335,18 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
       </section>
 
       {/* 7. CENTRAL DE ACOMPANHAMENTO: STATUS DAS LOJAS DA INDÚSTRIA */}
-      <section className="bg-[#171b26] border border-[#1e2433] rounded-2xl p-5 shadow-2xl space-y-4 font-mono">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#1e2433] pb-3">
+      <section className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-5 shadow-2xl space-y-4 font-mono">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#CFCDC5] pb-3">
           <div>
-            <h2 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
+            <h2 className="text-sm font-bold text-[#171717] uppercase tracking-wider flex items-center gap-2">
               <span className="material-symbols-outlined text-indigo-400 text-xl">store</span>
               Status de Atendimento das Lojas ({allOperationalVisits.length})
             </h2>
-            <p className="text-[11px] text-slate-400 mt-0.5">
+            <p className="text-[11px] text-[#77766F] mt-0.5">
               Listagem operacional em tempo real de todas as lojas contratadas no período.
             </p>
           </div>
-          <span className="text-[11px] text-slate-400">
+          <span className="text-[11px] text-[#77766F]">
             Exibindo <strong>{allOperationalVisits.length}</strong> loja(s)
           </span>
         </div>
@@ -2301,20 +2354,20 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
         {loading ? (
           <div className="py-12 text-center space-y-3">
             <span className="material-symbols-outlined text-indigo-400 text-3xl animate-spin">sync</span>
-            <p className="text-xs text-slate-400">Carregando operação da indústria...</p>
+            <p className="text-xs text-[#77766F]">Carregando operação da indústria...</p>
           </div>
         ) : allOperationalVisits.length === 0 ? (
-          <div className="py-12 text-center space-y-2 bg-[#10141f]/50 rounded-xl border border-[#1e2433]">
+          <div className="py-12 text-center space-y-2 bg-[#E4E2DB]/50 rounded-xl border border-[#CFCDC5]">
             <span className="material-symbols-outlined text-slate-600 text-3xl">event_busy</span>
-            <p className="text-xs text-slate-300 font-bold">Nenhuma operação encontrada para o período.</p>
+            <p className="text-xs text-[#171717] font-bold">Nenhuma operação encontrada para o período.</p>
           </div>
         ) : (
           <>
             {/* TABELA DESKTOP */}
-            <div className="hidden md:block overflow-x-auto rounded-xl border border-[#1e2433]">
+            <div className="hidden md:block overflow-x-auto rounded-xl border border-[#CFCDC5]">
               <table className="w-full text-left text-xs">
                 <thead>
-                  <tr className="bg-[#10141f] border-b border-[#1e2433] text-slate-400 text-[10px] uppercase">
+                  <tr className="bg-[#E4E2DB] border-b border-[#CFCDC5] text-[#77766F] text-[10px] uppercase">
                     <th className="py-3 px-4">Loja / PDV</th>
                     <th className="py-3 px-4">Cidade/UF</th>
                     <th className="py-3 px-4">Frequência</th>
@@ -2324,7 +2377,7 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                     <th className="py-3 px-4 text-right">Detalhes</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-[#1e2433] text-slate-300">
+                <tbody className="divide-y divide-[#CFCDC5] text-[#171717]">
                   {allOperationalVisits.map((item) => {
                     let badge = { label: '🔴 PENDENTE', style: 'bg-rose-500/10 text-rose-400 border-rose-500/30' };
                     if (item.isPastOverdue) {
@@ -2336,12 +2389,12 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                     } else if (item.status === 'concluida') {
                       badge = { label: '🟢 CONCLUÍDA', style: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' };
                     } else if (item.status === 'planejada') {
-                      badge = { label: '⚪ PLANEJADA', style: 'bg-slate-800 text-slate-300 border-slate-700' };
+                      badge = { label: '⚪ PLANEJADA', style: 'bg-slate-800 text-slate-300 border-[#CFCDC5]' };
                     }
 
                     return (
-                      <tr key={item.key} className="hover:bg-[#10141f]/80 transition-colors">
-                        <td className="py-3 px-4 font-bold text-white">
+                      <tr key={item.key} className="hover:bg-[#E4E2DB]/80 transition-colors">
+                        <td className="py-3 px-4 font-bold text-[#171717]">
                           <button
                             onClick={() => handleOpenStoreHistory(item.lojaCodigo)}
                             className="text-left font-bold text-white hover:text-indigo-400 underline decoration-indigo-500/40 cursor-pointer transition-colors flex items-center gap-1.5"
@@ -2350,12 +2403,12 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                             <span>{item.lojaNome}</span>
                           </button>
                         </td>
-                        <td className="py-3 px-4 text-slate-400">{item.lojaCidade || '—'}/{item.lojaUf || '-'}</td>
-                        <td className="py-3 px-4 text-slate-400">{item.frequencia}</td>
+                        <td className="py-3 px-4 text-[#77766F]">{item.lojaCidade || '—'}/{item.lojaUf || '-'}</td>
+                        <td className="py-3 px-4 text-[#77766F]">{item.frequencia}</td>
                         <td className="py-3 px-4 font-bold text-cyan-400">{item.promotorNome}</td>
                         <td className="py-3 px-4">
-                          <div className="font-bold text-white">{item.dataStr}</div>
-                          <div className="text-[10px] text-slate-500">{item.dayOfWeekLabel}</div>
+                          <div className="font-bold text-[#171717]">{item.dataStr}</div>
+                          <div className="text-[10px] text-[#5F5F5F]">{item.dayOfWeekLabel}</div>
                         </td>
                         <td className="py-3 px-4">
                           <span className={`px-2 py-0.5 rounded text-[10px] border ${badge.style}`}>
@@ -2365,7 +2418,7 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                         <td className="py-3 px-4 text-right flex items-center justify-end gap-2">
                           <button
                             onClick={() => handleOpenStoreHistory(item.lojaCodigo)}
-                            className="px-2.5 py-1.5 rounded-lg bg-[#10141f] hover:bg-indigo-950/40 text-indigo-300 border border-indigo-500/30 text-xs font-bold transition-all cursor-pointer flex items-center gap-1"
+                            className="px-2.5 py-1.5 rounded-lg bg-[#E4E2DB] hover:bg-indigo-950/40 text-indigo-300 border border-indigo-500/30 text-xs font-bold transition-all cursor-pointer flex items-center gap-1"
                             title="Ver Histórico Completo da Loja"
                           >
                             <span className="material-symbols-outlined text-sm">history</span>
@@ -2373,7 +2426,7 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                           </button>
                           <button
                             onClick={() => handleOpenVisitDetails(item)}
-                            className="px-2.5 py-1.5 rounded-lg bg-[#10141f] hover:bg-[#1e2433] text-slate-300 border border-[#1e2433] text-xs font-bold transition-all cursor-pointer"
+                            className="px-2.5 py-1.5 rounded-lg bg-[#E4E2DB] hover:bg-[#CFCDC5] text-[#171717] border border-[#CFCDC5] text-xs font-bold transition-all cursor-pointer"
                           >
                             Relatório
                           </button>
@@ -2388,9 +2441,9 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
             {/* CARDS MOBILE (390px / 768px) */}
             <div className="md:hidden space-y-3">
               {allOperationalVisits.map((item) => (
-                <div key={item.key} className="p-4 rounded-xl bg-[#10141f] border border-[#1e2433] space-y-2">
+                <div key={item.key} className="p-4 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5] space-y-2">
                   <div className="flex items-center justify-between">
-                    <span className="text-[10px] text-slate-400">{item.dataStr} • {item.dayOfWeekLabel}</span>
+                    <span className="text-[10px] text-[#77766F]">{item.dataStr} • {item.dayOfWeekLabel}</span>
                     <span className={`px-2 py-0.5 rounded text-[9px] font-bold border ${
                       item.status === 'concluida' ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' :
                       item.status === 'em_andamento' ? 'bg-blue-500/20 text-blue-300 border-blue-500/30' :
@@ -2409,19 +2462,19 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                     <span className="material-symbols-outlined text-xs text-indigo-400">history</span>
                     <span>{item.lojaNome}</span>
                   </h3>
-                  <p className="text-xs text-slate-400">Cidade: {item.lojaCidade}/{item.lojaUf} • Promotor: <strong className="text-cyan-300">{item.promotorNome}</strong></p>
+                  <p className="text-xs text-[#77766F]">Cidade: {item.lojaCidade}/{item.lojaUf} • Promotor: <strong className="text-cyan-300">{item.promotorNome}</strong></p>
 
-                  <div className="pt-2 border-t border-[#1e2433] flex justify-end gap-2">
+                  <div className="pt-2 border-t border-[#CFCDC5] flex justify-end gap-2">
                     <button
                       onClick={() => handleOpenStoreHistory(item.lojaCodigo)}
-                      className="px-3 py-1.5 rounded-lg bg-[#171b26] text-indigo-300 border border-indigo-500/30 text-xs font-bold flex items-center gap-1"
+                      className="px-3 py-1.5 rounded-lg bg-[#F7F6F2] text-indigo-300 border border-indigo-500/30 text-xs font-bold flex items-center gap-1"
                     >
                       <span className="material-symbols-outlined text-sm">history</span>
                       <span>Histórico Loja</span>
                     </button>
                     <button
                       onClick={() => handleOpenVisitDetails(item)}
-                      className="px-3 py-1.5 rounded-lg bg-[#171b26] text-slate-300 border border-[#1e2433] text-xs font-bold"
+                      className="px-3 py-1.5 rounded-lg bg-[#F7F6F2] text-[#171717] border border-[#CFCDC5] text-xs font-bold"
                     >
                       Relatório
                     </button>
@@ -2436,21 +2489,21 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
       {/* 9. MODAL / DRAWER DE DETALHES DA VISITA (SOMENTE LEITURA) */}
       {selectedVisitItem && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto font-mono">
-          <div className="bg-[#171b26] border border-indigo-500/40 rounded-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto shadow-2xl p-6 space-y-6">
+          <div className="bg-[#F7F6F2] border border-indigo-500/40 rounded-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto shadow-2xl p-6 space-y-6">
             {/* CABEÇALHO DO MODAL */}
-            <div className="flex items-center justify-between border-b border-[#1e2433] pb-4">
+            <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-4">
               <div>
-                <h3 className="text-lg font-extrabold text-white">
+                <h3 className="text-lg font-extrabold text-[#171717]">
                   Relatório da Visita — {selectedVisitItem.lojaNome}
                 </h3>
-                <p className="text-xs text-slate-400">
+                <p className="text-xs text-[#77766F]">
                   Data Prevista: {selectedVisitItem.dataStr} • Promotor: {selectedVisitItem.promotorNome}
                 </p>
               </div>
 
               <button
                 onClick={() => setSelectedVisitItem(null)}
-                className="p-1.5 rounded-xl bg-[#10141f] border border-[#1e2433] text-slate-400 hover:text-white cursor-pointer"
+                className="p-1.5 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5] text-[#77766F] hover:text-[#171717] cursor-pointer"
               >
                 <span className="material-symbols-outlined text-lg">close</span>
               </button>
@@ -2458,27 +2511,27 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
 
             {/* DADOS GERAIS DO ATENDIMENTO */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-              <div className="p-3 rounded-xl bg-[#10141f] border border-[#1e2433]">
-                <span className="text-slate-500 block">SITUAÇÃO</span>
-                <span className="font-extrabold text-white uppercase">{selectedVisitItem.status}</span>
+              <div className="p-3 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5]">
+                <span className="text-[#5F5F5F] block">SITUAÇÃO</span>
+                <span className="font-extrabold text-[#171717] uppercase">{selectedVisitItem.status}</span>
               </div>
 
-              <div className="p-3 rounded-xl bg-[#10141f] border border-[#1e2433]">
-                <span className="text-slate-500 block">CHECK-IN</span>
-                <span className="font-extrabold text-white">
+              <div className="p-3 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5]">
+                <span className="text-[#5F5F5F] block">CHECK-IN</span>
+                <span className="font-extrabold text-[#171717]">
                   {selectedVisitItem.startedAt ? new Date(selectedVisitItem.startedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—'}
                 </span>
               </div>
 
-              <div className="p-3 rounded-xl bg-[#10141f] border border-[#1e2433]">
-                <span className="text-slate-500 block">CHECK-OUT</span>
-                <span className="font-extrabold text-white">
+              <div className="p-3 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5]">
+                <span className="text-[#5F5F5F] block">CHECK-OUT</span>
+                <span className="font-extrabold text-[#171717]">
                   {selectedVisitItem.completedAt ? new Date(selectedVisitItem.completedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—'}
                 </span>
               </div>
 
-              <div className="p-3 rounded-xl bg-[#10141f] border border-[#1e2433]">
-                <span className="text-slate-500 block">DURAÇÃO</span>
+              <div className="p-3 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5]">
+                <span className="text-[#5F5F5F] block">DURAÇÃO</span>
                 <span className="font-extrabold text-amber-300">{selectedVisitItem.duracaoFormatada || '—'}</span>
               </div>
             </div>
@@ -2492,15 +2545,15 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
             )}
 
             {selectedVisitItem.visitObj?.observacao_geral && (
-              <div className="p-4 rounded-xl bg-[#10141f] border border-[#1e2433] text-xs space-y-1">
-                <span className="text-slate-400 font-bold block uppercase">OBSERVAÇÃO GERAL DO PROMOTOR:</span>
+              <div className="p-4 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5] text-xs space-y-1">
+                <span className="text-[#77766F] font-bold block uppercase">OBSERVAÇÃO GERAL DO PROMOTOR:</span>
                 <p className="text-slate-200">{selectedVisitItem.visitObj.observacao_geral}</p>
               </div>
             )}
 
             {/* 11. CHECKLIST OPERACIONAL */}
-            <div className="space-y-3 pt-2 border-t border-[#1e2433]">
-              <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-2">
+            <div className="space-y-3 pt-2 border-t border-[#CFCDC5]">
+              <h4 className="text-xs font-bold text-slate-[#171717] uppercase tracking-wider flex items-center gap-2">
                 <span className="material-symbols-outlined text-amber-400 text-base">fact_check</span>
                 Checklist Operacional Registrado
               </h4>
@@ -2508,33 +2561,33 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
               {selectedVisitItem.visitObj?.checklist_items && selectedVisitItem.visitObj.checklist_items.length > 0 ? (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
                   {selectedVisitItem.visitObj.checklist_items.map((item, idx) => (
-                    <div key={idx} className="p-2.5 rounded-xl bg-[#10141f] border border-[#1e2433] flex items-center justify-between">
+                    <div key={idx} className="p-2.5 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5] flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <span className={`material-symbols-outlined text-base ${item.checked ? 'text-emerald-400' : 'text-slate-600'}`}>
                           {item.checked ? 'check_circle' : 'cancel'}
                         </span>
                         <span className="text-slate-200 font-bold">{item.item_label}</span>
                       </div>
-                      <span className={`text-[10px] px-2 py-0.5 rounded font-bold uppercase ${item.checked ? 'bg-emerald-500/20 text-emerald-300' : 'bg-slate-800 text-slate-400'}`}>
+                      <span className={`text-[10px] px-2 py-0.5 rounded font-bold uppercase ${item.checked ? 'bg-emerald-500/20 text-emerald-300' : 'bg-slate-800 text-[#77766F]'}`}>
                         {item.checked ? 'Sim' : 'Não'}
                       </span>
                     </div>
                   ))}
                 </div>
               ) : (
-                <p className="text-[11px] text-slate-500 italic">Nenhum item de checklist registrado nesta visita.</p>
+                <p className="text-[11px] text-[#5F5F5F] italic">Nenhum item de checklist registrado nesta visita.</p>
               )}
             </div>
 
             {/* 10. EVIDÊNCIAS FOTOGRÁFICAS DA VISITA (STORAGE PRIVADO) */}
-            <div className="space-y-3 pt-2 border-t border-[#1e2433]">
-              <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-2">
+            <div className="space-y-3 pt-2 border-t border-[#CFCDC5]">
+              <h4 className="text-xs font-bold text-slate-[#171717] uppercase tracking-wider flex items-center gap-2">
                 <span className="material-symbols-outlined text-cyan-400 text-base">photo_camera</span>
                 Evidências Fotográficas do Ponto de Venda
               </h4>
 
               {loadingPhotos ? (
-                <div className="py-4 text-center text-xs text-slate-400 flex items-center justify-center gap-2">
+                <div className="py-4 text-center text-xs text-[#77766F] flex items-center justify-center gap-2">
                   <span className="material-symbols-outlined text-cyan-400 animate-spin">sync</span>
                   <span>Gerando Signed URLs seguras para fotos...</span>
                 </div>
@@ -2544,8 +2597,8 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                     const signedUrl = signedPhotoUrls[p.storage_path];
 
                     return (
-                      <div key={idx} className="p-2 rounded-xl bg-[#10141f] border border-[#1e2433] space-y-1.5 flex flex-col justify-between">
-                        <div className="relative aspect-video rounded-lg bg-[#171b26] overflow-hidden border border-[#1e2433] flex items-center justify-center">
+                      <div key={idx} className="p-2 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5] space-y-1.5 flex flex-col justify-between">
+                        <div className="relative aspect-video rounded-lg bg-[#F7F6F2] overflow-hidden border border-[#CFCDC5] flex items-center justify-center">
                           {signedUrl ? (
                             <img src={signedUrl} alt={p.legenda || p.tipo_foto} className="w-full h-full object-cover" />
                           ) : (
@@ -2555,19 +2608,19 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                             {p.tipo_foto}
                           </span>
                         </div>
-                        {p.legenda && <p className="text-[10px] text-slate-300 truncate" title={p.legenda}>{p.legenda}</p>}
+                        {p.legenda && <p className="text-[10px] text-[#171717] truncate" title={p.legenda}>{p.legenda}</p>}
                       </div>
                     );
                   })}
                 </div>
               ) : (
-                <p className="text-[11px] text-slate-500 italic">Nenhuma foto registrada nesta visita.</p>
+                <p className="text-[11px] text-[#5F5F5F] italic">Nenhuma foto registrada nesta visita.</p>
               )}
             </div>
 
             {/* 12. OCORRÊNCIAS E RUPTURAS */}
-            <div className="space-y-3 pt-2 border-t border-[#1e2433]">
-              <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-2">
+            <div className="space-y-3 pt-2 border-t border-[#CFCDC5]">
+              <h4 className="text-xs font-bold text-slate-[#171717] uppercase tracking-wider flex items-center gap-2">
                 <span className="material-symbols-outlined text-rose-400 text-base">report</span>
                 Ocorrências & Rupturas Registradas
               </h4>
@@ -2575,13 +2628,13 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
               {selectedVisitItem.visitObj?.occurrences && selectedVisitItem.visitObj.occurrences.length > 0 ? (
                 <div className="space-y-2 text-xs">
                   {selectedVisitItem.visitObj.occurrences.map((occ, idx) => (
-                    <div key={idx} className="p-3 rounded-xl bg-[#10141f] border border-[#1e2433] flex items-start justify-between gap-3">
+                    <div key={idx} className="p-3 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5] flex items-start justify-between gap-3">
                       <div>
                         <div className="flex items-center gap-2">
                           <span className="px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 text-[10px] font-bold uppercase border border-rose-500/30">
                             {occ.tipo}
                           </span>
-                          <span className="text-slate-400 text-[10px]">
+                          <span className="text-[#77766F] text-[10px]">
                             {occ.created_at ? new Date(occ.created_at).toLocaleString('pt-BR') : ''}
                           </span>
                         </div>
@@ -2597,22 +2650,22 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                   ))}
                 </div>
               ) : (
-                <p className="text-[11px] text-slate-500 italic">Nenhuma ocorrência ou ruptura identificada nesta visita.</p>
+                <p className="text-[11px] text-[#5F5F5F] italic">Nenhuma ocorrência ou ruptura identificada nesta visita.</p>
               )}
             </div>
 
             {/* 13. CONTROLE DE VALIDADE DE PRODUTOS */}
-            <div className="space-y-3 pt-2 border-t border-[#1e2433]">
-              <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-2">
+            <div className="space-y-3 pt-2 border-t border-[#CFCDC5]">
+              <h4 className="text-xs font-bold text-slate-[#171717] uppercase tracking-wider flex items-center gap-2">
                 <span className="material-symbols-outlined text-amber-400 text-base">event</span>
                 Controle de Validade de Produtos (FIFO)
               </h4>
 
               {selectedVisitItem.visitObj?.validity_items && selectedVisitItem.visitObj.validity_items.length > 0 ? (
-                <div className="overflow-x-auto rounded-xl border border-[#1e2433]">
+                <div className="overflow-x-auto rounded-xl border border-[#CFCDC5]">
                   <table className="w-full text-left text-xs">
                     <thead>
-                      <tr className="bg-[#10141f] text-slate-400 text-[10px] uppercase border-b border-[#1e2433]">
+                      <tr className="bg-[#E4E2DB] text-[#77766F] text-[10px] uppercase border-b border-[#CFCDC5]">
                         <th className="py-2 px-3">Produto</th>
                         <th className="py-2 px-3 text-right">Qtd.</th>
                         <th className="py-2 px-3">Vencimento</th>
@@ -2620,7 +2673,7 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                         <th className="py-2 px-3 text-right">Situação</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-[#1e2433] text-slate-300">
+                    <tbody className="divide-y divide-[#CFCDC5] text-[#171717]">
                       {selectedVisitItem.visitObj.validity_items.map((val, idx) => {
                         const [vYear, vMonth, vDay] = val.data_vencimento.split('-').map(Number);
                         const vencDate = new Date(vYear, vMonth - 1, vDay);
@@ -2640,11 +2693,11 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                         }
 
                         return (
-                          <tr key={idx} className="hover:bg-[#10141f]/50">
+                          <tr key={idx} className="hover:bg-[#E4E2DB]/50">
                             <td className="py-2 px-3 font-bold text-white">{val.produto_nome}</td>
                             <td className="py-2 px-3 text-right font-bold text-amber-300">{val.quantidade}</td>
                             <td className="py-2 px-3">{vencDate.toLocaleDateString('pt-BR')}</td>
-                            <td className="py-2 px-3 text-slate-400">{val.lote || '—'}</td>
+                            <td className="py-2 px-3 text-[#77766F]">{val.lote || '—'}</td>
                             <td className="py-2 px-3 text-right">
                               <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${statusBadge.color}`}>
                                 {statusBadge.label}
@@ -2657,12 +2710,12 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                   </table>
                 </div>
               ) : (
-                <p className="text-[11px] text-slate-500 italic">Nenhum produto cadastrado para controle de validade nesta visita.</p>
+                <p className="text-[11px] text-[#5F5F5F] italic">Nenhum produto cadastrado para controle de validade nesta visita.</p>
               )}
             </div>
 
             {/* RODAPÉ DO MODAL */}
-            <div className="pt-3 border-t border-[#1e2433] flex justify-end">
+            <div className="pt-3 border-t border-[#CFCDC5] flex justify-end">
               <button
                 onClick={() => setSelectedVisitItem(null)}
                 className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs cursor-pointer transition-all shadow-md"
@@ -2677,23 +2730,23 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
       {/* 10. MODAL / DRAWER DE HISTÓRICO OPERACIONAL DA LOJA SELECIONADA */}
       {selectedStoreCode && selectedStoreObj && (
         <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-md flex items-center justify-center p-3 sm:p-6 overflow-y-auto font-mono">
-          <div className="bg-[#171b26] border border-indigo-500/40 rounded-2xl w-full max-w-4xl max-h-[92vh] overflow-y-auto shadow-2xl p-5 sm:p-6 space-y-6">
+          <div className="bg-[#F7F6F2] border border-indigo-500/40 rounded-2xl w-full max-w-4xl max-h-[92vh] overflow-y-auto shadow-2xl p-5 sm:p-6 space-y-6">
             {/* CABEÇALHO DA LOJA */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-[#1e2433] pb-4 gap-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-[#CFCDC5] pb-4 gap-3">
               <div className="flex items-center gap-3">
                 <div className="w-12 h-12 rounded-xl bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 flex items-center justify-center font-bold text-xl shrink-0">
                   <span className="material-symbols-outlined text-2xl">storefront</span>
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
-                    <h3 className="text-base sm:text-lg font-extrabold text-white">
+                    <h3 className="text-base sm:text-lg font-extrabold text-[#171717]">
                       {selectedStoreObj.nome}
                     </h3>
                     <span className="px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 text-[10px] font-bold border border-indigo-500/30 uppercase">
                       {selectedStoreObj.codigo}
                     </span>
                   </div>
-                  <p className="text-xs text-slate-400 mt-0.5">
+                  <p className="text-xs text-[#77766F] mt-0.5">
                     {selectedStoreObj.cidade} / {selectedStoreObj.uf} • Frequência:{' '}
                     <strong className="text-cyan-400">
                       {selectedStoreRoutes[0]?.frequencia || 'SEMANAL'}
@@ -2705,7 +2758,7 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
               <div className="flex items-center gap-2 self-end sm:self-auto">
                 <button
                   onClick={() => setSelectedStoreCode(null)}
-                  className="p-2 rounded-xl bg-[#10141f] border border-[#1e2433] text-slate-400 hover:text-white cursor-pointer transition-colors"
+                  className="p-2 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5] text-[#77766F] hover:text-[#171717] cursor-pointer transition-colors"
                 >
                   <span className="material-symbols-outlined text-xl">close</span>
                 </button>
@@ -2715,13 +2768,13 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
             {/* SELETOR DE PERÍODO E KPIS RESUMO DA LOJA */}
             <div className="space-y-3">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <span className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                <span className="text-xs font-bold text-[#171717] uppercase tracking-wider flex items-center gap-1.5">
                   <span className="material-symbols-outlined text-indigo-400 text-sm">analytics</span>
                   Resumo Operacional do Período
                 </span>
 
                 {/* FILTROS DE PERÍODO DA LOJA */}
-                <div className="flex items-center gap-1 bg-[#10141f] p-1 rounded-xl border border-[#1e2433] self-start sm:self-auto">
+                <div className="flex items-center gap-1 bg-[#E4E2DB] p-1 rounded-xl border border-[#CFCDC5] self-start sm:self-auto">
                   {(['7', '30', '90', 'all'] as const).map((p) => (
                     <button
                       key={p}
@@ -2729,7 +2782,7 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                       className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
                         historyPeriodFilter === p
                           ? 'bg-indigo-600 text-white shadow-md'
-                          : 'text-slate-400 hover:text-slate-200'
+                          : 'text-[#77766F] hover:text-slate-200'
                       }`}
                     >
                       {p === 'all' ? 'Todos' : `${p} dias`}
@@ -2740,36 +2793,42 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
 
               {/* CARDS KPIS RESUMO DA LOJA */}
               <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-xs">
-                <div className="p-3 rounded-xl bg-[#10141f] border border-[#1e2433]">
+                <div className="p-3 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5]">
                   <span className="text-[10px] text-purple-400 block font-bold uppercase">PLANEJADOS</span>
                   <span className="text-xl font-extrabold text-purple-300 mt-0.5 block">{loadingHistory ? '...' : storeHistoryKPIs.planejadas}</span>
                 </div>
 
-                <div className="p-3 rounded-xl bg-[#10141f] border border-emerald-500/30 bg-emerald-950/10">
+                <div className="p-3 rounded-xl bg-[#E4E2DB] border border-emerald-500/30 bg-emerald-950/10">
                   <span className="text-[10px] text-emerald-400 block font-bold uppercase">CONCLUÍDOS</span>
                   <span className="text-xl font-extrabold text-emerald-300 mt-0.5 block">{loadingHistory ? '...' : storeHistoryKPIs.concluidas}</span>
                 </div>
 
-                <div className="p-3 rounded-xl bg-[#10141f] border border-rose-500/30 bg-rose-950/10">
+                <div className="p-3 rounded-xl bg-[#E4E2DB] border border-rose-500/30 bg-rose-950/10">
                   <span className="text-[10px] text-rose-400 block font-bold uppercase">PENDENTES</span>
                   <span className="text-xl font-extrabold text-rose-300 mt-0.5 block">{loadingHistory ? '...' : storeHistoryKPIs.pendentes}</span>
                 </div>
 
-                <div className="p-3 rounded-xl bg-[#10141f] border border-orange-500/30 bg-orange-950/10">
+                <div className="p-3 rounded-xl bg-[#E4E2DB] border border-orange-500/30 bg-orange-950/10">
                   <span className="text-[10px] text-orange-400 block font-bold uppercase">NÃO REALIZADOS</span>
                   <span className="text-xl font-extrabold text-orange-300 mt-0.5 block">{loadingHistory ? '...' : storeHistoryKPIs.naoRealizadas}</span>
                 </div>
 
-                <div className="p-3 rounded-xl bg-[#10141f] border border-indigo-500/30 bg-indigo-950/10 col-span-2 sm:col-span-1">
+                <div className="p-3 rounded-xl bg-[#E4E2DB] border border-indigo-500/30 bg-indigo-950/10 col-span-2 sm:col-span-1">
                   <span className="text-[10px] text-indigo-300 block font-bold uppercase">ADERÊNCIA</span>
-                  <span className="text-xl font-extrabold text-indigo-200 mt-0.5 block">{loadingHistory ? '...' : `${storeHistoryKPIs.aderencia}%`}</span>
+                  {loadingHistory || systemSettings.status === 'loading' ? (
+                    <span className="text-xs font-bold text-[#77766F] mt-1 block">Carregando...</span>
+                  ) : systemSettings.mode !== 'OPERACAO_OFICIAL' || systemSettings.status !== 'loaded' ? (
+                    <span className="text-[10px] font-bold text-amber-300 mt-1 block leading-tight">Fase de implantação — SLA não ativo</span>
+                  ) : (
+                    <span className="text-xl font-extrabold text-indigo-200 mt-0.5 block">{`${storeHistoryKPIs.aderencia}%`}</span>
+                  )}
                 </div>
               </div>
             </div>
 
             {/* TIMELINE / LISTA DE HISTÓRICO DE ATENDIMENTOS */}
-            <div className="space-y-3 pt-2 border-t border-[#1e2433]">
-              <h4 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-2">
+            <div className="space-y-3 pt-2 border-t border-[#CFCDC5]">
+              <h4 className="text-xs font-bold text-[#171717] uppercase tracking-wider flex items-center gap-2">
                 <span className="material-symbols-outlined text-indigo-400 text-base">history_edu</span>
                 Linha do Tempo de Atendimentos ({storeHistoryOperationalItems.length})
               </h4>
@@ -2777,12 +2836,12 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
               {loadingHistory ? (
                 <div className="py-10 text-center space-y-2">
                   <span className="material-symbols-outlined text-indigo-400 text-2xl animate-spin">sync</span>
-                  <p className="text-xs text-slate-400">Carregando histórico da loja...</p>
+                  <p className="text-xs text-[#77766F]">Carregando histórico da loja...</p>
                 </div>
               ) : storeHistoryOperationalItems.length === 0 ? (
-                <div className="py-8 text-center bg-[#10141f]/50 rounded-xl border border-[#1e2433] space-y-1">
+                <div className="py-8 text-center bg-[#E4E2DB]/50 rounded-xl border border-[#CFCDC5] space-y-1">
                   <span className="material-symbols-outlined text-slate-600 text-2xl">event_busy</span>
-                  <p className="text-xs text-slate-300 font-bold">Nenhum atendimento registrado no período.</p>
+                  <p className="text-xs text-[#171717] font-bold">Nenhum atendimento registrado no período.</p>
                 </div>
               ) : (
                 <div className="space-y-3">
@@ -2798,20 +2857,20 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                         key={item.key}
                         className={`p-4 rounded-xl border transition-all ${
                           isConcluida
-                            ? 'bg-[#10141f] border-emerald-500/30 hover:border-emerald-500/60'
+                            ? 'bg-[#E4E2DB] border-emerald-500/30 hover:border-emerald-500/60'
                             : isEmAndamento
-                            ? 'bg-[#10141f] border-blue-500/30 hover:border-blue-500/60'
+                            ? 'bg-[#E4E2DB] border-blue-500/30 hover:border-blue-500/60'
                             : isNaoRealizada
-                            ? 'bg-[#10141f] border-orange-500/30 hover:border-orange-500/60'
+                            ? 'bg-[#E4E2DB] border-orange-500/30 hover:border-orange-500/60'
                             : isAtrasada
                             ? 'bg-rose-950/20 border-rose-500/40 hover:border-rose-500/70'
-                            : 'bg-[#10141f] border-[#1e2433]'
+                            : 'bg-[#E4E2DB] border-[#CFCDC5]'
                         }`}
                       >
-                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-[#1e2433]">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-[#CFCDC5]">
                           <div className="flex items-center gap-2">
-                            <span className="font-extrabold text-white text-sm">{item.dataStr}</span>
-                            <span className="text-slate-500 text-xs">• {item.dayOfWeekLabel}</span>
+                            <span className="font-extrabold text-[#171717] text-sm">{item.dataStr}</span>
+                            <span className="text-[#5F5F5F] text-xs">• {item.dayOfWeekLabel}</span>
                           </div>
 
                           <span className={`px-2.5 py-0.5 rounded text-[10px] font-bold border self-start sm:self-auto ${
@@ -2830,12 +2889,12 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
 
                         <div className="pt-3 grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
                           <div>
-                            <span className="text-slate-500 block text-[10px]">PROMOTOR RESPONSÁVEL</span>
+                            <span className="text-[#5F5F5F] block text-[10px]">PROMOTOR RESPONSÁVEL</span>
                             <span className="font-bold text-cyan-300">{item.promotorNome}</span>
                           </div>
 
                           <div>
-                            <span className="text-slate-500 block text-[10px]">HORÁRIO / DURAÇÃO</span>
+                            <span className="text-[#5F5F5F] block text-[10px]">HORÁRIO / DURAÇÃO</span>
                             <span className="text-slate-200">
                               {item.startedAt ? new Date(item.startedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—'}
                               {' → '}
@@ -2844,7 +2903,7 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                             </span>
                           </div>
 
-                          <div className="flex items-center justify-between sm:justify-end gap-3 pt-2 sm:pt-0 border-t sm:border-t-0 border-[#1e2433]">
+                          <div className="flex items-center justify-between sm:justify-end gap-3 pt-2 sm:pt-0 border-t sm:border-t-0 border-[#CFCDC5]">
                             {photosCount > 0 && (
                               <span className="text-[11px] text-cyan-300 font-bold bg-cyan-500/10 px-2 py-0.5 rounded border border-cyan-500/30 flex items-center gap-1">
                                 📷 {photosCount} evidência(s)
@@ -2859,7 +2918,7 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                                 Abrir Relatório
                               </button>
                             ) : (
-                              <span className="text-[10px] text-slate-500 italic">
+                              <span className="text-[10px] text-[#5F5F5F] italic">
                                 Atendimento planejado sem execução
                               </span>
                             )}
@@ -2873,10 +2932,10 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
             </div>
 
             {/* RODAPÉ DO DRAWER DE HISTÓRICO */}
-            <div className="pt-3 border-t border-[#1e2433] flex justify-end">
+            <div className="pt-3 border-t border-[#CFCDC5] flex justify-end">
               <button
                 onClick={() => setSelectedStoreCode(null)}
-                className="px-5 py-2 rounded-xl bg-[#10141f] hover:bg-[#1e2433] text-slate-300 border border-[#1e2433] font-bold text-xs cursor-pointer transition-all"
+                className="px-5 py-2 rounded-xl bg-[#E4E2DB] hover:bg-[#CFCDC5] text-[#171717] border border-[#CFCDC5] font-bold text-xs cursor-pointer transition-all"
               >
                 Fechar Histórico
               </button>
@@ -2890,6 +2949,7 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
         activeIndName={activeIndName}
         activeIndCode={activeIndCode}
         periodFilter={periodFilter}
+        operationMode={systemSettings.mode}
         kpis={kpis}
         promotoresPerformance={promotoresPerformance}
         occurrencesSummary={occurrencesSummary}

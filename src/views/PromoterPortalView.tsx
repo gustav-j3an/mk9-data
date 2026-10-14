@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useAuth } from '../auth/AuthProvider';
 import { supabase } from '../lib/supabase';
-import type { RouteItem, Visit, ToastMessage, VisitChecklistItem } from '../types';
+import type { RouteItem, Visit, ToastMessage, VisitChecklistItem, PromoterOperationAuthorization } from '../types';
+import { fetchSystemSettings } from '../lib/systemSettings';
 import {
   calculateOperationalVisits,
   getWeekDaysRange,
@@ -35,6 +36,34 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
   const [routes, setRoutes] = useState<RouteItem[]>([]);
   const [todayVisits, setTodayVisits] = useState<Visit[]>([]);
   const [activeVisit, setActiveVisit] = useState<Visit | null>(null);
+
+  // Estado de Autorização do Promotor (Etapa 4.1)
+  const [isAuthorized, setIsAuthorized] = useState<boolean>(false);
+  const [authRecord, setAuthRecord] = useState<PromoterOperationAuthorization | null>(null);
+  const [isImplantacaoMode, setIsImplantacaoMode] = useState<boolean>(true);
+
+  // Visitas anteriores à data atual que não foram concluídas (Pendências de dias anteriores)
+  const [startingRouteId, setStartingRouteId] = useState<string | null>(null);
+  const [staleInProgressVisits, setStaleInProgressVisits] = useState<Visit[]>([]);
+  const [staleNotDoneVisits, setStaleNotDoneVisits] = useState<Visit[]>([]);
+  const [staleNotDoneVisit, setStaleNotDoneVisit] = useState<Visit | null>(null);
+  const [staleNotDoneReason, setStaleNotDoneReason] = useState<string>('');
+  const [savingStaleNotDone, setSavingStaleNotDone] = useState<boolean>(false);
+
+  // Estado para Interrupção / Cancelamento de Atendimento em Andamento (Requisito 3)
+  const [interruptModalVisit, setInterruptModalVisit] = useState<Visit | null>(null);
+  const [interruptReason, setInterruptReason] = useState<string>('');
+  const [savingInterrupt, setSavingInterrupt] = useState<boolean>(false);
+
+  // Estado para conflito de atendimento ativo ao tentar iniciar outra loja (Etapa 1)
+  const [busyConflictTargetRoute, setBusyConflictTargetRoute] = useState<RouteItem | null>(null);
+
+  // Estado para Recuperação de Visita Não Realizada / Pendente ("Realizar hoje" - Etapa 2)
+  const [recoverModalVisit, setRecoverModalVisit] = useState<Visit | null>(null);
+  const [recoveringVisit, setRecoveringVisit] = useState<boolean>(false);
+
+  // Controle de colapso do Histórico da Semana (Fechado por padrão no mobile)
+  const [isWeekHistoryOpen, setIsWeekHistoryOpen] = useState<boolean>(false);
 
   // Estado para Agenda Semanal "MINHA SEMANA" (Etapa 7.2)
   const [weekOffset, setWeekOffset] = useState<number>(0);
@@ -84,7 +113,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
 
     try {
       const now = new Date();
-      const todayStr = now.toISOString().split('T')[0];
+      const todayStr = getLocalDateString(now);
       const dayIndex = now.getDay();
       const dayKeys = ['domingo', 'segunda', 'terca', 'quarta', 'quinta', 'sexta', 'sabado'];
       const currentDayKey = dayKeys[dayIndex];
@@ -115,56 +144,153 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
         }
       }
 
-      // Se for perfil de promotor, filtrar pela matrícula associada. Se for admin/gestor, carregar primeiras rotas.
-      let rotasQuery = supabase.from('rotas').select(`
-        *,
-        industria:industrias(codigo, nome),
-        loja:lojas(codigo, nome, cidade, uf, endereco),
-        promotor:promotores(matricula, nome)
-      `);
-
-      if (promotorMatricula) {
-        rotasQuery = rotasQuery.eq('promotor_matricula', promotorMatricula);
-      }
-
       const weekDays = getWeekDaysRange(new Date(), weekOffset);
       const weekStartStr = weekDays[0].dateStr;
       const weekEndStr = weekDays[6].dateStr;
 
-      let visitsQuery = supabase.from('visits').select(`
-        *,
-        industria:industrias(codigo, nome),
-        loja:lojas(codigo, nome, cidade, uf, endereco),
-        promotor:promotores(matricula, nome),
-        checklist_items:visit_checklist_items(*),
-        photos:visit_photos(*),
-        occurrences:visit_occurrences(*),
-        validity_items:visit_product_validity(*)
-      `).gte('data_visita', weekStartStr).lte('data_visita', weekEndStr);
+      // Segurança por perfil: Administradores e Gestores podem visualizar rotas e visitas gerais para auditoria.
+      // Usuários comuns ou promotores sem matrícula associada NÃO devem carregar visitas de terceiros.
+      const isPrivilegedUser = profile?.role === 'admin' || profile?.role === 'gestor';
+
+      let rotasQuery: any;
+      let visitsQuery: any;
+      let openVisitsQuery: any;
 
       if (promotorMatricula) {
-        visitsQuery = visitsQuery.eq('promotor_matricula', promotorMatricula);
+        // Promotor autenticado com matrícula vinculada
+        rotasQuery = supabase.from('rotas').select(`
+          *,
+          industria:industrias(codigo, nome),
+          loja:lojas(codigo, nome, cidade, uf, endereco),
+          promotor:promotores(matricula, nome)
+        `).eq('promotor_matricula', promotorMatricula);
+
+        visitsQuery = supabase.from('visits').select(`
+          *,
+          industria:industrias(codigo, nome),
+          loja:lojas(codigo, nome, cidade, uf, endereco),
+          promotor:promotores(matricula, nome),
+          checklist_items:visit_checklist_items(*),
+          photos:visit_photos(*),
+          occurrences:visit_occurrences(*),
+          validity_items:visit_product_validity(*)
+        `).gte('data_visita', weekStartStr).lte('data_visita', weekEndStr).eq('promotor_matricula', promotorMatricula);
+
+        // Buscar visitas anteriores a hoje que ainda não foram concluídas (em_andamento ou nao_realizada)
+        openVisitsQuery = supabase.from('visits').select(`
+          *,
+          industria:industrias(codigo, nome),
+          loja:lojas(codigo, nome, cidade, uf, endereco),
+          promotor:promotores(matricula, nome),
+          checklist_items:visit_checklist_items(*),
+          photos:visit_photos(*),
+          occurrences:visit_occurrences(*),
+          validity_items:visit_product_validity(*)
+        `).in('status', ['em_andamento', 'nao_realizada']).lt('data_visita', todayStr).eq('promotor_matricula', promotorMatricula);
+      } else if (isPrivilegedUser) {
+        // Usuário privilegiado (Admin/Gestor) sem matrícula específica
+        rotasQuery = supabase.from('rotas').select(`
+          *,
+          industria:industrias(codigo, nome),
+          loja:lojas(codigo, nome, cidade, uf, endereco),
+          promotor:promotores(matricula, nome)
+        `);
+
+        visitsQuery = supabase.from('visits').select(`
+          *,
+          industria:industrias(codigo, nome),
+          loja:lojas(codigo, nome, cidade, uf, endereco),
+          promotor:promotores(matricula, nome),
+          checklist_items:visit_checklist_items(*),
+          photos:visit_photos(*),
+          occurrences:visit_occurrences(*),
+          validity_items:visit_product_validity(*)
+        `).gte('data_visita', weekStartStr).lte('data_visita', weekEndStr);
+
+        openVisitsQuery = supabase.from('visits').select(`
+          *,
+          industria:industrias(codigo, nome),
+          loja:lojas(codigo, nome, cidade, uf, endereco),
+          promotor:promotores(matricula, nome),
+          checklist_items:visit_checklist_items(*),
+          photos:visit_photos(*),
+          occurrences:visit_occurrences(*),
+          validity_items:visit_product_validity(*)
+        `).in('status', ['em_andamento', 'nao_realizada']).lt('data_visita', todayStr);
+      } else {
+        // Usuário não privilegiado e sem matrícula vinculada: não carrega dados de outros promotores
+        rotasQuery = Promise.resolve({ data: [], error: null });
+        visitsQuery = Promise.resolve({ data: [], error: null });
+        openVisitsQuery = Promise.resolve({ data: [], error: null });
       }
 
-      const [rotasRes, visitsRes] = await Promise.all([rotasQuery, visitsQuery]);
+      // Consultar autorização e modo operacional
+      let authQuery = promotorMatricula
+        ? supabase.from('promoter_operation_authorizations').select('*').eq('promotor_matricula', promotorMatricula).maybeSingle()
+        : Promise.resolve({ data: null, error: null });
+
+      const [rotasRes, visitsRes, openVisitsRes, authRes, settings] = await Promise.all([
+        rotasQuery,
+        visitsQuery,
+        openVisitsQuery,
+        authQuery,
+        fetchSystemSettings()
+      ]);
 
       if (rotasRes.error) throw rotasRes.error;
       if (visitsRes.error) throw visitsRes.error;
+      if (openVisitsRes && 'error' in openVisitsRes && openVisitsRes.error) throw openVisitsRes.error;
+
+      const isImplantacao = settings.mode !== 'OPERACAO_OFICIAL';
+      setIsImplantacaoMode(isImplantacao);
+
+      const authData = (authRes?.data as unknown as PromoterOperationAuthorization) || null;
+      setAuthRecord(authData);
+
+      // Autorizado se for OPERACAO_OFICIAL ou se tiver autorização com status 'liberado'
+      const authorized = !isImplantacao || (authData?.status === 'liberado');
+      setIsAuthorized(authorized);
 
       const rawRoutes = (rotasRes.data as unknown as RouteItem[]) || [];
       setRoutes(rawRoutes);
 
       const visits = (visitsRes.data as unknown as Visit[]) || [];
-      setWeekVisits(visits);
-      setTodayVisits(visits.filter((v) => v.data_visita === todayStr));
+      const openVisits = ((openVisitsRes && 'data' in openVisitsRes ? openVisitsRes.data : []) as unknown as Visit[]) || [];
 
-      // Verificar se há alguma visita em andamento para retomada automática
-      const inProgress = visits.find((v) => v.status === 'em_andamento');
-      if (inProgress) {
+      // Consolidar todas as visitas adicionando as em aberto
+      const visitsMap = new Map<string, Visit>();
+      visits.forEach((v) => visitsMap.set(v.id, v));
+      openVisits.forEach((v) => visitsMap.set(v.id, v));
+      const allConsolidatedVisits = Array.from(visitsMap.values());
+
+      setWeekVisits(allConsolidatedVisits);
+      setTodayVisits(allConsolidatedVisits.filter((v) => v.data_visita === todayStr));
+
+      // Identificar visitas anteriores à data atual que não foram concluídas (Requisito 2)
+      // 1. Em andamento de dias anteriores (data < hoje e status = 'em_andamento')
+      const stalesInProgress = allConsolidatedVisits.filter(
+        (v) => v.status === 'em_andamento' && v.data_visita < todayStr
+      );
+      setStaleInProgressVisits(stalesInProgress);
+
+      // 2. Não realizadas de dias anteriores (data < hoje e status = 'nao_realizada')
+      const stalesNotDone = allConsolidatedVisits.filter(
+        (v) => v.status === 'nao_realizada' && v.data_visita < todayStr
+      );
+      setStaleNotDoneVisits(stalesNotDone);
+
+      // Visita em andamento de HOJE
+      const todayInProgress = allConsolidatedVisits.find((v) => v.status === 'em_andamento' && v.data_visita === todayStr);
+
+      // Se houver visita de hoje em andamento, prioriza atendimento ativo de hoje
+      // Se não houver de hoje mas houver stale, candidateActive não sequestra o topo ativo de hoje
+      const candidateActive = todayInProgress || null;
+
+      if (candidateActive) {
         // Gerar signedUrls para as fotos da visita ativa
-        if (inProgress.photos && inProgress.photos.length > 0) {
+        if (candidateActive.photos && candidateActive.photos.length > 0) {
           const photosWithSignedUrls = await Promise.all(
-            inProgress.photos.map(async (p) => {
+            candidateActive.photos.map(async (p) => {
               if (p.storage_path) {
                 const { data } = await supabase!.storage
                   .from('visit-photos')
@@ -176,23 +302,31 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
               return p;
             })
           );
-          inProgress.photos = photosWithSignedUrls;
+          candidateActive.photos = photosWithSignedUrls;
         }
 
-        setActiveVisit(inProgress);
-        setGeneralObs(inProgress.observacao_geral || '');
+        // Se a visita for do dia de hoje, abre no formulário de atendimento ativo
+        if (candidateActive.data_visita === todayStr) {
+          setActiveVisit(candidateActive);
+          setGeneralObs(candidateActive.observacao_geral || '');
 
-        // Preencher checklist já salvo
-        const initialChk: Record<string, { checked: boolean; obs: string; valTxt: string }> = {};
-        DEFAULT_CHECKLIST_ITEMS.forEach((def) => {
-          const found = inProgress.checklist_items?.find((c) => c.item_key === def.item_key);
-          initialChk[def.item_key] = {
-            checked: found ? found.checked : false,
-            obs: found?.observacao || '',
-            valTxt: found?.valor_texto || ''
-          };
-        });
-        setChecklist(initialChk);
+          const initialChk: Record<string, { checked: boolean; obs: string; valTxt: string }> = {};
+          DEFAULT_CHECKLIST_ITEMS.forEach((def) => {
+            const found = candidateActive.checklist_items?.find((c) => c.item_key === def.item_key);
+            initialChk[def.item_key] = {
+              checked: found ? found.checked : false,
+              obs: found?.observacao || '',
+              valTxt: found?.valor_texto || ''
+            };
+          });
+          setChecklist(initialChk);
+        } else {
+          // Se for uma visita de dia anterior, NÃO sequestra o topo como visita ativa do dia
+          // O banner dedicado de aviso exibirá os botões: "Continuar Visita" ou "Registrar como Não Realizada"
+          setActiveVisit(null);
+        }
+      } else {
+        setActiveVisit(null);
       }
     } catch (err: any) {
       console.error('Erro ao carregar Portal do Promotor:', err);
@@ -222,6 +356,24 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
     });
   }, [routes, weekVisits, weekDaysRange, todayStr]);
 
+  // Agenda das visitas de HOJE com ordenação amigável:
+  // 1º Em atendimento, 2º Pendentes/Planejadas, 3º Não realizadas, 4º Concluídas
+  const todayOperationalVisits = useMemo(() => {
+    const list = allWeekOperationalVisits.filter((item) => item.dataStr === todayStr);
+    return list.sort((a, b) => {
+      const orderScore = (status: string) => {
+        if (status === 'em_andamento') return 1;
+        if (status === 'pendente' || status === 'planejada') return 2;
+        if (status === 'nao_realizada') return 3;
+        if (status === 'concluida') return 4;
+        return 5;
+      };
+      const scoreDiff = orderScore(a.status) - orderScore(b.status);
+      if (scoreDiff !== 0) return scoreDiff;
+      return a.lojaNome.localeCompare(b.lojaNome);
+    });
+  }, [allWeekOperationalVisits, todayStr]);
+
   const realName = promoterDetails?.nome || profile?.promotor_nome || profile?.name || (promotorMatricula ? 'Promotor de Campo' : 'Promotor não vinculado');
   const realMatricula = promoterDetails?.matricula || profile?.promotor_matricula || null;
   const realCidade = promoterDetails?.cidade || profile?.promotor_cidade;
@@ -236,12 +388,12 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
     return realName.substring(0, 2).toUpperCase();
   })();
 
-  // Resumo de execução do dia
-  const totalPlanned = routes.length;
-  const completedCount = todayVisits.filter((v) => v.status === 'concluida').length;
-  const inProgressCount = todayVisits.filter((v) => v.status === 'em_andamento').length;
-  const notDoneCount = todayVisits.filter((v) => v.status === 'nao_realizada').length;
-  const pendingCount = Math.max(0, totalPlanned - completedCount - notDoneCount);
+  // Resumo de execução do dia de HOJE baseado nas visitas previstas para o dia atual
+  const totalPlanned = todayOperationalVisits.length;
+  const completedCount = todayOperationalVisits.filter((v) => v.status === 'concluida').length;
+  const inProgressCount = todayOperationalVisits.filter((v) => v.status === 'em_andamento').length;
+  const notDoneCount = todayOperationalVisits.filter((v) => v.status === 'nao_realizada').length;
+  const pendingCount = todayOperationalVisits.filter((v) => v.status === 'pendente' || v.status === 'planejada').length;
   const executionPerc = totalPlanned > 0 ? Math.round((completedCount / totalPlanned) * 100) : 0;
 
   // Iniciar Visita
@@ -257,8 +409,31 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
       return;
     }
 
+    if (isImplantacaoMode && !isAuthorized) {
+      onShowToast({
+        title: 'Operação Não Liberada',
+        message: 'Seu usuário ainda não foi liberado individualmente pelo gestor para a fase de testes em campo.',
+        type: 'warning'
+      });
+      return;
+    }
+
+    // Se já houver uma visita em andamento (hoje ou de dias anteriores), não permite iniciar outra silenciosamente.
+    // Exige decisão explícita: voltar para a atual ou interromper a anterior com justificativa.
+    if (activeVisit) {
+      const isSameVisit = activeVisit.loja_codigo === route.loja_codigo && activeVisit.industria_codigo === route.industria_codigo;
+      if (!isSameVisit) {
+        setBusyConflictTargetRoute(route);
+        return;
+      }
+    }
+
+    // Prevenir duplo clique
+    if (startingRouteId) return;
+    setStartingRouteId(route.id);
+
     try {
-      const todayStr = new Date().toISOString().split('T')[0];
+      const todayStr = getLocalDateString(new Date());
 
       // 1. Verificar se já existe visita para esta rota e data (prevenir duplicidade)
       const { data: existingVisits, error: checkErr } = await supabase
@@ -290,28 +465,47 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
           type: 'info'
         });
       } else {
-        // Obter Geolocalização do dispositivo se disponível
+        // Obter Geolocalização do dispositivo com timeout seguro e sem travar o início da visita
         let lat: number | null = null;
         let lng: number | null = null;
 
-        if (navigator.geolocation) {
+        if (typeof navigator !== 'undefined' && navigator.geolocation) {
           try {
             const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
-              navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 4000 });
+              const timer = setTimeout(() => {
+                reject(new Error('Geolocation timeout'));
+              }, 3000);
+
+              navigator.geolocation.getCurrentPosition(
+                (position) => {
+                  clearTimeout(timer);
+                  resolve(position);
+                },
+                (error) => {
+                  clearTimeout(timer);
+                  reject(error);
+                },
+                { timeout: 3000, enableHighAccuracy: false, maximumAge: 60000 }
+              );
             });
             lat = pos.coords.latitude;
             lng = pos.coords.longitude;
           } catch (e) {
-            console.warn('Geolocalização não concedida ou timeout');
+            console.warn('Geolocalização não concedida ou timeout:', e);
           }
         }
+
+        // Sanitização de rota_id: validar se corresponde a um UUID válido ou rota real para evitar rejeição por Foreign Key
+        const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(route.id || '');
+        const validRouteInDb = routes.find((r) => r.id === route.id);
+        const rotaIdToInsert = (validRouteInDb || isUuid) ? route.id : null;
 
         // Inserir registro de visita em_andamento no Supabase usando schema exato
         const { data: newVisit, error: insertErr } = await supabase
           .from('visits')
           .insert([
             {
-              rota_id: route.id,
+              rota_id: rotaIdToInsert,
               promotor_matricula: promotorMatricula,
               loja_codigo: route.loja_codigo,
               industria_codigo: route.industria_codigo,
@@ -330,14 +524,46 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
           `)
           .single();
 
-        if (insertErr) throw insertErr;
+        if (insertErr) {
+          // Se ocorreu duplicidade por corrida concorrente, tenta carregar a visita criada
+          if (insertErr.code === '23505' || insertErr.message?.includes('duplicate key') || insertErr.message?.includes('visits_promotor_loja_industria_data_unique')) {
+            const { data: fallbackVisits } = await supabase
+              .from('visits')
+              .select(`
+                *,
+                industria:industrias(codigo, nome),
+                loja:lojas(codigo, nome, cidade, uf, endereco),
+                promotor:promotores(matricula, nome),
+                checklist_items:visit_checklist_items(*),
+                photos:visit_photos(*),
+                occurrences:visit_occurrences(*)
+              `)
+              .eq('promotor_matricula', promotorMatricula)
+              .eq('loja_codigo', route.loja_codigo)
+              .eq('industria_codigo', route.industria_codigo)
+              .eq('data_visita', todayStr);
 
-        visitData = newVisit as Visit;
-        onShowToast({
-          title: 'Visita Iniciada!',
-          message: `Check-in registrado na loja ${route.loja?.nome || route.loja_codigo}.`,
-          type: 'success'
-        });
+            if (fallbackVisits && fallbackVisits.length > 0) {
+              visitData = fallbackVisits[0] as Visit;
+              onShowToast({
+                title: 'Visita em Andamento',
+                message: `Visita recuperada com sucesso para a loja ${route.loja?.nome || route.loja_codigo}.`,
+                type: 'info'
+              });
+            } else {
+              throw insertErr;
+            }
+          } else {
+            throw insertErr;
+          }
+        } else {
+          visitData = newVisit as Visit;
+          onShowToast({
+            title: 'Visita Iniciada!',
+            message: `Check-in registrado na loja ${route.loja?.nome || route.loja_codigo}.`,
+            type: 'success'
+          });
+        }
       }
 
       setActiveVisit(visitData);
@@ -354,14 +580,31 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
       });
       setChecklist(initialChk);
 
-      loadPortalData();
+      await loadPortalData();
     } catch (err: any) {
-      console.error(err);
+      console.error('Erro ao iniciar visita:', err);
+
+      let userMsg = 'Erro ao registrar check-in no servidor.';
+      if (err?.message) {
+        if (err.message.includes('row-level security') || err.code === '42501') {
+          userMsg = 'Acesso não autorizado pelas regras do sistema para esta matrícula.';
+        } else if (err.message.includes('foreign key') || err.code === '23503') {
+          userMsg = 'Dados da loja, indústria ou rota não encontrados no cadastro.';
+        } else if (err.message.includes('duplicate key') || err.code === '23505') {
+          userMsg = 'Já existe um registro de visita ativo para esta loja e data.';
+        } else {
+          // Sanitização de mensagem: evitar expor tokens, senhas ou URLs completas
+          userMsg = err.message.replace(/https?:\/\/[^\s]+/g, '[servidor]').slice(0, 150);
+        }
+      }
+
       onShowToast({
         title: 'Falha ao Iniciar Visita',
-        message: err.message || 'Erro ao registrar check-in no servidor.',
+        message: userMsg,
         type: 'error'
       });
+    } finally {
+      setStartingRouteId(null);
     }
   };
 
@@ -730,8 +973,17 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
   const handleMarkNotDone = async () => {
     if (!showNotDoneModal || !notDoneReason.trim() || !supabase) return;
 
+    if (isImplantacaoMode && !isAuthorized) {
+      onShowToast({
+        title: 'Operação Não Liberada',
+        message: 'Seu usuário ainda não foi liberado para registrar apontamentos de campo.',
+        type: 'warning'
+      });
+      return;
+    }
+
     try {
-      const todayStr = new Date().toISOString().split('T')[0];
+      const todayStr = getLocalDateString(new Date());
 
       const { error: err } = await supabase.from('visits').insert([
         {
@@ -765,20 +1017,395 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
     }
   };
 
+  // 1. Continuar Visita Antiga em Andamento
+  const handleResumeStaleVisit = async (visit: Visit) => {
+    try {
+      // Carregar signedUrls para fotos
+      if (visit.photos && visit.photos.length > 0 && supabase) {
+        const photosWithSignedUrls = await Promise.all(
+          visit.photos.map(async (p) => {
+            if (p.storage_path) {
+              const { data } = await supabase!.storage
+                .from('visit-photos')
+                .createSignedUrl(p.storage_path, 3600);
+              if (data?.signedUrl) {
+                return { ...p, signed_url: data.signedUrl };
+              }
+            }
+            return p;
+          })
+        );
+        visit.photos = photosWithSignedUrls;
+      }
+
+      setActiveVisit(visit);
+      setGeneralObs(visit.observacao_geral || '');
+
+      const initialChk: Record<string, { checked: boolean; obs: string; valTxt: string }> = {};
+      DEFAULT_CHECKLIST_ITEMS.forEach((def) => {
+        const found = visit.checklist_items?.find((c) => c.item_key === def.item_key);
+        initialChk[def.item_key] = {
+          checked: found ? found.checked : false,
+          obs: found?.observacao || '',
+          valTxt: found?.valor_texto || ''
+        };
+      });
+      setChecklist(initialChk);
+
+      onShowToast({
+        title: 'Atendimento Retomado',
+        message: `Visita iniciada em ${visit.data_visita.split('-').reverse().join('/')} retomada com dados preservados.`,
+        type: 'info'
+      });
+    } catch (err: any) {
+      console.error('Erro ao retomar visita antiga:', err);
+      onShowToast({
+        title: 'Erro ao Retomar Visita',
+        message: err.message || 'Não foi possível carregar a visita em andamento.',
+        type: 'error'
+      });
+    }
+  };
+
+  // 2. Registrar Visita Antiga como Não Realizada com motivo obrigatório
+  const handleConfirmStaleNotDone = async () => {
+    if (!staleNotDoneVisit || !staleNotDoneReason.trim() || !supabase) return;
+
+    setSavingStaleNotDone(true);
+    try {
+      const nowIso = new Date().toISOString();
+      const { error: updateErr } = await supabase
+        .from('visits')
+        .update({
+          status: 'nao_realizada',
+          motivo_nao_realizada: staleNotDoneReason.trim(),
+          updated_at: nowIso
+        })
+        .eq('id', staleNotDoneVisit.id);
+
+      if (updateErr) throw updateErr;
+
+      onShowToast({
+        title: 'Visita Registrada como Não Realizada',
+        message: `A visita de ${staleNotDoneVisit.data_visita.split('-').reverse().join('/')} na loja ${staleNotDoneVisit.loja?.nome || staleNotDoneVisit.loja_codigo} foi registrada como não realizada.`,
+        type: 'info'
+      });
+
+      // Se a visita cancelada era a visita ativa aberta no formulário, limpa
+      if (activeVisit?.id === staleNotDoneVisit.id) {
+        setActiveVisit(null);
+      }
+
+      setStaleNotDoneVisit(null);
+      setStaleNotDoneReason('');
+      await loadPortalData();
+    } catch (err: any) {
+      console.error('Erro ao registrar visita antiga como não realizada:', err);
+      onShowToast({
+        title: 'Erro ao Atualizar',
+        message: err.message || 'Falha ao registrar ocorrência no banco de dados.',
+        type: 'error'
+      });
+    } finally {
+      setSavingStaleNotDone(false);
+    }
+  };
+
+  // 3. Interromper Atendimento em Andamento (Requisito 3)
+  // Permite abandonar uma execução iniciada por engano ou interrompida para atender outra loja.
+  // Grava ocorrência de auditoria em visit_occurrences, define status 'nao_realizada',
+  // preserva evidências e fotos existentes, e desocupa a visita ativa para permitir iniciar outra.
+  const handleConfirmInterruptVisit = async () => {
+    if (!interruptModalVisit || !interruptReason.trim() || !supabase) return;
+
+    // Garantir que não permite modificar visitas já concluídas
+    if (interruptModalVisit.status === 'concluida') {
+      onShowToast({
+        title: 'Operação Não Permitida',
+        message: 'Visitas já concluídas não podem ser alteradas ou interrompidas.',
+        type: 'warning'
+      });
+      setInterruptModalVisit(null);
+      setInterruptReason('');
+      return;
+    }
+
+    setSavingInterrupt(true);
+    try {
+      const nowIso = new Date().toISOString();
+      const justifText = interruptReason.trim();
+
+      // 1. Atualizar o status da visita para 'nao_realizada' com o motivo registrado
+      const { error: updateErr } = await supabase
+        .from('visits')
+        .update({
+          status: 'nao_realizada',
+          motivo_nao_realizada: `[Interrupção de Atendimento]: ${justifText}`,
+          updated_at: nowIso
+        })
+        .eq('id', interruptModalVisit.id);
+
+      if (updateErr) throw updateErr;
+
+      // 2. Registrar no mecanismo de histórico e auditoria (visit_occurrences)
+      try {
+        await supabase.from('visit_occurrences').insert([
+          {
+            visit_id: interruptModalVisit.id,
+            tipo: 'outro',
+            descricao: `Atendimento interrompido pelo promotor. Justificativa: ${justifText}`
+          }
+        ]);
+      } catch (occErr) {
+        console.warn('Aviso: Falha ao inserir ocorrência de auditoria da interrupção:', occErr);
+      }
+
+      onShowToast({
+        title: 'Atendimento Interrompido',
+        message: `Atendimento da loja ${interruptModalVisit.loja?.nome || interruptModalVisit.loja_codigo} foi cancelado com justificativa. Sua agenda está liberada.`,
+        type: 'info'
+      });
+
+      // Se a visita interrompida for a visita ativa no momento, desocupar
+      if (activeVisit?.id === interruptModalVisit.id) {
+        setActiveVisit(null);
+      }
+
+      setInterruptModalVisit(null);
+      setInterruptReason('');
+      await loadPortalData();
+    } catch (err: any) {
+      console.error('Erro ao interromper atendimento:', err);
+      onShowToast({
+        title: 'Erro ao Interromper',
+        message: err.message || 'Falha ao atualizar status da visita no banco de dados.',
+        type: 'error'
+      });
+    } finally {
+      setSavingInterrupt(false);
+    }
+  };
+
+  // 4. Recuperar Visita Não Realizada ("Realizar hoje" - Etapa 2)
+  // Reabre com atraso uma visita não realizada pertencente à janela operacional permitida (até 30 dias).
+  // Preserva integralmente: data_visita original, motivo_nao_realizada anterior, fotos, checklist e ocorrências.
+  // Registra nova ocorrência em visit_occurrences para auditoria e define started_at se ainda não existia.
+  const handleConfirmRecoverVisit = async () => {
+    if (!recoverModalVisit || !supabase || recoveringVisit) return;
+
+    if (!promotorMatricula) {
+      onShowToast({
+        title: 'Matrícula Não Vinculada',
+        message: 'Usuário sem matrícula associada não pode recuperar visitas.',
+        type: 'warning'
+      });
+      return;
+    }
+
+    if (isImplantacaoMode && !isAuthorized) {
+      onShowToast({
+        title: 'Operação Não Liberada',
+        message: 'Seu usuário ainda não foi liberado para testes em campo.',
+        type: 'warning'
+      });
+      return;
+    }
+
+    // Validação de conflito: não permite recuperar se já houver outra visita em andamento
+    if (activeVisit && activeVisit.id !== recoverModalVisit.id) {
+      const targetRouteFake = {
+        id: recoverModalVisit.rota_id || recoverModalVisit.id,
+        promotor_matricula: recoverModalVisit.promotor_matricula,
+        loja_codigo: recoverModalVisit.loja_codigo,
+        industria_codigo: recoverModalVisit.industria_codigo,
+        frequencia: 'SEMANAL',
+        loja: recoverModalVisit.loja,
+        industria: recoverModalVisit.industria
+      } as RouteItem;
+      setRecoverModalVisit(null);
+      setBusyConflictTargetRoute(targetRouteFake);
+      return;
+    }
+
+    setRecoveringVisit(true);
+
+    try {
+      const todayStr = getLocalDateString(new Date());
+
+      // 1. Revalidar no servidor o status e a matrícula atual da visita para evitar corrida/duplicidade
+      const { data: currentDbVisit, error: fetchErr } = await supabase
+        .from('visits')
+        .select(`
+          *,
+          industria:industrias(codigo, nome),
+          loja:lojas(codigo, nome, cidade, uf, endereco),
+          promotor:promotores(matricula, nome),
+          checklist_items:visit_checklist_items(*),
+          photos:visit_photos(*),
+          occurrences:visit_occurrences(*),
+          validity_items:visit_product_validity(*)
+        `)
+        .eq('id', recoverModalVisit.id)
+        .eq('promotor_matricula', promotorMatricula)
+        .single();
+
+      if (fetchErr || !currentDbVisit) {
+        throw new Error('Visita não encontrada ou você não tem permissão para recuperá-la.');
+      }
+
+      // Regra de segurança: não permitir recuperar visita já concluída
+      if (currentDbVisit.status === 'concluida') {
+        onShowToast({
+          title: 'Operação Não Permitida',
+          message: 'Esta visita já foi concluída anteriormente e não pode ser reaberta.',
+          type: 'warning'
+        });
+        setRecoverModalVisit(null);
+        await loadPortalData();
+        return;
+      }
+
+      // Regra de elegibilidade temporal: data planejada não pode ser futura e não pode exceder 30 dias (ciclo mensal)
+      if (currentDbVisit.data_visita > todayStr) {
+        onShowToast({
+          title: 'Data Futura',
+          message: 'Visitas futuras não podem ser recuperadas antecipadamente como pendência.',
+          type: 'warning'
+        });
+        setRecoverModalVisit(null);
+        return;
+      }
+
+      const diffDays = Math.round((new Date(todayStr).getTime() - new Date(currentDbVisit.data_visita).getTime()) / (1000 * 60 * 60 * 24));
+      if (diffDays > 30) {
+        onShowToast({
+          title: 'Período Excedido',
+          message: 'Visitas anteriores a 30 dias pertencem a ciclos operacionais já encerrados para auditoria.',
+          type: 'warning'
+        });
+        setRecoverModalVisit(null);
+        return;
+      }
+
+      const nowIso = new Date().toISOString();
+
+      // Preservar started_at original se já existia (ex: visita que começou e foi interrompida); caso contrário, registrar nowIso
+      const effectiveStartedAt = currentDbVisit.started_at || nowIso;
+
+      // 2. Atualizar status para 'em_andamento' preservando motivo_nao_realizada original
+      const { data: updatedVisitData, error: updateErr } = await supabase
+        .from('visits')
+        .update({
+          status: 'em_andamento',
+          started_at: effectiveStartedAt,
+          updated_at: nowIso
+        })
+        .eq('id', currentDbVisit.id)
+        .eq('promotor_matricula', promotorMatricula)
+        .select(`
+          *,
+          industria:industrias(codigo, nome),
+          loja:lojas(codigo, nome, cidade, uf, endereco),
+          promotor:promotores(matricula, nome),
+          checklist_items:visit_checklist_items(*),
+          photos:visit_photos(*),
+          occurrences:visit_occurrences(*),
+          validity_items:visit_product_validity(*)
+        `)
+        .single();
+
+      if (updateErr) throw updateErr;
+
+      // 3. Registrar ocorrência de auditoria em visit_occurrences registrando a recuperação com atraso
+      try {
+        const originalDateFmt = currentDbVisit.data_visita.split('-').reverse().join('/');
+        const todayFmt = todayStr.split('-').reverse().join('/');
+        await supabase.from('visit_occurrences').insert([
+          {
+            visit_id: currentDbVisit.id,
+            tipo: 'outro',
+            descricao: `[Recuperação de Pendência]: Visita originalmente planejada para ${originalDateFmt} recuperada para execução em ${todayFmt} com atraso.`
+          }
+        ]);
+      } catch (occErr) {
+        console.warn('Aviso: Falha ao registrar ocorrência de auditoria da recuperação:', occErr);
+      }
+
+      // 4. Carregar signedUrls para fotos existentes sem perder nada
+      const loadedVisit = (updatedVisitData || currentDbVisit) as Visit;
+      if (loadedVisit.photos && loadedVisit.photos.length > 0) {
+        const photosWithSignedUrls = await Promise.all(
+          loadedVisit.photos.map(async (p) => {
+            if (p.storage_path) {
+              const { data: sData } = await supabase!.storage
+                .from('visit-photos')
+                .createSignedUrl(p.storage_path, 3600);
+              if (sData?.signedUrl) {
+                return { ...p, signed_url: sData.signedUrl };
+              }
+            }
+            return p;
+          })
+        );
+        loadedVisit.photos = photosWithSignedUrls;
+      }
+
+      // 5. Configurar visita ativa no formulário de atendimento
+      setActiveVisit(loadedVisit);
+      setGeneralObs(loadedVisit.observacao_geral || '');
+
+      // Preservar checklist preenchido ou carregar padrão
+      const initialChk: Record<string, { checked: boolean; obs: string; valTxt: string }> = {};
+      DEFAULT_CHECKLIST_ITEMS.forEach((def) => {
+        const found = loadedVisit.checklist_items?.find((c) => c.item_key === def.item_key);
+        initialChk[def.item_key] = {
+          checked: found ? found.checked : false,
+          obs: found?.observacao || '',
+          valTxt: found?.valor_texto || ''
+        };
+      });
+      setChecklist(initialChk);
+
+      onShowToast({
+        title: 'Visita Recuperada com Sucesso!',
+        message: `Atendimento liberado para a loja ${loadedVisit.loja?.nome || loadedVisit.loja_codigo} (Planejada para ${loadedVisit.data_visita.split('-').reverse().join('/')}).`,
+        type: 'success'
+      });
+
+      setRecoverModalVisit(null);
+      await loadPortalData();
+
+      // Rolar suavemente para a área de atendimento
+      setTimeout(() => {
+        const el = document.getElementById('active-visit-section');
+        if (el) el.scrollIntoView({ behavior: 'smooth' });
+      }, 250);
+    } catch (err: any) {
+      console.error('Erro ao recuperar visita pendente:', err);
+      onShowToast({
+        title: 'Falha ao Recuperar Visita',
+        message: err.message || 'Não foi possível reabrir a pendência no banco de dados.',
+        type: 'error'
+      });
+    } finally {
+      setRecoveringVisit(false);
+    }
+  };
+
   return (
     <div className="w-full px-4 sm:px-6 py-6 max-w-4xl mx-auto space-y-6 font-sans">
       {/* CABEÇALHO PORTAL MOBILE-FIRST */}
-      <section className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#1e2433] pb-5">
+      <section className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#CFCDC5] pb-5">
         <div>
           <div className="flex items-center gap-2.5">
             <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-purple-600 to-amber-500 flex items-center justify-center font-bold text-white shadow-[0_0_15px_rgba(245,158,11,0.4)]">
               <span className="material-symbols-outlined text-[22px]">smartphone</span>
             </div>
             <div>
-              <h1 className="text-2xl font-extrabold text-white tracking-tight">
+              <h1 className="text-2xl font-extrabold text-[#171717] tracking-tight">
                 Portal do Promotor
               </h1>
-              <p className="text-xs text-slate-400 font-mono">
+              <p className="text-xs text-[#77766F] font-mono">
                 {realName} {realMatricula ? `• Matrícula: ${realMatricula}` : ''}
               </p>
             </div>
@@ -788,7 +1415,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
         <button
           onClick={loadPortalData}
           disabled={loading}
-          className="px-4 py-2 rounded-xl bg-[#171b26] border border-[#1e2433] text-xs font-semibold text-slate-300 hover:text-white flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+          className="px-4 py-2 rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] text-xs font-semibold text-[#171717] hover:text-white flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
         >
           <span className={`material-symbols-outlined text-[18px] ${loading ? 'animate-spin' : ''}`}>
             refresh
@@ -797,31 +1424,76 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
         </button>
       </section>
 
+      {/* BANNER DE AUTORIZAÇÃO INDIVIDUAL DO PROMOTOR (Etapa 4.1) */}
+      {isImplantacaoMode && !loading && (
+        !isAuthorized ? (
+          <section className="bg-amber-950/30 border border-amber-500/40 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs font-mono shadow-lg">
+            <div className="flex items-start gap-3">
+              <span className="material-symbols-outlined text-amber-400 text-2xl mt-0.5">lock_clock</span>
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-bold border border-amber-500/30 text-[10px] uppercase">
+                    Fase de Preparação (Piloto)
+                  </span>
+                  <span className="text-[#77766F] text-[11px]">• Aguardando Liberação</span>
+                </div>
+                <p className="text-[#171717] text-xs font-sans leading-relaxed">
+                  Suas rotas cadastradas estão disponíveis para visualização e planejamento. A realização de check-ins em campo está temporariamente bloqueada até que o administrador libere o seu usuário para o teste piloto.
+                </p>
+              </div>
+            </div>
+            <span className="px-3 py-1.5 rounded-xl bg-[#E4E2DB] border border-amber-500/30 text-amber-300 text-[11px] font-bold self-start sm:self-auto shrink-0">
+              Operação Pré-Liberada
+            </span>
+          </section>
+        ) : (
+          <section className="bg-emerald-950/25 border border-emerald-500/40 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs font-mono shadow-lg">
+            <div className="flex items-start gap-3">
+              <span className="material-symbols-outlined text-emerald-400 text-2xl mt-0.5">verified_user</span>
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-bold border border-emerald-500/30 text-[10px] uppercase">
+                    Piloto Liberado
+                  </span>
+                  <span className="text-[#77766F] text-[11px]">• Operação Autorizada</span>
+                </div>
+                <p className="text-[#171717] text-xs font-sans leading-relaxed">
+                  Seu usuário está liberado para executar check-in, checklists e fotos nas suas rotas programadas. Os dados registrados serão auditados pela coordenação.
+                </p>
+              </div>
+            </div>
+            <span className="px-3 py-1.5 rounded-xl bg-[#E4E2DB] border border-emerald-500/30 text-emerald-300 text-[11px] font-bold self-start sm:self-auto shrink-0">
+              🟢 Liberado para Teste
+            </span>
+          </section>
+        )
+      )}
+
       {/* CARTÃO DE PERFIL DETALHADO DO PROMOTOR */}
-      <div className="p-5 rounded-2xl bg-[#171b26] border border-[#1e2433] shadow-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+      <div className="p-5 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5] shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div className="flex items-center gap-4">
-          <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-amber-500 via-purple-600 to-indigo-500 flex items-center justify-center font-extrabold text-white text-lg shadow-[0_0_18px_rgba(245,158,11,0.4)] border border-amber-400/40 shrink-0">
+          <div className="w-14 h-14 rounded-2xl bg-[#222222] flex items-center justify-center font-extrabold text-[#171717] text-lg font-mono border border-[#CFCDC5] shrink-0 shadow-xs">
             {initials}
           </div>
           <div className="space-y-1">
-            <h2 className="text-lg font-extrabold text-white tracking-tight">
+            <h2 className="text-xl font-extrabold text-[#171717] tracking-tight">
               {realName}
             </h2>
             <div className="flex flex-wrap items-center gap-2 text-xs font-mono">
               {realMatricula ? (
-                <span className="px-2.5 py-1 rounded bg-amber-500/15 border border-amber-500/30 text-amber-300 font-bold">
+                <span className="px-2.5 py-1 rounded-lg bg-[#E4E2DB] border border-[#CFCDC5] text-[#222222] font-bold">
                   Matrícula: {realMatricula}
                 </span>
               ) : (
-                <span className="px-2.5 py-1 rounded bg-rose-500/15 border border-rose-500/30 text-rose-300 font-bold flex items-center gap-1">
+                <span className="px-2.5 py-1 rounded-lg bg-[#FDF2F2] border border-[#F8C8C8] text-[#C62828] font-bold flex items-center gap-1">
                   <span className="material-symbols-outlined text-xs">warning</span>
                   Promotor não vinculado
                 </span>
               )}
 
               {(realCidade || realUf) && (
-                <span className="text-slate-300 flex items-center gap-1 bg-[#10141f] px-2.5 py-1 rounded border border-[#1e2433]">
-                  <span className="material-symbols-outlined text-xs text-amber-400">location_on</span>
+                <span className="text-[#5F5F5F] flex items-center gap-1 bg-[#E4E2DB] px-2.5 py-1 rounded-lg border border-[#CFCDC5]">
+                  <span className="material-symbols-outlined text-xs text-[#286FF5]">location_on</span>
                   {realCidade}{realUf ? ` - ${realUf}` : ''}
                 </span>
               )}
@@ -830,51 +1502,56 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
         </div>
 
         {(realSupervisor || realEquipe) && (
-          <div className="p-3 rounded-xl bg-[#10141f] border border-[#1e2433] text-xs font-mono space-y-1 w-full sm:w-auto text-left sm:text-right">
+          <div className="p-3.5 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5] text-xs font-mono space-y-1.5 w-full sm:w-auto text-left sm:text-right">
             {realSupervisor && (
-              <div className="text-slate-300">
-                <span className="text-slate-500">Supervisor:</span> <strong className="text-slate-100">{realSupervisor}</strong>
+              <div className="text-[#222222]">
+                <span className="text-[#5F5F5F]">Supervisor:</span> <strong className="text-[#171717]">{realSupervisor}</strong>
               </div>
             )}
             {realEquipe && (
-              <div className="text-cyan-400">
-                <span className="text-slate-500">Equipe:</span> <strong>{realEquipe}</strong>
+              <div className="text-[#286FF5]">
+                <span className="text-[#5F5F5F]">Equipe:</span> <strong className="text-[#286FF5]">{realEquipe}</strong>
               </div>
             )}
           </div>
         )}
       </div>
 
-      {/* 1. RESUMO EXECUTIVO DO DIA */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 font-mono">
-        <div className="p-4 rounded-2xl bg-[#171b26] border border-[#1e2433]">
-          <span className="text-[10px] text-slate-400 block font-bold">PLANEJADAS</span>
-          <span className="text-2xl font-extrabold text-white">{totalPlanned}</span>
+      {/* 1. RESUMO EXECUTIVO DO DIA (HOJE) */}
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 font-mono">
+        <div className="p-3.5 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5]">
+          <span className="text-[10px] text-[#5F5F5F] block font-bold uppercase">PLANEJADAS HOJE</span>
+          <span className="text-2xl font-extrabold text-[#171717]">{totalPlanned}</span>
         </div>
 
-        <div className="p-4 rounded-2xl bg-[#171b26] border border-emerald-500/30">
-          <span className="text-[10px] text-emerald-400 block font-bold">CONCLUÍDAS</span>
-          <span className="text-2xl font-extrabold text-emerald-400">{completedCount}</span>
+        <div className="p-3.5 rounded-2xl bg-[#F7F6F2] border border-[#FCE19B]">
+          <span className="text-[10px] text-[#986000] block font-bold uppercase">EM ANDAMENTO</span>
+          <span className="text-2xl font-extrabold text-[#986000]">{inProgressCount}</span>
         </div>
 
-        <div className="p-4 rounded-2xl bg-[#171b26] border border-amber-500/30">
-          <span className="text-[10px] text-amber-400 block font-bold">PENDENTES</span>
-          <span className="text-2xl font-extrabold text-amber-400">{pendingCount}</span>
+        <div className="p-3.5 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5]">
+          <span className="text-[10px] text-[#5F5F5F] block font-bold uppercase">PENDENTES HOJE</span>
+          <span className="text-2xl font-extrabold text-[#222222]">{pendingCount}</span>
         </div>
 
-        <div className="p-4 rounded-2xl bg-[#171b26] border border-purple-500/30">
-          <span className="text-[10px] text-purple-300 block font-bold">% EXECUÇÃO</span>
-          <span className="text-2xl font-extrabold text-purple-300">{executionPerc}%</span>
+        <div className="p-3.5 rounded-2xl bg-[#F7F6F2] border border-[#B9E5D0]">
+          <span className="text-[10px] text-[#16794F] block font-bold uppercase">CONCLUÍDAS HOJE</span>
+          <span className="text-2xl font-extrabold text-[#16794F]">{completedCount}</span>
+        </div>
+
+        <div className="p-3.5 rounded-2xl bg-[#F7F6F2] border border-[#F8C8C8] col-span-2 sm:col-span-1">
+          <span className="text-[10px] text-[#C62828] block font-bold uppercase">NÃO REALIZADAS</span>
+          <span className="text-2xl font-extrabold text-[#C62828]">{notDoneCount}</span>
         </div>
       </div>
 
       {/* Barra de Progresso de Execução */}
-      <div className="p-4 rounded-2xl bg-[#171b26] border border-[#1e2433] space-y-2">
+      <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5] space-y-2">
         <div className="flex justify-between items-center text-xs font-mono">
-          <span className="text-slate-300 font-bold">Meta de Atendimento Diário:</span>
+          <span className="text-[#171717] font-bold">Meta de Atendimento Diário:</span>
           <span className="text-cyan-400 font-bold">{completedCount} de {totalPlanned} lojas atendidas</span>
         </div>
-        <div className="w-full bg-[#10141f] h-3 rounded-full overflow-hidden p-0.5 border border-[#1e2433]">
+        <div className="w-full bg-[#E4E2DB] h-3 rounded-full overflow-hidden p-0.5 border border-[#CFCDC5]">
           <div
             className="bg-gradient-to-r from-amber-500 via-purple-500 to-emerald-400 h-2 rounded-full transition-all duration-500"
             style={{ width: `${executionPerc}%` }}
@@ -882,40 +1559,479 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
         </div>
       </div>
 
+
+
+      {/* 2. AGENDA DE HOJE — VISITAS DO DIA ATUAL NO TOPO */}
+      <section className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-5 sm:p-6 shadow-2xl space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#CFCDC5] pb-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="material-symbols-outlined text-purple-400 text-xl">today</span>
+              <h2 className="text-base font-extrabold text-[#171717] font-mono tracking-tight">
+                Agenda de Hoje ({todayStr.split('-').reverse().join('/')})
+              </h2>
+              <span className="px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 text-[10px] font-bold font-mono">
+                {todayOperationalVisits.length} {todayOperationalVisits.length === 1 ? 'loja' : 'lojas'}
+              </span>
+            </div>
+            <p className="text-xs text-[#77766F] font-mono mt-0.5">
+              Rotas previstas e em atendimento ordenadas para o seu dia de trabalho.
+            </p>
+          </div>
+        </div>
+
+        {/* ALERTA CONTEXTUAL DE ATENDIMENTO ATIVO (Etapa 1) */}
+        {activeVisit && (
+          <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/40 font-mono text-xs flex flex-col md:flex-row md:items-center justify-between gap-3 shadow-md animate-fadeIn">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-ping shrink-0" />
+                <span className="text-amber-300 font-extrabold uppercase tracking-wide">
+                  Atendimento em Andamento
+                </span>
+                <span className="text-[10px] px-2 py-0.5 rounded bg-amber-500/20 text-amber-200 border border-amber-500/30 font-bold">
+                  {activeVisit.data_visita.split('-').reverse().join('/')}
+                </span>
+              </div>
+              <p className="text-[#171717] text-[11px] leading-relaxed">
+                Você possui uma visita aberta na loja <strong className="text-[#171717]">{activeVisit.loja?.nome || activeVisit.loja_codigo}</strong> ({activeVisit.industria?.nome || activeVisit.industria_codigo}). Conclua o preenchimento ou interrompa com justificativa para iniciar outra rota.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  const el = document.getElementById('active-visit-section');
+                  if (el) {
+                    el.scrollIntoView({ behavior: 'smooth' });
+                  }
+                }}
+                className="px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-xs flex items-center gap-1.5 cursor-pointer shadow-md transition-colors"
+              >
+                <span className="material-symbols-outlined text-sm">edit_note</span>
+                <span>Voltar para atendimento atual</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setInterruptModalVisit(activeVisit);
+                  setInterruptReason('');
+                }}
+                className="px-3 py-2 rounded-xl bg-[#EAE8E2] hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-colors"
+                title="Interromper atendimento com justificativa obrigatória"
+              >
+                <span className="material-symbols-outlined text-sm">close</span>
+                <span>Interromper com justificativa</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {todayOperationalVisits.length === 0 ? (
+          <div className="py-10 text-center space-y-3 font-mono">
+            <div className="w-12 h-12 rounded-full bg-[#EAE8E2] border border-[#CFCDC5] flex items-center justify-center text-[#5F5F5F] mx-auto">
+              <span className="material-symbols-outlined text-2xl">event_available</span>
+            </div>
+            <h4 className="text-xs font-bold text-[#171717]">Nenhuma Rota Prevista para Hoje</h4>
+            <p className="text-[11px] text-[#77766F] max-w-sm mx-auto">
+              Não há lojas agendadas para o seu perfil no dia de hoje ({todayStr.split('-').reverse().join('/')}). Consulte o histórico semanal abaixo para ver outras datas.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {todayOperationalVisits.map((item, idx) => {
+              const routeObj = routes.find((r) => r.id === item.routeId) || {
+                id: item.routeId,
+                promotor_matricula: item.promotorMatricula,
+                loja_codigo: item.lojaCodigo,
+                industria_codigo: item.industriaCodigo,
+                frequencia: item.frequencia,
+                loja: { codigo: item.lojaCodigo, nome: item.lojaNome, cidade: item.lojaCidade, uf: item.lojaUf },
+                industria: { codigo: item.industriaCodigo, nome: item.industriaNome }
+              } as RouteItem;
+
+              const isCurrentActive = activeVisit && (activeVisit.id === item.visitObj?.id || (activeVisit.loja_codigo === item.lojaCodigo && activeVisit.data_visita === item.dataStr));
+
+              return (
+                <div
+                  key={`today_${item.key}_${item.dataStr}`}
+                  className={`p-4 rounded-xl border transition-all flex flex-col md:flex-row md:items-center justify-between gap-4 font-mono ${
+                    isCurrentActive
+                      ? 'bg-amber-950/30 border-2 border-amber-500 shadow-lg'
+                      : item.status === 'concluida'
+                      ? 'bg-emerald-950/20 border-emerald-500/30'
+                      : item.status === 'em_andamento'
+                      ? 'bg-amber-950/20 border-amber-500/50'
+                      : item.status === 'nao_realizada'
+                      ? 'bg-rose-950/20 border-rose-500/30'
+                      : 'bg-[#EAE8E2] border-[#CFCDC5]'
+                  }`}
+                >
+                  <div className="space-y-1.5 flex-1 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="w-5 h-5 rounded-full bg-[#F7F6F2] border border-[#CFCDC5] text-[#7E22CE] font-bold text-[10px] flex items-center justify-center shrink-0">
+                        {idx + 1}
+                      </span>
+                      <span
+                        className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase flex items-center gap-1 shrink-0 ${
+                          item.status === 'concluida'
+                            ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                            : item.status === 'em_andamento'
+                            ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30 animate-pulse'
+                            : item.status === 'nao_realizada'
+                            ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                            : item.status === 'pendente'
+                            ? 'bg-amber-500/15 text-amber-300 border border-amber-500/40'
+                            : 'bg-slate-800 text-slate-300 border border-[#CFCDC5]'
+                        }`}
+                      >
+                        {item.status === 'concluida' && '🟢 Concluída'}
+                        {item.status === 'em_andamento' && '🔵 Em andamento'}
+                        {item.status === 'pendente' && '🟡 Pendente'}
+                        {item.status === 'nao_realizada' && '🟠 Não realizada'}
+                        {item.status === 'planejada' && '⚪ Planejada'}
+                      </span>
+                    </div>
+
+                    <h4 className="text-sm font-bold text-[#171717] truncate">
+                      {item.lojaNome}
+                    </h4>
+
+                    <p className="text-[11px] text-[#77766F]">
+                      {item.lojaCidade || '—'}/{item.lojaUf || '-'} • Indústria: <span className="text-[#7E22CE] font-bold">{item.industriaNome}</span>
+                    </p>
+
+                    <div className="flex flex-wrap items-center gap-3 text-[10px] text-[#5F5F5F]">
+                      {item.startedAt && (
+                        <span>Check-in: <strong className="text-amber-300">{new Date(item.startedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</strong></span>
+                      )}
+                      {item.completedAt && (
+                        <span>Concluído: <strong className="text-emerald-300">{new Date(item.completedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</strong></span>
+                      )}
+                      {item.motivoNaoRealizada && (
+                        <span className="text-rose-400">Motivo: <strong>{item.motivoNaoRealizada}</strong></span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Ação Única e Clara por Cartão */}
+                  <div className="flex items-center gap-2 shrink-0 pt-2 md:pt-0 border-t md:border-t-0 border-[#CFCDC5]">
+                    {(item.status === 'pendente' || item.status === 'planejada') && (
+                      isImplantacaoMode && !isAuthorized ? (
+                        <div className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#FFF8E6] border border-[#FCE19B] text-[#986000] text-xs font-mono font-bold">
+                          <span className="material-symbols-outlined text-sm">lock</span>
+                          <span>Aguardando Liberação</span>
+                        </div>
+                      ) : activeVisit ? (
+                        <div className="flex flex-wrap items-center gap-1.5 w-full md:w-auto">
+                          <button
+                            onClick={() => handleStartVisit(routeObj)}
+                            disabled={Boolean(startingRouteId)}
+                            className="px-3.5 py-2 rounded-xl bg-[#E4E2DB] hover:bg-[#CFCDC5] text-[#222222] border border-[#AAA79E] font-bold text-xs flex items-center justify-center gap-1 cursor-pointer transition-colors shadow-xs"
+                            title="Trocar para esta loja (exige finalizar ou interromper o atendimento atual)"
+                          >
+                            <span className="material-symbols-outlined text-sm">play_arrow</span>
+                            <span>Iniciar Esta</span>
+                          </button>
+                        </div>
+                      ) : (
+                        <>
+                          <button
+                            onClick={() => handleStartVisit(routeObj)}
+                            disabled={Boolean(startingRouteId)}
+                            className="w-full md:w-auto px-4 py-2.5 rounded-xl bg-[#222222] hover:bg-black disabled:bg-[#CFCDC5] disabled:text-[#737373] disabled:cursor-not-allowed text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-colors"
+                          >
+                            <span className={`material-symbols-outlined text-sm ${startingRouteId === routeObj.id ? 'animate-spin' : ''}`}>
+                              {startingRouteId === routeObj.id ? 'sync' : 'play_arrow'}
+                            </span>
+                            <span>{startingRouteId === routeObj.id ? 'Iniciando...' : 'Iniciar Visita'}</span>
+                          </button>
+                          <button
+                            onClick={() => setShowNotDoneModal(routeObj)}
+                            disabled={Boolean(startingRouteId)}
+                            className="px-3 py-2.5 rounded-xl bg-[#F7F6F2] hover:bg-[#FDF2F2] disabled:bg-[#E4E2DB] disabled:text-[#737373] text-[#5F5F5F] hover:text-[#C62828] border border-[#CFCDC5] text-xs font-bold cursor-pointer transition-colors"
+                            title="Registrar Não Atendimento"
+                          >
+                            Não Atendido
+                          </button>
+                        </>
+                      )
+                    )}
+
+                    {item.status === 'em_andamento' && (
+                      <div className="flex items-center gap-2 w-full md:w-auto">
+                        <button
+                          onClick={() => {
+                            if (item.visitObj) {
+                              handleResumeStaleVisit(item.visitObj);
+                            }
+                          }}
+                          className="flex-1 md:flex-none px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-md transition-colors"
+                        >
+                          <span className="material-symbols-outlined text-sm">edit_note</span>
+                          <span>{isCurrentActive ? 'Preenchendo Abaixo' : 'Continuar Atendimento'}</span>
+                        </button>
+                        <button
+                          onClick={() => {
+                            if (item.visitObj) {
+                              setInterruptModalVisit(item.visitObj);
+                              setInterruptReason('');
+                            }
+                          }}
+                          className="px-3 py-2.5 rounded-xl bg-[#F7F6F2] hover:bg-rose-500/20 text-[#171717] hover:text-rose-300 border border-[#CFCDC5] text-xs font-bold cursor-pointer transition-colors"
+                          title="Interromper atendimento desta loja"
+                        >
+                          <span className="material-symbols-outlined text-sm text-rose-400">close</span>
+                          <span className="hidden sm:inline">Interromper</span>
+                        </button>
+                      </div>
+                    )}
+
+                    {item.status === 'concluida' && (
+                      <span className="text-xs text-emerald-400 font-bold flex items-center gap-1 px-3 py-2 bg-emerald-500/10 rounded-xl border border-emerald-500/30">
+                        <span className="material-symbols-outlined text-sm">check_circle</span>
+                        Concluída
+                      </span>
+                    )}
+
+                    {item.status === 'nao_realizada' && (
+                      <span className="text-xs text-rose-400 font-bold flex items-center gap-1 px-3 py-2 bg-rose-500/10 rounded-xl border border-rose-500/30">
+                        <span className="material-symbols-outlined text-sm">cancel</span>
+                        Não Realizada
+                      </span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      {/* 2. PENDÊNCIAS DE DIAS ANTERIORES (VISITAS ANTERIORES NÃO CONCLUÍDAS) */}
+      {(staleInProgressVisits.length > 0 || staleNotDoneVisits.length > 0) && (
+        <section className="bg-amber-950/20 border-2 border-amber-500/50 rounded-2xl p-5 sm:p-6 shadow-2xl space-y-6">
+          <div className="flex items-start gap-3 border-b border-amber-500/30 pb-4">
+            <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 shrink-0">
+              <span className="material-symbols-outlined text-2xl">pending_actions</span>
+            </div>
+            <div className="space-y-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="px-2.5 py-0.5 rounded bg-amber-500/30 text-amber-200 font-bold border border-amber-500/40 text-xs font-mono uppercase tracking-wide">
+                  Pendências de dias anteriores
+                </span>
+                <span className="text-xs text-amber-300 font-mono font-bold">
+                  {staleInProgressVisits.length + staleNotDoneVisits.length} {staleInProgressVisits.length + staleNotDoneVisits.length === 1 ? 'visita pendente' : 'visitas pendentes'}
+                </span>
+              </div>
+              <p className="text-[#171717] text-xs leading-relaxed font-mono">
+                Visitas de datas anteriores à data de hoje que não foram concluídas. Não misturadas com os indicadores diários de hoje.
+              </p>
+            </div>
+          </div>
+
+          {/* GRUPO 1: VISITAS EM ANDAMENTO */}
+          {staleInProgressVisits.length > 0 && (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 font-mono text-xs">
+                <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-ping"></span>
+                <h3 className="font-bold text-amber-300 uppercase tracking-wider flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-sm">timelapse</span>
+                  Em andamento ({staleInProgressVisits.length})
+                </h3>
+                <span className="text-[11px] text-[#77766F]">
+                  — Visitas iniciadas que ficaram em aberto
+                </span>
+              </div>
+
+              <div className="space-y-3">
+                {staleInProgressVisits.map((stale) => {
+                  const elapsedDesc = (() => {
+                    if (!stale.started_at) return null;
+                    const startMs = new Date(stale.started_at).getTime();
+                    const nowMs = Date.now();
+                    const diffHours = Math.floor((nowMs - startMs) / (1000 * 60 * 60));
+                    const diffDays = Math.floor(diffHours / 24);
+                    if (diffDays > 0) return `Iniciada há ${diffDays}d e ${diffHours % 24}h`;
+                    if (diffHours > 0) return `Iniciada há ${diffHours}h`;
+                    return 'Iniciada há menos de 1h';
+                  })();
+
+                  const isCurrentActive = activeVisit?.id === stale.id;
+
+                  return (
+                    <div
+                      key={`stale_prog_${stale.id}`}
+                      className={`p-4 rounded-xl border transition-all flex flex-col md:flex-row md:items-center justify-between gap-4 font-mono ${
+                        isCurrentActive
+                          ? 'bg-[#FFF8E6] border-2 border-amber-400 shadow-lg'
+                          : 'bg-[#EAE8E2] border-amber-500/40 hover:border-amber-500/70'
+                      }`}
+                    >
+                      <div className="space-y-1.5 flex-1 min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30 uppercase flex items-center gap-1">
+                            <span className="material-symbols-outlined text-xs animate-spin">refresh</span>
+                            Em andamento
+                          </span>
+                          <span className="text-amber-400 text-xs font-bold">
+                            Data: {stale.data_visita.split('-').reverse().join('/')}
+                          </span>
+                          {stale.started_at && (
+                            <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-[#F7F6F2] text-[#171717] border border-[#CFCDC5]">
+                              Início: {new Date(stale.started_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                          )}
+                          {elapsedDesc && (
+                            <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-500/10 text-amber-200 border border-amber-500/30">
+                              {elapsedDesc}
+                            </span>
+                          )}
+                        </div>
+
+                        <h4 className="text-sm font-bold text-[#171717] truncate">
+                          {stale.loja?.nome || stale.loja_codigo}
+                        </h4>
+
+                        <p className="text-[11px] text-[#77766F]">
+                          {stale.loja?.cidade || '—'}/{stale.loja?.uf || '-'} • Indústria: <span className="text-[#7E22CE] font-bold">{stale.industria?.nome || stale.industria_codigo}</span>
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0 pt-2 md:pt-0 border-t md:border-t-0 border-[#CFCDC5]">
+                        <button
+                          onClick={() => handleResumeStaleVisit(stale)}
+                          className="px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-xs flex items-center gap-1.5 cursor-pointer shadow-md transition-colors"
+                        >
+                          <span className="material-symbols-outlined text-sm">play_arrow</span>
+                          <span>{isCurrentActive ? 'Preenchendo Abaixo' : 'Continuar Visita'}</span>
+                        </button>
+                        <button
+                          onClick={() => {
+                            setInterruptModalVisit(stale);
+                            setInterruptReason('');
+                          }}
+                          className="px-3 py-2.5 rounded-xl bg-[#F7F6F2] hover:bg-rose-500/20 text-[#171717] hover:text-rose-300 border border-[#CFCDC5] text-xs font-bold cursor-pointer transition-colors"
+                          title="Interromper atendimento com justificativa obrigatória"
+                        >
+                          <span className="material-symbols-outlined text-sm text-rose-400">close</span>
+                          <span>Interromper Atendimento</span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* GRUPO 2: VISITAS NÃO REALIZADAS */}
+          {staleNotDoneVisits.length > 0 && (
+            <div className="space-y-3 pt-2">
+              <div className="flex items-center gap-2 font-mono text-xs">
+                <span className="material-symbols-outlined text-rose-400 text-sm">cancel</span>
+                <h3 className="font-bold text-rose-300 uppercase tracking-wider">
+                  Não realizadas ({staleNotDoneVisits.length})
+                </h3>
+                <span className="text-[11px] text-[#77766F]">
+                  — Registros de dias anteriores com justificativa (somente leitura)
+                </span>
+              </div>
+
+              <div className="space-y-3">
+                {staleNotDoneVisits.map((stale) => (
+                  <div
+                    key={`stale_notdone_${stale.id}`}
+                    className="p-4 rounded-xl bg-[#EAE8E2] border border-rose-500/30 hover:border-rose-500/50 transition-all flex flex-col md:flex-row md:items-center justify-between gap-4 font-mono"
+                  >
+                    <div className="space-y-1.5 flex-1 min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30 uppercase flex items-center gap-1">
+                          <span className="material-symbols-outlined text-xs">cancel</span>
+                          Não realizada
+                        </span>
+                        <span className="text-rose-300 text-xs font-bold">
+                          Data: {stale.data_visita.split('-').reverse().join('/')}
+                        </span>
+                      </div>
+
+                      <h4 className="text-sm font-bold text-[#171717] truncate">
+                        {stale.loja?.nome || stale.loja_codigo}
+                      </h4>
+
+                      <p className="text-[11px] text-[#77766F]">
+                        {stale.loja?.cidade || '—'}/{stale.loja?.uf || '-'} • Indústria: <span className="text-[#7E22CE] font-bold">{stale.industria?.nome || stale.industria_codigo}</span>
+                      </p>
+
+                      <div className="p-2.5 rounded-lg bg-[#F7F6F2] border border-[#CFCDC5] text-xs text-rose-300/90 flex items-start gap-2 mt-1">
+                        <span className="material-symbols-outlined text-sm text-rose-400 shrink-0 mt-0.5">comment</span>
+                        <div>
+                          <span className="text-[#77766F] font-bold">Motivo registrado: </span>
+                          <span className="font-medium text-white">{stale.motivo_nao_realizada || 'Não informado'}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0 pt-2 md:pt-0 border-t md:border-t-0 border-[#CFCDC5]">
+                      <button
+                        onClick={() => setRecoverModalVisit(stale)}
+                        className="px-3.5 py-2 rounded-xl bg-[#222222] hover:bg-black text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-md transition-colors"
+                        title="Recuperar esta pendência para execução na data de hoje"
+                      >
+                        <span className="material-symbols-outlined text-sm">replay</span>
+                        <span>Realizar hoje</span>
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </section>
+      )}
+
       {/* TELA DE FLUXO DA VISITA EM ANDAMENTO */}
       {activeVisit ? (
-        <section className="bg-[#171b26] border-2 border-amber-500/50 rounded-2xl p-6 shadow-2xl space-y-6">
-          <div className="flex items-center justify-between border-b border-[#1e2433] pb-4">
+        <section id="active-visit-section" className="bg-[#F7F6F2] border-2 border-amber-500/50 rounded-2xl p-6 shadow-2xl space-y-6">
+          <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-4">
             <div className="flex items-center gap-2">
               <span className="w-3 h-3 rounded-full bg-amber-400 animate-ping"></span>
-              <h2 className="text-base font-bold text-white font-mono">
+              <h2 className="text-base font-bold text-[#171717] font-mono">
                 Visita em Andamento — Loja: {activeVisit.loja?.nome || activeVisit.loja_codigo}
               </h2>
             </div>
-            <span className="px-2.5 py-1 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-bold font-mono uppercase">
-              EM ANDAMENTO
-            </span>
+            <div className="flex items-center gap-2">
+              {activeVisit.data_visita < todayStr && (
+                <span className="px-2.5 py-1 rounded-full bg-purple-500/20 border border-purple-500/40 text-purple-300 text-[10px] font-bold font-mono uppercase flex items-center gap-1">
+                  <span className="material-symbols-outlined text-xs">schedule</span>
+                  Recuperada com Atraso (Orig: {activeVisit.data_visita.split('-').reverse().join('/')})
+                </span>
+              )}
+              <span className="px-2.5 py-1 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-bold font-mono uppercase">
+                EM ANDAMENTO
+              </span>
+            </div>
           </div>
 
           {/* Dados Gerais da Visita */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs font-mono">
-            <div className="p-3 rounded-xl bg-[#131722] border border-[#1e2433]">
-              <span className="text-slate-500 block">LOJA / ENDEREÇO:</span>
+            <div className="p-3 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5]">
+              <span className="text-[#5F5F5F] block">LOJA / ENDEREÇO:</span>
               <span className="text-white font-bold block">{activeVisit.loja?.nome}</span>
-              <span className="text-slate-400 block">{activeVisit.loja?.endereco} • {activeVisit.loja?.cidade}/{activeVisit.loja?.uf}</span>
+              <span className="text-[#77766F] block">{activeVisit.loja?.endereco} • {activeVisit.loja?.cidade}/{activeVisit.loja?.uf}</span>
             </div>
 
-            <div className="p-3 rounded-xl bg-[#131722] border border-[#1e2433]">
-              <span className="text-slate-500 block">INDÚSTRIA PARCEIRA:</span>
-              <span className="text-purple-300 font-bold block">{activeVisit.industria?.nome || activeVisit.industria_codigo}</span>
-              <span className="text-slate-400 block">Horário Check-in: {activeVisit.started_at ? new Date(activeVisit.started_at).toLocaleTimeString('pt-BR') : '—'}</span>
+            <div className="p-3 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5]">
+              <span className="text-[#5F5F5F] block">INDÚSTRIA PARCEIRA:</span>
+              <span className="text-[#7E22CE] font-bold block">{activeVisit.industria?.nome || activeVisit.industria_codigo}</span>
+              <span className="text-[#77766F] block">Horário Check-in: {activeVisit.started_at ? new Date(activeVisit.started_at).toLocaleTimeString('pt-BR') : '—'}</span>
             </div>
           </div>
 
           {/* PASSO 1: CHECKLIST OPERACIONAL */}
-          <div className="space-y-3 pt-2 border-t border-[#1e2433]">
+          <div className="space-y-3 pt-2 border-t border-[#CFCDC5]">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-              <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider font-mono flex items-center gap-2">
+              <h3 className="text-xs font-bold text-slate-[#171717] uppercase tracking-wider font-mono flex items-center gap-2">
                 <span className="material-symbols-outlined text-amber-400 text-sm">fact_check</span>
                 1. Checklist de Atendimento ({DEFAULT_CHECKLIST_ITEMS.length} Itens)
               </h3>
@@ -987,7 +2103,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                 };
 
                 return (
-                  <div key={item.item_key} className="p-3 rounded-xl bg-[#131722] border border-[#1e2433] space-y-2">
+                  <div key={item.item_key} className="p-3 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] space-y-2">
                     <label className="flex items-center justify-between cursor-pointer">
                       <div className="flex items-center gap-3">
                         <input
@@ -995,13 +2111,13 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                           checked={state.checked}
                           disabled={isSaving}
                           onChange={(e) => handleChecklistChange(e.target.checked, state.obs, state.valTxt)}
-                          className="rounded border-[#1e2433] bg-[#171b26] text-emerald-500 focus:ring-emerald-400 w-4 h-4 cursor-pointer"
+                          className="rounded border-[#CFCDC5] bg-[#F7F6F2] text-emerald-500 focus:ring-emerald-400 w-4 h-4 cursor-pointer"
                         />
                         <span className={`text-xs font-mono font-bold ${state.checked ? 'text-emerald-300' : 'text-slate-300'}`}>
                           {item.item_label}
                         </span>
                       </div>
-                      <span className={`text-[10px] font-mono px-2 py-0.5 rounded font-bold uppercase ${state.checked ? 'bg-emerald-500/20 text-emerald-300' : 'bg-slate-800 text-slate-400'}`}>
+                      <span className={`text-[10px] font-mono px-2 py-0.5 rounded font-bold uppercase ${state.checked ? 'bg-emerald-500/20 text-emerald-300' : 'bg-slate-800 text-[#77766F]'}`}>
                         {state.checked ? 'Concluído' : 'Pendente'}
                       </span>
                     </label>
@@ -1013,14 +2129,14 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                           value={state.valTxt}
                           onChange={(e) => handleChecklistChange(state.checked, state.obs, e.target.value)}
                           placeholder="Valor / Preço / Qtd..."
-                          className="h-8 px-2.5 bg-[#171b26] border border-[#1e2433] rounded-lg text-slate-200 focus:outline-none focus:border-amber-500"
+                          className="h-8 px-2.5 bg-[#F7F6F2] border border-[#CFCDC5] rounded-lg text-[#171717] focus:outline-none focus:border-amber-500"
                         />
                         <input
                           type="text"
                           value={state.obs}
                           onChange={(e) => handleChecklistChange(state.checked, e.target.value, state.valTxt)}
                           placeholder="Observações do item..."
-                          className="h-8 px-2.5 bg-[#171b26] border border-[#1e2433] rounded-lg text-slate-200 focus:outline-none focus:border-amber-500"
+                          className="h-8 px-2.5 bg-[#F7F6F2] border border-[#CFCDC5] rounded-lg text-[#171717] focus:outline-none focus:border-amber-500"
                         />
                       </div>
                     )}
@@ -1031,20 +2147,20 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
           </div>
 
           {/* PASSO 2: ANEXAR FOTOS DO PONTO DE VENDA */}
-          <div className="space-y-3 pt-3 border-t border-[#1e2433]">
-            <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider font-mono flex items-center gap-2">
+          <div className="space-y-3 pt-3 border-t border-[#CFCDC5]">
+            <h3 className="text-xs font-bold text-slate-[#171717] uppercase tracking-wider font-mono flex items-center gap-2">
               <span className="material-symbols-outlined text-cyan-400 text-sm">photo_camera</span>
               2. Evidências Fotográficas do PDV (Bucket Privado Supabase)
             </h3>
 
-            <div className="p-4 rounded-xl bg-[#131722] border border-[#1e2433] space-y-3 font-mono text-xs">
+            <div className="p-4 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] space-y-3 font-mono text-xs">
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
-                  <label className="text-slate-400 block mb-1">TIPO DA FOTO (*)</label>
+                  <label className="text-[#77766F] block mb-1">TIPO DA FOTO (*)</label>
                   <select
                     value={photoType}
                     onChange={(e) => setPhotoType(e.target.value as any)}
-                    className="w-full h-9 px-2 bg-[#171b26] border border-[#1e2433] rounded-lg text-slate-200"
+                    className="w-full h-9 px-2 bg-[#F7F6F2] border border-[#CFCDC5] rounded-lg text-[#171717]"
                   >
                     <option value="fachada">FACHADA</option>
                     <option value="gondola">GÔNDOLA / EXPOSIÇÃO</option>
@@ -1056,13 +2172,13 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                 </div>
 
                 <div className="sm:col-span-2">
-                  <label className="text-slate-400 block mb-1">LEGENDA / OBSERVAÇÃO</label>
+                  <label className="text-[#77766F] block mb-1">LEGENDA / OBSERVAÇÃO</label>
                   <input
                     type="text"
                     value={photoCaption}
                     onChange={(e) => setPhotoCaption(e.target.value)}
                     placeholder="Ex: Foto do ponto extra da marca no corredor 3..."
-                    className="w-full h-9 px-3 bg-[#171b26] border border-[#1e2433] rounded-lg text-slate-200"
+                    className="w-full h-9 px-3 bg-[#F7F6F2] border border-[#CFCDC5] rounded-lg text-[#171717]"
                   />
                 </div>
               </div>
@@ -1089,12 +2205,12 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
 
               {/* Lista de Fotos Anexadas com Preview de Miniaturas */}
               {activeVisit.photos && activeVisit.photos.length > 0 ? (
-                <div className="space-y-2 pt-2 border-t border-[#1e2433]">
-                  <span className="text-[11px] text-slate-400 font-bold block">FOTOS REGISTRADAS NESTA VISITA ({activeVisit.photos.length}):</span>
+                <div className="space-y-2 pt-2 border-t border-[#CFCDC5]">
+                  <span className="text-[11px] text-[#77766F] font-bold block">FOTOS REGISTRADAS NESTA VISITA ({activeVisit.photos.length}):</span>
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                     {activeVisit.photos.map((p, idx) => (
-                      <div key={idx} className="p-2 rounded-xl bg-[#171b26] border border-[#1e2433] space-y-1.5 flex flex-col justify-between">
-                        <div className="relative aspect-video rounded-lg bg-[#10141f] overflow-hidden border border-[#1e2433] flex items-center justify-center">
+                      <div key={idx} className="p-2 rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] space-y-1.5 flex flex-col justify-between">
+                        <div className="relative aspect-video rounded-lg bg-[#E4E2DB] overflow-hidden border border-[#CFCDC5] flex items-center justify-center">
                           {(p.signed_url || p.file_url) ? (
                             <img
                               src={p.signed_url || p.file_url}
@@ -1111,32 +2227,32 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                             {p.tipo_foto}
                           </span>
                         </div>
-                        {p.legenda && <p className="text-[10px] text-slate-300 truncate" title={p.legenda}>{p.legenda}</p>}
+                        {p.legenda && <p className="text-[10px] text-[#171717] truncate" title={p.legenda}>{p.legenda}</p>}
                       </div>
                     ))}
                   </div>
                 </div>
               ) : (
-                <p className="text-[11px] text-slate-500 italic pt-1 text-center">Nenhuma foto enviada para esta visita ainda.</p>
+                <p className="text-[11px] text-[#5F5F5F] italic pt-1 text-center">Nenhuma foto enviada para esta visita ainda.</p>
               )}
             </div>
           </div>
 
           {/* PASSO 3: OCORRÊNCIAS E RUPTURAS */}
-          <div className="space-y-3 pt-3 border-t border-[#1e2433]">
-            <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider font-mono flex items-center gap-2">
+          <div className="space-y-3 pt-3 border-t border-[#CFCDC5]">
+            <h3 className="text-xs font-bold text-slate-[#171717] uppercase tracking-wider font-mono flex items-center gap-2">
               <span className="material-symbols-outlined text-rose-400 text-sm">report_problem</span>
               3. Ocorrências &amp; Rupturas Registradas
             </h3>
 
-            <div className="p-4 rounded-xl bg-[#131722] border border-[#1e2433] space-y-3 font-mono text-xs">
+            <div className="p-4 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] space-y-3 font-mono text-xs">
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
-                  <label className="text-slate-400 block mb-1">TIPO DE INCIDENTE</label>
+                  <label className="text-[#77766F] block mb-1">TIPO DE INCIDENTE</label>
                   <select
                     value={occurrenceType}
                     onChange={(e) => setOccurrenceType(e.target.value as any)}
-                    className="w-full h-9 px-2 bg-[#171b26] border border-[#1e2433] rounded-lg text-slate-200"
+                    className="w-full h-9 px-2 bg-[#F7F6F2] border border-[#CFCDC5] rounded-lg text-[#171717]"
                   >
                     <option value="ruptura">RUPTURA DE ESTOQUE</option>
                     <option value="preco_divergente">PREÇO DIVERGENTE</option>
@@ -1146,13 +2262,13 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                 </div>
 
                 <div className="sm:col-span-2">
-                  <label className="text-slate-400 block mb-1">DESCRIÇÃO DA OCORRÊNCIA</label>
+                  <label className="text-[#77766F] block mb-1">DESCRIÇÃO DA OCORRÊNCIA</label>
                   <input
                     type="text"
                     value={occurrenceDesc}
                     onChange={(e) => setOccurrenceDesc(e.target.value)}
                     placeholder="Descreva a ruptura ou problema..."
-                    className="w-full h-9 px-3 bg-[#171b26] border border-[#1e2433] rounded-lg text-slate-200"
+                    className="w-full h-9 px-3 bg-[#F7F6F2] border border-[#CFCDC5] rounded-lg text-[#171717]"
                   />
                 </div>
               </div>
@@ -1171,8 +2287,8 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
 
               {/* Lista de Ocorrências Registradas */}
               {activeVisit.occurrences && activeVisit.occurrences.length > 0 ? (
-                <div className="space-y-2 pt-2 border-t border-[#1e2433]">
-                  <span className="text-[11px] text-slate-400 font-bold block">OCORRÊNCIAS NESTA VISITA ({activeVisit.occurrences.length}):</span>
+                <div className="space-y-2 pt-2 border-t border-[#CFCDC5]">
+                  <span className="text-[11px] text-[#77766F] font-bold block">OCORRÊNCIAS NESTA VISITA ({activeVisit.occurrences.length}):</span>
                   <div className="space-y-2">
                     {activeVisit.occurrences.map((occ, idx) => (
                       <div key={idx} className="p-3 rounded-xl bg-rose-950/20 border border-rose-500/30 text-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
@@ -1182,7 +2298,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                               {occ.tipo.replace('_', ' ')}
                             </span>
                             {occ.created_at && (
-                              <span className="text-[10px] text-slate-400">
+                              <span className="text-[10px] text-[#77766F]">
                                 {new Date(occ.created_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
                               </span>
                             )}
@@ -1197,72 +2313,72 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                   </div>
                 </div>
               ) : (
-                <p className="text-[11px] text-slate-500 italic pt-1 text-center">Nenhuma ocorrência registrada para esta visita.</p>
+                <p className="text-[11px] text-[#5F5F5F] italic pt-1 text-center">Nenhuma ocorrência registrada para esta visita.</p>
               )}
             </div>
           </div>
 
           {/* PASSO 4: CONTROLE DE VALIDADE E VENCIMENTO DE PRODUTOS */}
-          <div className="space-y-3 pt-3 border-t border-[#1e2433]">
-            <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider font-mono flex items-center gap-2">
+          <div className="space-y-3 pt-3 border-t border-[#CFCDC5]">
+            <h3 className="text-xs font-bold text-slate-[#171717] uppercase tracking-wider font-mono flex items-center gap-2">
               <span className="material-symbols-outlined text-amber-400 text-sm">inventory_2</span>
               4. 📦 Controle de Validade dos Produtos
             </h3>
 
-            <div className="p-4 rounded-xl bg-[#131722] border border-[#1e2433] space-y-3 font-mono text-xs">
+            <div className="p-4 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] space-y-3 font-mono text-xs">
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
                 <div className="lg:col-span-2">
-                  <label className="text-slate-400 block mb-1">PRODUTO (*)</label>
+                  <label className="text-[#77766F] block mb-1">PRODUTO (*)</label>
                   <input
                     type="text"
                     value={validityProdutoNome}
                     onChange={(e) => setValidityProdutoNome(e.target.value)}
                     placeholder="Nome ou descrição do produto..."
-                    className="w-full h-9 px-3 bg-[#171b26] border border-[#1e2433] rounded-lg text-slate-200"
+                    className="w-full h-9 px-3 bg-[#F7F6F2] border border-[#CFCDC5] rounded-lg text-[#171717]"
                   />
                 </div>
 
                 <div>
-                  <label className="text-slate-400 block mb-1">QUANTIDADE (*)</label>
+                  <label className="text-[#77766F] block mb-1">QUANTIDADE (*)</label>
                   <input
                     type="number"
                     min="1"
                     value={validityQuantidade}
                     onChange={(e) => setValidityQuantidade(Math.max(1, parseInt(e.target.value) || 1))}
-                    className="w-full h-9 px-3 bg-[#171b26] border border-[#1e2433] rounded-lg text-slate-200"
+                    className="w-full h-9 px-3 bg-[#F7F6F2] border border-[#CFCDC5] rounded-lg text-[#171717]"
                   />
                 </div>
 
                 <div>
-                  <label className="text-slate-400 block mb-1">VALIDADE (*)</label>
+                  <label className="text-[#77766F] block mb-1">VALIDADE (*)</label>
                   <input
                     type="date"
                     value={validityDataVencimento}
                     onChange={(e) => setValidityDataVencimento(e.target.value)}
-                    className="w-full h-9 px-3 bg-[#171b26] border border-[#1e2433] rounded-lg text-slate-200"
+                    className="w-full h-9 px-3 bg-[#F7F6F2] border border-[#CFCDC5] rounded-lg text-[#171717]"
                   />
                 </div>
 
                 <div>
-                  <label className="text-slate-400 block mb-1">LOTE (OPCIONAL)</label>
+                  <label className="text-[#77766F] block mb-1">LOTE (OPCIONAL)</label>
                   <input
                     type="text"
                     value={validityLote}
                     onChange={(e) => setValidityLote(e.target.value)}
                     placeholder="L12345"
-                    className="w-full h-9 px-3 bg-[#171b26] border border-[#1e2433] rounded-lg text-slate-200"
+                    className="w-full h-9 px-3 bg-[#F7F6F2] border border-[#CFCDC5] rounded-lg text-[#171717]"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="text-slate-400 block mb-1">OBSERVAÇÃO (OPCIONAL)</label>
+                <label className="text-[#77766F] block mb-1">OBSERVAÇÃO (OPCIONAL)</label>
                 <input
                   type="text"
                   value={validityObservacao}
                   onChange={(e) => setValidityObservacao(e.target.value)}
                   placeholder="Ex: Produto recolhido / Avaria na embalagem..."
-                  className="w-full h-9 px-3 bg-[#171b26] border border-[#1e2433] rounded-lg text-slate-200"
+                  className="w-full h-9 px-3 bg-[#F7F6F2] border border-[#CFCDC5] rounded-lg text-[#171717]"
                 />
               </div>
 
@@ -1280,15 +2396,15 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
 
               {/* Lista de Produtos Registrados na Visita */}
               {activeVisit.validity_items && activeVisit.validity_items.length > 0 ? (
-                <div className="space-y-2 pt-2 border-t border-[#1e2433]">
-                  <span className="text-[11px] text-slate-400 font-bold block">
+                <div className="space-y-2 pt-2 border-t border-[#CFCDC5]">
+                  <span className="text-[11px] text-[#77766F] font-bold block">
                     PRODUTOS E VALIDADES REGISTRADOS ({activeVisit.validity_items.length}):
                   </span>
 
-                  <div className="overflow-x-auto rounded-lg border border-[#1e2433]">
+                  <div className="overflow-x-auto rounded-lg border border-[#CFCDC5]">
                     <table className="w-full text-left text-xs border-collapse">
                       <thead>
-                        <tr className="bg-[#171b26] text-slate-400 text-[10px] font-bold uppercase border-b border-[#1e2433]">
+                        <tr className="bg-[#F7F6F2] text-[#77766F] text-[10px] font-bold uppercase border-b border-[#CFCDC5]">
                           <th className="py-2 px-3">Produto</th>
                           <th className="py-2 px-3 text-right">Qtd.</th>
                           <th className="py-2 px-3">Validade</th>
@@ -1296,7 +2412,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                           <th className="py-2 px-3 text-right">Situação</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-[#1e2433] text-slate-200">
+                      <tbody className="divide-y divide-[#CFCDC5] text-slate-200">
                         {activeVisit.validity_items.map((valItem, idx) => {
                           // Calcular classificação de vencimento local
                           const [vYear, vMonth, vDay] = valItem.data_vencimento.split('-').map(Number);
@@ -1319,11 +2435,11 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                           }
 
                           return (
-                            <tr key={valItem.id || idx} className="hover:bg-[#171b26]/50">
+                            <tr key={valItem.id || idx} className="hover:bg-[#F7F6F2]/50">
                               <td className="py-2 px-3 font-bold text-white">{valItem.produto_nome}</td>
                               <td className="py-2 px-3 text-right font-bold text-amber-300">{valItem.quantidade}</td>
                               <td className="py-2 px-3">{new Date(vencDate).toLocaleDateString('pt-BR')}</td>
-                              <td className="py-2 px-3 text-slate-400">{valItem.lote || '—'}</td>
+                              <td className="py-2 px-3 text-[#77766F]">{valItem.lote || '—'}</td>
                               <td className="py-2 px-3 text-right">
                                 <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${statusBadge.color}`}>
                                   {statusBadge.label}
@@ -1337,7 +2453,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                   </div>
                 </div>
               ) : (
-                <p className="text-[11px] text-slate-500 italic pt-1 text-center">
+                <p className="text-[11px] text-[#5F5F5F] italic pt-1 text-center">
                   Nenhum produto cadastrado para controle de validade nesta visita.
                 </p>
               )}
@@ -1345,7 +2461,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
           </div>
 
           {/* PASSO 5: OBSERVAÇÕES GERAIS E FINALIZAÇÃO */}
-          <div className="space-y-4 pt-3 border-t border-[#1e2433]">
+          <div className="space-y-4 pt-3 border-t border-[#CFCDC5]">
             <div>
               <label className="text-xs font-bold text-slate-200 uppercase tracking-wider font-mono block mb-1.5">
                 5. Observações Gerais do Atendimento
@@ -1354,47 +2470,47 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                 value={generalObs}
                 onChange={(e) => setGeneralObs(e.target.value)}
                 placeholder="Digite impressões gerais, conversas com o gerente da loja..."
-                className="w-full p-3 bg-[#131722] border border-[#1e2433] rounded-xl text-slate-200 focus:outline-none focus:border-amber-500 font-mono text-xs h-20 resize-none"
+                className="w-full p-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-500 font-mono text-xs h-20 resize-none"
               />
             </div>
 
             {/* PAINEL DE RESUMO DA VISITA PARA FINALIZAÇÃO */}
-            <div className="p-4 rounded-xl bg-[#10141f] border border-[#1e2433] space-y-3 font-mono text-xs">
+            <div className="p-4 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5] space-y-3 font-mono text-xs">
               <h4 className="text-xs font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-2">
                 <span className="material-symbols-outlined text-sm">summarize</span>
                 Resumo do Atendimento Antes do Check-out
               </h4>
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-slate-300">
-                <div className="p-2.5 rounded-lg bg-[#171b26] border border-[#1e2433]">
-                  <span className="text-[10px] text-slate-500 block font-bold">HORÁRIO ENTRADA</span>
-                  <span className="text-sm font-extrabold text-white">
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-[#171717]">
+                <div className="p-2.5 rounded-lg bg-[#F7F6F2] border border-[#CFCDC5]">
+                  <span className="text-[10px] text-[#5F5F5F] block font-bold">HORÁRIO ENTRADA</span>
+                  <span className="text-sm font-extrabold text-[#171717]">
                     {activeVisit.started_at ? new Date(activeVisit.started_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—'}
                   </span>
                 </div>
 
-                <div className="p-2.5 rounded-lg bg-[#171b26] border border-[#1e2433]">
-                  <span className="text-[10px] text-slate-500 block font-bold">CHECKLIST</span>
+                <div className="p-2.5 rounded-lg bg-[#F7F6F2] border border-[#CFCDC5]">
+                  <span className="text-[10px] text-[#5F5F5F] block font-bold">CHECKLIST</span>
                   <span className="text-sm font-extrabold text-amber-300">
                     {Object.values(checklist).filter((c) => c.checked).length} / {DEFAULT_CHECKLIST_ITEMS.length}
                   </span>
                 </div>
 
-                <div className="p-2.5 rounded-lg bg-[#171b26] border border-[#1e2433]">
-                  <span className="text-[10px] text-slate-500 block font-bold">FOTOS ANEXADAS</span>
+                <div className="p-2.5 rounded-lg bg-[#F7F6F2] border border-[#CFCDC5]">
+                  <span className="text-[10px] text-[#5F5F5F] block font-bold">FOTOS ANEXADAS</span>
                   <span className="text-sm font-extrabold text-cyan-300">
                     {activeVisit.photos?.length || 0}
                   </span>
                 </div>
 
-                <div className="p-2.5 rounded-lg bg-[#171b26] border border-[#1e2433]">
-                  <span className="text-[10px] text-slate-500 block font-bold">OCORRÊNCIAS</span>
+                <div className="p-2.5 rounded-lg bg-[#F7F6F2] border border-[#CFCDC5]">
+                  <span className="text-[10px] text-[#5F5F5F] block font-bold">OCORRÊNCIAS</span>
                   <span className="text-sm font-extrabold text-rose-300">
                     {activeVisit.occurrences?.length || 0}
                   </span>
                 </div>
 
-                <div className="p-2.5 rounded-lg bg-[#171b26] border border-[#1e2433]">
-                  <span className="text-[10px] text-slate-500 block font-bold">VALIDADES</span>
+                <div className="p-2.5 rounded-lg bg-[#F7F6F2] border border-[#CFCDC5]">
+                  <span className="text-[10px] text-[#5F5F5F] block font-bold">VALIDADES</span>
                   <span className="text-sm font-extrabold text-amber-400">
                     {activeVisit.validity_items?.length || 0}
                   </span>
@@ -1403,42 +2519,65 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
             </div>
           </div>
 
-          <div className="pt-4 border-t border-[#1e2433] flex flex-col sm:flex-row items-center justify-between gap-3 font-mono">
-            <span className="text-[11px] text-slate-400 text-center sm:text-left">
+          <div className="pt-4 border-t border-[#CFCDC5] flex flex-col sm:flex-row items-center justify-between gap-3 font-mono">
+            <span className="text-[11px] text-[#77766F] text-center sm:text-left">
               Ao finalizar, o check-out será registrado e a visita não poderá ser reeditada.
             </span>
-            <button
-              onClick={handleCompleteVisit}
-              disabled={completingVisit}
-              className="w-full sm:w-auto px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-[0_0_15px_rgba(16,185,129,0.4)] cursor-pointer transition-all"
-            >
-              <span className={`material-symbols-outlined text-lg ${completingVisit ? 'animate-spin' : ''}`}>
-                {completingVisit ? 'sync' : 'check_circle'}
-              </span>
-              <span>{completingVisit ? 'Finalizando...' : 'Finalizar Visita & Check-out'}</span>
-            </button>
+            <div className="flex flex-col sm:flex-row items-center gap-3 w-full sm:w-auto">
+              <button
+                type="button"
+                onClick={() => {
+                  setInterruptModalVisit(activeVisit);
+                  setInterruptReason('');
+                }}
+                disabled={completingVisit}
+                className="w-full sm:w-auto px-4 py-3 rounded-xl bg-[#EAE8E2] hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
+                title="Abandonar ou cancelar esta execução para atender outra loja"
+              >
+                <span className="material-symbols-outlined text-sm">close</span>
+                <span>Interromper Atendimento</span>
+              </button>
+              <button
+                onClick={handleCompleteVisit}
+                disabled={completingVisit}
+                className="w-full sm:w-auto px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-[0_0_15px_rgba(16,185,129,0.4)] cursor-pointer transition-all"
+              >
+                <span className={`material-symbols-outlined text-lg ${completingVisit ? 'animate-spin' : ''}`}>
+                  {completingVisit ? 'sync' : 'check_circle'}
+                </span>
+                <span>{completingVisit ? 'Finalizando...' : 'Finalizar Visita & Check-out'}</span>
+              </button>
+            </div>
           </div>
         </section>
       ) : null}
 
-      {/* 2. MINHA SEMANA OPERACIONAL */}
-      <section className="bg-[#171b26] border border-[#1e2433] rounded-2xl p-6 shadow-2xl space-y-5">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#1e2433] pb-4">
-          <div>
-            <h3 className="text-sm font-bold text-white uppercase tracking-wider font-mono flex items-center gap-2">
+      {/* 3. HISTÓRICO E AGENDA DA SEMANA (RECOLHÍVEL POR PADRÃO NO MOBILE) */}
+      <section className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-5 sm:p-6 shadow-2xl space-y-5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#CFCDC5] pb-4">
+          <div
+            onClick={() => setIsWeekHistoryOpen((prev) => !prev)}
+            className="cursor-pointer select-none flex-1 group"
+          >
+            <div className="flex items-center gap-2">
               <span className="material-symbols-outlined text-purple-400">calendar_view_week</span>
-              2. Minha Semana Operacional ({allWeekOperationalVisits.length} agendadas)
-            </h3>
-            <p className="text-[11px] text-slate-400 font-mono mt-0.5">
-              Agenda semanal completa das suas rotas operacionais e pendências acumuladas.
+              <h3 className="text-sm font-bold text-[#171717] uppercase tracking-wider font-mono flex items-center gap-2">
+                3. Minha Semana & Histórico ({allWeekOperationalVisits.length} agendadas)
+              </h3>
+              <span className="px-2 py-0.5 rounded bg-[#E4E2DB] border border-[#CFCDC5] text-[#77766F] text-[10px] font-mono group-hover:text-[#171717] transition-colors">
+                {isWeekHistoryOpen ? 'Recolher ▲' : 'Ver Todos os Dias ▼'}
+              </span>
+            </div>
+            <p className="text-[11px] text-[#77766F] font-mono mt-0.5">
+              Grade semanal completa de rotas planejadas, histórico e pendências de outros dias.
             </p>
           </div>
 
-          {/* Navegação entre semanas */}
+          {/* Navegação entre semanas (visível sempre) */}
           <div className="flex items-center gap-2 shrink-0 font-mono text-xs">
             <button
               onClick={() => setWeekOffset((prev) => prev - 1)}
-              className="p-1.5 rounded-lg bg-[#131722] hover:bg-[#1a202c] border border-[#1e2433] text-slate-300 hover:text-white cursor-pointer flex items-center gap-1"
+              className="p-1.5 rounded-lg bg-[#EAE8E2] hover:bg-[#1a202c] border border-[#CFCDC5] text-[#171717] hover:text-white cursor-pointer flex items-center gap-1"
               title="Semana anterior"
             >
               <span className="material-symbols-outlined text-sm">chevron_left</span>
@@ -1450,7 +2589,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
               className={`px-3 py-1.5 rounded-lg border text-xs font-bold transition-colors cursor-pointer ${
                 weekOffset === 0
                   ? 'bg-purple-600/30 text-purple-300 border-purple-500/50'
-                  : 'bg-[#131722] text-slate-300 border-[#1e2433] hover:text-white'
+                  : 'bg-[#EAE8E2] text-slate-300 border-[#CFCDC5] hover:text-white'
               }`}
             >
               Semana Atual
@@ -1458,7 +2597,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
 
             <button
               onClick={() => setWeekOffset((prev) => prev + 1)}
-              className="p-1.5 rounded-lg bg-[#131722] hover:bg-[#1a202c] border border-[#1e2433] text-slate-300 hover:text-white cursor-pointer flex items-center gap-1"
+              className="p-1.5 rounded-lg bg-[#EAE8E2] hover:bg-[#1a202c] border border-[#CFCDC5] text-[#171717] hover:text-white cursor-pointer flex items-center gap-1"
               title="Próxima semana"
             >
               <span className="hidden md:inline">Próxima</span>
@@ -1467,232 +2606,346 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
           </div>
         </div>
 
-        {/* Resumo rápido por dia da semana */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2 font-mono">
-          {weekDaysRange.map((day) => {
-            const isTodayDay = day.dateStr === getLocalDateString(new Date());
-            const dayVisits = allWeekOperationalVisits.filter((v) => v.dataStr === day.dateStr);
-            const pendingCount = dayVisits.filter((v) => v.status === 'pendente').length;
-            const completedCount = dayVisits.filter((v) => v.status === 'concluida').length;
+        {/* CONTEÚDO EXPANSÍVEL DA SEMANA */}
+        {isWeekHistoryOpen && (
+          <div className="space-y-5 pt-1">
+            {/* Resumo rápido por dia da semana */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2 font-mono">
+              {weekDaysRange.map((day) => {
+                const isTodayDay = day.dateStr === getLocalDateString(new Date());
+                const dayVisits = allWeekOperationalVisits.filter((v) => v.dataStr === day.dateStr);
+                const pendingCount = dayVisits.filter((v) => v.status === 'pendente').length;
+                const completedCount = dayVisits.filter((v) => v.status === 'concluida').length;
 
-            return (
-              <div
-                key={day.dateStr}
-                className={`p-2.5 rounded-xl border flex flex-col justify-between space-y-1 ${
-                  isTodayDay
-                    ? 'bg-purple-950/20 border-purple-500/40'
-                    : 'bg-[#131722] border-[#1e2433]'
-                }`}
-              >
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-bold text-slate-400 uppercase">{day.dayShort}</span>
-                  {isTodayDay && (
-                    <span className="px-1.5 py-0.2 text-[8px] font-bold rounded bg-purple-500/20 text-purple-300">
-                      HOJE
-                    </span>
-                  )}
-                </div>
-                <div className="text-xs font-bold text-white">
-                  {day.dateStr.split('-').reverse().slice(0, 2).join('/')}
-                </div>
-                <div className="flex items-center gap-1.5 text-[10px] pt-1 border-t border-[#1e2433]/50">
-                  {completedCount > 0 && <span className="text-emerald-400 font-bold">🟢 {completedCount}</span>}
-                  {pendingCount > 0 && <span className="text-rose-400 font-bold">🔴 {pendingCount}</span>}
-                  {dayVisits.length === 0 && <span className="text-slate-600">—</span>}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-
-        {/* Lista detalhada das visitas da semana */}
-        {allWeekOperationalVisits.length === 0 ? (
-          <div className="py-12 text-center space-y-3 font-mono">
-            <div className="w-12 h-12 rounded-full bg-[#131722] border border-[#1e2433] flex items-center justify-center text-slate-500 mx-auto">
-              <span className="material-symbols-outlined text-2xl">event_busy</span>
-            </div>
-            <h4 className="text-xs font-bold text-white">Nenhuma Rota para esta Semana</h4>
-            <p className="text-[11px] text-slate-400 max-w-sm mx-auto">
-              Não foram encontradas rotas cadastradas para a sua matrícula na semana selecionada.
-            </p>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {allWeekOperationalVisits.map((item, idx) => {
-              const isTodayItem = item.dataStr === getLocalDateString(new Date());
-              const routeObj = routes.find((r) => r.id === item.routeId) || {
-                id: item.routeId,
-                promotor_matricula: item.promotorMatricula,
-                loja_codigo: item.lojaCodigo,
-                industria_codigo: item.industriaCodigo,
-                frequencia: item.frequencia,
-                loja: { codigo: item.lojaCodigo, nome: item.lojaNome, cidade: item.lojaCidade, uf: item.lojaUf },
-                industria: { codigo: item.industriaCodigo, nome: item.industriaNome }
-              } as RouteItem;
-
-              return (
-                <div
-                  key={`${item.key}_${item.dataStr}`}
-                  className={`p-4 rounded-xl border transition-all flex flex-col md:flex-row md:items-center justify-between gap-4 font-mono ${
-                    item.status === 'concluida'
-                      ? 'bg-emerald-950/20 border-emerald-500/30'
-                      : item.status === 'em_andamento'
-                      ? 'bg-amber-950/20 border-amber-500/50'
-                      : item.status === 'nao_realizada'
-                      ? 'bg-rose-950/20 border-rose-500/30'
-                      : item.status === 'pendente'
-                      ? 'bg-rose-950/15 border-rose-500/30'
-                      : 'bg-[#131722] border-[#1e2433]'
-                  }`}
-                >
-                  <div className="space-y-1.5">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="w-5 h-5 rounded-full bg-[#171b26] border border-[#1e2433] text-purple-300 font-bold text-[10px] flex items-center justify-center">
-                        {idx + 1}
-                      </span>
-                      <span className="text-xs font-bold text-purple-300 uppercase">
-                        {item.dataStr.split('-').reverse().join('/')} • {item.dayOfWeekLabel}
-                      </span>
-                      <span
-                        className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase flex items-center gap-1 ${
-                          item.status === 'concluida'
-                            ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                            : item.status === 'em_andamento'
-                            ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30 animate-pulse'
-                            : item.status === 'nao_realizada'
-                            ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
-                            : item.status === 'pendente'
-                            ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
-                            : 'bg-slate-800 text-slate-300 border border-slate-700'
-                        }`}
-                      >
-                        {item.status === 'concluida' && '🟢 Concluída'}
-                        {item.status === 'em_andamento' && '🔵 Em andamento'}
-                        {item.status === 'pendente' && (item.isPastOverdue ? '🔴 Pendente (Atrasada)' : '🔴 Pendente')}
-                        {item.status === 'nao_realizada' && '🟠 Não realizada'}
-                        {item.status === 'planejada' && '⚪ Planejada'}
-                      </span>
-                    </div>
-
-                    <h4 className="text-sm font-bold text-white">
-                      {item.lojaNome}
-                    </h4>
-
-                    <p className="text-[11px] text-slate-400">
-                      Cidade/UF: {item.lojaCidade || '—'}/{item.lojaUf || '-'}
-                    </p>
-                    <div className="flex flex-wrap items-center gap-3 text-[10px] text-slate-500">
-                      <span>Indústria: <strong className="text-purple-300">{item.industriaNome}</strong></span>
-                      <span>Frequência: <strong className="text-cyan-300">{item.frequencia}</strong></span>
-                      {item.completedAt && (
-                        <span>Concluído às: <strong className="text-emerald-300">{new Date(item.completedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</strong></span>
+                return (
+                  <div
+                    key={day.dateStr}
+                    className={`p-2.5 rounded-xl border flex flex-col justify-between space-y-1 ${
+                      isTodayDay
+                        ? 'bg-purple-950/20 border-purple-500/40'
+                        : 'bg-[#EAE8E2] border-[#CFCDC5]'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-bold text-[#77766F] uppercase">{day.dayShort}</span>
+                      {isTodayDay && (
+                        <span className="px-1.5 py-0.2 text-[8px] font-bold rounded bg-purple-500/20 text-purple-300">
+                          HOJE
+                        </span>
                       )}
                     </div>
+                    <div className="text-xs font-bold text-[#171717]">
+                      {day.dateStr.split('-').reverse().slice(0, 2).join('/')}
+                    </div>
+                    <div className="flex items-center gap-1.5 text-[10px] pt-1 border-t border-[#CFCDC5]/50">
+                      {completedCount > 0 && <span className="text-emerald-400 font-bold">🟢 {completedCount}</span>}
+                      {pendingCount > 0 && <span className="text-rose-400 font-bold">🔴 {pendingCount}</span>}
+                      {dayVisits.length === 0 && <span className="text-slate-600">—</span>}
+                    </div>
                   </div>
+                );
+              })}
+            </div>
 
-                  {/* Ações */}
-                  <div className="flex items-center gap-2 shrink-0 pt-2 md:pt-0 border-t md:border-t-0 border-[#1e2433]">
-                    {item.status === 'pendente' && isTodayItem && !activeVisit && (
-                      <>
-                        <button
-                          onClick={() => handleStartVisit(routeObj)}
-                          className="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-md"
-                        >
-                          <span className="material-symbols-outlined text-sm">play_arrow</span>
-                          <span>Iniciar Visita</span>
-                        </button>
-                        <button
-                          onClick={() => setShowNotDoneModal(routeObj)}
-                          className="px-3 py-2 rounded-xl bg-[#171b26] hover:bg-rose-500/20 text-slate-400 hover:text-rose-300 border border-[#1e2433] text-xs font-bold cursor-pointer"
-                          title="Justificar Não Realização"
-                        >
-                          Não Atendido
-                        </button>
-                      </>
-                    )}
-
-                    {item.status === 'pendente' && !isTodayItem && item.isPastOverdue && !activeVisit && (
-                      <button
-                        onClick={() => handleStartVisit(routeObj)}
-                        className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-md"
-                      >
-                        <span className="material-symbols-outlined text-sm">play_arrow</span>
-                        <span>Regularizar Pendência</span>
-                      </button>
-                    )}
-
-                    {item.status === 'em_andamento' && (
-                      <span className="text-xs text-amber-300 font-bold flex items-center gap-1 px-3 py-2 bg-amber-500/10 rounded-xl border border-amber-500/30">
-                        <span className="material-symbols-outlined text-sm animate-spin">sync</span>
-                        Em Atendimento
-                      </span>
-                    )}
-
-                    {item.status === 'concluida' && (
-                      <span className="text-xs text-emerald-400 font-bold flex items-center gap-1 px-3 py-2 bg-emerald-500/10 rounded-xl border border-emerald-500/30">
-                        <span className="material-symbols-outlined text-sm">check_circle</span>
-                        Concluída
-                      </span>
-                    )}
-
-                    {item.status === 'nao_realizada' && (
-                      <span className="text-xs text-rose-400 font-bold flex items-center gap-1 px-3 py-2 bg-rose-500/10 rounded-xl border border-rose-500/30">
-                        <span className="material-symbols-outlined text-sm">cancel</span>
-                        Não Realizada
-                      </span>
-                    )}
-
-                    {item.status === 'planejada' && (
-                      <span className="text-xs text-slate-400 font-bold flex items-center gap-1 px-3 py-2 bg-slate-800/40 rounded-xl border border-slate-700/50">
-                        <span className="material-symbols-outlined text-sm">event</span>
-                        Visita Planejada
-                      </span>
-                    )}
-                  </div>
+            {/* Lista detalhada das visitas da semana */}
+            {allWeekOperationalVisits.length === 0 ? (
+              <div className="py-12 text-center space-y-3 font-mono">
+                <div className="w-12 h-12 rounded-full bg-[#EAE8E2] border border-[#CFCDC5] flex items-center justify-center text-[#5F5F5F] mx-auto">
+                  <span className="material-symbols-outlined text-2xl">event_busy</span>
                 </div>
-              );
-            })}
+                <h4 className="text-xs font-bold text-[#171717]">Nenhuma Rota para esta Semana</h4>
+                <p className="text-[11px] text-[#77766F] max-w-sm mx-auto">
+                  Não foram encontradas rotas cadastradas para a sua matrícula na semana selecionada.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {allWeekOperationalVisits.map((item, idx) => {
+                  const isTodayItem = item.dataStr === getLocalDateString(new Date());
+                  const routeObj = routes.find((r) => r.id === item.routeId) || {
+                    id: item.routeId,
+                    promotor_matricula: item.promotorMatricula,
+                    loja_codigo: item.lojaCodigo,
+                    industria_codigo: item.industriaCodigo,
+                    frequencia: item.frequencia,
+                    loja: { codigo: item.lojaCodigo, nome: item.lojaNome, cidade: item.lojaCidade, uf: item.lojaUf },
+                    industria: { codigo: item.industriaCodigo, nome: item.industriaNome }
+                  } as RouteItem;
+
+                  return (
+                    <div
+                      key={`${item.key}_${item.dataStr}`}
+                      className={`p-4 rounded-xl border transition-all flex flex-col md:flex-row md:items-center justify-between gap-4 font-mono ${
+                        item.status === 'concluida'
+                          ? 'bg-emerald-950/20 border-emerald-500/30'
+                          : item.status === 'em_andamento'
+                          ? 'bg-amber-950/20 border-amber-500/50'
+                          : item.status === 'nao_realizada'
+                          ? 'bg-rose-950/20 border-rose-500/30'
+                          : item.status === 'pendente'
+                          ? 'bg-rose-950/15 border-rose-500/30'
+                          : 'bg-[#EAE8E2] border-[#CFCDC5]'
+                      }`}
+                    >
+                      <div className="space-y-1.5">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="w-5 h-5 rounded-full bg-[#F7F6F2] border border-[#CFCDC5] text-[#7E22CE] font-bold text-[10px] flex items-center justify-center">
+                            {idx + 1}
+                          </span>
+                          <span className="text-xs font-bold text-purple-300 uppercase">
+                            {item.dataStr.split('-').reverse().join('/')} • {item.dayOfWeekLabel}
+                          </span>
+                          <span
+                            className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase flex items-center gap-1 ${
+                              item.status === 'concluida'
+                                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                                : item.status === 'em_andamento'
+                                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30 animate-pulse'
+                                : item.status === 'nao_realizada'
+                                ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                                : item.status === 'pendente'
+                                ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
+                                : 'bg-slate-800 text-slate-300 border border-[#CFCDC5]'
+                            }`}
+                          >
+                            {item.status === 'concluida' && '🟢 Concluída'}
+                            {item.status === 'em_andamento' && '🔵 Em andamento'}
+                            {item.status === 'pendente' && (item.isPastOverdue ? '🔴 Pendente (Atrasada)' : '🔴 Pendente')}
+                            {item.status === 'nao_realizada' && '🟠 Não realizada'}
+                            {item.status === 'planejada' && '⚪ Planejada'}
+                          </span>
+                        </div>
+
+                        <h4 className="text-sm font-bold text-[#171717]">
+                          {item.lojaNome}
+                        </h4>
+
+                        <p className="text-[11px] text-[#77766F]">
+                          Cidade/UF: {item.lojaCidade || '—'}/{item.lojaUf || '-'}
+                        </p>
+                        <div className="flex flex-wrap items-center gap-3 text-[10px] text-[#5F5F5F]">
+                          <span>Indústria: <strong className="text-purple-300">{item.industriaNome}</strong></span>
+                          <span>Frequência: <strong className="text-cyan-300">{item.frequencia}</strong></span>
+                          {item.completedAt && (
+                            <span>Concluído às: <strong className="text-emerald-300">{new Date(item.completedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</strong></span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Ações */}
+                      <div className="flex items-center gap-2 shrink-0 pt-2 md:pt-0 border-t md:border-t-0 border-[#CFCDC5]">
+                        {(item.status === 'pendente' || item.status === 'planejada') && isTodayItem && (
+                          isImplantacaoMode && !isAuthorized ? (
+                            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs font-mono">
+                              <span className="material-symbols-outlined text-sm">lock</span>
+                              <span>Aguardando Liberação</span>
+                            </div>
+                          ) : activeVisit ? (
+                            <button
+                              onClick={() => handleStartVisit(routeObj)}
+                              className="px-3 py-1.5 rounded-xl bg-[#EAE8E2] hover:bg-purple-600/30 text-purple-300 border border-purple-500/40 font-bold text-xs flex items-center gap-1 cursor-pointer transition-colors"
+                              title="Trocar para esta loja (exige finalizar ou interromper o atendimento atual)"
+                            >
+                              <span className="material-symbols-outlined text-sm">play_arrow</span>
+                              <span>Iniciar Esta</span>
+                            </button>
+                          ) : (
+                            <>
+                              <button
+                                onClick={() => handleStartVisit(routeObj)}
+                                className="px-4 py-2 rounded-xl bg-[#222222] hover:bg-black text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-md"
+                              >
+                                <span className="material-symbols-outlined text-sm">play_arrow</span>
+                                <span>Iniciar Visita</span>
+                              </button>
+                              <button
+                                onClick={() => setShowNotDoneModal(routeObj)}
+                                className="px-3 py-2 rounded-xl bg-[#F7F6F2] hover:bg-rose-500/20 text-[#77766F] hover:text-rose-300 border border-[#CFCDC5] text-xs font-bold cursor-pointer"
+                                title="Justificar Não Realização"
+                              >
+                                Não Atendido
+                              </button>
+                            </>
+                          )
+                        )}
+
+                        {item.status === 'pendente' && !isTodayItem && item.isPastOverdue && !activeVisit && (
+                          isImplantacaoMode && !isAuthorized ? (
+                            <span className="text-xs text-[#5F5F5F] font-mono italic">Aguardando Liberação</span>
+                          ) : (
+                            <button
+                              onClick={() => handleStartVisit(routeObj)}
+                              className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-md"
+                            >
+                              <span className="material-symbols-outlined text-sm">play_arrow</span>
+                              <span>Regularizar Pendência</span>
+                            </button>
+                          )
+                        )}
+
+                        {item.status === 'em_andamento' && (
+                          <span className="text-xs text-amber-300 font-bold flex items-center gap-1 px-3 py-2 bg-amber-500/10 rounded-xl border border-amber-500/30">
+                            <span className="material-symbols-outlined text-sm animate-spin">sync</span>
+                            Em Atendimento
+                          </span>
+                        )}
+
+                        {item.status === 'concluida' && (
+                          <span className="text-xs text-emerald-400 font-bold flex items-center gap-1 px-3 py-2 bg-emerald-500/10 rounded-xl border border-emerald-500/30">
+                            <span className="material-symbols-outlined text-sm">check_circle</span>
+                            Concluída
+                          </span>
+                        )}
+
+                        {item.status === 'nao_realizada' && (
+                          item.visitObj ? (
+                            <button
+                              onClick={() => {
+                                if (activeVisit) {
+                                  onShowToast({
+                                    title: 'Atendimento Já em Andamento',
+                                    message: `Finalize ou interrompa o atendimento da loja ${activeVisit.loja?.nome || activeVisit.loja_codigo} antes de recuperar outra visita.`,
+                                    type: 'warning'
+                                  });
+                                  const el = document.getElementById('active-visit-section');
+                                  if (el) el.scrollIntoView({ behavior: 'smooth' });
+                                  return;
+                                }
+                                if (item.visitObj) {
+                                  setRecoverModalVisit(item.visitObj);
+                                }
+                              }}
+                              className="px-3 py-1.5 rounded-xl bg-[#222222] hover:bg-black text-white font-bold text-xs flex items-center gap-1 cursor-pointer shadow-md transition-colors"
+                              title="Realizar esta visita hoje com atraso"
+                            >
+                              <span className="material-symbols-outlined text-sm">replay</span>
+                              <span>Realizar hoje</span>
+                            </button>
+                          ) : (
+                            <span className="text-xs text-rose-400 font-bold flex items-center gap-1 px-3 py-2 bg-rose-500/10 rounded-xl border border-rose-500/30">
+                              <span className="material-symbols-outlined text-sm">cancel</span>
+                              Não Realizada
+                            </span>
+                          )
+                        )}
+
+                        {item.status === 'planejada' && (
+                          <span className="text-xs text-[#77766F] font-bold flex items-center gap-1 px-3 py-2 bg-slate-800/40 rounded-xl border border-[#CFCDC5]/50">
+                            <span className="material-symbols-outlined text-sm">event</span>
+                            Visita Planejada
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
       </section>
 
-      {/* MODAL JUSTIFICAR NÃO REALIZAÇÃO */}
-      {showNotDoneModal && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-[#171b26] border border-[#1e2433] rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5">
-            <div className="flex items-center justify-between border-b border-[#1e2433] pb-3">
-              <h3 className="text-sm font-bold text-white font-mono flex items-center gap-2">
+      {/* MODAL JUSTIFICAR VISITA ANTERIOR EM ANDAMENTO COMO NÃO REALIZADA */}
+      {staleNotDoneVisit && (
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-[#F7F6F2] border-2 border-rose-500/50 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5">
+            <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-3">
+              <h3 className="text-sm font-bold text-[#171717] font-mono flex items-center gap-2">
                 <span className="material-symbols-outlined text-rose-400">report_problem</span>
-                Justificar Não Atendimento
+                Registrar Visita Anterior como Não Realizada
               </h3>
-              <button onClick={() => setShowNotDoneModal(null)} className="text-slate-400 hover:text-white">
+              <button
+                onClick={() => setStaleNotDoneVisit(null)}
+                className="text-[#77766F] hover:text-white cursor-pointer"
+              >
                 <span className="material-symbols-outlined">close</span>
               </button>
             </div>
 
             <div className="space-y-3 font-mono text-xs">
-              <div className="p-3 rounded-xl bg-[#131722] border border-[#1e2433] text-slate-300">
-                <div>Loja: <strong className="text-white">{showNotDoneModal.loja?.nome}</strong></div>
+              <div className="p-3.5 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] text-[#171717] space-y-1">
+                <div>Loja: <strong className="text-[#171717]">{staleNotDoneVisit.loja?.nome || staleNotDoneVisit.loja_codigo}</strong></div>
+                <div>Indústria: <strong className="text-purple-300">{staleNotDoneVisit.industria?.nome || staleNotDoneVisit.industria_codigo}</strong></div>
+                <div>Data Original: <strong className="text-amber-400">{staleNotDoneVisit.data_visita.split('-').reverse().join('/')}</strong></div>
+              </div>
+
+              <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-200 text-[11px] leading-relaxed">
+                Ao registrar como não realizada, o status da visita será atualizado no banco de dados e sua agenda ficará liberada para os atendimentos de hoje.
+              </div>
+
+              <div>
+                <label className="text-[#171717] block mb-1.5 font-bold">
+                  MOTIVO OBRIGATÓRIO (*)
+                </label>
+                <textarea
+                  required
+                  value={staleNotDoneReason}
+                  onChange={(e) => setStaleNotDoneReason(e.target.value)}
+                  placeholder="Ex: Turno encerrado sem check-out, loja fechou antes da conclusão, problema com o dispositivo..."
+                  className="w-full p-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-rose-500 h-24 resize-none font-mono text-xs"
+                />
+              </div>
+            </div>
+
+            <div className="pt-3 border-t border-[#CFCDC5] flex items-center justify-end gap-3 font-mono">
+              <button
+                type="button"
+                onClick={() => setStaleNotDoneVisit(null)}
+                disabled={savingStaleNotDone}
+                className="px-4 py-2 rounded-xl bg-[#EAE8E2] text-[#171717] border border-[#CFCDC5] text-xs font-semibold cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmStaleNotDone}
+                disabled={!staleNotDoneReason.trim() || savingStaleNotDone}
+                className="px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs flex items-center gap-1.5 disabled:opacity-50 cursor-pointer shadow-md"
+              >
+                <span>{savingStaleNotDone ? 'Salvando...' : 'Confirmar Não Realização'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL JUSTIFICAR NÃO REALIZAÇÃO */}
+      {showNotDoneModal && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5">
+            <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-3">
+              <h3 className="text-sm font-bold text-[#171717] font-mono flex items-center gap-2">
+                <span className="material-symbols-outlined text-rose-400">report_problem</span>
+                Justificar Não Atendimento
+              </h3>
+              <button onClick={() => setShowNotDoneModal(null)} className="text-[#77766F] hover:text-white">
+                <span className="material-symbols-outlined">close</span>
+              </button>
+            </div>
+
+            <div className="space-y-3 font-mono text-xs">
+              <div className="p-3 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] text-[#171717]">
+                <div>Loja: <strong className="text-[#171717]">{showNotDoneModal.loja?.nome}</strong></div>
                 <div>Indústria: <strong className="text-purple-300">{showNotDoneModal.industria?.nome}</strong></div>
               </div>
 
               <div>
-                <label className="text-slate-300 block mb-1 font-bold">MOTIVO DO NÃO ATENDIMENTO (*)</label>
+                <label className="text-[#171717] block mb-1 font-bold">MOTIVO DO NÃO ATENDIMENTO (*)</label>
                 <textarea
                   required
                   value={notDoneReason}
                   onChange={(e) => setNotDoneReason(e.target.value)}
                   placeholder="Ex: Loja fechada para inventário, falta de chave, ausência do encarregado..."
-                  className="w-full p-3 bg-[#131722] border border-[#1e2433] rounded-xl text-slate-200 focus:outline-none focus:border-rose-500 h-24 resize-none"
+                  className="w-full p-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-rose-500 h-24 resize-none"
                 />
               </div>
             </div>
 
-            <div className="pt-3 border-t border-[#1e2433] flex items-center justify-end gap-3 font-mono">
+            <div className="pt-3 border-t border-[#CFCDC5] flex items-center justify-end gap-3 font-mono">
               <button
                 type="button"
                 onClick={() => setShowNotDoneModal(null)}
-                className="px-4 py-2 rounded-xl bg-[#131722] text-slate-300 border border-[#1e2433] text-xs font-semibold cursor-pointer"
+                className="px-4 py-2 rounded-xl bg-[#EAE8E2] text-[#171717] border border-[#CFCDC5] text-xs font-semibold cursor-pointer"
               >
                 Cancelar
               </button>
@@ -1703,6 +2956,217 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                 className="px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
               >
                 <span>Confirmar Ocorrência</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL INTERROMPER / CANCELAR ATENDIMENTO (Requisito 3) */}
+      {interruptModalVisit && (
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-[#F7F6F2] border-2 border-rose-500/50 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5">
+            <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-3">
+              <h3 className="text-sm font-bold text-[#171717] font-mono flex items-center gap-2">
+                <span className="material-symbols-outlined text-rose-400">cancel</span>
+                Interromper Atendimento
+              </h3>
+              <button
+                onClick={() => {
+                  if (!savingInterrupt) {
+                    setInterruptModalVisit(null);
+                    setInterruptReason('');
+                  }
+                }}
+                className="text-[#77766F] hover:text-white cursor-pointer"
+              >
+                <span className="material-symbols-outlined">close</span>
+              </button>
+            </div>
+
+            <div className="space-y-3 font-mono text-xs">
+              <div className="p-3.5 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] text-[#171717] space-y-1">
+                <div>Loja: <strong className="text-[#171717]">{interruptModalVisit.loja?.nome || interruptModalVisit.loja_codigo}</strong></div>
+                <div>Indústria: <strong className="text-purple-300">{interruptModalVisit.industria?.nome || interruptModalVisit.industria_codigo}</strong></div>
+                <div>Data da Visita: <strong className="text-amber-400">{interruptModalVisit.data_visita.split('-').reverse().join('/')}</strong></div>
+                {interruptModalVisit.started_at && (
+                  <div>Iniciada às: <strong className="text-cyan-400">{new Date(interruptModalVisit.started_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</strong></div>
+                )}
+              </div>
+
+              <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-200 text-[11px] leading-relaxed">
+                Esta ação cancelará a execução atual desta loja com registro de auditoria, preservando fotos e dados já salvos. Sua agenda será liberada para você iniciar o atendimento em outra loja programada.
+              </div>
+
+              <div>
+                <label className="text-[#171717] block mb-1.5 font-bold">
+                  JUSTIFICATIVA OBRIGATÓRIA (*)
+                </label>
+                <textarea
+                  required
+                  value={interruptReason}
+                  onChange={(e) => setInterruptReason(e.target.value)}
+                  placeholder="Ex: Iniciada por engano; loja solicitou retorno mais tarde; necessidade de deslocamento para outra loja..."
+                  className="w-full p-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-rose-500 h-24 resize-none font-mono text-xs"
+                />
+              </div>
+            </div>
+
+            <div className="pt-3 border-t border-[#CFCDC5] flex items-center justify-end gap-3 font-mono">
+              <button
+                type="button"
+                onClick={() => {
+                  setInterruptModalVisit(null);
+                  setInterruptReason('');
+                }}
+                disabled={savingInterrupt}
+                className="px-4 py-2 rounded-xl bg-[#EAE8E2] text-[#171717] border border-[#CFCDC5] text-xs font-semibold cursor-pointer"
+              >
+                Voltar
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmInterruptVisit}
+                disabled={!interruptReason.trim() || savingInterrupt}
+                className="px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs flex items-center gap-1.5 disabled:opacity-50 cursor-pointer shadow-md"
+              >
+                <span className={`material-symbols-outlined text-sm ${savingInterrupt ? 'animate-spin' : ''}`}>
+                  {savingInterrupt ? 'sync' : 'close'}
+                </span>
+                <span>{savingInterrupt ? 'Cancelando...' : 'Confirmar Interrupção'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* MODAL DECISÃO EXPLÍCITA: ATENDIMENTO EM ANDAMENTO (Etapa 1) */}
+      {busyConflictTargetRoute && activeVisit && (
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-[#F7F6F2] border-2 border-amber-500/50 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5">
+            <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-3">
+              <h3 className="text-sm font-bold text-[#171717] font-mono flex items-center gap-2">
+                <span className="material-symbols-outlined text-amber-400">warning</span>
+                Atendimento Já em Andamento
+              </h3>
+              <button
+                onClick={() => setBusyConflictTargetRoute(null)}
+                className="text-[#77766F] hover:text-white cursor-pointer"
+              >
+                <span className="material-symbols-outlined">close</span>
+              </button>
+            </div>
+
+            <div className="space-y-3 font-mono text-xs">
+              <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-200 text-xs leading-relaxed">
+                Você já possui um atendimento ativo na loja <strong className="text-[#171717]">{activeVisit.loja?.nome || activeVisit.loja_codigo}</strong> ({activeVisit.industria?.nome || activeVisit.industria_codigo}).
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] text-[#171717] space-y-1">
+                <div className="text-[10px] text-[#5F5F5F] font-bold uppercase">NOVA LOJA SELECIONADA:</div>
+                <div>Loja: <strong className="text-[#171717]">{busyConflictTargetRoute.loja?.nome || busyConflictTargetRoute.loja_codigo}</strong></div>
+                <div>Indústria: <strong className="text-purple-300">{busyConflictTargetRoute.industria?.nome || busyConflictTargetRoute.industria_codigo}</strong></div>
+              </div>
+
+              <p className="text-[#171717] text-[11px] leading-relaxed">
+                Para iniciar a nova loja, você deve primeiro <strong>concluir</strong> o checklist da loja atual ou <strong>interrompê-la com justificativa</strong> obrigatória.
+              </p>
+            </div>
+
+            <div className="pt-3 border-t border-[#CFCDC5] flex flex-col sm:flex-row items-center justify-end gap-2 font-mono">
+              <button
+                type="button"
+                onClick={() => {
+                  setBusyConflictTargetRoute(null);
+                  const el = document.getElementById('active-visit-section');
+                  if (el) {
+                    el.scrollIntoView({ behavior: 'smooth' });
+                  }
+                }}
+                className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-md transition-colors"
+              >
+                <span className="material-symbols-outlined text-sm">edit_note</span>
+                <span>Voltar para atendimento atual</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const currentActive = activeVisit;
+                  setBusyConflictTargetRoute(null);
+                  setInterruptModalVisit(currentActive);
+                  setInterruptReason('');
+                }}
+                className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-[#EAE8E2] hover:bg-rose-500/20 text-rose-300 border border-rose-500/40 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
+              >
+                <span className="material-symbols-outlined text-sm">close</span>
+                <span>Interromper com justificativa</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL CONFIRMAÇÃO DE RECUPERAÇÃO DE VISITA PENDENTE COM ATRASO */}
+      {recoverModalVisit && (
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-[#F7F6F2] border-2 border-purple-500/50 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5">
+            <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-3">
+              <h3 className="text-sm font-bold text-[#171717] font-mono flex items-center gap-2">
+                <span className="material-symbols-outlined text-purple-400">replay</span>
+                Recuperar Visita Pendente
+              </h3>
+              <button
+                onClick={() => setRecoverModalVisit(null)}
+                disabled={recoveringVisit}
+                className="text-[#77766F] hover:text-white cursor-pointer"
+              >
+                <span className="material-symbols-outlined">close</span>
+              </button>
+            </div>
+
+            <div className="space-y-3 font-mono text-xs">
+              <div className="p-3.5 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] text-[#171717] space-y-1">
+                <div>Loja: <strong className="text-[#171717]">{recoverModalVisit.loja?.nome || recoverModalVisit.loja_codigo}</strong></div>
+                <div>Indústria: <strong className="text-purple-300">{recoverModalVisit.industria?.nome || recoverModalVisit.industria_codigo}</strong></div>
+                <div>Data Originalmente Planejada: <strong className="text-amber-400">{recoverModalVisit.data_visita.split('-').reverse().join('/')}</strong></div>
+                {recoverModalVisit.motivo_nao_realizada && (
+                  <div className="pt-1 text-[11px] text-[#77766F]">
+                    Motivo Anterior: <span className="text-rose-300 italic">{recoverModalVisit.motivo_nao_realizada}</span>
+                  </div>
+                )}
+              </div>
+
+              <div className="p-3 rounded-xl bg-purple-500/10 border border-purple-500/30 text-purple-200 text-[11px] leading-relaxed space-y-1">
+                <p>
+                  • Esta visita será iniciada na <strong>data de hoje</strong> e vinculada ao seu atendimento ativo.
+                </p>
+                <p>
+                  • O motivo anterior e as evidências já registradas serão integralmente <strong>preservados</strong>.
+                </p>
+                <p>
+                  • A data planejada original será mantida para auditoria, e a recuperação ficará registrada como <strong>atendimento realizado com atraso</strong>.
+                </p>
+              </div>
+            </div>
+
+            <div className="pt-3 border-t border-[#CFCDC5] flex items-center justify-end gap-3 font-mono">
+              <button
+                type="button"
+                onClick={() => setRecoverModalVisit(null)}
+                disabled={recoveringVisit}
+                className="px-4 py-2 rounded-xl bg-[#EAE8E2] text-[#171717] border border-[#CFCDC5] text-xs font-semibold cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmRecoverVisit}
+                disabled={recoveringVisit}
+                className="px-5 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-md transition-colors"
+              >
+                <span className={`material-symbols-outlined text-sm ${recoveringVisit ? 'animate-spin' : ''}`}>
+                  {recoveringVisit ? 'sync' : 'play_arrow'}
+                </span>
+                <span>{recoveringVisit ? 'Reabrindo Visita...' : 'Confirmar e Iniciar Hoje'}</span>
               </button>
             </div>
           </div>

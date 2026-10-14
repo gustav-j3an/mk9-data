@@ -503,10 +503,23 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
   }, [industries, searchTerm, statusFilter]);
 
   // Abrir Modal de Adição
-  const handleOpenCreate = () => {
+  const handleOpenCreate = async () => {
     setEditingItem(null);
+
+    let nextCode = '';
+    try {
+      if (supabase) {
+        const { data, error: rpcErr } = await supabase.rpc('get_next_industry_code');
+        if (!rpcErr && data) {
+          nextCode = data;
+        }
+      }
+    } catch (err) {
+      console.error('Erro ao consultar próximo código da indústria:', err);
+    }
+
     setFormData({
-      codigo: '',
+      codigo: nextCode,
       nome: '',
       cnpj: '',
       status: 'ativo',
@@ -595,7 +608,12 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
           .update(payload)
           .eq('id', editingItem.id);
 
-        if (updateErr) throw updateErr;
+        if (updateErr) {
+          if (updateErr.code === '23505') {
+            throw new Error(`O código de indústria "${payload.codigo}" já está em uso por outro registro.`);
+          }
+          throw updateErr;
+        }
 
         onShowToast({
           title: 'Indústria Atualizada',
@@ -608,7 +626,12 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
           .from('industrias')
           .insert([payload]);
 
-        if (insertErr) throw insertErr;
+        if (insertErr) {
+          if (insertErr.code === '23505') {
+            throw new Error(`O código de indústria "${payload.codigo}" já está cadastrado no sistema.`);
+          }
+          throw insertErr;
+        }
 
         onShowToast({
           title: 'Indústria Cadastrada',
@@ -634,46 +657,71 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
   return (
     <div className="w-full px-4 lg:px-8 py-6 max-w-[1720px] mx-auto space-y-8 font-sans">
       {/* HEADER PRINCIPAL */}
-      <section className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-[#1e2433] pb-6">
+      <section className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-[#CFCDC5] pb-6">
         <div>
           <div className="flex items-center gap-2.5">
             <div className="w-9 h-9 rounded-lg bg-gradient-to-tr from-purple-600 to-indigo-500 flex items-center justify-center font-bold text-white shadow-[0_0_14px_rgba(147,51,234,0.6)]">
               <span className="material-symbols-outlined text-[20px]">factory</span>
             </div>
-            <h1 className="text-3xl font-extrabold text-white tracking-tight">
+            <h1 className="text-3xl font-extrabold text-[#171717] tracking-tight">
               Gestão de Indústrias
             </h1>
           </div>
-          <p className="text-xs sm:text-sm text-slate-400 mt-1 max-w-3xl">
+          <p className="text-xs sm:text-sm text-[#77766F] mt-1 max-w-3xl">
             Aderência operacional de visitas e cadastro das marcas parceiras atendidas pela operação de trade marketing.
           </p>
         </div>
 
-        {/* NAVEGAÇÃO DE ABAS */}
-        <div className="flex items-center gap-3 bg-[#131722] p-1.5 rounded-xl border border-[#1e2433]">
+        {/* AÇÕES E NAVEGAÇÃO DE ABAS */}
+        <div className="flex flex-wrap items-center gap-3">
           <button
-            onClick={() => setActiveTab('frequencia')}
-            className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
-              activeTab === 'frequencia'
-                ? 'bg-purple-600 text-white shadow-[0_0_12px_rgba(147,51,234,0.5)]'
-                : 'text-slate-400 hover:text-white hover:bg-[#1e2433]'
-            }`}
+            onClick={fetchIndustries}
+            disabled={loading}
+            className="px-3.5 py-2 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] text-xs font-semibold text-[#171717] hover:text-white hover:border-purple-500/40 transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+            title="Recarregar Lista de Indústrias"
           >
-            <span className="material-symbols-outlined text-[18px]">analytics</span>
-            <span>Aderência Operacional</span>
+            <span className={`material-symbols-outlined text-[18px] ${loading ? 'animate-spin' : ''}`}>
+              refresh
+            </span>
+            <span>Atualizar</span>
           </button>
 
-          <button
-            onClick={() => setActiveTab('cadastro')}
-            className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
-              activeTab === 'cadastro'
-                ? 'bg-purple-600 text-white shadow-[0_0_12px_rgba(147,51,234,0.5)]'
-                : 'text-slate-400 hover:text-white hover:bg-[#1e2433]'
-            }`}
-          >
-            <span className="material-symbols-outlined text-[18px]">list_alt</span>
-            <span>Cadastro das Indústrias</span>
-          </button>
+          {canEdit && (
+            <button
+              onClick={handleOpenCreate}
+              className="px-4 py-2 rounded-xl bg-[#222222] hover:bg-black text-white font-bold text-xs flex items-center gap-2 cursor-pointer transition-all shadow-[0_0_15px_rgba(147,51,234,0.4)] active:scale-95"
+            >
+              <span className="material-symbols-outlined text-[18px]">add</span>
+              <span>Nova Indústria</span>
+            </button>
+          )}
+
+          {/* NAVEGAÇÃO DE ABAS */}
+          <div className="flex items-center gap-1.5 bg-[#EAE8E2] p-1.5 rounded-xl border border-[#CFCDC5]">
+            <button
+              onClick={() => setActiveTab('frequencia')}
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                activeTab === 'frequencia'
+                  ? 'bg-[#222222] text-white shadow-[0_0_12px_rgba(147,51,234,0.5)]'
+                  : 'text-[#77766F] hover:text-white hover:bg-[#CFCDC5]'
+              }`}
+            >
+              <span className="material-symbols-outlined text-[16px]">analytics</span>
+              <span>Aderência</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('cadastro')}
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                activeTab === 'cadastro'
+                  ? 'bg-[#222222] text-white shadow-[0_0_12px_rgba(147,51,234,0.5)]'
+                  : 'text-[#77766F] hover:text-white hover:bg-[#CFCDC5]'
+              }`}
+            >
+              <span className="material-symbols-outlined text-[16px]">list_alt</span>
+              <span>Cadastro ({industries.length})</span>
+            </button>
+          </div>
         </div>
       </section>
 
@@ -683,16 +731,16 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
       {activeTab === 'frequencia' && (
         <div className="space-y-8 animate-fadeIn">
           {/* BARRA DE FILTROS */}
-          <section className="bg-[#171b26] border border-[#1e2433] rounded-2xl p-5 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between border-b border-[#1e2433] pb-3">
-              <div className="flex items-center gap-2 text-xs font-mono font-bold text-slate-300">
+          <section className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-5 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-3">
+              <div className="flex items-center gap-2 text-xs font-mono font-bold text-[#171717]">
                 <span className="material-symbols-outlined text-purple-400 text-[18px]">filter_alt</span>
                 <span>FILTROS OPERACIONAIS</span>
               </div>
               <button
                 onClick={fetchFrequencyData}
                 disabled={freqLoading}
-                className="px-3 py-1.5 rounded-lg bg-[#131722] border border-[#1e2433] text-xs font-semibold text-slate-300 hover:text-white flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                className="px-3 py-1.5 rounded-lg bg-[#EAE8E2] border border-[#CFCDC5] text-xs font-semibold text-[#171717] hover:text-white flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
               >
                 <span className={`material-symbols-outlined text-[16px] ${freqLoading ? 'animate-spin' : ''}`}>
                   refresh
@@ -704,13 +752,13 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               {/* FILTRO PERÍODO */}
               <div>
-                <label className="text-[11px] font-mono font-bold text-slate-400 block mb-1.5 uppercase">
+                <label className="text-[11px] font-mono font-bold text-[#77766F] block mb-1.5 uppercase">
                   Período
                 </label>
                 <select
                   value={periodFilter}
                   onChange={(e) => setPeriodFilter(e.target.value as any)}
-                  className="w-full h-10 px-3 bg-[#131722] border border-[#1e2433] rounded-xl text-xs text-slate-200 focus:outline-none focus:border-purple-500 font-mono"
+                  className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-xs text-[#171717] focus:outline-none focus:border-purple-500 font-mono"
                 >
                   <option value="today">Hoje</option>
                   <option value="week">Últimos 7 dias</option>
@@ -720,13 +768,13 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
 
               {/* FILTRO INDÚSTRIA */}
               <div>
-                <label className="text-[11px] font-mono font-bold text-slate-400 block mb-1.5 uppercase">
+                <label className="text-[11px] font-mono font-bold text-[#77766F] block mb-1.5 uppercase">
                   Indústria
                 </label>
                 <select
                   value={selectedIndustria}
                   onChange={(e) => setSelectedIndustria(e.target.value)}
-                  className="w-full h-10 px-3 bg-[#131722] border border-[#1e2433] rounded-xl text-xs text-slate-200 focus:outline-none focus:border-purple-500 font-mono"
+                  className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-xs text-[#171717] focus:outline-none focus:border-purple-500 font-mono"
                 >
                   <option value="todas">Indústria: Todas ({industries.length})</option>
                   {industries.map((ind) => (
@@ -739,13 +787,13 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
 
               {/* FILTRO LOJA */}
               <div>
-                <label className="text-[11px] font-mono font-bold text-slate-400 block mb-1.5 uppercase">
+                <label className="text-[11px] font-mono font-bold text-[#77766F] block mb-1.5 uppercase">
                   Loja
                 </label>
                 <select
                   value={selectedLoja}
                   onChange={(e) => setSelectedLoja(e.target.value)}
-                  className="w-full h-10 px-3 bg-[#131722] border border-[#1e2433] rounded-xl text-xs text-slate-200 focus:outline-none focus:border-purple-500 font-mono"
+                  className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-xs text-[#171717] focus:outline-none focus:border-purple-500 font-mono"
                 >
                   <option value="todas">Loja: Todas ({lojasList.length})</option>
                   {lojasList.map((st) => (
@@ -758,13 +806,13 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
 
               {/* FILTRO PROMOTOR */}
               <div>
-                <label className="text-[11px] font-mono font-bold text-slate-400 block mb-1.5 uppercase">
+                <label className="text-[11px] font-mono font-bold text-[#77766F] block mb-1.5 uppercase">
                   Promotor
                 </label>
                 <select
                   value={selectedPromotor}
                   onChange={(e) => setSelectedPromotor(e.target.value)}
-                  className="w-full h-10 px-3 bg-[#131722] border border-[#1e2433] rounded-xl text-xs text-slate-200 focus:outline-none focus:border-purple-500 font-mono"
+                  className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-xs text-[#171717] focus:outline-none focus:border-purple-500 font-mono"
                 >
                   <option value="todos">Promotor: Todos ({promotoresList.length})</option>
                   {promotoresList.map((pr) => (
@@ -795,19 +843,19 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
           {/* CARDS DE KPI (TOP BAR) */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
             {/* PLANEJADAS */}
-            <div className="p-5 rounded-2xl bg-[#171b26] border border-[#1e2433] shadow-xl">
-              <div className="flex items-center justify-between text-slate-400 font-mono text-[11px] font-bold">
+            <div className="p-5 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5] shadow-xl">
+              <div className="flex items-center justify-between text-[#77766F] font-mono text-[11px] font-bold">
                 <span>PLANEJADAS</span>
                 <span className="material-symbols-outlined text-purple-400">calendar_month</span>
               </div>
-              <div className="text-3xl font-extrabold text-white font-mono mt-2">
+              <div className="text-3xl font-extrabold text-[#171717] font-mono mt-2">
                 {processedData.totalPlanejadas}
               </div>
-              <p className="text-[10px] text-slate-500 mt-1">Ocorrências geradas por rotas</p>
+              <p className="text-[10px] text-[#5F5F5F] mt-1">Ocorrências geradas por rotas</p>
             </div>
 
             {/* REALIZADAS */}
-            <div className="p-5 rounded-2xl bg-[#171b26] border border-emerald-500/30 shadow-xl">
+            <div className="p-5 rounded-2xl bg-[#F7F6F2] border border-emerald-500/30 shadow-xl">
               <div className="flex items-center justify-between text-emerald-400 font-mono text-[11px] font-bold">
                 <span>REALIZADAS</span>
                 <span className="material-symbols-outlined">task_alt</span>
@@ -815,11 +863,11 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
               <div className="text-3xl font-extrabold text-emerald-400 font-mono mt-2">
                 {processedData.totalRealizadas}
               </div>
-              <p className="text-[10px] text-slate-500 mt-1">Visitas com status concluída</p>
+              <p className="text-[10px] text-[#5F5F5F] mt-1">Visitas com status concluída</p>
             </div>
 
             {/* PENDENTES */}
-            <div className="p-5 rounded-2xl bg-[#171b26] border border-amber-500/30 shadow-xl">
+            <div className="p-5 rounded-2xl bg-[#F7F6F2] border border-amber-500/30 shadow-xl">
               <div className="flex items-center justify-between text-amber-400 font-mono text-[11px] font-bold">
                 <span>PENDENTES</span>
                 <span className="material-symbols-outlined">pending_actions</span>
@@ -827,11 +875,11 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
               <div className="text-3xl font-extrabold text-amber-400 font-mono mt-2">
                 {processedData.totalPendentes}
               </div>
-              <p className="text-[10px] text-slate-500 mt-1">Visitas sem execução no dia</p>
+              <p className="text-[10px] text-[#5F5F5F] mt-1">Visitas sem execução no dia</p>
             </div>
 
             {/* NÃO REALIZADAS */}
-            <div className="p-5 rounded-2xl bg-[#171b26] border border-rose-500/30 shadow-xl">
+            <div className="p-5 rounded-2xl bg-[#F7F6F2] border border-rose-500/30 shadow-xl">
               <div className="flex items-center justify-between text-rose-400 font-mono text-[11px] font-bold">
                 <span>NÃO REALIZADAS</span>
                 <span className="material-symbols-outlined">cancel</span>
@@ -839,11 +887,11 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
               <div className="text-3xl font-extrabold text-rose-400 font-mono mt-2">
                 {processedData.totalNaoRealizadas}
               </div>
-              <p className="text-[10px] text-slate-500 mt-1">Com justificativa / ocorrência</p>
+              <p className="text-[10px] text-[#5F5F5F] mt-1">Com justificativa / ocorrência</p>
             </div>
 
             {/* ADERÊNCIA OPERACIONAL */}
-            <div className="p-5 rounded-2xl bg-[#171b26] border border-indigo-500/30 shadow-xl">
+            <div className="p-5 rounded-2xl bg-[#F7F6F2] border border-indigo-500/30 shadow-xl">
               <div className="flex items-center justify-between text-indigo-400 font-mono text-[11px] font-bold">
                 <span>ADERÊNCIA OPERACIONAL</span>
                 <span className="material-symbols-outlined">trending_up</span>
@@ -851,19 +899,19 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
               <div className="text-3xl font-extrabold text-indigo-400 font-mono mt-2">
                 {processedData.taxaAderenciaGeral}%
               </div>
-              <p className="text-[10px] text-slate-500 mt-1">Realizadas / Planejadas</p>
+              <p className="text-[10px] text-[#5F5F5F] mt-1">Realizadas / Planejadas</p>
             </div>
           </div>
 
           {/* ALTERNADOR DE VISUALIZAÇÃO (POR INDÚSTRIA OU POR PROMOTOR) */}
-          <div className="flex items-center justify-between border-b border-[#1e2433] pb-4">
+          <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-4">
             <div className="flex items-center gap-3">
               <button
                 onClick={() => setViewMode('industria')}
                 className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
                   viewMode === 'industria'
-                    ? 'bg-purple-600 text-white shadow-lg'
-                    : 'bg-[#171b26] text-slate-400 hover:text-white border border-[#1e2433]'
+                    ? 'bg-[#222222] text-white shadow-lg'
+                    : 'bg-[#F7F6F2] text-[#77766F] hover:text-white border border-[#CFCDC5]'
                 }`}
               >
                 <span className="material-symbols-outlined text-[18px]">factory</span>
@@ -874,8 +922,8 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
                 onClick={() => setViewMode('promotor')}
                 className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
                   viewMode === 'promotor'
-                    ? 'bg-purple-600 text-white shadow-lg'
-                    : 'bg-[#171b26] text-slate-400 hover:text-white border border-[#1e2433]'
+                    ? 'bg-[#222222] text-white shadow-lg'
+                    : 'bg-[#F7F6F2] text-[#77766F] hover:text-white border border-[#CFCDC5]'
                 }`}
               >
                 <span className="material-symbols-outlined text-[18px]">badge</span>
@@ -883,7 +931,7 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
               </button>
             </div>
 
-            <div className="text-xs font-mono text-slate-400 hidden sm:block">
+            <div className="text-xs font-mono text-[#77766F] hidden sm:block">
               {viewMode === 'industria'
                 ? `${processedData.tabelaIndustrias.length} Indústrias Analisadas`
                 : `${processedData.tabelaPromotores.length} Promotores Analisados`}
@@ -892,28 +940,28 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
 
           {/* TABELA DE VISÃO POR INDÚSTRIA & DETALHAMENTO POR LOJA */}
           {viewMode === 'industria' && (
-            <section className="bg-[#171b26] border border-[#1e2433] rounded-2xl p-6 shadow-2xl space-y-4">
+            <section className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-6 shadow-2xl space-y-4">
               <div className="flex items-center justify-between">
                 <div>
-                  <h3 className="text-lg font-bold text-white tracking-tight flex items-center gap-2">
+                  <h3 className="text-lg font-bold text-[#171717] tracking-tight flex items-center gap-2">
                     <span className="material-symbols-outlined text-purple-400">table_chart</span>
                     Frequência e Aderência Operacional por Indústria
                   </h3>
-                  <p className="text-xs text-slate-400 mt-0.5">
+                  <p className="text-xs text-[#77766F] mt-0.5">
                     Ordenado inicialmente por menor aderência para identificação rápida de desvios. Clique na linha para detalhar por loja.
                   </p>
                 </div>
               </div>
 
               {processedData.tabelaIndustrias.length === 0 ? (
-                <div className="p-12 text-center text-slate-500 font-mono text-xs border border-dashed border-[#1e2433] rounded-xl">
+                <div className="p-12 text-center text-[#5F5F5F] font-mono text-xs border border-dashed border-[#CFCDC5] rounded-xl">
                   Nenhum registro encontrado para os filtros selecionados.
                 </div>
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-xs font-sans border-collapse">
                     <thead>
-                      <tr className="border-b border-[#1e2433] text-slate-400 font-mono text-[11px] uppercase bg-[#131722]">
+                      <tr className="border-b border-[#CFCDC5] text-[#77766F] font-mono text-[11px] uppercase bg-[#EAE8E2]">
                         <th className="py-3 px-4 font-semibold">Indústria</th>
                         <th className="py-3 px-4 font-semibold text-right">Planejadas</th>
                         <th className="py-3 px-4 font-semibold text-right">Realizadas</th>
@@ -924,7 +972,7 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
                         <th className="py-3 px-4 font-semibold text-center">Detalhamento</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-[#1e2433]">
+                    <tbody className="divide-y divide-[#CFCDC5]">
                       {processedData.tabelaIndustrias.map((ind) => {
                         const isExpanded = expandedIndustria === ind.codigo;
                         return (
@@ -934,12 +982,12 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
                               className="hover:bg-[#1d2230]/60 transition-colors cursor-pointer"
                             >
                               <td className="py-3.5 px-4 font-bold text-white flex items-center gap-2">
-                                <span className="material-symbols-outlined text-slate-400 text-[18px]">
+                                <span className="material-symbols-outlined text-[#77766F] text-[18px]">
                                   factory
                                 </span>
                                 <div>
                                   <span className="block">{ind.nome}</span>
-                                  <span className="text-[10px] font-mono text-slate-500">{ind.codigo}</span>
+                                  <span className="text-[10px] font-mono text-[#5F5F5F]">{ind.codigo}</span>
                                 </div>
                                 {ind.temQuinzenal && (
                                   <span
@@ -979,7 +1027,7 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
                                 </span>
                               </td>
                               <td className="py-3.5 px-4 text-center">
-                                <button className="text-slate-400 hover:text-white transition-colors">
+                                <button className="text-[#77766F] hover:text-white transition-colors">
                                   <span className="material-symbols-outlined text-[20px]">
                                     {isExpanded ? 'expand_less' : 'expand_more'}
                                   </span>
@@ -990,24 +1038,24 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
                             {/* LINHA EXPANDIDA COM DETALHAMENTO POR LOJA */}
                             {isExpanded && (
                               <tr>
-                                <td colSpan={8} className="p-0 bg-[#121622] border-b border-[#1e2433]">
+                                <td colSpan={8} className="p-0 bg-[#121622] border-b border-[#CFCDC5]">
                                   <div className="p-4 space-y-3">
-                                    <div className="text-xs font-mono font-bold text-slate-300 flex items-center justify-between border-b border-[#1e2433] pb-2">
+                                    <div className="text-xs font-mono font-bold text-[#171717] flex items-center justify-between border-b border-[#CFCDC5] pb-2">
                                       <span>DETALHAMENTO POR LOJA — {ind.nome.toUpperCase()}</span>
-                                      <span className="text-slate-500 font-normal">
+                                      <span className="text-[#5F5F5F] font-normal">
                                         {ind.detalhamentoLojas.length} Lojas Atendidas
                                       </span>
                                     </div>
 
                                     {ind.detalhamentoLojas.length === 0 ? (
-                                      <div className="p-4 text-slate-500 font-mono text-xs">
+                                      <div className="p-4 text-[#5F5F5F] font-mono text-xs">
                                         Sem detalhamento de lojas para esta indústria no período.
                                       </div>
                                     ) : (
                                       <div className="overflow-x-auto">
                                         <table className="w-full text-left text-xs font-sans">
                                           <thead>
-                                            <tr className="text-slate-400 font-mono text-[10px] uppercase border-b border-[#1e2433]">
+                                            <tr className="text-[#77766F] font-mono text-[10px] uppercase border-b border-[#CFCDC5]">
                                               <th className="py-2 px-3">Loja</th>
                                               <th className="py-2 px-3">Promotor</th>
                                               <th className="py-2 px-3">Frequência</th>
@@ -1017,27 +1065,27 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
                                               <th className="py-2 px-3 text-center">Aderência</th>
                                             </tr>
                                           </thead>
-                                          <tbody className="divide-y divide-[#1e2433]">
+                                          <tbody className="divide-y divide-[#CFCDC5]">
                                             {ind.detalhamentoLojas.map((d, idx) => (
                                               <tr key={idx} className="hover:bg-[#181d2c]">
                                                 <td className="py-2.5 px-3 font-semibold text-slate-200">
                                                   {d.lojaNome}
-                                                  <span className="block text-[10px] font-mono text-slate-500">
+                                                  <span className="block text-[10px] font-mono text-[#5F5F5F]">
                                                     {d.lojaCodigo}
                                                   </span>
                                                 </td>
-                                                <td className="py-2.5 px-3 text-slate-300">
+                                                <td className="py-2.5 px-3 text-[#171717]">
                                                   {d.promotorNome}
-                                                  <span className="block text-[10px] font-mono text-slate-500">
+                                                  <span className="block text-[10px] font-mono text-[#5F5F5F]">
                                                     {d.promotorMatricula}
                                                   </span>
                                                 </td>
                                                 <td className="py-2.5 px-3 font-mono text-[11px] uppercase">
-                                                  <span className="px-2 py-0.5 rounded bg-[#1e2433] text-purple-300 font-bold border border-purple-500/20">
+                                                  <span className="px-2 py-0.5 rounded bg-[#CFCDC5] text-[#7E22CE] font-bold border border-purple-500/20">
                                                     {d.frequencia}
                                                   </span>
                                                 </td>
-                                                <td className="py-2.5 px-3 font-mono text-slate-300 text-right">
+                                                <td className="py-2.5 px-3 font-mono text-[#171717] text-right">
                                                   {d.planejadas}
                                                 </td>
                                                 <td className="py-2.5 px-3 font-mono text-emerald-400 font-bold text-right">
@@ -1073,28 +1121,28 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
 
           {/* TABELA DE VISÃO POR PROMOTOR */}
           {viewMode === 'promotor' && (
-            <section className="bg-[#171b26] border border-[#1e2433] rounded-2xl p-6 shadow-2xl space-y-4">
+            <section className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-6 shadow-2xl space-y-4">
               <div className="flex items-center justify-between">
                 <div>
-                  <h3 className="text-lg font-bold text-white tracking-tight flex items-center gap-2">
+                  <h3 className="text-lg font-bold text-[#171717] tracking-tight flex items-center gap-2">
                     <span className="material-symbols-outlined text-purple-400">badge</span>
                     Aderência Operacional por Promotor
                   </h3>
-                  <p className="text-xs text-slate-400 mt-0.5">
+                  <p className="text-xs text-[#77766F] mt-0.5">
                     Métricas acumuladas de cumprimento do roteiro individual.
                   </p>
                 </div>
               </div>
 
               {processedData.tabelaPromotores.length === 0 ? (
-                <div className="p-12 text-center text-slate-500 font-mono text-xs border border-dashed border-[#1e2433] rounded-xl">
+                <div className="p-12 text-center text-[#5F5F5F] font-mono text-xs border border-dashed border-[#CFCDC5] rounded-xl">
                   Nenhum promotor encontrado para os filtros selecionados.
                 </div>
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-xs font-sans border-collapse">
                     <thead>
-                      <tr className="border-b border-[#1e2433] text-slate-400 font-mono text-[11px] uppercase bg-[#131722]">
+                      <tr className="border-b border-[#CFCDC5] text-[#77766F] font-mono text-[11px] uppercase bg-[#EAE8E2]">
                         <th className="py-3 px-4 font-semibold">Promotor</th>
                         <th className="py-3 px-4 font-semibold text-center">Indústrias</th>
                         <th className="py-3 px-4 font-semibold text-center">Lojas</th>
@@ -1104,7 +1152,7 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
                         <th className="py-3 px-4 font-semibold text-center">Aderência</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-[#1e2433]">
+                    <tbody className="divide-y divide-[#CFCDC5]">
                       {processedData.tabelaPromotores.map((prm) => (
                         <tr key={prm.matricula} className="hover:bg-[#1d2230]/60 transition-colors">
                           <td className="py-3.5 px-4 font-bold text-white flex items-center gap-2">
@@ -1113,13 +1161,13 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
                             </span>
                             <div>
                               <span className="block">{prm.nome}</span>
-                              <span className="text-[10px] font-mono text-slate-500">{prm.matricula}</span>
+                              <span className="text-[10px] font-mono text-[#5F5F5F]">{prm.matricula}</span>
                             </div>
                           </td>
-                          <td className="py-3.5 px-4 text-center font-mono text-slate-300">
+                          <td className="py-3.5 px-4 text-center font-mono text-[#171717]">
                             {prm.qtdIndustrias}
                           </td>
-                          <td className="py-3.5 px-4 text-center font-mono text-slate-300">
+                          <td className="py-3.5 px-4 text-center font-mono text-[#171717]">
                             {prm.qtdLojas}
                           </td>
                           <td className="py-3.5 px-4 font-mono font-semibold text-slate-200 text-right">
@@ -1162,15 +1210,15 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
         <div className="space-y-8 animate-fadeIn">
           {/* CARDS DE METRICAS */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
-            <div className="p-5 rounded-2xl bg-[#171b26] border border-[#1e2433] shadow-xl">
-              <div className="flex items-center justify-between text-slate-400 font-mono text-xs">
+            <div className="p-5 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5] shadow-xl">
+              <div className="flex items-center justify-between text-[#77766F] font-mono text-xs">
                 <span>TOTAL DE INDÚSTRIAS</span>
                 <span className="material-symbols-outlined text-purple-400">factory</span>
               </div>
-              <div className="text-3xl font-extrabold text-white font-mono mt-2">{industries.length}</div>
+              <div className="text-3xl font-extrabold text-[#171717] font-mono mt-2">{industries.length}</div>
             </div>
 
-            <div className="p-5 rounded-2xl bg-[#171b26] border border-emerald-500/30 shadow-xl">
+            <div className="p-5 rounded-2xl bg-[#F7F6F2] border border-emerald-500/30 shadow-xl">
               <div className="flex items-center justify-between text-emerald-400 font-mono text-xs font-bold">
                 <span>INDÚSTRIAS ATIVAS</span>
                 <span className="material-symbols-outlined">check_circle</span>
@@ -1180,8 +1228,8 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
               </div>
             </div>
 
-            <div className="p-5 rounded-2xl bg-[#171b26] border border-[#1e2433] shadow-xl">
-              <div className="flex items-center justify-between text-slate-400 font-mono text-xs">
+            <div className="p-5 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5] shadow-xl">
+              <div className="flex items-center justify-between text-[#77766F] font-mono text-xs">
                 <span>INATIVAS / ARQUIVADAS</span>
                 <span className="material-symbols-outlined text-rose-400">block</span>
               </div>
@@ -1192,10 +1240,10 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
           </div>
 
       {/* BARRA DE BUSCA E FILTRO */}
-      <div className="bg-[#171b26] border border-[#1e2433] rounded-2xl p-5 shadow-2xl space-y-4">
+      <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-5 shadow-2xl space-y-4">
         <div className="grid grid-cols-1 sm:grid-cols-12 gap-4">
           <div className="sm:col-span-8 relative">
-            <span className="material-symbols-outlined absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-lg">
+            <span className="material-symbols-outlined absolute left-3.5 top-1/2 -translate-y-1/2 text-[#77766F] text-lg">
               search
             </span>
             <input
@@ -1203,7 +1251,7 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               placeholder="Buscar por código ou nome da indústria..."
-              className="w-full h-10 pl-10 pr-4 bg-[#131722] border border-[#1e2433] rounded-xl text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-purple-500 transition-all font-sans"
+              className="w-full h-10 pl-10 pr-4 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-xs text-[#171717] placeholder:text-[#5F5F5F] focus:outline-none focus:border-purple-500 transition-all font-sans"
             />
           </div>
 
@@ -1211,7 +1259,7 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value as any)}
-              className="w-full h-10 px-3 bg-[#131722] border border-[#1e2433] rounded-xl text-xs text-slate-200 focus:outline-none focus:border-purple-500 font-mono"
+              className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-xs text-[#171717] focus:outline-none focus:border-purple-500 font-mono"
             >
               <option value="todos">Status: Todos</option>
               <option value="ativo">Ativas</option>
@@ -1222,19 +1270,29 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
       </div>
 
       {/* TABELA DE REGISTROS */}
-      <section className="bg-[#171b26] border border-[#1e2433] rounded-2xl p-6 shadow-2xl space-y-4">
+      <section className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-6 shadow-2xl space-y-4">
         <div className="flex items-center justify-between">
-          <h3 className="text-sm font-bold text-white uppercase tracking-wider font-mono flex items-center gap-2">
+          <h3 className="text-sm font-bold text-[#171717] uppercase tracking-wider font-mono flex items-center gap-2">
             <span className="material-symbols-outlined text-purple-400">table_chart</span>
             Indústrias Cadastradas ({filteredIndustries.length})
           </h3>
+
+          {canEdit && (
+            <button
+              onClick={handleOpenCreate}
+              className="px-3.5 py-1.5 rounded-xl bg-[#222222] hover:bg-black text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-all shadow-[0_0_12px_rgba(147,51,234,0.3)] active:scale-95"
+            >
+              <span className="material-symbols-outlined text-[16px]">add</span>
+              <span>Nova Indústria</span>
+            </button>
+          )}
         </div>
 
         {/* LOADING */}
         {loading && (
           <div className="py-16 text-center space-y-3">
             <div className="w-10 h-10 border-4 border-purple-500/20 border-t-purple-500 rounded-full animate-spin mx-auto"></div>
-            <p className="text-xs font-mono text-slate-400">Carregando indústrias do Supabase...</p>
+            <p className="text-xs font-mono text-[#77766F]">Carregando indústrias do Supabase...</p>
           </div>
         )}
 
@@ -1243,18 +1301,18 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
           <div className="p-6 bg-rose-500/10 border border-rose-500/30 rounded-xl text-center space-y-3">
             <span className="material-symbols-outlined text-rose-400 text-3xl">warning</span>
             <h4 className="text-sm font-bold text-rose-300">Erro de Carregamento</h4>
-            <p className="text-xs text-slate-400 font-mono">{error}</p>
+            <p className="text-xs text-[#77766F] font-mono">{error}</p>
           </div>
         )}
 
         {/* VAZIO */}
         {!loading && !error && filteredIndustries.length === 0 && (
           <div className="py-16 text-center space-y-3">
-            <div className="w-14 h-14 rounded-full bg-[#131722] border border-[#1e2433] flex items-center justify-center text-slate-500 mx-auto">
+            <div className="w-14 h-14 rounded-full bg-[#EAE8E2] border border-[#CFCDC5] flex items-center justify-center text-[#5F5F5F] mx-auto">
               <span className="material-symbols-outlined text-3xl">search_off</span>
             </div>
-            <h4 className="text-sm font-bold text-white">Nenhuma Indústria Encontrada</h4>
-            <p className="text-xs text-slate-400 max-w-sm mx-auto">
+            <h4 className="text-sm font-bold text-[#171717]">Nenhuma Indústria Encontrada</h4>
+            <p className="text-xs text-[#77766F] max-w-sm mx-auto">
               Não há registros de indústrias correspondentes aos filtros aplicados.
             </p>
           </div>
@@ -1262,10 +1320,10 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
 
         {/* LISTA */}
         {!loading && !error && filteredIndustries.length > 0 && (
-          <div className="overflow-x-auto rounded-xl border border-[#1e2433]">
+          <div className="overflow-x-auto rounded-xl border border-[#CFCDC5]">
             <table className="w-full text-left text-xs border-collapse">
               <thead>
-                <tr className="bg-[#131722] border-b border-[#1e2433] text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono">
+                <tr className="bg-[#E3E1DA] border-b border-[#CFCDC5] text-[11px] font-bold text-[#171717] uppercase tracking-wider font-mono">
                   <th className="py-3.5 px-4">Código</th>
                   <th className="py-3.5 px-4">Nome da Indústria</th>
                   <th className="py-3.5 px-4">CNPJ</th>
@@ -1274,12 +1332,12 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
                   <th className="py-3.5 px-4 text-right">Ações</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-[#1e2433] text-slate-300 font-mono">
+              <tbody className="divide-y divide-[#CFCDC5] text-[#171717] font-mono">
                 {filteredIndustries.map((ind) => (
-                  <tr key={ind.id} className="hover:bg-[#131722]/60 transition-colors">
+                  <tr key={ind.id} className="hover:bg-[#EAE8E1] transition-colors">
                     <td className="py-3.5 px-4 font-bold text-purple-400">{ind.codigo}</td>
                     <td className="py-3.5 px-4 font-bold text-white">{ind.nome}</td>
-                    <td className="py-3.5 px-4 text-slate-400">{ind.cnpj || '—'}</td>
+                    <td className="py-3.5 px-4 text-[#77766F]">{ind.cnpj || '—'}</td>
                     <td className="py-3.5 px-4">
                       <span
                         className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${
@@ -1291,13 +1349,13 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
                         {ind.status.toUpperCase()}
                       </span>
                     </td>
-                    <td className="py-3.5 px-4 text-slate-400 max-w-xs truncate">
+                    <td className="py-3.5 px-4 text-[#77766F] max-w-xs truncate">
                       {ind.observacao || '—'}
                     </td>
                     <td className="py-3.5 px-4 text-right space-x-2">
                       <button
                         onClick={() => setViewingItem(ind)}
-                        className="p-1.5 rounded-lg bg-[#131722] hover:bg-[#1f2433] text-slate-300 border border-[#1e2433] cursor-pointer"
+                        className="p-1.5 rounded-lg bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] border border-[#CFCDC5] cursor-pointer"
                         title="Ver Detalhes"
                       >
                         <span className="material-symbols-outlined text-[16px]">visibility</span>
@@ -1339,46 +1397,46 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
       {/* MODAL VER DETALHES */}
       {viewingItem && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-[#171b26] border border-[#1e2433] rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5">
-            <div className="flex items-center justify-between border-b border-[#1e2433] pb-3">
-              <h3 className="text-sm font-bold text-white font-mono flex items-center gap-2">
+          <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5">
+            <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-3">
+              <h3 className="text-sm font-bold text-[#171717] font-mono flex items-center gap-2">
                 <span className="material-symbols-outlined text-purple-400">factory</span>
                 Detalhes da Indústria
               </h3>
-              <button onClick={() => setViewingItem(null)} className="text-slate-400 hover:text-white">
+              <button onClick={() => setViewingItem(null)} className="text-[#77766F] hover:text-white">
                 <span className="material-symbols-outlined">close</span>
               </button>
             </div>
 
             <div className="space-y-3 text-xs font-mono">
               <div>
-                <span className="text-slate-500 block">CÓDIGO:</span>
+                <span className="text-[#5F5F5F] block">CÓDIGO:</span>
                 <span className="text-purple-400 font-bold text-sm">{viewingItem.codigo}</span>
               </div>
               <div>
-                <span className="text-slate-500 block">NOME DA INDÚSTRIA:</span>
-                <span className="text-white font-bold">{viewingItem.nome}</span>
+                <span className="text-[#5F5F5F] block">NOME DA INDÚSTRIA:</span>
+                <span className="text-[#171717] font-bold">{viewingItem.nome}</span>
               </div>
               <div>
-                <span className="text-slate-500 block">CNPJ:</span>
-                <span className="text-slate-300">{viewingItem.cnpj || '—'}</span>
+                <span className="text-[#5F5F5F] block">CNPJ:</span>
+                <span className="text-[#171717]">{viewingItem.cnpj || '—'}</span>
               </div>
               <div>
-                <span className="text-slate-500 block">STATUS:</span>
+                <span className="text-[#5F5F5F] block">STATUS:</span>
                 <span className={`font-bold uppercase ${viewingItem.status === 'ativo' ? 'text-emerald-400' : 'text-rose-400'}`}>
                   {viewingItem.status}
                 </span>
               </div>
               <div>
-                <span className="text-slate-500 block">OBSERVAÇÃO:</span>
-                <span className="text-slate-300">{viewingItem.observacao || '—'}</span>
+                <span className="text-[#5F5F5F] block">OBSERVAÇÃO:</span>
+                <span className="text-[#171717]">{viewingItem.observacao || '—'}</span>
               </div>
             </div>
 
-            <div className="pt-3 border-t border-[#1e2433] flex justify-end">
+            <div className="pt-3 border-t border-[#CFCDC5] flex justify-end">
               <button
                 onClick={() => setViewingItem(null)}
-                className="px-4 py-2 rounded-xl bg-[#131722] hover:bg-[#1f2433] text-slate-300 border border-[#1e2433] text-xs font-semibold"
+                className="px-4 py-2 rounded-xl bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] border border-[#CFCDC5] text-xs font-semibold"
               >
                 Fechar
               </button>
@@ -1394,10 +1452,10 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <form
             onSubmit={handleSave}
-            className="bg-[#171b26] border border-[#1e2433] rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-5"
+            className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-5"
           >
-            <div className="flex items-center justify-between border-b border-[#1e2433] pb-3">
-              <h3 className="text-sm font-bold text-white font-mono flex items-center gap-2">
+            <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-3">
+              <h3 className="text-sm font-bold text-[#171717] font-mono flex items-center gap-2">
                 <span className="material-symbols-outlined text-purple-400">
                   {editingItem ? 'edit' : 'add'}
                 </span>
@@ -1406,7 +1464,7 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
               <button
                 type="button"
                 onClick={() => setShowModal(false)}
-                className="text-slate-400 hover:text-white"
+                className="text-[#77766F] hover:text-white"
               >
                 <span className="material-symbols-outlined">close</span>
               </button>
@@ -1414,47 +1472,54 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
 
             <div className="space-y-4 text-xs font-mono">
               <div>
-                <label className="text-slate-300 block mb-1">CÓDIGO DA INDÚSTRIA (*)</label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-[#171717]">CÓDIGO DA INDÚSTRIA (*)</label>
+                  {!editingItem && (
+                    <span className="text-[10px] text-purple-400 font-mono">
+                      (Gerado automaticamente se mantido)
+                    </span>
+                  )}
+                </div>
                 <input
                   type="text"
                   required
                   value={formData.codigo}
-                  onChange={(e) => setFormData({ ...formData, codigo: e.target.value })}
+                  onChange={(e) => setFormData({ ...formData, codigo: e.target.value.toUpperCase() })}
                   placeholder="Ex: IND-001"
                   disabled={Boolean(editingItem)}
-                  className="w-full h-10 px-3 bg-[#131722] border border-[#1e2433] rounded-xl text-slate-200 focus:outline-none focus:border-purple-500 disabled:opacity-50"
+                  className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-purple-500 disabled:opacity-50 font-mono uppercase"
                 />
               </div>
 
               <div>
-                <label className="text-slate-300 block mb-1">NOME / RAZÃO SOCIAL (*)</label>
+                <label className="text-[#171717] block mb-1">NOME / RAZÃO SOCIAL (*)</label>
                 <input
                   type="text"
                   required
                   value={formData.nome}
                   onChange={(e) => setFormData({ ...formData, nome: e.target.value })}
                   placeholder="Ex: Nestle Brasil Ltda"
-                  className="w-full h-10 px-3 bg-[#131722] border border-[#1e2433] rounded-xl text-slate-200 focus:outline-none focus:border-purple-500"
+                  className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-purple-500"
                 />
               </div>
 
               <div>
-                <label className="text-slate-300 block mb-1">CNPJ (OPCIONAL)</label>
+                <label className="text-[#171717] block mb-1">CNPJ (OPCIONAL)</label>
                 <input
                   type="text"
                   value={formData.cnpj}
                   onChange={(e) => setFormData({ ...formData, cnpj: e.target.value })}
                   placeholder="Ex: 12345678000195"
-                  className="w-full h-10 px-3 bg-[#131722] border border-[#1e2433] rounded-xl text-slate-200 focus:outline-none focus:border-purple-500"
+                  className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-purple-500"
                 />
               </div>
 
               <div>
-                <label className="text-slate-300 block mb-1">STATUS</label>
+                <label className="text-[#171717] block mb-1">STATUS</label>
                 <select
                   value={formData.status}
                   onChange={(e) => setFormData({ ...formData, status: e.target.value as any })}
-                  className="w-full h-10 px-3 bg-[#131722] border border-[#1e2433] rounded-xl text-slate-200 focus:outline-none focus:border-purple-500"
+                  className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-purple-500"
                 >
                   <option value="ativo">ATIVO</option>
                   <option value="inativo">INATIVO</option>
@@ -1462,28 +1527,28 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
               </div>
 
               <div>
-                <label className="text-slate-300 block mb-1">OBSERVAÇÕES</label>
+                <label className="text-[#171717] block mb-1">OBSERVAÇÕES</label>
                 <textarea
                   value={formData.observacao}
                   onChange={(e) => setFormData({ ...formData, observacao: e.target.value })}
                   placeholder="Anotações gerais..."
-                  className="w-full p-3 bg-[#131722] border border-[#1e2433] rounded-xl text-slate-200 focus:outline-none focus:border-purple-500 h-20 resize-none"
+                  className="w-full p-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-purple-500 h-20 resize-none"
                 />
               </div>
             </div>
 
-            <div className="pt-3 border-t border-[#1e2433] flex items-center justify-end gap-3">
+            <div className="pt-3 border-t border-[#CFCDC5] flex items-center justify-end gap-3">
               <button
                 type="button"
                 onClick={() => setShowModal(false)}
-                className="px-4 py-2 rounded-xl bg-[#131722] hover:bg-[#1f2433] text-slate-300 border border-[#1e2433] text-xs font-semibold cursor-pointer"
+                className="px-4 py-2 rounded-xl bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] border border-[#CFCDC5] text-xs font-semibold cursor-pointer"
               >
                 Cancelar
               </button>
               <button
                 type="submit"
                 disabled={saving}
-                className="px-5 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                className="px-5 py-2 rounded-xl bg-[#222222] hover:bg-black text-white font-bold text-xs flex items-center gap-2 cursor-pointer disabled:opacity-50"
               >
                 {saving ? (
                   <span>Salvando...</span>

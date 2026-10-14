@@ -150,17 +150,6 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
     return Array.from(map.entries()).sort((a, b) => a[1].localeCompare(b[1]));
   }, [routes]);
 
-  // Resumo de métricas no topo
-  const metrics = useMemo(() => {
-    const totalRotas = routes.length;
-    const semanais = routes.filter((r) => r.frequencia === 'SEMANAL').length;
-    const quinzenais = routes.filter((r) => r.frequencia === 'QUINZENAL').length;
-    const promotoresUnicos = new Set(routes.map((r) => r.promotor_matricula)).size;
-    const lojasUnicas = new Set(routes.map((r) => r.loja_codigo)).size;
-
-    return { totalRotas, semanais, quinzenais, promotoresUnicos, lojasUnicas };
-  }, [routes]);
-
   // Filtragem e Ordenação
   const filteredAndSortedRoutes = useMemo(() => {
     let result = routes.filter((r) => {
@@ -232,6 +221,80 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
 
     return result;
   }, [routes, searchTerm, selectedFrequencia, selectedDay, selectedUF, selectedIndustria, selectedLoja, selectedPromotor, sortBy]);
+
+  // Resumo de métricas no topo (Geral vs Individual por Promotor selecionado)
+  const metrics = useMemo(() => {
+    const isPromotorSelected = selectedPromotor !== 'TODOS';
+
+    // Quando nenhum promotor estiver selecionado, preserva os indicadores gerais da base carregada
+    if (!isPromotorSelected) {
+      const totalRotas = routes.length;
+      const semanais = routes.filter((r) => r.frequencia === 'SEMANAL').length;
+      const quinzenais = routes.filter((r) => r.frequencia === 'QUINZENAL').length;
+      const promotoresUnicos = new Set(routes.map((r) => r.promotor_matricula)).size;
+      const lojasUnicas = new Set(routes.map((r) => r.loja_codigo)).size;
+
+      return {
+        isIndividual: false,
+        totalRotas,
+        semanais,
+        quinzenais,
+        promotoresUnicos,
+        lojasUnicas,
+        visitasSemanais: 0,
+        visitasQuinzenais: 0,
+        promotorNome: null
+      };
+    }
+
+    // Quando um promotor específico estiver selecionado, calcula métricas individuais respeitando os filtros ativos
+    const targetRoutes = filteredAndSortedRoutes;
+    const totalRotas = targetRoutes.length;
+    const lojasUnicas = new Set(targetRoutes.map((r) => r.loja_codigo)).size;
+
+    // Função auxiliar para contar dias ativos em uma rota
+    const countActiveDays = (r: RouteItem): number => {
+      let count = 0;
+      if (r.segunda) count++;
+      if (r.terca) count++;
+      if (r.quarta) count++;
+      if (r.quinta) count++;
+      if (r.sexta) count++;
+      if (r.sabado) count++;
+      if (r.domingo) count++;
+      return count;
+    };
+
+    let visitasSemanais = 0;
+    let visitasQuinzenais = 0;
+
+    targetRoutes.forEach((r) => {
+      const activeDays = countActiveDays(r);
+      if (r.frequencia === 'SEMANAL') {
+        visitasSemanais += activeDays;
+      } else if (r.frequencia === 'QUINZENAL') {
+        visitasQuinzenais += activeDays;
+      }
+    });
+
+    // Nome do promotor selecionado para exibição contextual
+    const promotorName =
+      targetRoutes[0]?.promotor?.nome ||
+      availablePromotores.find(([mat]) => mat === selectedPromotor)?.[1] ||
+      selectedPromotor;
+
+    return {
+      isIndividual: true,
+      totalRotas,
+      lojasUnicas,
+      visitasSemanais,
+      visitasQuinzenais,
+      promotoresUnicos: 1,
+      semanais: targetRoutes.filter((r) => r.frequencia === 'SEMANAL').length,
+      quinzenais: targetRoutes.filter((r) => r.frequencia === 'QUINZENAL').length,
+      promotorNome: promotorName
+    };
+  }, [routes, filteredAndSortedRoutes, selectedPromotor, availablePromotores]);
 
   // Agrupamento Opcional
   const groupedRoutes = useMemo(() => {
@@ -387,17 +450,17 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
   return (
     <div className="w-full px-4 lg:px-8 py-6 max-w-[1720px] mx-auto space-y-8 font-sans">
       {/* HEADER PRINCIPAL */}
-      <section className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-[#1e2433] pb-6">
+      <section className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-[#CFCDC5] pb-6">
         <div>
           <div className="flex items-center gap-2.5">
             <div className="w-9 h-9 rounded-lg bg-gradient-to-tr from-amber-500 to-orange-600 flex items-center justify-center font-bold text-white shadow-[0_0_14px_rgba(245,158,11,0.5)]">
               <span className="material-symbols-outlined text-[20px]">alt_route</span>
             </div>
-            <h1 className="text-3xl font-extrabold text-white tracking-tight">
+            <h1 className="text-3xl font-extrabold text-[#171717] tracking-tight">
               Escala Operacional de Rotas Fixas
             </h1>
           </div>
-          <p className="text-xs sm:text-sm text-slate-400 mt-1 max-w-3xl">
+          <p className="text-xs sm:text-sm text-[#77766F] mt-1 max-w-3xl">
             Grade semanal de atendimento em campo por indústria, loja/PDV e promotor responsável.
           </p>
         </div>
@@ -406,7 +469,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
           <button
             onClick={fetchRoutes}
             disabled={loading}
-            className="px-4 py-2 rounded-xl bg-[#171b26] border border-[#1e2433] text-xs font-semibold text-slate-300 hover:text-white hover:border-amber-500/40 transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+            className="px-4 py-2 rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] text-xs font-semibold text-[#171717] hover:text-white hover:border-amber-500/40 transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
           >
             <span className={`material-symbols-outlined text-[18px] ${loading ? 'animate-spin' : ''}`}>
               refresh
@@ -427,39 +490,98 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
       </section>
 
       {/* CARDS DE RESUMO NO TOPO */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
-        <div className="p-4 rounded-2xl bg-[#171b26] border border-[#1e2433] shadow-xl">
-          <div className="text-[11px] font-mono text-slate-400 font-bold uppercase">Total de Rotas</div>
-          <div className="text-2xl font-extrabold text-white font-mono mt-1">{metrics.totalRotas}</div>
-        </div>
+      {metrics.isIndividual ? (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between text-xs font-mono text-[#77766F]">
+            <span className="flex items-center gap-1.5 text-amber-400 font-bold">
+              <span className="material-symbols-outlined text-[16px]">person</span>
+              Indicadores Individuais: {metrics.promotorNome} ({selectedPromotor})
+            </span>
+            <span className="text-[11px] text-[#5F5F5F]">
+              *Visitas calculadas com base nos dias configurados na grade
+            </span>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-amber-500/30 shadow-xl">
+              <div className="text-[11px] font-mono text-[#77766F] font-bold uppercase flex items-center gap-1.5">
+                <span className="material-symbols-outlined text-amber-400 text-[14px]">alt_route</span>
+                Rotas Cadastradas
+              </div>
+              <div className="text-2xl font-extrabold text-[#171717] font-mono mt-1">{metrics.totalRotas}</div>
+              <div className="text-[10px] text-[#5F5F5F] font-mono mt-0.5">
+                {metrics.semanais} semanais • {metrics.quinzenais} quinzenais
+              </div>
+            </div>
 
-        <div className="p-4 rounded-2xl bg-[#171b26] border border-[#1e2433] shadow-xl">
-          <div className="text-[11px] font-mono text-cyan-400 font-bold uppercase">Rotas Semanais</div>
-          <div className="text-2xl font-extrabold text-cyan-400 font-mono mt-1">{metrics.semanais}</div>
-        </div>
+            <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-emerald-500/30 shadow-xl">
+              <div className="text-[11px] font-mono text-emerald-400 font-bold uppercase flex items-center gap-1.5">
+                <span className="material-symbols-outlined text-emerald-400 text-[14px]">storefront</span>
+                Lojas / PDVs Distintos
+              </div>
+              <div className="text-2xl font-extrabold text-emerald-400 font-mono mt-1">{metrics.lojasUnicas}</div>
+              <div className="text-[10px] text-[#5F5F5F] font-mono mt-0.5">
+                Pontos de venda atendidos
+              </div>
+            </div>
 
-        <div className="p-4 rounded-2xl bg-[#171b26] border border-[#1e2433] shadow-xl">
-          <div className="text-[11px] font-mono text-purple-400 font-bold uppercase">Rotas Quinzenais</div>
-          <div className="text-2xl font-extrabold text-purple-400 font-mono mt-1">{metrics.quinzenais}</div>
-        </div>
+            <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-cyan-500/30 shadow-xl">
+              <div className="text-[11px] font-mono text-cyan-400 font-bold uppercase flex items-center gap-1.5">
+                <span className="material-symbols-outlined text-cyan-400 text-[14px]">event_repeat</span>
+                Visitas Semanais Previstas
+              </div>
+              <div className="text-2xl font-extrabold text-cyan-400 font-mono mt-1">{metrics.visitasSemanais}</div>
+              <div className="text-[10px] text-[#5F5F5F] font-mono mt-0.5">
+                Soma dos dias ativos (freq. semanal)
+              </div>
+            </div>
 
-        <div className="p-4 rounded-2xl bg-[#171b26] border border-[#1e2433] shadow-xl">
-          <div className="text-[11px] font-mono text-amber-400 font-bold uppercase">Promotores Ativos</div>
-          <div className="text-2xl font-extrabold text-amber-400 font-mono mt-1">{metrics.promotoresUnicos}</div>
+            <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-purple-500/30 shadow-xl">
+              <div className="text-[11px] font-mono text-purple-400 font-bold uppercase flex items-center gap-1.5">
+                <span className="material-symbols-outlined text-purple-400 text-[14px]">date_range</span>
+                Visitas Quinzenais Previstas
+              </div>
+              <div className="text-2xl font-extrabold text-purple-400 font-mono mt-1">{metrics.visitasQuinzenais}</div>
+              <div className="text-[10px] text-[#5F5F5F] font-mono mt-0.5">
+                Soma dos dias ativos (freq. quinzenal)
+              </div>
+            </div>
+          </div>
         </div>
+      ) : (
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+          <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5] shadow-sm">
+            <div className="text-[11px] font-mono text-[#5F5F5F] font-bold uppercase">Total de Rotas</div>
+            <div className="text-2xl font-extrabold text-[#171717] font-mono mt-1">{metrics.totalRotas}</div>
+          </div>
 
-        <div className="p-4 rounded-2xl bg-[#171b26] border border-[#1e2433] shadow-xl col-span-2 sm:col-span-1">
-          <div className="text-[11px] font-mono text-emerald-400 font-bold uppercase">Lojas / PDVs Atendidos</div>
-          <div className="text-2xl font-extrabold text-emerald-400 font-mono mt-1">{metrics.lojasUnicas}</div>
+          <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5] shadow-sm">
+            <div className="text-[11px] font-mono text-[#087F9C] font-bold uppercase">Rotas Semanais</div>
+            <div className="text-2xl font-extrabold text-[#171717] font-mono mt-1">{metrics.semanais}</div>
+          </div>
+
+          <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5] shadow-sm">
+            <div className="text-[11px] font-mono text-[#7E22CE] font-bold uppercase">Rotas Quinzenais</div>
+            <div className="text-2xl font-extrabold text-[#171717] font-mono mt-1">{metrics.quinzenais}</div>
+          </div>
+
+          <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5] shadow-sm">
+            <div className="text-[11px] font-mono text-[#986000] font-bold uppercase">Promotores Ativos</div>
+            <div className="text-2xl font-extrabold text-[#171717] font-mono mt-1">{metrics.promotoresUnicos}</div>
+          </div>
+
+          <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5] shadow-sm col-span-2 sm:col-span-1">
+            <div className="text-[11px] font-mono text-[#16794F] font-bold uppercase">Lojas / PDVs Atendidos</div>
+            <div className="text-2xl font-extrabold text-[#171717] font-mono mt-1">{metrics.lojasUnicas}</div>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* PAINEL DE CONTROLES: FILTROS COMBINÁVEIS, BUSCA, AGRUPAMENTO & ORDENAÇÃO */}
-      <div className="bg-[#171b26] border border-[#1e2433] rounded-2xl p-5 shadow-2xl space-y-4">
+      <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-5 shadow-2xl space-y-4">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3 text-xs font-mono">
           {/* Busca Rápida */}
           <div className="lg:col-span-4 relative">
-            <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-base">
+            <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-[#77766F] text-base">
               search
             </span>
             <input
@@ -470,7 +592,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
                 setCurrentPage(1);
               }}
               placeholder="Buscar código, rota, indústria, loja ou promotor..."
-              className="w-full h-9 pl-9 pr-3 bg-[#131722] border border-[#1e2433] rounded-xl text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-amber-500"
+              className="w-full h-9 pl-9 pr-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] placeholder:text-[#5F5F5F] focus:outline-none focus:border-amber-500"
             />
           </div>
 
@@ -482,7 +604,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
                 setSelectedIndustria(e.target.value);
                 setCurrentPage(1);
               }}
-              className="w-full h-9 px-2 bg-[#131722] border border-[#1e2433] rounded-xl text-slate-200 focus:outline-none focus:border-amber-500"
+              className="w-full h-9 px-2 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-500"
             >
               <option value="TODAS">Indústria: Todas</option>
               {availableIndustrias.map(([code, name]) => (
@@ -499,7 +621,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
                 setSelectedLoja(e.target.value);
                 setCurrentPage(1);
               }}
-              className="w-full h-9 px-2 bg-[#131722] border border-[#1e2433] rounded-xl text-slate-200 focus:outline-none focus:border-amber-500"
+              className="w-full h-9 px-2 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-500"
             >
               <option value="TODAS">Loja: Todas</option>
               {availableLojas.map(([code, name]) => (
@@ -516,7 +638,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
                 setSelectedPromotor(e.target.value);
                 setCurrentPage(1);
               }}
-              className="w-full h-9 px-2 bg-[#131722] border border-[#1e2433] rounded-xl text-slate-200 focus:outline-none focus:border-amber-500"
+              className="w-full h-9 px-2 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-500"
             >
               <option value="TODOS">Promotor: Todos</option>
               {availablePromotores.map(([mat, name]) => (
@@ -533,7 +655,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
                 setSelectedUF(e.target.value);
                 setCurrentPage(1);
               }}
-              className="w-full h-9 px-2 bg-[#131722] border border-[#1e2433] rounded-xl text-slate-200 focus:outline-none focus:border-amber-500"
+              className="w-full h-9 px-2 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-500"
             >
               <option value="TODAS">UF: Todas</option>
               {availableUFs.map((uf) => (
@@ -544,7 +666,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
         </div>
 
         {/* Segunda Linha de Controles: Frequência, Dia, Agrupamento & Ordenação */}
-        <div className="pt-3 border-t border-[#1e2433] grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3 text-xs font-mono">
+        <div className="pt-3 border-t border-[#CFCDC5] grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3 text-xs font-mono">
           <div className="lg:col-span-3">
             <select
               value={selectedFrequencia}
@@ -552,7 +674,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
                 setSelectedFrequencia(e.target.value);
                 setCurrentPage(1);
               }}
-              className="w-full h-9 px-2 bg-[#131722] border border-[#1e2433] rounded-xl text-slate-200 focus:outline-none focus:border-amber-500"
+              className="w-full h-9 px-2 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-500"
             >
               <option value="TODAS">Frequência: Todas</option>
               <option value="SEMANAL">Semanal</option>
@@ -567,7 +689,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
                 setSelectedDay(e.target.value);
                 setCurrentPage(1);
               }}
-              className="w-full h-9 px-2 bg-[#131722] border border-[#1e2433] rounded-xl text-slate-200 focus:outline-none focus:border-amber-500"
+              className="w-full h-9 px-2 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-500"
             >
               <option value="TODOS">Dia: Qualquer dia</option>
               <option value="segunda">Segunda-feira</option>
@@ -584,7 +706,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
             <select
               value={groupBy}
               onChange={(e) => setGroupBy(e.target.value as GroupByOption)}
-              className="w-full h-9 px-2 bg-[#131722] border border-[#1e2433] rounded-xl text-amber-300 font-bold focus:outline-none focus:border-amber-500"
+              className="w-full h-9 px-2 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-amber-300 font-bold focus:outline-none focus:border-amber-500"
             >
               <option value="none">Agrupar por: Nenhum</option>
               <option value="promotor">Agrupar por Promotor</option>
@@ -598,7 +720,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
             <select
               value={sortBy}
               onChange={(e) => setSortBy(e.target.value as SortByOption)}
-              className="w-full h-9 px-2 bg-[#131722] border border-[#1e2433] rounded-xl text-slate-200 focus:outline-none focus:border-amber-500"
+              className="w-full h-9 px-2 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-500"
             >
               <option value="promotor">Ordenar por: Promotor</option>
               <option value="industria">Ordenar por: Indústria</option>
@@ -611,14 +733,14 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
       </div>
 
       {/* MATRIZ / GRADE SEMANAL OPERACIONAL DE ROTAS */}
-      <section className="bg-[#171b26] border border-[#1e2433] rounded-2xl p-6 shadow-2xl space-y-4">
+      <section className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-6 shadow-2xl space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <h3 className="text-sm font-bold text-white uppercase tracking-wider font-mono flex items-center gap-2">
+          <h3 className="text-sm font-bold text-[#171717] uppercase tracking-wider font-mono flex items-center gap-2">
             <span className="material-symbols-outlined text-amber-400">grid_on</span>
             Grade Semanal de Rotas ({filteredAndSortedRoutes.length} filtradas)
           </h3>
 
-          <div className="flex items-center gap-3 text-xs font-mono text-slate-400">
+          <div className="flex items-center gap-3 text-xs font-mono text-[#77766F]">
             <div className="flex items-center gap-1">
               <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
               <span>Visita Agendada</span>
@@ -634,7 +756,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
         {loading && (
           <div className="py-16 text-center space-y-3">
             <div className="w-10 h-10 border-4 border-amber-500/20 border-t-amber-500 rounded-full animate-spin mx-auto"></div>
-            <p className="text-xs font-mono text-slate-400">Carregando dados da grade semanal...</p>
+            <p className="text-xs font-mono text-[#77766F]">Carregando dados da grade semanal...</p>
           </div>
         )}
 
@@ -643,7 +765,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
           <div className="p-6 bg-rose-500/10 border border-rose-500/30 rounded-xl text-center space-y-3">
             <span className="material-symbols-outlined text-rose-400 text-3xl">warning</span>
             <h4 className="text-sm font-bold text-rose-300">Erro de Carregamento</h4>
-            <p className="text-xs text-slate-400 font-mono">{error}</p>
+            <p className="text-xs text-[#77766F] font-mono">{error}</p>
             <button
               onClick={fetchRoutes}
               className="px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs cursor-pointer"
@@ -656,11 +778,11 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
         {/* VAZIO */}
         {!loading && !error && filteredAndSortedRoutes.length === 0 && (
           <div className="py-16 text-center space-y-3">
-            <div className="w-14 h-14 rounded-full bg-[#131722] border border-[#1e2433] flex items-center justify-center text-slate-500 mx-auto">
+            <div className="w-14 h-14 rounded-full bg-[#EAE8E2] border border-[#CFCDC5] flex items-center justify-center text-[#5F5F5F] mx-auto">
               <span className="material-symbols-outlined text-3xl">search_off</span>
             </div>
-            <h4 className="text-sm font-bold text-white">Nenhuma Rota Encontrada</h4>
-            <p className="text-xs text-slate-400 max-w-sm mx-auto">
+            <h4 className="text-sm font-bold text-[#171717]">Nenhuma Rota Encontrada</h4>
+            <p className="text-xs text-[#77766F] max-w-sm mx-auto">
               Não há rotas cadastradas correspondentes aos critérios selecionados.
             </p>
           </div>
@@ -672,17 +794,17 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
             {Object.entries(groupedRoutes).map(([groupTitle, routeList]) => (
               <div key={groupTitle} className="space-y-2">
                 {groupBy !== 'none' && (
-                  <div className="px-3 py-1.5 rounded-lg bg-[#131722] border border-[#1e2433] text-xs font-bold font-mono text-amber-300 flex items-center gap-2">
+                  <div className="px-3 py-1.5 rounded-lg bg-[#EAE8E2] border border-[#CFCDC5] text-xs font-bold font-mono text-amber-300 flex items-center gap-2">
                     <span className="material-symbols-outlined text-base">folder_open</span>
                     <span>{groupTitle} ({routeList.length})</span>
                   </div>
                 )}
 
-                <div className="overflow-x-auto max-h-[600px] overflow-y-auto rounded-xl border border-[#1e2433]">
+                <div className="overflow-x-auto max-h-[600px] overflow-y-auto rounded-xl border border-[#CFCDC5]">
                   <table className="w-full text-left text-xs border-collapse font-mono">
-                    <thead className="sticky top-0 bg-[#0f131d] z-20 shadow-md">
-                      <tr className="border-b border-[#1e2433] text-[11px] font-bold text-slate-400 uppercase tracking-wider">
-                        <th className="py-3 px-4 sticky left-0 bg-[#0f131d] z-30 min-w-[140px] border-r border-[#1e2433]">
+                    <thead className="sticky top-0 bg-[#E3E1DA] z-20 shadow-xs">
+                      <tr className="border-b border-[#CFCDC5] text-[11px] font-bold text-[#171717] uppercase tracking-wider">
+                        <th className="py-3 px-4 sticky left-0 bg-[#E3E1DA] z-30 min-w-[140px] border-r border-[#CFCDC5]">
                           Rota / Code
                         </th>
                         <th className="py-3 px-4 min-w-[160px]">Indústria</th>
@@ -691,17 +813,17 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
                         <th className="py-3 px-4 min-w-[180px]">Promotor</th>
                         <th className="py-3 px-4 min-w-[110px]">Frequência</th>
                         {/* GRADE SEMANAL DE SEGUNDA A DOMINGO */}
-                        <th className="py-3 px-2 text-center w-12 bg-slate-900/60">SEG</th>
-                        <th className="py-3 px-2 text-center w-12 bg-slate-900/60">TER</th>
-                        <th className="py-3 px-2 text-center w-12 bg-slate-900/60">QUA</th>
-                        <th className="py-3 px-2 text-center w-12 bg-slate-900/60">QUI</th>
-                        <th className="py-3 px-2 text-center w-12 bg-slate-900/60">SEX</th>
-                        <th className="py-3 px-2 text-center w-12 bg-amber-950/40 text-amber-300">SÁB</th>
-                        <th className="py-3 px-2 text-center w-12 bg-rose-950/40 text-rose-300">DOM</th>
+                        <th className="py-3 px-2 text-center w-12 bg-[#DCD9D0]">SEG</th>
+                        <th className="py-3 px-2 text-center w-12 bg-[#DCD9D0]">TER</th>
+                        <th className="py-3 px-2 text-center w-12 bg-[#DCD9D0]">QUA</th>
+                        <th className="py-3 px-2 text-center w-12 bg-[#DCD9D0]">QUI</th>
+                        <th className="py-3 px-2 text-center w-12 bg-[#DCD9D0]">SEX</th>
+                        <th className="py-3 px-2 text-center w-12 bg-[#F5EED9] text-[#986000]">SÁB</th>
+                        <th className="py-3 px-2 text-center w-12 bg-[#FCE8E8] text-[#C62828]">DOM</th>
                         <th className="py-3 px-4 text-right min-w-[90px]">Ações</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-[#1e2433] text-slate-300">
+                    <tbody className="divide-y divide-[#CFCDC5] text-[#222222]">
                       {routeList.map((r) => {
                         const hasNoDays =
                           !r.segunda && !r.terca && !r.quarta && !r.quinta && !r.sexta && !r.sabado && !r.domingo;
@@ -711,12 +833,12 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
                         return (
                           <tr
                             key={r.id}
-                            className={`hover:bg-[#131722]/80 transition-colors ${
+                            className={`hover:bg-[#EAE8E1] transition-colors ${
                               hasNoDays ? 'bg-rose-950/20 border-l-4 border-l-rose-500' : ''
                             } ${missingRel ? 'bg-amber-950/10' : ''}`}
                           >
                             {/* COLUNA FIXA DA ROTA */}
-                            <td className="py-3 px-4 sticky left-0 bg-[#171b26] z-10 font-bold border-r border-[#1e2433]">
+                            <td className="py-3 px-4 sticky left-0 bg-[#F7F6F2] z-10 font-bold border-r border-[#CFCDC5]">
                               <div className="text-amber-400 flex items-center gap-1">
                                 {r.codigo_rota}
                                 {hasNoDays && (
@@ -734,29 +856,29 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
 
                             {/* Indústria */}
                             <td className="py-3 px-4">
-                              <div className="font-bold text-white truncate max-w-[150px]" title={r.industria?.nome || r.industria_codigo}>
+                              <div className="font-bold text-[#171717] truncate max-w-[150px]" title={r.industria?.nome || r.industria_codigo}>
                                 {r.industria?.nome || <span className="text-amber-400 italic">{r.industria_codigo} (Não achado)</span>}
                               </div>
-                              <div className="text-[10px] text-slate-500">{r.industria_codigo}</div>
+                              <div className="text-[10px] text-[#5F5F5F]">{r.industria_codigo}</div>
                             </td>
 
                             {/* Loja */}
                             <td className="py-3 px-4">
-                              <div className="font-bold text-white truncate max-w-[170px]" title={r.loja?.nome || r.loja_codigo}>
+                              <div className="font-bold text-[#171717] truncate max-w-[170px]" title={r.loja?.nome || r.loja_codigo}>
                                 {r.loja?.nome || <span className="text-amber-400 italic">{r.loja_codigo} (Não achado)</span>}
                               </div>
-                              <div className="text-[10px] text-slate-500">{r.loja_codigo}</div>
+                              <div className="text-[10px] text-[#5F5F5F]">{r.loja_codigo}</div>
                             </td>
 
                             {/* UF */}
-                            <td className="py-3 px-4 font-bold text-slate-200">{ufVal}</td>
+                            <td className="py-3 px-4 font-bold text-[#222222]">{ufVal}</td>
 
                             {/* Promotor */}
                             <td className="py-3 px-4">
-                              <div className="font-bold text-cyan-300 truncate max-w-[170px]" title={r.promotor?.nome || r.promotor_matricula}>
-                                {r.promotor?.nome || <span className="text-amber-400 italic">{r.promotor_matricula} (Não achado)</span>}
+                              <div className="font-bold text-[#171717] truncate max-w-[170px]" title={r.promotor?.nome || r.promotor_matricula}>
+                                {r.promotor?.nome || <span className="text-[#986000] italic">{r.promotor_matricula} (Não achado)</span>}
                               </div>
-                              <div className="text-[10px] text-slate-500">Mat: {r.promotor_matricula}</div>
+                              <div className="text-[10px] text-[#5F5F5F]">Mat: {r.promotor_matricula}</div>
                             </td>
 
                             {/* Frequência */}
@@ -764,8 +886,8 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
                               <span
                                 className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
                                   r.frequencia === 'SEMANAL'
-                                    ? 'bg-cyan-500/10 text-cyan-300 border-cyan-500/30'
-                                    : 'bg-purple-500/10 text-purple-300 border-purple-500/30'
+                                    ? 'bg-cyan-50 text-[#087F9C] border-cyan-200'
+                                    : 'bg-purple-50 text-[#7E22CE] border-purple-200'
                                 }`}
                               >
                                 {r.frequencia}
@@ -784,13 +906,13 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
                             ].map((day) => {
                               const marked = Boolean(r[day.dayKey as keyof RouteItem]);
                               return (
-                                <td key={day.dayKey} className="py-3 px-2 text-center border-l border-[#1e2433]">
+                                <td key={day.dayKey} className="py-3 px-2 text-center border-l border-[#CFCDC5]">
                                   {marked ? (
-                                    <div className="w-6 h-6 rounded-md bg-emerald-500/20 border border-emerald-500/50 text-emerald-400 flex items-center justify-center mx-auto font-bold shadow-[0_0_8px_rgba(16,185,129,0.3)]">
-                                      <span className="material-symbols-outlined text-sm">check</span>
+                                    <div className="w-6 h-6 rounded-md bg-emerald-100 border border-emerald-300 text-[#16794F] flex items-center justify-center mx-auto font-bold">
+                                      <span className="material-symbols-outlined text-sm font-black">check</span>
                                     </div>
                                   ) : (
-                                    <span className="text-slate-600 font-bold">—</span>
+                                    <span className="text-[#AAA79E] font-bold">—</span>
                                   )}
                                 </td>
                               );
@@ -800,7 +922,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
                             <td className="py-3 px-4 text-right space-x-1.5">
                               <button
                                 onClick={() => setViewingRoute(r)}
-                                className="p-1.5 rounded-lg bg-[#131722] hover:bg-[#1f2433] text-slate-300 hover:text-white border border-[#1e2433] cursor-pointer"
+                                className="p-1.5 rounded-lg bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] hover:text-white border border-[#CFCDC5] cursor-pointer"
                                 title="Ver Detalhes Operacionais"
                               >
                                 <span className="material-symbols-outlined text-[16px]">visibility</span>
@@ -827,23 +949,23 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
 
             {/* CONTROLES DE PAGINAÇÃO */}
             {groupBy === 'none' && totalPages > 1 && (
-              <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-4 border-t border-[#1e2433] font-mono text-xs text-slate-400">
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-4 border-t border-[#CFCDC5] font-mono text-xs text-[#77766F]">
                 <div>
-                  Exibindo página <strong className="text-white">{currentPage}</strong> de <strong className="text-white">{totalPages}</strong> ({totalItems} rotas no total)
+                  Exibindo página <strong className="text-[#171717]">{currentPage}</strong> de <strong className="text-[#171717]">{totalPages}</strong> ({totalItems} rotas no total)
                 </div>
 
                 <div className="flex items-center gap-2">
                   <button
                     disabled={currentPage === 1}
                     onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                    className="px-3 py-1.5 rounded-lg bg-[#131722] border border-[#1e2433] text-slate-300 hover:text-white disabled:opacity-40 cursor-pointer"
+                    className="px-3 py-1.5 rounded-lg bg-[#EAE8E2] border border-[#CFCDC5] text-[#171717] hover:text-white disabled:opacity-40 cursor-pointer"
                   >
                     Anterior
                   </button>
                   <button
                     disabled={currentPage >= totalPages}
                     onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                    className="px-3 py-1.5 rounded-lg bg-[#131722] border border-[#1e2433] text-slate-300 hover:text-white disabled:opacity-40 cursor-pointer"
+                    className="px-3 py-1.5 rounded-lg bg-[#EAE8E2] border border-[#CFCDC5] text-[#171717] hover:text-white disabled:opacity-40 cursor-pointer"
                   >
                     Próxima
                   </button>
@@ -857,47 +979,47 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
       {/* MODAL DETALHES DA ROTA */}
       {viewingRoute && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-[#171b26] border border-[#1e2433] rounded-2xl max-w-xl w-full p-6 shadow-2xl space-y-6">
-            <div className="flex items-center justify-between border-b border-[#1e2433] pb-4">
+          <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl max-w-xl w-full p-6 shadow-2xl space-y-6">
+            <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-4">
               <div className="flex items-center gap-2">
                 <span className="material-symbols-outlined text-amber-400 text-xl">alt_route</span>
-                <h3 className="text-base font-bold text-white font-mono">
+                <h3 className="text-base font-bold text-[#171717] font-mono">
                   Ficha Operacional da Rota {viewingRoute.codigo_rota}
                 </h3>
               </div>
-              <button onClick={() => setViewingRoute(null)} className="text-slate-400 hover:text-white">
+              <button onClick={() => setViewingRoute(null)} className="text-[#77766F] hover:text-white">
                 <span className="material-symbols-outlined">close</span>
               </button>
             </div>
 
             <div className="grid grid-cols-2 gap-4 text-xs font-mono">
-              <div className="p-3 rounded-xl bg-[#131722] border border-[#1e2433] space-y-1">
-                <span className="text-slate-500 block text-[10px]">INDÚSTRIA</span>
+              <div className="p-3 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] space-y-1">
+                <span className="text-[#5F5F5F] block text-[10px]">INDÚSTRIA</span>
                 <span className="text-white font-bold block">{viewingRoute.industria?.nome || viewingRoute.industria_codigo}</span>
                 <span className="text-amber-400 block text-[10px]">{viewingRoute.industria_codigo}</span>
               </div>
 
-              <div className="p-3 rounded-xl bg-[#131722] border border-[#1e2433] space-y-1">
-                <span className="text-slate-500 block text-[10px]">LOJA / PDV</span>
+              <div className="p-3 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] space-y-1">
+                <span className="text-[#5F5F5F] block text-[10px]">LOJA / PDV</span>
                 <span className="text-white font-bold block">{viewingRoute.loja?.nome || viewingRoute.loja_codigo}</span>
                 <span className="text-cyan-400 block text-[10px]">Código: {viewingRoute.loja_codigo} • UF: {viewingRoute.uf || viewingRoute.loja?.uf || '-'}</span>
               </div>
 
-              <div className="p-3 rounded-xl bg-[#131722] border border-[#1e2433] space-y-1">
-                <span className="text-slate-500 block text-[10px]">PROMOTOR RESPONSÁVEL</span>
+              <div className="p-3 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] space-y-1">
+                <span className="text-[#5F5F5F] block text-[10px]">PROMOTOR RESPONSÁVEL</span>
                 <span className="text-white font-bold block">{viewingRoute.promotor?.nome || viewingRoute.promotor_matricula}</span>
                 <span className="text-purple-400 block text-[10px]">Matrícula: {viewingRoute.promotor_matricula}</span>
               </div>
 
-              <div className="p-3 rounded-xl bg-[#131722] border border-[#1e2433] space-y-1">
-                <span className="text-slate-500 block text-[10px]">FREQUÊNCIA DE VISITA</span>
+              <div className="p-3 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] space-y-1">
+                <span className="text-[#5F5F5F] block text-[10px]">FREQUÊNCIA DE VISITA</span>
                 <span className="text-emerald-400 font-bold block uppercase">{viewingRoute.frequencia}</span>
               </div>
             </div>
 
             {/* Escala semanal em 7 blocos */}
             <div className="space-y-2 font-mono">
-              <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block">
+              <span className="text-xs font-bold text-[#77766F] uppercase tracking-wider block">
                 Escala Semanal de Visitas:
               </span>
               <div className="grid grid-cols-7 gap-1.5 text-center">
@@ -917,7 +1039,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
                       className={`p-2.5 rounded-xl border flex flex-col items-center justify-center space-y-1 ${
                         marked
                           ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300 font-bold'
-                          : 'bg-[#131722] border-[#1e2433] text-slate-600'
+                          : 'bg-[#EAE8E2] border-[#CFCDC5] text-slate-600'
                       }`}
                     >
                       <span className="text-[10px]">{day.label}</span>
@@ -931,16 +1053,16 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
             </div>
 
             {viewingRoute.observacao && (
-              <div className="p-3 rounded-xl bg-[#131722] border border-[#1e2433] space-y-1 font-mono text-xs">
-                <span className="text-slate-500 text-[10px] font-bold uppercase block">Observações</span>
-                <p className="text-slate-300">{viewingRoute.observacao}</p>
+              <div className="p-3 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] space-y-1 font-mono text-xs">
+                <span className="text-[#5F5F5F] text-[10px] font-bold uppercase block">Observações</span>
+                <p className="text-[#171717]">{viewingRoute.observacao}</p>
               </div>
             )}
 
-            <div className="pt-3 border-t border-[#1e2433] flex justify-end">
+            <div className="pt-3 border-t border-[#CFCDC5] flex justify-end">
               <button
                 onClick={() => setViewingRoute(null)}
-                className="px-5 py-2 rounded-xl bg-[#131722] hover:bg-[#1f2433] text-slate-300 border border-[#1e2433] text-xs font-semibold cursor-pointer"
+                className="px-5 py-2 rounded-xl bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] border border-[#CFCDC5] text-xs font-semibold cursor-pointer"
               >
                 Fechar
               </button>
@@ -952,34 +1074,34 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
       {/* MODAL EDITAR ESCALA DA ROTA */}
       {editingRoute && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-[#171b26] border border-[#1e2433] rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-6">
-            <div className="flex items-center justify-between border-b border-[#1e2433] pb-4">
+          <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-6">
+            <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-4">
               <div className="flex items-center gap-2">
                 <span className="material-symbols-outlined text-amber-400 text-xl">edit</span>
-                <h3 className="text-base font-bold text-white font-mono">
+                <h3 className="text-base font-bold text-[#171717] font-mono">
                   Editar Escala da Rota {editingRoute.codigo_rota}
                 </h3>
               </div>
-              <button onClick={() => setEditingRoute(null)} className="text-slate-400 hover:text-white">
+              <button onClick={() => setEditingRoute(null)} className="text-[#77766F] hover:text-white">
                 <span className="material-symbols-outlined">close</span>
               </button>
             </div>
 
             <div className="space-y-4 text-xs font-mono">
-              <div className="p-3 rounded-xl bg-[#131722] border border-[#1e2433] text-slate-300 space-y-1">
-                <div><span className="text-slate-500">Indústria:</span> <strong className="text-white">{editingRoute.industria?.nome || editingRoute.industria_codigo}</strong></div>
-                <div><span className="text-slate-500">Loja:</span> <strong className="text-white">{editingRoute.loja?.nome || editingRoute.loja_codigo}</strong></div>
-                <div><span className="text-slate-500">Promotor:</span> <strong className="text-cyan-300">{editingRoute.promotor?.nome || editingRoute.promotor_matricula}</strong></div>
+              <div className="p-3 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] text-[#171717] space-y-1">
+                <div><span className="text-[#5F5F5F]">Indústria:</span> <strong className="text-[#171717]">{editingRoute.industria?.nome || editingRoute.industria_codigo}</strong></div>
+                <div><span className="text-[#5F5F5F]">Loja:</span> <strong className="text-[#171717]">{editingRoute.loja?.nome || editingRoute.loja_codigo}</strong></div>
+                <div><span className="text-[#5F5F5F]">Promotor:</span> <strong className="text-cyan-300">{editingRoute.promotor?.nome || editingRoute.promotor_matricula}</strong></div>
               </div>
 
               <div>
-                <label className="text-slate-300 block mb-1">FREQUÊNCIA DE VISITA</label>
+                <label className="text-[#171717] block mb-1">FREQUÊNCIA DE VISITA</label>
                 <select
                   value={editingRoute.frequencia}
                   onChange={(e) =>
                     setEditingRoute({ ...editingRoute, frequencia: e.target.value as any })
                   }
-                  className="w-full h-10 px-3 bg-[#131722] border border-[#1e2433] rounded-xl text-slate-200 focus:outline-none focus:border-amber-500"
+                  className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-500"
                 >
                   <option value="SEMANAL">SEMANAL</option>
                   <option value="QUINZENAL">QUINZENAL</option>
@@ -988,7 +1110,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
 
               {/* Checkboxes de dias */}
               <div className="space-y-2">
-                <label className="text-slate-300 block font-bold uppercase">
+                <label className="text-[#171717] block font-bold uppercase">
                   DIAS DA SEMANA COM VISITA:
                 </label>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -1008,7 +1130,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
                         className={`p-2.5 rounded-xl border flex items-center gap-2 cursor-pointer transition-colors ${
                           checked
                             ? 'bg-amber-500/20 border-amber-500/50 text-amber-300 font-bold'
-                            : 'bg-[#131722] border-[#1e2433] text-slate-400 hover:text-slate-200'
+                            : 'bg-[#EAE8E2] border-[#CFCDC5] text-[#77766F] hover:text-slate-200'
                         }`}
                       >
                         <input
@@ -1017,7 +1139,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
                           onChange={(e) =>
                             setEditingRoute({ ...editingRoute, [day.key]: e.target.checked })
                           }
-                          className="rounded border-[#1e2433] text-amber-500 focus:ring-amber-400 w-4 h-4"
+                          className="rounded border-[#CFCDC5] text-amber-500 focus:ring-amber-400 w-4 h-4"
                         />
                         <span>{day.label}</span>
                       </label>
@@ -1027,21 +1149,21 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
               </div>
 
               <div>
-                <label className="text-slate-300 block mb-1">OBSERVAÇÕES DA ESCALA</label>
+                <label className="text-[#171717] block mb-1">OBSERVAÇÕES DA ESCALA</label>
                 <textarea
                   value={editingRoute.observacao || ''}
                   onChange={(e) => setEditingRoute({ ...editingRoute, observacao: e.target.value })}
                   placeholder="Observações da rota..."
-                  className="w-full p-3 bg-[#131722] border border-[#1e2433] rounded-xl text-slate-200 focus:outline-none focus:border-amber-500 h-20 resize-none"
+                  className="w-full p-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-500 h-20 resize-none"
                 />
               </div>
             </div>
 
-            <div className="pt-4 border-t border-[#1e2433] flex items-center justify-end gap-3">
+            <div className="pt-4 border-t border-[#CFCDC5] flex items-center justify-end gap-3">
               <button
                 type="button"
                 onClick={() => setEditingRoute(null)}
-                className="px-5 py-2 rounded-xl bg-[#131722] hover:bg-[#1f2433] text-slate-300 border border-[#1e2433] text-xs font-semibold cursor-pointer"
+                className="px-5 py-2 rounded-xl bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] border border-[#CFCDC5] text-xs font-semibold cursor-pointer"
               >
                 Cancelar
               </button>
@@ -1070,37 +1192,37 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <form
             onSubmit={handleSaveNewRoute}
-            className="bg-[#171b26] border border-[#1e2433] rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-5"
+            className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-5"
           >
-            <div className="flex items-center justify-between border-b border-[#1e2433] pb-3">
-              <h3 className="text-sm font-bold text-white font-mono flex items-center gap-2">
+            <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-3">
+              <h3 className="text-sm font-bold text-[#171717] font-mono flex items-center gap-2">
                 <span className="material-symbols-outlined text-amber-400">add</span>
                 Cadastrar Nova Rota Fixa
               </h3>
-              <button type="button" onClick={() => setShowCreateModal(false)} className="text-slate-400 hover:text-white">
+              <button type="button" onClick={() => setShowCreateModal(false)} className="text-[#77766F] hover:text-white">
                 <span className="material-symbols-outlined">close</span>
               </button>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs font-mono">
               <div className="sm:col-span-2">
-                <label className="text-slate-300 block mb-1">CÓDIGO DA ROTA (OPCIONAL)</label>
+                <label className="text-[#171717] block mb-1">CÓDIGO DA ROTA (OPCIONAL)</label>
                 <input
                   type="text"
                   value={newRouteForm.codigo_rota}
                   onChange={(e) => setNewRouteForm({ ...newRouteForm, codigo_rota: e.target.value })}
                   placeholder="Ex: ROT-PRM-001 (Gerado automaticamente se vazio)"
-                  className="w-full h-10 px-3 bg-[#131722] border border-[#1e2433] rounded-xl text-slate-200 focus:outline-none focus:border-amber-500"
+                  className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-500"
                 />
               </div>
 
               <div>
-                <label className="text-slate-300 block mb-1">INDÚSTRIA (*)</label>
+                <label className="text-[#171717] block mb-1">INDÚSTRIA (*)</label>
                 <select
                   required
                   value={newRouteForm.industria_codigo}
                   onChange={(e) => setNewRouteForm({ ...newRouteForm, industria_codigo: e.target.value })}
-                  className="w-full h-10 px-3 bg-[#131722] border border-[#1e2433] rounded-xl text-slate-200 focus:outline-none focus:border-amber-500"
+                  className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-500"
                 >
                   <option value="">Selecione a Indústria</option>
                   {industriasList.map((i) => (
@@ -1110,7 +1232,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
               </div>
 
               <div>
-                <label className="text-slate-300 block mb-1">LOJA / PDV (*)</label>
+                <label className="text-[#171717] block mb-1">LOJA / PDV (*)</label>
                 <select
                   required
                   value={newRouteForm.loja_codigo}
@@ -1122,7 +1244,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
                       uf: selected?.uf || newRouteForm.uf
                     });
                   }}
-                  className="w-full h-10 px-3 bg-[#131722] border border-[#1e2433] rounded-xl text-slate-200 focus:outline-none focus:border-amber-500"
+                  className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-500"
                 >
                   <option value="">Selecione a Loja</option>
                   {lojasList.map((l) => (
@@ -1132,12 +1254,12 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
               </div>
 
               <div>
-                <label className="text-slate-300 block mb-1">PROMOTOR (*)</label>
+                <label className="text-[#171717] block mb-1">PROMOTOR (*)</label>
                 <select
                   required
                   value={newRouteForm.promotor_matricula}
                   onChange={(e) => setNewRouteForm({ ...newRouteForm, promotor_matricula: e.target.value })}
-                  className="w-full h-10 px-3 bg-[#131722] border border-[#1e2433] rounded-xl text-slate-200 focus:outline-none focus:border-amber-500"
+                  className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-500"
                 >
                   <option value="">Selecione o Promotor</option>
                   {promotoresList.map((p) => (
@@ -1147,11 +1269,11 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
               </div>
 
               <div>
-                <label className="text-slate-300 block mb-1">FREQUÊNCIA (*)</label>
+                <label className="text-[#171717] block mb-1">FREQUÊNCIA (*)</label>
                 <select
                   value={newRouteForm.frequencia}
                   onChange={(e) => setNewRouteForm({ ...newRouteForm, frequencia: e.target.value as any })}
-                  className="w-full h-10 px-3 bg-[#131722] border border-[#1e2433] rounded-xl text-slate-200 focus:outline-none focus:border-amber-500"
+                  className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-500"
                 >
                   <option value="SEMANAL">SEMANAL</option>
                   <option value="QUINZENAL">QUINZENAL</option>
@@ -1159,7 +1281,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
               </div>
 
               <div className="sm:col-span-2 space-y-2">
-                <label className="text-slate-300 block font-bold uppercase">DIAS DE ATENDIMENTO:</label>
+                <label className="text-[#171717] block font-bold uppercase">DIAS DE ATENDIMENTO:</label>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                   {[
                     { key: 'segunda', label: 'Segunda' },
@@ -1175,14 +1297,14 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
                       <label
                         key={day.key}
                         className={`p-2.5 rounded-xl border flex items-center gap-2 cursor-pointer ${
-                          checked ? 'bg-amber-500/20 border-amber-500/50 text-amber-300 font-bold' : 'bg-[#131722] border-[#1e2433] text-slate-400'
+                          checked ? 'bg-amber-500/20 border-amber-500/50 text-amber-300 font-bold' : 'bg-[#EAE8E2] border-[#CFCDC5] text-[#77766F]'
                         }`}
                       >
                         <input
                           type="checkbox"
                           checked={checked}
                           onChange={(e) => setNewRouteForm({ ...newRouteForm, [day.key]: e.target.checked })}
-                          className="rounded border-[#1e2433] text-amber-500 focus:ring-amber-400 w-4 h-4"
+                          className="rounded border-[#CFCDC5] text-amber-500 focus:ring-amber-400 w-4 h-4"
                         />
                         <span>{day.label}</span>
                       </label>
@@ -1192,11 +1314,11 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
               </div>
             </div>
 
-            <div className="pt-3 border-t border-[#1e2433] flex items-center justify-end gap-3">
+            <div className="pt-3 border-t border-[#CFCDC5] flex items-center justify-end gap-3">
               <button
                 type="button"
                 onClick={() => setShowCreateModal(false)}
-                className="px-4 py-2 rounded-xl bg-[#131722] hover:bg-[#1f2433] text-slate-300 border border-[#1e2433] text-xs font-semibold cursor-pointer"
+                className="px-4 py-2 rounded-xl bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] border border-[#CFCDC5] text-xs font-semibold cursor-pointer"
               >
                 Cancelar
               </button>
