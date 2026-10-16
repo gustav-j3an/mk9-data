@@ -67,7 +67,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
 
     try {
       // 1. Consultar promotores ativos com equipe associada
-      // 2. Consultar rotas ativas cadastradas
+      // 2. Consultar rotas cadastradas (conforme o esquema real: não possui coluna 'status')
       // 3. Consultar visitas registradas na data operacional selecionada (data_visita = dateVal)
       const [promotoresRes, rotasRes, visitsRes] = await Promise.all([
         supabase
@@ -77,8 +77,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
           .not('equipe', 'is', null),
         supabase
           .from('rotas')
-          .select('id, promotor_matricula, status, domingo, segunda, terca, quarta, quinta, sexta, sabado')
-          .eq('status', 'ativo'),
+          .select('id, promotor_matricula, domingo, segunda, terca, quarta, quinta, sexta, sabado'),
         supabase
           .from('visits')
           .select('id, promotor_matricula, loja_codigo, status, data_visita, started_at, completed_at, motivo_nao_realizada')
@@ -86,11 +85,17 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
       ]);
 
       if (promotoresRes.error) throw new Error(`Erro ao buscar promotores: ${promotoresRes.error.message}`);
-      if (rotasRes.error) throw new Error(`Erro ao buscar rotas: ${rotasRes.error.message}`);
       if (visitsRes.error) throw new Error(`Erro ao buscar visitas do dia: ${visitsRes.error.message}`);
 
+      // Se houver erro específico de rotas, registrar aviso sem impedir o carregamento dos promotores
+      let rawRotas: RouteItem[] = [];
+      if (rotasRes.error) {
+        console.warn('Aviso: Não foi possível obter escala detalhada de rotas:', rotasRes.error.message);
+      } else {
+        rawRotas = (rotasRes.data as unknown as RouteItem[]) || [];
+      }
+
       const rawPromotores = promotoresRes.data || [];
-      const rawRotas = (rotasRes.data as unknown as RouteItem[]) || [];
       const rawVisits = (visitsRes.data as unknown as Visit[]) || [];
 
       // Determinar o dia da semana para checagem da escala na data selecionada
