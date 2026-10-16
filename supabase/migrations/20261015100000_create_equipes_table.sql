@@ -6,6 +6,8 @@
 --           e povoamento inicial idempotente e conservador a partir de public.promotores.
 -- ==============================================================================
 
+BEGIN;
+
 -- 1. SEQUENCE PARA NUMERAÇÃO SEQUENCIAL DE EQUIPES (EQP-XXX)
 CREATE SEQUENCE IF NOT EXISTS public.equipes_codigo_seq;
 
@@ -133,9 +135,7 @@ END;
 $$;
 
 -- Permissões das funções auxiliares
-GRANT EXECUTE ON FUNCTION public.generate_team_code() TO authenticated;
 GRANT EXECUTE ON FUNCTION public.get_next_team_code() TO authenticated;
-GRANT USAGE, SELECT ON SEQUENCE public.equipes_codigo_seq TO authenticated;
 
 -- 5. TRIGGER BEFORE INSERT PARA AUTO-PREENCHIMENTO DO CÓDIGO
 -- Se o código for omitido ou vazio, gera automaticamente no padrão EQP-XXX via generate_team_code().
@@ -183,6 +183,10 @@ CREATE TRIGGER trigger_equipes_updated_at
 
 -- 7. CONFIGURAÇÃO DE SEGURANÇA E POLÍTICAS RLS (ROW LEVEL SECURITY)
 ALTER TABLE public.equipes ENABLE ROW LEVEL SECURITY;
+
+-- Concessão explícita de privilégios de tabela (PostgREST DML)
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.equipes TO authenticated;
+GRANT ALL ON public.equipes TO service_role;
 
 DROP POLICY IF EXISTS "equipes_select_policy" ON public.equipes;
 DROP POLICY IF EXISTS "equipes_write_policy" ON public.equipes;
@@ -259,3 +263,5 @@ BEGIN
     END IF;
   END IF;
 END $$;
+
+COMMIT;

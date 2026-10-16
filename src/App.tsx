@@ -6,6 +6,7 @@ import { CockpitView } from './views/CockpitView';
 import { OperationalDashboardView } from './views/OperationalDashboardView';
 import { AttendanceControlView } from './views/AttendanceControlView';
 import { TeamsManagementView } from './views/TeamsManagementView';
+import { SupervisorsManagementView } from './views/SupervisorsManagementView';
 import { FreelancersView } from './views/FreelancersView';
 import { DailiesControlView } from './views/DailiesControlView';
 import { PromotersView } from './views/PromotersView';
@@ -135,6 +136,9 @@ function Dashboard() {
       )}
       {activeScreen === 'gestao-equipes' && (
         <TeamsManagementView onNavigate={handleNavigate} onShowToast={addToast} />
+      )}
+      {activeScreen === 'supervisores' && (
+        <SupervisorsManagementView onNavigate={handleNavigate} onShowToast={addToast} />
       )}
       {activeScreen === 'freelancers' && (
         <FreelancersView onNavigate={handleNavigate} onShowToast={addToast} />

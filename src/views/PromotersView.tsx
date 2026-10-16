@@ -196,8 +196,8 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
       email: formEmail.trim() || null,
       cidade: city || 'São Paulo',
       uf: state || 'SP',
-      supervisor: formSupervisor.trim() || null,
-      equipe: formSquad.trim() || null,
+      supervisor: editingPromoter?.supervisor || formSupervisor.trim() || null,
+      equipe: editingPromoter?.squad || formSquad.trim() || null,
       status: dbStatus
     };
 
@@ -994,34 +994,53 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
                 </div>
               </div>
 
-              {/* Seção 3: Alocação de Campo & Supervisão */}
-              <div className="space-y-2 pt-2 border-t border-[#CFCDC5]">
-                <span className="text-[10px] font-bold font-mono text-purple-400 uppercase tracking-wider">
-                  3. Alocação de Campo &amp; Supervisão
-                </span>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <div className="space-y-1">
-                    <label className="font-bold text-[#171717]">Supervisor Responsável</label>
-                    <input
-                      type="text"
-                      value={formSupervisor}
-                      onChange={(e) => setFormSupervisor(e.target.value)}
-                      placeholder="ex: Renata Vasconcelos"
-                      className="w-full h-10 px-3 bg-[#E4E2DB] border border-[#CFCDC5] rounded-lg text-[#171717] focus:outline-none focus:border-purple-500"
-                    />
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="font-bold text-[#171717]">Equipe / Squad</label>
-                    <input
-                      type="text"
-                      value={formSquad}
-                      onChange={(e) => setFormSquad(e.target.value)}
-                      placeholder="ex: SP Capital Norte"
-                      className="w-full h-10 px-3 bg-[#E4E2DB] border border-[#CFCDC5] rounded-lg text-[#171717] focus:outline-none focus:border-purple-500"
-                    />
-                  </div>
+              {/* Seção 3: Alocação de Campo & Supervisão (Somente Leitura - Derivada de Equipes) */}
+              <div className="space-y-3 pt-2 border-t border-[#CFCDC5]">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-bold font-mono text-purple-400 uppercase tracking-wider">
+                    3. Alocação de Campo &amp; Supervisão
+                  </span>
+                  <span className="text-[10px] text-[#77766F] font-medium bg-[#EAE8E2] px-2 py-0.5 rounded border border-[#CFCDC5]">
+                    Gerenciado via Gestão de Equipes
+                  </span>
                 </div>
+
+                {formSquad ? (
+                  <div className="p-3 bg-[#E4E2DB] rounded-lg border border-[#CFCDC5] space-y-2">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div>
+                        <span className="text-[11px] text-[#77766F] block font-semibold">Equipe / Squad Atual</span>
+                        <div className="flex items-center gap-1.5 mt-0.5 font-bold text-[#171717]">
+                          <span className="material-symbols-outlined text-base text-purple-600">groups</span>
+                          {formSquad}
+                        </div>
+                      </div>
+                      <div>
+                        <span className="text-[11px] text-[#77766F] block font-semibold">Supervisor Responsável</span>
+                        <div className="flex items-center gap-1.5 mt-0.5 font-medium text-[#171717]">
+                          <span className="material-symbols-outlined text-base text-cyan-600">person</span>
+                          {formSupervisor || 'Não informado na equipe'}
+                        </div>
+                      </div>
+                    </div>
+                    <p className="text-[11px] text-[#5F5F5F] pt-1 border-t border-[#CFCDC5]/60 flex items-center gap-1">
+                      <span className="material-symbols-outlined text-xs text-[#77766F]">info</span>
+                      Para transferir ou alocar este promotor em outra equipe, utilize o módulo{' '}
+                      <strong className="text-[#171717]">Gestão de Equipes</strong>.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="p-3 bg-amber-500/10 rounded-lg border border-amber-500/30 text-amber-900 space-y-1">
+                    <div className="flex items-center gap-1.5 font-bold text-amber-800 text-xs">
+                      <span className="material-symbols-outlined text-base text-amber-600">warning</span>
+                      Promotor sem equipe vinculada
+                    </div>
+                    <p className="text-[11px] text-amber-700">
+                      A atribuição de squad e supervisor deve ser realizada através do módulo{' '}
+                      <strong className="text-amber-900 font-semibold">Gestão de Equipes</strong> na aba de promotores integrantes.
+                    </p>
+                  </div>
+                )}
               </div>
 
               {/* Seção 4: Status & Arquivamento */}

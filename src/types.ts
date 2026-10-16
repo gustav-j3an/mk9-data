@@ -8,6 +8,7 @@ export type ScreenId =
   | 'portal-promotor'
   | 'portal-industria'
   | 'gestao-equipes'
+  | 'supervisores'
   | 'freelancers'
   | 'controle-diarias'
   | 'promotores'
@@ -330,6 +331,79 @@ export interface DailyRecord {
   status: 'a_pagar' | 'pago';
   geofenceValidated: boolean;
   notes?: string;
+}
+
+export type EquipeStatus = 'ativa' | 'reestruturacao' | 'arquivada';
+
+export interface Equipe {
+  id: string;
+  codigo: string;
+  nome: string;
+  regional: string | null;
+  supervisor_id?: string | null;
+  supervisor_nome: string | null;
+  status: EquipeStatus;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface CreateEquipeDTO {
+  codigo?: string | null;
+  nome: string;
+  regional?: string | null;
+  supervisor_id?: string | null;
+  supervisor_nome?: string | null;
+  status?: EquipeStatus;
+}
+
+export interface UpdateEquipeDTO {
+  codigo?: string;
+  nome?: string;
+  regional?: string | null;
+  supervisor_id?: string | null;
+  supervisor_nome?: string | null;
+  status?: EquipeStatus;
+}
+
+export type SupervisorStatus = 'ativo' | 'inativo' | 'ferias' | 'afastado';
+
+export interface Supervisor {
+  id: string;
+  codigo: string;
+  nome: string;
+  email?: string | null;
+  telefone?: string | null;
+  regional?: string | null;
+  status: SupervisorStatus;
+  user_id?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface CreateSupervisorDTO {
+  codigo?: string | null;
+  nome: string;
+  email?: string | null;
+  telefone?: string | null;
+  regional?: string | null;
+  status?: SupervisorStatus;
+  user_id?: string | null;
+}
+
+export interface UpdateSupervisorDTO {
+  codigo?: string;
+  nome?: string;
+  email?: string | null;
+  telefone?: string | null;
+  regional?: string | null;
+  status?: SupervisorStatus;
+  user_id?: string | null;
+}
+
+export interface ListSupervisoresFilters {
+  status?: SupervisorStatus | 'all';
+  search?: string;
+  regional?: string;
 }
 
 export interface SquadTeam {

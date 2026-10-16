@@ -93,7 +93,8 @@ export const AppShell: React.FC<AppShellProps> = ({
       items: [
         { id: 'cockpit' as ScreenId, label: 'Cockpit', icon: 'speed', roles: ['admin', 'gestor', 'operador'] as UserRole[] },
         { id: 'painel-operacional' as ScreenId, label: 'Painel Operacional', icon: 'monitoring', roles: ['admin', 'gestor', 'operador'] as UserRole[] },
-        { id: 'gestao-equipes' as ScreenId, label: 'Gestão de Equipes', icon: 'groups', roles: ['admin', 'gestor', 'operador'] as UserRole[] }
+        { id: 'gestao-equipes' as ScreenId, label: 'Gestão de Equipes', icon: 'groups', roles: ['admin', 'gestor', 'operador'] as UserRole[] },
+        { id: 'supervisores' as ScreenId, label: 'Gestão de Supervisores', icon: 'supervisor_account', roles: ['admin', 'gestor', 'operador'] as UserRole[] }
       ]
     },
     {
