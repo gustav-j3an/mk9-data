@@ -48,6 +48,15 @@ export const TeamsManagementView: React.FC<TeamsManagementViewProps> = ({
   const [loadingPromoters, setLoadingPromoters] = useState(false);
   const [transferring, setTransferring] = useState(false);
 
+  // Modal Vincular Promotores Disponíveis (sem equipe)
+  const [modalVincularOpen, setModalVincularOpen] = useState(false);
+  const [promotoresDisponiveis, setPromotoresDisponiveis] = useState<{ id: string; matricula: string; nome: string; cidade: string; uf: string; supervisor: string | null; status: string }[]>([]);
+  const [loadingDisponiveis, setLoadingDisponiveis] = useState(false);
+  const [disponiveisError, setDisponiveisError] = useState<string | null>(null);
+  const [selectedToVincularIds, setSelectedToVincularIds] = useState<string[]>([]);
+  const [vincularSearch, setVincularSearch] = useState('');
+  const [savingVinculacao, setSavingVinculacao] = useState(false);
+
   // 1. Carregar Equipes do Banco via equipesService
   const fetchEquipes = useCallback(async (selectIdAfter?: string) => {
     setLoading(true);
@@ -437,6 +446,93 @@ export const TeamsManagementView: React.FC<TeamsManagementViewProps> = ({
 
     setSelectedPromoterIds([]);
     setTargetSquadTransfer('');
+    if (selectedEquipe?.nome) {
+      fetchTeamPromoters(selectedEquipe.nome);
+    }
+  };
+
+  // Carregar lista de promotores disponíveis para o modal de vinculação
+  const handleOpenModalVincular = async () => {
+    if (!selectedEquipe) return;
+    setModalVincularOpen(true);
+    setLoadingDisponiveis(true);
+    setDisponiveisError(null);
+    setSelectedToVincularIds([]);
+    setVincularSearch('');
+
+    const res = await equipesService.listPromotoresDisponiveis();
+    if (res.error) {
+      setDisponiveisError(res.error.message);
+      setPromotoresDisponiveis([]);
+    } else {
+      setPromotoresDisponiveis(res.data || []);
+    }
+    setLoadingDisponiveis(false);
+  };
+
+  const handleToggleVincularPromoter = (id: string) => {
+    setSelectedToVincularIds((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    );
+  };
+
+  const handleConfirmarVinculacao = async () => {
+    if (!selectedEquipe) return;
+
+    if (selectedToVincularIds.length === 0) {
+      onShowToast({
+        title: 'Nenhum Promotor Selecionado',
+        message: 'Marque ao menos um promotor disponível para vincular à equipe.',
+        type: 'warning'
+      });
+      return;
+    }
+
+    if (selectedEquipe.status === 'arquivada') {
+      onShowToast({
+        title: 'Equipe Arquivada',
+        message: 'Não é possível vincular promotores a uma equipe arquivada.',
+        type: 'error'
+      });
+      return;
+    }
+
+    setSavingVinculacao(true);
+    const res = await equipesService.vincularPromotoresAEquipe(
+      selectedToVincularIds,
+      selectedEquipe.nome
+    );
+    setSavingVinculacao(false);
+
+    if (res.error || !res.data) {
+      onShowToast({
+        title: 'Erro ao Vincular Promotores',
+        message: res.error?.message || 'Falha ao associar promotores à equipe.',
+        type: 'error'
+      });
+      // Preservar a seleção para permitir nova tentativa
+      return;
+    }
+
+    const { updatedCount, skippedCount } = res.data;
+
+    if (skippedCount > 0) {
+      onShowToast({
+        title: 'Vinculação Concluída com Alerta',
+        message: `${updatedCount} promotor(es) vinculado(s) à equipe "${selectedEquipe.nome}". ${skippedCount} promotor(es) já haviam sido alocados por outro usuário simultaneamente.`,
+        type: 'warning'
+      });
+    } else {
+      onShowToast({
+        title: 'Promotores Vinculados',
+        message: `${updatedCount} promotor(es) associado(s) com sucesso à equipe "${selectedEquipe.nome}".`,
+        type: 'success'
+      });
+    }
+
+    // Fechar modal, limpar seleções e atualizar lista da equipe
+    setModalVincularOpen(false);
+    setSelectedToVincularIds([]);
     if (selectedEquipe?.nome) {
       fetchTeamPromoters(selectedEquipe.nome);
     }
@@ -1097,24 +1193,34 @@ export const TeamsManagementView: React.FC<TeamsManagementViewProps> = ({
                 </div>
                 {/* Lista Real de Promotores Vinculados à Equipe */}
                 <div className="space-y-1.5">
-                  <div className="flex items-center justify-between pb-1">
-                    <span className="text-[11px] font-bold text-[#171717]">
+                  <div className="flex items-center justify-between pb-1 gap-2">
+                    <span className="text-[11px] font-bold text-[#171717] truncate">
                       Promotores Integrantes ({teamPromoters.length})
                     </span>
-                    {teamPromoters.length > 0 && (
+                    <div className="flex items-center gap-2 shrink-0">
                       <button
-                        onClick={() => {
-                          if (selectedPromoterIds.length === teamPromoters.length) {
-                            setSelectedPromoterIds([]);
-                          } else {
-                            setSelectedPromoterIds(teamPromoters.map((p) => p.id));
-                          }
-                        }}
-                        className="text-[10px] text-purple-700 hover:underline font-semibold cursor-pointer"
+                        type="button"
+                        onClick={handleOpenModalVincular}
+                        className="px-2.5 py-1 rounded-md bg-purple-700 hover:bg-purple-800 text-white font-bold text-[10px] transition-all flex items-center gap-1 cursor-pointer shadow-xs"
                       >
-                        {selectedPromoterIds.length === teamPromoters.length ? 'Desmarcar todos' : 'Selecionar todos'}
+                        <span className="material-symbols-outlined text-xs">group_add</span>
+                        <span>+ Vincular Promotores</span>
                       </button>
-                    )}
+                      {teamPromoters.length > 0 && (
+                        <button
+                          onClick={() => {
+                            if (selectedPromoterIds.length === teamPromoters.length) {
+                              setSelectedPromoterIds([]);
+                            } else {
+                              setSelectedPromoterIds(teamPromoters.map((p) => p.id));
+                            }
+                          }}
+                          className="text-[10px] text-purple-700 hover:underline font-semibold cursor-pointer"
+                        >
+                          {selectedPromoterIds.length === teamPromoters.length ? 'Desmarcar todos' : 'Selecionar todos'}
+                        </button>
+                      )}
+                    </div>
                   </div>
 
                   {loadingPromoters ? (
@@ -1513,6 +1619,200 @@ export const TeamsManagementView: React.FC<TeamsManagementViewProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 3: VINCULAR PROMOTORES DISPONÍVEIS À EQUIPE */}
+      {modalVincularOpen && selectedEquipe && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center z-50 p-4">
+          <div className="bg-[#F7F6F2] rounded-2xl max-w-xl w-full p-5 shadow-2xl border border-[#CFCDC5] space-y-4 max-h-[90vh] flex flex-col">
+            {/* Cabeçalho */}
+            <div className="flex items-start justify-between pb-3 border-b border-[#CFCDC5] shrink-0">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="material-symbols-outlined text-purple-700 text-xl">group_add</span>
+                  <h3 className="text-base font-bold text-[#171717]">Vincular Promotores à Equipe</h3>
+                </div>
+                <p className="text-xs text-[#77766F] mt-0.5">
+                  Equipe de destino: <strong className="text-[#171717] font-semibold">{selectedEquipe.nome}</strong> ({selectedEquipe.codigo})
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={savingVinculacao}
+                onClick={() => setModalVincularOpen(false)}
+                className="w-8 h-8 rounded-lg bg-[#EAE8E2] text-[#77766F] hover:text-[#171717] flex items-center justify-center cursor-pointer transition-colors"
+              >
+                <span className="material-symbols-outlined text-sm">close</span>
+              </button>
+            </div>
+
+            {/* Alerta de Escopo */}
+            <div className="p-2.5 rounded-lg bg-cyan-500/10 border border-cyan-500/30 text-cyan-900 text-xs flex items-center justify-between shrink-0">
+              <span className="flex items-center gap-1.5 font-medium">
+                <span className="material-symbols-outlined text-base text-cyan-600">info</span>
+                Exibindo somente promotores sem equipe associada
+              </span>
+              <span className="px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-900 font-mono text-[11px] font-bold">
+                {selectedToVincularIds.length} selecionado(s)
+              </span>
+            </div>
+
+            {/* Barra de Busca e Selecionar Todos */}
+            <div className="flex items-center gap-2 shrink-0">
+              <div className="relative flex-1">
+                <span className="material-symbols-outlined absolute left-3 top-2.5 text-[#77766F] text-base">search</span>
+                <input
+                  type="text"
+                  value={vincularSearch}
+                  onChange={(e) => setVincularSearch(e.target.value)}
+                  placeholder="Buscar promotor por nome ou matrícula..."
+                  className="w-full pl-9 pr-3 py-1.5 bg-[#E4E2DB] border border-[#CFCDC5] rounded-lg text-xs text-[#171717] placeholder:text-[#77766F] focus:outline-none focus:border-purple-500"
+                />
+              </div>
+              {promotoresDisponiveis.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const filtered = promotoresDisponiveis.filter((p) => {
+                      const term = vincularSearch.trim().toLowerCase();
+                      if (!term) return true;
+                      return (
+                        p.nome.toLowerCase().includes(term) ||
+                        p.matricula.toLowerCase().includes(term) ||
+                        (p.cidade && p.cidade.toLowerCase().includes(term))
+                      );
+                    });
+                    if (selectedToVincularIds.length === filtered.length) {
+                      setSelectedToVincularIds([]);
+                    } else {
+                      setSelectedToVincularIds(filtered.map((p) => p.id));
+                    }
+                  }}
+                  className="text-xs text-purple-700 hover:underline font-semibold shrink-0 cursor-pointer px-2"
+                >
+                  {selectedToVincularIds.length === promotoresDisponiveis.length ? 'Desmarcar todos' : 'Marcar todos'}
+                </button>
+              )}
+            </div>
+
+            {/* Corpo da Lista com Scroll */}
+            <div className="flex-1 overflow-y-auto min-h-[220px] max-h-[360px] pr-1 space-y-1.5">
+              {loadingDisponiveis ? (
+                <div className="p-8 text-center text-[#77766F] flex flex-col items-center justify-center gap-2">
+                  <span className="material-symbols-outlined animate-spin text-purple-600 text-2xl">sync</span>
+                  <span className="text-xs font-semibold">Buscando promotores disponíveis no Supabase...</span>
+                </div>
+              ) : disponiveisError ? (
+                <div className="p-4 bg-rose-500/10 border border-rose-500/30 rounded-xl text-rose-800 text-xs space-y-1">
+                  <div className="flex items-center gap-1.5 font-bold">
+                    <span className="material-symbols-outlined text-base">error</span>
+                    <span>Falha ao consultar promotores</span>
+                  </div>
+                  <p className="text-[11px] text-[#5F5F5F]">{disponiveisError}</p>
+                  <button
+                    type="button"
+                    onClick={handleOpenModalVincular}
+                    className="mt-2 px-3 py-1 bg-rose-700 text-white rounded-md text-[11px] font-semibold cursor-pointer"
+                  >
+                    Tentar novamente
+                  </button>
+                </div>
+              ) : promotoresDisponiveis.length === 0 ? (
+                <div className="p-8 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] text-center text-[#77766F] space-y-1.5">
+                  <span className="material-symbols-outlined text-3xl text-emerald-600">check_circle</span>
+                  <p className="text-xs font-bold text-[#171717]">Todos os promotores já possuem equipe alocada!</p>
+                  <p className="text-[11px]">Não há promotores sem equipe cadastrada no momento.</p>
+                </div>
+              ) : (
+                (() => {
+                  const filtered = promotoresDisponiveis.filter((p) => {
+                    const term = vincularSearch.trim().toLowerCase();
+                    if (!term) return true;
+                    return (
+                      p.nome.toLowerCase().includes(term) ||
+                      p.matricula.toLowerCase().includes(term) ||
+                      (p.cidade && p.cidade.toLowerCase().includes(term))
+                    );
+                  });
+
+                  if (filtered.length === 0) {
+                    return (
+                      <div className="p-6 text-center text-xs text-[#77766F]">
+                        Nenhum promotor encontrado para o termo "{vincularSearch}".
+                      </div>
+                    );
+                  }
+
+                  return filtered.map((p) => {
+                    const isChecked = selectedToVincularIds.includes(p.id);
+                    return (
+                      <div
+                        key={p.id}
+                        onClick={() => handleToggleVincularPromoter(p.id)}
+                        className={`flex items-center justify-between p-2.5 rounded-lg border cursor-pointer transition-all ${
+                          isChecked
+                            ? 'bg-purple-600/10 border-purple-500/40 text-[#171717]'
+                            : 'bg-[#EAE8E2] border-[#CFCDC5] text-[#222222] hover:bg-[#E4E2DB]'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => {}}
+                            className="w-4 h-4 rounded text-purple-600 bg-[#F7F6F2] border-[#CFCDC5] focus:ring-0 cursor-pointer"
+                          />
+                          <div className="flex flex-col min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-bold truncate">{p.nome}</span>
+                              <span className="px-1.5 py-0.2 rounded bg-[#F7F6F2] text-cyan-800 font-mono text-[9px] font-bold border border-cyan-500/20">
+                                {p.matricula}
+                              </span>
+                            </div>
+                            <span className="text-[11px] text-[#77766F] truncate font-mono">
+                              {p.cidade || 'Sem cidade'} - {p.uf || 'UF'} {p.status ? `• Status: ${p.status}` : ''}
+                            </span>
+                          </div>
+                        </div>
+                        {isChecked && (
+                          <span className="px-2 py-0.5 rounded bg-purple-600/20 text-purple-800 font-mono text-[10px] font-bold shrink-0">
+                            Selecionado
+                          </span>
+                        )}
+                      </div>
+                    );
+                  });
+                })()
+              )}
+            </div>
+
+            {/* Rodapé com Ações */}
+            <div className="pt-3 border-t border-[#CFCDC5] flex items-center justify-between gap-2 shrink-0">
+              <span className="text-xs text-[#77766F] font-mono">
+                Total disponível: <strong className="text-[#171717]">{promotoresDisponiveis.length}</strong>
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={savingVinculacao}
+                  onClick={() => setModalVincularOpen(false)}
+                  className="px-4 py-2 rounded-lg bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] border border-[#CFCDC5] text-xs font-semibold cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  disabled={savingVinculacao || selectedToVincularIds.length === 0}
+                  onClick={handleConfirmarVinculacao}
+                  className="px-5 py-2 rounded-lg bg-purple-700 hover:bg-purple-800 text-white text-xs font-bold shadow-xs cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
+                >
+                  <span className="material-symbols-outlined text-sm">check</span>
+                  <span>{savingVinculacao ? 'Vinculando...' : `Confirmar Vinculação (${selectedToVincularIds.length})`}</span>
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

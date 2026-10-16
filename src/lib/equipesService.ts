@@ -317,5 +317,125 @@ export const equipesService = {
     } catch (err: any) {
       return { data: null, error: new Error(err?.message || 'Falha inesperada ao transferir promotores.') };
     }
+  },
+
+  /**
+   * Lista promotores que não possuem equipe associada (disponíveis para alocação):
+   * - equipe IS NULL
+   * - equipe vazia ou contendo apenas espaços
+   * - equipe igual ao valor legado 'Nenhum' (case-insensitive)
+   */
+  async listPromotoresDisponiveis(): Promise<ServiceResponse<{ id: string; matricula: string; nome: string; cidade: string; uf: string; supervisor: string | null; status: string }[]>> {
+    if (!supabase) {
+      return { data: null, error: new Error('Cliente Supabase não inicializado.') };
+    }
+
+    try {
+      // Buscar promotores com equipe nula ou vazia. Como o PostgREST suporta filtro com .or():
+      // 'equipe.is.null,equipe.eq.,equipe.ilike.nenhum'
+      const { data, error } = await supabase
+        .from('promotores')
+        .select('id, matricula, nome, cidade, uf, supervisor, status, equipe')
+        .or('equipe.is.null,equipe.eq.,equipe.ilike.nenhum')
+        .order('nome', { ascending: true });
+
+      if (error) {
+        return { data: null, error: new Error(`Erro ao listar promotores disponíveis: ${error.message}`) };
+      }
+
+      // Filtragem defensiva adicional em memória para cobrir variações de espaços ('   ')
+      const filtered = (data || []).filter((p) => {
+        if (!p.equipe) return true;
+        const clean = p.equipe.trim().toLowerCase();
+        return clean === '' || clean === 'nenhum';
+      }).map(({ equipe, ...rest }) => rest);
+
+      return { data: filtered, error: null };
+    } catch (err: any) {
+      return { data: null, error: new Error(err?.message || 'Falha inesperada ao consultar promotores disponíveis.') };
+    }
+  },
+
+  /**
+   * Vincula promotores disponíveis (sem equipe) a uma equipe alvo.
+   * Aplica verificação condicional contra race condition:
+   * Garante que os promotores só sejam vinculados se ainda estiverem sem equipe (ou com equipe nula/vazia/'Nenhum'),
+   * impedindo que uma atribuição simultânea feita por outro usuário seja sobrescrita inadvertidamente.
+   */
+  async vincularPromotoresAEquipe(
+    promoterIds: string[],
+    targetEquipeNome: string
+  ): Promise<ServiceResponse<{ updatedCount: number; skippedCount: number }>> {
+    if (!supabase) {
+      return { data: null, error: new Error('Cliente Supabase não inicializado.') };
+    }
+
+    if (!promoterIds || promoterIds.length === 0) {
+      return { data: null, error: new Error('Nenhum promotor selecionado para vinculação.') };
+    }
+
+    if (!targetEquipeNome || !targetEquipeNome.trim()) {
+      return { data: null, error: new Error('Equipe de destino é obrigatória.') };
+    }
+
+    try {
+      const cleanTarget = targetEquipeNome.trim();
+      const cleanIds = promoterIds.map((id) => id.trim()).filter(Boolean);
+
+      if (cleanIds.length === 0) {
+        return { data: null, error: new Error('Lista de IDs de promotores inválida.') };
+      }
+
+      // 1. Verificar o estado atual dos promotores selecionados para evitar condição de corrida
+      const { data: currentRows, error: checkErr } = await supabase
+        .from('promotores')
+        .select('id, nome, equipe')
+        .in('id', cleanIds);
+
+      if (checkErr) {
+        return { data: null, error: new Error(`Erro ao checar promotores antes de vincular: ${checkErr.message}`) };
+      }
+
+      // Separar os elegíveis (que continuam sem equipe) dos que já foram alocados
+      const eligibleIds: string[] = [];
+      let skippedCount = 0;
+
+      (currentRows || []).forEach((row) => {
+        const eq = row.equipe ? row.equipe.trim().toLowerCase() : '';
+        if (!eq || eq === 'nenhum') {
+          eligibleIds.push(row.id);
+        } else {
+          skippedCount++;
+        }
+      });
+
+      if (eligibleIds.length === 0) {
+        return {
+          data: null,
+          error: new Error('Nenhum dos promotores selecionados está mais disponível. Eles já foram alocados em outra equipe por outro usuário.')
+        };
+      }
+
+      // 2. Atualizar somente os promotores elegíveis, sem alterar supervisor
+      const { data: updatedData, error: updateErr } = await supabase
+        .from('promotores')
+        .update({
+          equipe: cleanTarget,
+          updated_at: new Date().toISOString()
+        })
+        .in('id', eligibleIds)
+        .or('equipe.is.null,equipe.eq.,equipe.ilike.nenhum') // verificação atômica no UPDATE
+        .select('id');
+
+      if (updateErr) {
+        return { data: null, error: new Error(`Erro ao vincular promotores à equipe: ${updateErr.message}`) };
+      }
+
+      const updatedCount = updatedData ? updatedData.length : 0;
+      return { data: { updatedCount, skippedCount }, error: null };
+    } catch (err: any) {
+      return { data: null, error: new Error(err?.message || 'Falha inesperada ao vincular promotores.') };
+    }
   }
 };
+
