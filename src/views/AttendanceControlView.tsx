@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
-import { ScreenId, ToastMessage, AttendanceItem } from '../types';
-import { INITIAL_ATTENDANCE } from '../data/mockData';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { ScreenId, ToastMessage, AttendanceItem, RouteItem, Visit } from '../types';
+import { supabase } from '../lib/supabase';
+import { getLocalDateString } from '../utils/routePlanner';
 
 interface AttendanceControlViewProps {
   onNavigate: (screen: ScreenId) => void;
@@ -11,20 +12,194 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
   onNavigate,
   onShowToast
 }) => {
-  const [items, setItems] = useState<AttendanceItem[]>(INITIAL_ATTENDANCE);
+  // Data Operacional Inicializada dinamicamente com a data local (sem desvios UTC)
+  const [dateVal, setDateVal] = useState<string>(() => getLocalDateString(new Date()));
+
+  // Dados reais carregados do Supabase
+  const [items, setItems] = useState<AttendanceItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // Filtros de Busca e Visualização
   const [search, setSearch] = useState('');
   const [supervisorFilter, setSupervisorFilter] = useState('');
   const [squadFilter, setSquadFilter] = useState('');
-  const [quickFilter, setQuickFilter] = useState<'all' | 'falta' | 'atestado' | 'sem_registro'>('all');
+  const [quickFilter, setQuickFilter] = useState<'all' | 'presente' | 'falta' | 'atestado' | 'sem_registro'>('all');
   const [simulateEmpty, setSimulateEmpty] = useState(false);
-  const [dateVal, setDateVal] = useState('2024-10-24');
 
-  // Modal for editing attendance status
+  // Modal para Ajuste Manual de Presença / Justificativa
   const [selectedItem, setSelectedItem] = useState<AttendanceItem | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [newStatus, setNewStatus] = useState<'presente' | 'falta' | 'atestado' | 'sem_registro'>('presente');
   const [justification, setJustification] = useState('');
   const [medicalDays, setMedicalDays] = useState(2);
+
+  /**
+   * Determina o dia da semana ('segunda', 'terca', etc.) com base na data operacional (YYYY-MM-DD local)
+   */
+  const getDayKeyFromDateStr = (dateStr: string): 'domingo' | 'segunda' | 'terca' | 'quarta' | 'quinta' | 'sexta' | 'sabado' => {
+    const parts = dateStr.split('-');
+    if (parts.length === 3) {
+      const year = parseInt(parts[0], 10);
+      const month = parseInt(parts[1], 10) - 1;
+      const day = parseInt(parts[2], 10);
+      const d = new Date(year, month, day);
+      const dayKeys: Array<'domingo' | 'segunda' | 'terca' | 'quarta' | 'quinta' | 'sexta' | 'sabado'> = [
+        'domingo', 'segunda', 'terca', 'quarta', 'quinta', 'sexta', 'sabado'
+      ];
+      return dayKeys[d.getDay()] || 'segunda';
+    }
+    return 'segunda';
+  };
+
+  /**
+   * Carrega promotores, rotas ativas e visitas do dia no Supabase
+   */
+  const fetchAttendanceData = useCallback(async () => {
+    if (!supabase) {
+      setError('Cliente Supabase não inicializado.');
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      // 1. Consultar promotores ativos com equipe associada
+      // 2. Consultar rotas ativas cadastradas
+      // 3. Consultar visitas registradas na data operacional selecionada (data_visita = dateVal)
+      const [promotoresRes, rotasRes, visitsRes] = await Promise.all([
+        supabase
+          .from('promotores')
+          .select('id, matricula, nome, cidade, uf, telefone, equipe, supervisor, status')
+          .eq('status', 'ativo')
+          .not('equipe', 'is', null),
+        supabase
+          .from('rotas')
+          .select('id, promotor_matricula, status, domingo, segunda, terca, quarta, quinta, sexta, sabado')
+          .eq('status', 'ativo'),
+        supabase
+          .from('visits')
+          .select('id, promotor_matricula, loja_codigo, status, data_visita, started_at, completed_at, motivo_nao_realizada')
+          .eq('data_visita', dateVal)
+      ]);
+
+      if (promotoresRes.error) throw new Error(`Erro ao buscar promotores: ${promotoresRes.error.message}`);
+      if (rotasRes.error) throw new Error(`Erro ao buscar rotas: ${rotasRes.error.message}`);
+      if (visitsRes.error) throw new Error(`Erro ao buscar visitas do dia: ${visitsRes.error.message}`);
+
+      const rawPromotores = promotoresRes.data || [];
+      const rawRotas = (rotasRes.data as unknown as RouteItem[]) || [];
+      const rawVisits = (visitsRes.data as unknown as Visit[]) || [];
+
+      // Determinar o dia da semana para checagem da escala na data selecionada
+      const targetDayKey = getDayKeyFromDateStr(dateVal);
+
+      // Indexar promotores que possuem rotas cadastradas para este dia da semana
+      const scheduledMatriculas = new Set<string>();
+      rawRotas.forEach((r) => {
+        if (r.promotor_matricula && Boolean(r[targetDayKey as keyof RouteItem])) {
+          scheduledMatriculas.add(r.promotor_matricula);
+        }
+      });
+
+      // Indexar visitas do dia por matrícula do promotor
+      const visitsByPromoter = new Map<string, Visit[]>();
+      rawVisits.forEach((v) => {
+        const list = visitsByPromoter.get(v.promotor_matricula) || [];
+        list.push(v);
+        visitsByPromoter.set(v.promotor_matricula, list);
+      });
+
+      // Se há rotas configuradas no sistema, escalados são aqueles com rota no dia.
+      // Se ainda não há rotas cadastradas para o dia (ex: início de implantação),
+      // consideramos elegíveis todos os promotores alocados em equipes ativas.
+      const hasAnyRouteForDay = scheduledMatriculas.size > 0;
+
+      const attendanceList: AttendanceItem[] = rawPromotores
+        .filter((p) => {
+          // Filtrar promotores cuja equipe não é vazia nem 'Nenhum'
+          const eq = p.equipe ? p.equipe.trim().toLowerCase() : '';
+          if (!eq || eq === 'nenhum') return false;
+
+          // Se há rotas cadastradas para o dia, respeitar estritamente a escala da rota
+          if (hasAnyRouteForDay) {
+            return scheduledMatriculas.has(p.matricula);
+          }
+          // Caso contrário, todos os promotores com equipe alocada compõem a escala base
+          return true;
+        })
+        .map((p) => {
+          const promVisits = visitsByPromoter.get(p.matricula) || [];
+
+          // Regra de Classificação de Presença:
+          // 1. 'presente': Se possui ao menos uma visita concluída ou em andamento
+          // 2. 'falta': Se todas as visitas do dia foram registradas como 'nao_realizada'
+          // 3. 'sem_registro': Se não há telemetria ou as visitas continuam pendentes/sem check-in
+          const hasCompleted = promVisits.some((v) => v.status === 'concluida');
+          const hasInProgress = promVisits.some((v) => v.status === 'em_andamento');
+          const allNotDone = promVisits.length > 0 && promVisits.every((v) => v.status === 'nao_realizada');
+
+          let status: 'presente' | 'falta' | 'atestado' | 'sem_registro' = 'sem_registro';
+          let telemetryDetail = 'Aguardando primeiro check-in no aplicativo';
+          let telemetryTime = '--:--';
+
+          if (hasCompleted || hasInProgress) {
+            status = 'presente';
+            const firstActive = promVisits.find((v) => v.started_at);
+            if (firstActive && firstActive.started_at) {
+              const dt = new Date(firstActive.started_at);
+              telemetryTime = `${String(dt.getHours()).padStart(2, '0')}:${String(dt.getMinutes()).padStart(2, '0')}`;
+              telemetryDetail = hasCompleted ? 'Atendimento concluído em loja' : 'Check-in ativo em atendimento';
+            } else {
+              telemetryTime = 'Confirmado';
+              telemetryDetail = 'Visita registrada em campo';
+            }
+          } else if (allNotDone) {
+            status = 'falta';
+            const reason = promVisits[0]?.motivo_nao_realizada || 'Visita não realizada';
+            telemetryDetail = `Atendimento não realizado: ${reason}`;
+          }
+
+          // Iniciais do nome
+          const nameParts = (p.nome || '').trim().split(' ').filter(Boolean);
+          const initials = nameParts.length > 1
+            ? (nameParts[0][0] + nameParts[nameParts.length - 1][0]).toUpperCase()
+            : (nameParts[0] ? nameParts[0].slice(0, 2).toUpperCase() : 'PR');
+
+          return {
+            id: p.id,
+            promoterId: p.id,
+            name: p.nome,
+            initials,
+            matricula: p.matricula,
+            type: 'CLT',
+            squad: p.equipe || 'Sem Equipe',
+            supervisor: p.supervisor || 'Não atribuído',
+            city: p.cidade || 'Não informada',
+            state: p.uf || 'UF',
+            phone: p.telefone || undefined,
+            status,
+            telemetryTime,
+            telemetryDetail
+          };
+        });
+
+      setItems(attendanceList);
+    } catch (err: any) {
+      console.error('Erro ao carregar dados de presença:', err);
+      setError(err?.message || 'Falha ao buscar registros operacionais no Supabase.');
+      setItems([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [dateVal]);
+
+  // Carregar dados sempre que a data operacional selecionada mudar
+  useEffect(() => {
+    fetchAttendanceData();
+  }, [fetchAttendanceData]);
 
   const openStatusModal = (item: AttendanceItem) => {
     setSelectedItem(item);
@@ -38,6 +213,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
     e.preventDefault();
     if (!selectedItem) return;
 
+    // Atualização local do item (anotação/ajuste operacional de supervisão)
     setItems((prev) =>
       prev.map((it) => {
         if (it.id === selectedItem.id) {
@@ -63,33 +239,36 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
     setModalOpen(false);
     onShowToast({
       title: 'Presença Atualizada',
-      message: `Status de ${selectedItem.name} alterado para ${newStatus.toUpperCase()}.`,
+      message: `Status de ${selectedItem.name} ajustado para ${newStatus.toUpperCase()}.`,
       type: 'success'
     });
   };
 
-  const filteredItems = simulateEmpty
-    ? []
-    : items.filter((item) => {
-        const matchesSearch =
-          item.name.toLowerCase().includes(search.toLowerCase()) ||
-          item.matricula.toLowerCase().includes(search.toLowerCase()) ||
-          item.city.toLowerCase().includes(search.toLowerCase());
+  const filteredItems = useMemo(() => {
+    if (simulateEmpty) return [];
 
-        const matchesSupervisor =
-          !supervisorFilter || item.supervisor.toLowerCase().includes(supervisorFilter.toLowerCase());
+    return items.filter((item) => {
+      const matchesSearch =
+        item.name.toLowerCase().includes(search.toLowerCase()) ||
+        item.matricula.toLowerCase().includes(search.toLowerCase()) ||
+        item.city.toLowerCase().includes(search.toLowerCase());
 
-        const matchesSquad =
-          !squadFilter || item.squad.toLowerCase().includes(squadFilter.toLowerCase());
+      const matchesSupervisor =
+        !supervisorFilter || item.supervisor.toLowerCase().includes(supervisorFilter.toLowerCase());
 
-        const matchesQuick =
-          quickFilter === 'all' ||
-          (quickFilter === 'falta' && item.status === 'falta') ||
-          (quickFilter === 'atestado' && item.status === 'atestado') ||
-          (quickFilter === 'sem_registro' && item.status === 'sem_registro');
+      const matchesSquad =
+        !squadFilter || item.squad.toLowerCase().includes(squadFilter.toLowerCase());
 
-        return matchesSearch && matchesSupervisor && matchesSquad && matchesQuick;
-      });
+      const matchesQuick =
+        quickFilter === 'all' ||
+        (quickFilter === 'presente' && item.status === 'presente') ||
+        (quickFilter === 'falta' && item.status === 'falta') ||
+        (quickFilter === 'atestado' && item.status === 'atestado') ||
+        (quickFilter === 'sem_registro' && item.status === 'sem_registro');
+
+      return matchesSearch && matchesSupervisor && matchesSquad && matchesQuick;
+    });
+  }, [items, search, supervisorFilter, squadFilter, quickFilter, simulateEmpty]);
 
   return (
     <div className="w-full px-4 lg:px-8 py-6 max-w-[1720px] mx-auto space-y-6">
@@ -365,8 +544,30 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
         </div>
       </div>
 
-      {/* Main Table or Empty State */}
-      {filteredItems.length === 0 ? (
+      {/* Main Table, Loading, Error or Empty State */}
+      {loading ? (
+        <div className="rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] p-12 text-center shadow-xl">
+          <div className="max-w-md mx-auto space-y-3 flex flex-col items-center">
+            <span className="material-symbols-outlined text-4xl text-purple-600 animate-spin">sync</span>
+            <h3 className="text-sm font-bold text-[#171717]">Carregando escala e registros de presença...</h3>
+            <p className="text-xs text-[#77766F]">Consultando dados de promotores, rotas e visitas no Supabase.</p>
+          </div>
+        </div>
+      ) : error ? (
+        <div className="rounded-xl bg-rose-500/10 border border-rose-500/30 p-8 text-center shadow-xl text-rose-900">
+          <div className="max-w-md mx-auto space-y-2 flex flex-col items-center">
+            <span className="material-symbols-outlined text-3xl text-rose-600">error</span>
+            <h3 className="text-sm font-bold text-rose-800">Falha ao sincronizar presença</h3>
+            <p className="text-xs text-[#5F5F5F]">{error}</p>
+            <button
+              onClick={fetchAttendanceData}
+              className="mt-2 px-4 py-1.5 rounded-lg bg-rose-700 text-white font-semibold text-xs cursor-pointer shadow-xs"
+            >
+              Tentar novamente
+            </button>
+          </div>
+        </div>
+      ) : filteredItems.length === 0 ? (
         <div className="rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] p-10 text-center shadow-xl">
           <div className="max-w-md mx-auto space-y-4 flex flex-col items-center">
             <div className="w-16 h-16 rounded-full bg-[#EAE8E2] border border-[#CFCDC5] flex items-center justify-center text-purple-400">
