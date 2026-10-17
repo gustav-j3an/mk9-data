@@ -5,36 +5,58 @@ interface BeforeInstallPromptEvent extends Event {
   userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>;
 }
 
+const DISMISS_KEY = 'mk9_pwa_dismissed';
+const DISMISS_DURATION_MS = 7 * 24 * 60 * 60 * 1000; // Lembrar dispensa por 7 dias
+
 export const PWAInstallPrompt: React.FC = () => {
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [showIOSPrompt, setShowIOSPrompt] = useState(false);
   const [dismissed, setDismissed] = useState(false);
 
   useEffect(() => {
-    // Check if dismissed in this session
-    const isDismissed = sessionStorage.getItem('mk9_pwa_install_dismissed');
-    if (isDismissed) {
-      setDismissed(true);
-      return;
+    // Verificar se já foi dispensado recentemente no localStorage
+    try {
+      const dismissedTimestamp = localStorage.getItem(DISMISS_KEY);
+      if (dismissedTimestamp) {
+        const timeElapsed = Date.now() - parseInt(dismissedTimestamp, 10);
+        if (timeElapsed < DISMISS_DURATION_MS) {
+          setDismissed(true);
+          return;
+        }
+      }
+    } catch {
+      // LocalStorage pode falhar em ambientes com restrição de cookies
     }
 
-    // Check if already in standalone mode
-    const isStandalone = window.matchMedia('(display-mode: standalone)').matches ||
+    // Verificar se já está rodando em modo standalone (PWA instalado)
+    const isStandalone =
+      window.matchMedia('(display-mode: standalone)').matches ||
       (window.navigator as unknown as { standalone?: boolean }).standalone === true;
 
     if (isStandalone) {
       return;
     }
 
-    // Handler for Android / Desktop Chromium beforeinstallprompt
+    // Handler para evento nativo no Android / Desktop Chromium
     const handleBeforeInstallPrompt = (e: Event) => {
       e.preventDefault();
       setDeferredPrompt(e as BeforeInstallPromptEvent);
     };
 
-    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    const handleAppInstalled = () => {
+      setDeferredPrompt(null);
+      setShowIOSPrompt(false);
+      try {
+        localStorage.setItem(DISMISS_KEY, Date.now().toString());
+      } catch {
+        // Ignora
+      }
+    };
 
-    // Detect iOS Safari
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    window.addEventListener('appinstalled', handleAppInstalled);
+
+    // Detectar iOS Safari para instrução manual
     const ua = window.navigator.userAgent;
     const isIOS = /iPad|iPhone|iPod/.test(ua) && !(window as unknown as { MSStream?: unknown }).MSStream;
     const isSafari = /Safari/.test(ua) && !/CriOS|FxiOS|EdgiOS/.test(ua);
@@ -45,6 +67,7 @@ export const PWAInstallPrompt: React.FC = () => {
 
     return () => {
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+      window.removeEventListener('appinstalled', handleAppInstalled);
     };
   }, []);
 
@@ -54,86 +77,110 @@ export const PWAInstallPrompt: React.FC = () => {
     const { outcome } = await deferredPrompt.userChoice;
     if (outcome === 'accepted') {
       setDeferredPrompt(null);
+      try {
+        localStorage.setItem(DISMISS_KEY, Date.now().toString());
+      } catch {
+        // Ignora
+      }
     }
   };
 
   const handleDismiss = () => {
     setDismissed(true);
-    sessionStorage.setItem('mk9_pwa_install_dismissed', 'true');
+    try {
+      localStorage.setItem(DISMISS_KEY, Date.now().toString());
+    } catch {
+      // Ignora
+    }
   };
 
   if (dismissed) return null;
 
-  // Render Android / Chrome prompt
+  // Prompt nativo para Android / Chrome Desktop
   if (deferredPrompt) {
     return (
-      <div className="fixed bottom-4 left-4 right-4 sm:left-auto sm:right-6 sm:max-w-sm z-50 bg-[#F7F6F2] border border-purple-500/40 rounded-xl shadow-2xl p-4 animate-slideUp">
+      <aside
+        aria-label="Instalação do Aplicativo"
+        className="fixed bottom-4 left-4 right-4 sm:left-auto sm:right-6 sm:max-w-md z-40 bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl shadow-2xl p-4 animate-slideUp backdrop-blur-md"
+      >
         <div className="flex items-start gap-3">
-          <div className="w-10 h-10 rounded-lg bg-gradient-to-tr from-purple-600 to-indigo-500 flex items-center justify-center font-bold text-white shadow-md shrink-0">
-            <span className="text-xs font-mono font-extrabold">MK9</span>
+          <div className="w-11 h-11 rounded-xl bg-[#111114] border border-[#2D2D30] flex items-center justify-center font-bold text-white shadow-md shrink-0">
+            <span className="text-xs font-mono font-extrabold tracking-wider text-[#F3F2EE]">MK9</span>
           </div>
           <div className="flex-1 min-w-0">
-            <h4 className="text-xs font-bold text-[#171717] tracking-wide">Instalar aplicativo MK9</h4>
-            <p className="text-[11px] text-[#171717] mt-0.5 leading-tight">
-              Instale na sua tela inicial para acesso rápido e melhor experiência em campo.
+            <div className="flex items-center justify-between gap-2">
+              <h4 className="text-sm font-bold text-[#171717] tracking-tight">Instale o MK9 Date</h4>
+              <button
+                onClick={handleDismiss}
+                className="text-[#737373] hover:text-[#171717] p-1 rounded-lg transition-colors cursor-pointer shrink-0"
+                aria-label="Fechar aviso"
+              >
+                <span className="material-symbols-outlined text-[18px]">close</span>
+              </button>
+            </div>
+            <p className="text-xs text-[#525252] mt-0.5 leading-snug">
+              Acesse suas rotas, visitas e atividades diretamente pela tela inicial do celular.
             </p>
             <div className="flex items-center gap-2 mt-3">
               <button
                 onClick={handleInstallClick}
-                className="px-3 py-1.5 rounded-lg bg-[#222222] hover:bg-black text-white text-xs font-bold transition-colors flex items-center gap-1.5 shadow-md"
+                className="px-3.5 py-2 rounded-xl bg-[#111114] hover:bg-black text-[#F3F2EE] text-xs font-bold transition-all flex items-center gap-1.5 shadow-md active:scale-95 cursor-pointer"
               >
                 <span className="material-symbols-outlined text-[16px]">download</span>
-                <span>Instalar</span>
+                <span>Instalar aplicativo</span>
               </button>
               <button
                 onClick={handleDismiss}
-                className="px-2.5 py-1.5 rounded-lg text-[#77766F] hover:text-slate-200 text-xs font-medium transition-colors"
+                className="px-3 py-2 rounded-xl text-[#737373] hover:text-[#171717] text-xs font-medium transition-colors cursor-pointer"
               >
                 Agora não
               </button>
             </div>
           </div>
-          <button
-            onClick={handleDismiss}
-            className="text-[#5F5F5F] hover:text-[#171717] p-1 rounded shrink-0"
-            aria-label="Fechar"
-          >
-            <span className="material-symbols-outlined text-[16px]">close</span>
-          </button>
         </div>
-      </div>
+      </aside>
     );
   }
 
-  // Render iOS Safari instruction prompt
+  // Instrução para iOS Safari
   if (showIOSPrompt) {
     return (
-      <div className="fixed bottom-4 left-4 right-4 sm:left-auto sm:right-6 sm:max-w-sm z-50 bg-[#F7F6F2] border border-cyan-500/40 rounded-xl shadow-2xl p-4 animate-slideUp">
+      <aside
+        aria-label="Instalação do Aplicativo iOS"
+        className="fixed bottom-4 left-4 right-4 sm:left-auto sm:right-6 sm:max-w-md z-40 bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl shadow-2xl p-4 animate-slideUp backdrop-blur-md"
+      >
         <div className="flex items-start gap-3">
-          <div className="w-10 h-10 rounded-lg bg-gradient-to-tr from-cyan-600 to-blue-500 flex items-center justify-center font-bold text-white shadow-md shrink-0">
-            <span className="text-xs font-mono font-extrabold">MK9</span>
+          <div className="w-11 h-11 rounded-xl bg-[#111114] border border-[#2D2D30] flex items-center justify-center font-bold text-white shadow-md shrink-0">
+            <span className="text-xs font-mono font-extrabold tracking-wider text-[#F3F2EE]">MK9</span>
           </div>
           <div className="flex-1 min-w-0">
-            <h4 className="text-xs font-bold text-[#171717] tracking-wide">Instalar MK9 no iOS</h4>
-            <p className="text-[11px] text-[#171717] mt-1 leading-normal">
-              Para instalar: toque no ícone de <span className="text-cyan-400 font-bold">Compartilhar</span> <span className="inline-block border border-slate-600 rounded px-1 text-[10px]">⎋</span> e selecione <span className="text-cyan-400 font-bold">'Adicionar à Tela de Início'</span>.
+            <div className="flex items-center justify-between gap-2">
+              <h4 className="text-sm font-bold text-[#171717] tracking-tight">Instale o MK9 Date</h4>
+              <button
+                onClick={handleDismiss}
+                className="text-[#737373] hover:text-[#171717] p-1 rounded-lg transition-colors cursor-pointer shrink-0"
+                aria-label="Fechar aviso"
+              >
+                <span className="material-symbols-outlined text-[18px]">close</span>
+              </button>
+            </div>
+            <p className="text-xs text-[#525252] mt-0.5 leading-snug">
+              Acesse suas rotas, visitas e atividades diretamente pela tela inicial do celular.
             </p>
-            <button
-              onClick={handleDismiss}
-              className="mt-2.5 px-3 py-1 rounded bg-[#CFCDC5] hover:bg-[#283044] text-[#171717] text-[11px] font-bold transition-colors"
-            >
-              Entendido
-            </button>
+            <div className="mt-2.5 p-2 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[11px] text-[#333333] leading-relaxed">
+              Toque no ícone de <strong className="text-[#111114]">Compartilhar</strong> <span className="inline-block border border-[#CFCDC5] bg-white rounded px-1 font-mono text-[10px]">⎋</span> e selecione <strong className="text-[#111114]">&ldquo;Adicionar à Tela de Início&rdquo;</strong>.
+            </div>
+            <div className="flex items-center gap-2 mt-3">
+              <button
+                onClick={handleDismiss}
+                className="px-3.5 py-1.5 rounded-xl bg-[#111114] hover:bg-black text-[#F3F2EE] text-xs font-bold transition-all active:scale-95 cursor-pointer"
+              >
+                Entendido
+              </button>
+            </div>
           </div>
-          <button
-            onClick={handleDismiss}
-            className="text-[#5F5F5F] hover:text-[#171717] p-1 rounded shrink-0"
-            aria-label="Fechar"
-          >
-            <span className="material-symbols-outlined text-[16px]">close</span>
-          </button>
         </div>
-      </div>
+      </aside>
     );
   }
 

@@ -1,6 +1,7 @@
 import { FormEvent, useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from './AuthProvider';
+import { AuthorSignature } from '../components/AuthorSignature';
 
 export function LoginPage() {
   const { configured, session, signIn, isPasswordRecovery, updatePassword, resetPasswordForEmail } = useAuth();
@@ -303,6 +304,10 @@ export function LoginPage() {
             </form>
           </div>
         )}
+
+        <div className="mt-8 pt-4 border-t border-[#CFCDC5]/60 flex justify-center">
+          <AuthorSignature variant="muted" />
+        </div>
       </section>
     </main>
   );

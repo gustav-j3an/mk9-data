@@ -11,6 +11,7 @@ import {
   DayOfWeekDate
 } from '../utils/routePlanner';
 import { ExecutiveReportDocument } from '../components/reports/ExecutiveReportDocument';
+import { AuthorSignature } from '../components/AuthorSignature';
 
 interface IndustryPortalViewProps {
   onShowToast: (toast: Omit<ToastMessage, 'id'>) => void;
@@ -2485,6 +2486,15 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
           </>
         )}
       </section>
+
+      {/* RODAPÉ DISCRETO DO PORTAL DA INDÚSTRIA */}
+      <footer className="pt-6 pb-2 border-t border-[#CFCDC5]/60 flex flex-col sm:flex-row items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="flex h-2 w-2 rounded-full bg-[#286FF5]" />
+          <span className="font-mono text-[11px] text-[#737373]">MK9 Date • Portal da Indústria</span>
+        </div>
+        <AuthorSignature variant="muted" />
+      </footer>
 
       {/* 9. MODAL / DRAWER DE DETALHES DA VISITA (SOMENTE LEITURA) */}
       {selectedVisitItem && (

@@ -4,6 +4,7 @@ import { useAuth } from '../auth/AuthProvider';
 import { notificationService } from '../lib/notificationService';
 import { supabase } from '../lib/supabase';
 import { PWAInstallPrompt } from './PWAInstallPrompt';
+import { AuthorSignature } from './AuthorSignature';
 
 interface AppShellProps {
   currentScreen: ScreenId;
@@ -432,18 +433,23 @@ export const AppShell: React.FC<AppShellProps> = ({
         </div>
 
         {/* Sidebar Footer */}
-        <div className="p-3 m-3 rounded-lg bg-[#E4E2DB] border border-[#CFCDC5] flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span className="flex h-2 w-2 rounded-full bg-[#16845B]" />
-            <span className="font-mono text-[11px] text-[#737373] font-medium">v2.5.0 GridCraft</span>
+        <div className="p-3 m-3 rounded-lg bg-[#E4E2DB] border border-[#CFCDC5] space-y-2">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="flex h-2 w-2 rounded-full bg-[#16845B]" />
+              <span className="font-mono text-[11px] text-[#737373] font-medium">v2.5.0 GridCraft</span>
+            </div>
+            <span
+              onClick={() => onNavigate('design-system')}
+              title="Design System & Tokens"
+              className="material-symbols-outlined text-[16px] text-[#737373] hover:text-[#171717] cursor-pointer transition-colors"
+            >
+              verified_user
+            </span>
           </div>
-          <span
-            onClick={() => onNavigate('design-system')}
-            title="Design System & Tokens"
-            className="material-symbols-outlined text-[16px] text-[#737373] hover:text-[#171717] cursor-pointer transition-colors"
-          >
-            verified_user
-          </span>
+          <div className="pt-2 border-t border-[#CFCDC5]/60 flex justify-center">
+            <AuthorSignature variant="compact" />
+          </div>
         </div>
       </aside>
 

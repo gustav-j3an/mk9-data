@@ -1,7 +1,38 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="100" fill="#171b26"/>
-  <rect x="16" y="16" width="480" height="480" rx="90" fill="none" stroke="#6366f1" stroke-width="16" opacity="0.6"/>
-  <path d="M130 360 V152 L256 280 L382 152 V360" fill="none" stroke="#818cf8" stroke-width="48" stroke-linecap="round" stroke-linejoin="round"/>
-  <circle cx="382" cy="360" r="24" fill="#38bdf8"/>
-  <text x="256" y="445" font-family="system-ui, sans-serif" font-weight="800" font-size="40" fill="#ffffff" text-anchor="middle" letter-spacing="4">MK9 TRADE</text>
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1A1A1E" />
+      <stop offset="100%" stop-color="#111114" />
+    </linearGradient>
+    <linearGradient id="accentGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3B82F6" />
+      <stop offset="100%" stop-color="#2563EB" />
+    </linearGradient>
+  </defs>
+
+  <!-- Background Card -->
+  <rect width="512" height="512" rx="112" fill="url(#bgGrad)"/>
+  <rect x="16" y="16" width="480" height="480" rx="96" fill="none" stroke="#286FF5" stroke-width="8" opacity="0.4"/>
+
+  <!-- Geometric Grid Pattern subtle -->
+  <circle cx="256" cy="210" r="140" fill="none" stroke="#26262B" stroke-width="2" stroke-dasharray="8 8"/>
+
+  <!-- Central Modern MK9 Monogram -->
+  <g transform="translate(0, -10)">
+    <!-- Stylized M & K Icon -->
+    <path d="M120 310 V150 L200 240 L280 150 V310" fill="none" stroke="#FFFFFF" stroke-width="36" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M320 150 V310" fill="none" stroke="#FFFFFF" stroke-width="36" stroke-linecap="round"/>
+    <path d="M325 230 L395 150" fill="none" stroke="url(#accentGrad)" stroke-width="36" stroke-linecap="round"/>
+    <path d="M335 220 L400 310" fill="none" stroke="url(#accentGrad)" stroke-width="36" stroke-linecap="round"/>
+
+    <!-- Operational Pin / Radar Node -->
+    <circle cx="200" cy="240" r="12" fill="#16A34A"/>
+    <circle cx="200" cy="240" r="20" fill="none" stroke="#16A34A" stroke-width="3" opacity="0.7"/>
+  </g>
+
+  <!-- Subtitle Badge: DATE / TRADE OPS -->
+  <g transform="translate(256, 415)">
+    <rect x="-105" y="-22" width="210" height="44" rx="22" fill="#202025" stroke="#33333A" stroke-width="2"/>
+    <text x="0" y="7" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-weight="800" font-size="22" fill="#3B82F6" text-anchor="middle" letter-spacing="4">DATE</text>
+  </g>
 </svg>

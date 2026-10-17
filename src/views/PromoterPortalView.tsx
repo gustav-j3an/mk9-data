@@ -10,6 +10,7 @@ import {
   DayOfWeekDate,
   OperationalVisitItem
 } from '../utils/routePlanner';
+import { AuthorSignature } from '../components/AuthorSignature';
 
 interface PromoterPortalViewProps {
   onShowToast: (toast: Omit<ToastMessage, 'id'>) => void;
@@ -3592,6 +3593,15 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
           </div>
         </div>
       )}
+
+      {/* RODAPÉ DO PORTAL DO PROMOTOR */}
+      <footer className="pt-6 pb-2 border-t border-[#CFCDC5]/60 flex flex-col sm:flex-row items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="flex h-2 w-2 rounded-full bg-[#16845B]" />
+          <span className="font-mono text-[11px] text-[#737373]">MK9 Date • Portal de Campo</span>
+        </div>
+        <AuthorSignature variant="muted" />
+      </footer>
 
       {/* MODAL DE ZOOM DE FOTO (MODO ADMINISTRATIVO) */}
       {adminZoomedPhoto && (

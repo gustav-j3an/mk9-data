@@ -1,8 +1,8 @@
-// Service Worker MK9 Trade Marketing
+// Service Worker MK9 Date
 // Cache estático exclusivo para o Shell da aplicação e assets compilados.
 // NENHUMA API PRIVADA OU DADO OPERACIONAL DO SUPABASE É CACHEADO.
 
-const CACHE_NAME = 'mk9-shell-v1';
+const CACHE_NAME = 'mk9-date-shell-v2';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
