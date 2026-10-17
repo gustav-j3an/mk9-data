@@ -1,11 +1,97 @@
 import { supabase } from './supabase';
-import type { Equipe, EquipeStatus, CreateEquipeDTO, UpdateEquipeDTO } from '../types';
+import type { Equipe, EquipeWithMetrics, EquipeStatus, CreateEquipeDTO, UpdateEquipeDTO } from '../types';
 
 const normalizeOptionalCode = (value?: string | null): string | undefined => {
   if (value === undefined || value === null) return undefined;
   const trimmed = value.trim();
   return trimmed ? trimmed.toUpperCase() : undefined;
 };
+
+/**
+ * Normaliza o valor textual da equipe do promotor.
+ * Valores vazios, nulos, apenas com espaços ou iguais a 'Nenhum' (case-insensitive) retornam null.
+ */
+export const normalizeEquipeNome = (value?: string | null): string | null => {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.toLowerCase() === 'nenhum') return null;
+  return trimmed;
+};
+
+/**
+ * Função pura que calcula as métricas de promotores e PDVs distintos para cada equipe.
+ * 
+ * Regras:
+ * 1. Mapeia cada promotor para sua equipe normalizada. Promotores com equipe nula, vazia ou 'Nenhum' são ignorados para equipes cadastradas.
+ * 2. Cada promotor é contado uma única vez por equipe (usando matrícula ou ID único).
+ * 3. As rotas são cruzadas pela matrícula do promotor. Cada loja (loja_codigo válido) é contabilizada uma única vez por equipe via Set.
+ * 4. Múltiplos promotores da mesma equipe atendendo ao mesmo PDV não duplicam a contagem de PDVs da equipe.
+ * 5. Lojas de promotores sem equipe não são atribuídas a nenhuma equipe.
+ * 6. Equipes sem promotores ou sem rotas retornam métricas zeradas (0 promotores, 0 PDVs).
+ */
+export function calculateTeamsMetrics(
+  equipes: Equipe[],
+  promotores: Array<{ id?: string; matricula?: string | null; equipe?: string | null }>,
+  rotas: Array<{ promotor_matricula?: string | null; loja_codigo?: string | null }>
+): EquipeWithMetrics[] {
+  if (!Array.isArray(equipes)) return [];
+
+  // 1. Mapear promotores por equipe
+  // Chave: equipeNome (em maiúsculas/normalizado para correspondência segura)
+  // Valor: Set de matrículas únicas
+  const teamPromoterMatriculas = new Map<string, Set<string>>();
+  // Mapear também matrícula do promotor para sua equipe normalizada
+  const promoterToTeamMap = new Map<string, string>();
+
+  (promotores || []).forEach((p) => {
+    const rawEquipe = normalizeEquipeNome(p.equipe);
+    const matricula = (p.matricula || p.id || '').trim();
+    if (!rawEquipe || !matricula) return;
+
+    const normalizedEquipeKey = rawEquipe.toUpperCase();
+
+    let set = teamPromoterMatriculas.get(normalizedEquipeKey);
+    if (!set) {
+      set = new Set<string>();
+      teamPromoterMatriculas.set(normalizedEquipeKey, set);
+    }
+    set.add(matricula);
+    promoterToTeamMap.set(matricula, normalizedEquipeKey);
+  });
+
+  // 2. Mapear PDVs distintos por equipe a partir de rotas
+  // Chave: normalizedEquipeKey -> Set de loja_codigo únicos
+  const teamPdvs = new Map<string, Set<string>>();
+
+  (rotas || []).forEach((r) => {
+    const matricula = (r.promotor_matricula || '').trim();
+    const lojaCodigo = (r.loja_codigo || '').trim();
+    if (!matricula || !lojaCodigo) return;
+
+    const teamKey = promoterToTeamMap.get(matricula);
+    if (!teamKey) return; // Rota de promotor sem equipe ou equipe desconhecida
+
+    let set = teamPdvs.get(teamKey);
+    if (!set) {
+      set = new Set<string>();
+      teamPdvs.set(teamKey, set);
+    }
+    set.add(lojaCodigo);
+  });
+
+  // 3. Montar lista de EquipeWithMetrics
+  return equipes.map((eq) => {
+    const key = (eq.nome || '').trim().toUpperCase();
+    const promotoresCount = teamPromoterMatriculas.get(key)?.size || 0;
+    const pdvsCount = teamPdvs.get(key)?.size || 0;
+
+    return {
+      ...eq,
+      promotoresCount,
+      pdvsCount
+    };
+  });
+}
 
 /**
  * Filtros opcionais para listagem de equipes
@@ -85,6 +171,93 @@ export const equipesService = {
       return { data: (data as Equipe[]) || [], error: null };
     } catch (err: any) {
       return { data: null, error: new Error(err?.message || 'Falha inesperada ao listar equipes.') };
+    }
+  },
+
+  /**
+   * Busca equipes com métricas reais de promotores vinculados e PDVs distintos calculadas.
+   * Executa a busca de promotores e rotas com paginação segura (tratando o limite de 1000 registros do PostgREST).
+   */
+  async fetchTeamsWithMetrics(filters?: ListEquipesFilters): Promise<ServiceResponse<EquipeWithMetrics[]>> {
+    if (!supabase) {
+      return { data: null, error: new Error('Cliente Supabase não inicializado.') };
+    }
+
+    try {
+      // 1. Buscar equipes aplicando os filtros existentes
+      const equipesRes = await this.listEquipes(filters);
+      if (equipesRes.error || !equipesRes.data) {
+        return { data: null, error: equipesRes.error };
+      }
+      const equipes = equipesRes.data;
+
+      // 2. Buscar promotores com paginação defensiva
+      const allPromotores: Array<{ id: string; matricula: string; equipe: string | null }> = [];
+      const PAGE_SIZE = 1000;
+      let pPage = 0;
+      let hasMorePromotores = true;
+
+      while (hasMorePromotores) {
+        const from = pPage * PAGE_SIZE;
+        const to = from + PAGE_SIZE - 1;
+
+        const { data: pBatch, error: pErr } = await supabase
+          .from('promotores')
+          .select('id, matricula, equipe')
+          .range(from, to);
+
+        if (pErr) {
+          return { data: null, error: new Error(`Erro ao consultar promotores para métricas: ${pErr.message}`) };
+        }
+
+        if (pBatch && pBatch.length > 0) {
+          allPromotores.push(...pBatch);
+          if (pBatch.length < PAGE_SIZE) {
+            hasMorePromotores = false;
+          } else {
+            pPage++;
+          }
+        } else {
+          hasMorePromotores = false;
+        }
+      }
+
+      // 3. Buscar rotas com paginação defensiva
+      const allRotas: Array<{ promotor_matricula: string; loja_codigo: string }> = [];
+      let rPage = 0;
+      let hasMoreRotas = true;
+
+      while (hasMoreRotas) {
+        const from = rPage * PAGE_SIZE;
+        const to = from + PAGE_SIZE - 1;
+
+        const { data: rBatch, error: rErr } = await supabase
+          .from('rotas')
+          .select('promotor_matricula, loja_codigo')
+          .range(from, to);
+
+        if (rErr) {
+          return { data: null, error: new Error(`Erro ao consultar rotas para métricas: ${rErr.message}`) };
+        }
+
+        if (rBatch && rBatch.length > 0) {
+          allRotas.push(...rBatch);
+          if (rBatch.length < PAGE_SIZE) {
+            hasMoreRotas = false;
+          } else {
+            rPage++;
+          }
+        } else {
+          hasMoreRotas = false;
+        }
+      }
+
+      // 4. Executar agregação pura em memória
+      const teamsWithMetrics = calculateTeamsMetrics(equipes, allPromotores, allRotas);
+
+      return { data: teamsWithMetrics, error: null };
+    } catch (err: any) {
+      return { data: null, error: new Error(err?.message || 'Falha inesperada ao calcular métricas de equipes.') };
     }
   },
 

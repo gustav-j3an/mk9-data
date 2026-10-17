@@ -4,6 +4,7 @@ import { ScreenId, ToastMessage } from './types';
 import { AppShell } from './components/AppShell';
 import { CockpitView } from './views/CockpitView';
 import { OperationalDashboardView } from './views/OperationalDashboardView';
+import { VisitsTrackingView } from './views/VisitsTrackingView';
 import { AttendanceControlView } from './views/AttendanceControlView';
 import { TeamsManagementView } from './views/TeamsManagementView';
 import { SupervisorsManagementView } from './views/SupervisorsManagementView';
@@ -18,12 +19,16 @@ import { IndustriesView } from './views/IndustriesView';
 import { StoresView } from './views/StoresView';
 import { PromoterPortalView } from './views/PromoterPortalView';
 import { IndustryPortalView } from './views/IndustryPortalView';
+import { ProfileView } from './views/ProfileView';
 import { AuthProvider, useAuth } from './auth/AuthProvider';
 import { LoginPage } from './auth/LoginPage';
 import { ResetPasswordPage } from './auth/ResetPasswordPage';
 import { ProtectedRoute } from './auth/ProtectedRoute';
 
 function isScreenAllowedForRole(screen: ScreenId, role: string): boolean {
+  if (screen === 'meu-perfil') {
+    return true;
+  }
   if (role === 'promotor') {
     return screen === 'portal-promotor';
   }
@@ -116,6 +121,9 @@ function Dashboard() {
       {activeScreen === 'painel-operacional' && (
         <OperationalDashboardView onNavigate={handleNavigate} onShowToast={addToast} />
       )}
+      {activeScreen === 'acompanhamento-visitas' && (
+        <VisitsTrackingView onNavigate={handleNavigate} onShowToast={addToast} />
+      )}
       {activeScreen === 'presenca' && (
         <AttendanceControlView onNavigate={handleNavigate} onShowToast={addToast} />
       )}
@@ -157,6 +165,9 @@ function Dashboard() {
       )}
       {activeScreen === 'usuarios' && (
         <UsersPermissionsView onShowToast={addToast} />
+      )}
+      {activeScreen === 'meu-perfil' && (
+        <ProfileView onNavigate={handleNavigate} onShowToast={addToast} />
       )}
     </AppShell>
   );

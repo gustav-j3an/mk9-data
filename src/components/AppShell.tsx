@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { ScreenId, ToastMessage, UserRole, AppNotification } from '../types';
 import { useAuth } from '../auth/AuthProvider';
 import { notificationService } from '../lib/notificationService';
@@ -23,11 +23,206 @@ export const AppShell: React.FC<AppShellProps> = ({
   const { session, profile, role, signOut, hasPermission } = useAuth();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [globalSearch, setGlobalSearch] = useState('');
+  const [searchFocused, setSearchFocused] = useState(false);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [searchResults, setSearchResults] = useState<{
+    promotores: Array<{ id: string; title: string; subtitle: string; target: ScreenId }>;
+    lojas: Array<{ id: string; title: string; subtitle: string; target: ScreenId }>;
+    industrias: Array<{ id: string; title: string; subtitle: string; target: ScreenId }>;
+    equipes: Array<{ id: string; title: string; subtitle: string; target: ScreenId }>;
+    rotas: Array<{ id: string; title: string; subtitle: string; target: ScreenId }>;
+  }>({
+    promotores: [],
+    lojas: [],
+    industrias: [],
+    equipes: [],
+    rotas: []
+  });
+
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const searchContainerRef = useRef<HTMLDivElement>(null);
+  const searchSeqRef = useRef<number>(0);
+
   const [notificationsOpen, setNotificationsOpen] = useState(false);
 
   // Estados de Notificações Persistentes
   const [notificationsList, setNotificationsList] = useState<AppNotification[]>([]);
   const [unreadCount, setUnreadCount] = useState<number>(0);
+
+  // Atalho Ctrl+K ou Cmd+K para focar e abrir a pesquisa global
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+        setSearchFocused(true);
+      } else if (e.key === 'Escape') {
+        setSearchFocused(false);
+        searchInputRef.current?.blur();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  // Fechar ao clicar fora do container de pesquisa
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (searchContainerRef.current && !searchContainerRef.current.contains(e.target as Node)) {
+        setSearchFocused(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Debounced search query contra Supabase
+  useEffect(() => {
+    const term = globalSearch.trim();
+    if (!term || term.length < 2) {
+      setSearchResults({ promotores: [], lojas: [], industrias: [], equipes: [], rotas: [] });
+      setSearchLoading(false);
+      setSearchError(null);
+      return;
+    }
+
+    setSearchLoading(true);
+    setSearchError(null);
+    const seq = ++searchSeqRef.current;
+
+    const timer = setTimeout(async () => {
+      if (!supabase) {
+        setSearchLoading(false);
+        return;
+      }
+
+      try {
+        const pattern = `%${term}%`;
+        const canViewOps = hasPermission(['admin', 'gestor', 'operador']);
+        const canViewPromoters = hasPermission(['admin', 'gestor', 'operador', 'promotor']);
+        const isClientIndustry = role === 'client_industry';
+
+        // 1. Promotores
+        const promotoresPromise = canViewPromoters
+          ? (async () => {
+              let q = supabase
+                .from('promotores')
+                .select('id, matricula, nome, cidade, uf, equipe')
+                .or(`nome.ilike.${pattern},matricula.ilike.${pattern},cidade.ilike.${pattern}`)
+                .limit(5);
+
+              // Se promotor, RLS limita a si próprio
+              const { data } = await q;
+              return (data || []).map((p: any) => ({
+                id: p.id || p.matricula,
+                title: p.nome || p.matricula,
+                subtitle: `Matrícula: ${p.matricula} • ${p.cidade || ''}/${p.uf || ''} ${p.equipe ? `• Equipe: ${p.equipe}` : ''}`.trim(),
+                target: (role === 'promotor' ? 'portal-promotor' : 'promotores') as ScreenId
+              }));
+            })()
+          : Promise.resolve([]);
+
+        // 2. Lojas / PDVs
+        const lojasPromise = !isClientIndustry
+          ? (async () => {
+              const { data } = await supabase
+                .from('lojas')
+                .select('id, codigo, nome, cidade, uf, rede')
+                .or(`nome.ilike.${pattern},codigo.ilike.${pattern},cidade.ilike.${pattern},rede.ilike.${pattern}`)
+                .limit(5);
+
+              return (data || []).map((l: any) => ({
+                id: l.id || l.codigo,
+                title: l.nome || l.codigo,
+                subtitle: `Código: ${l.codigo} • ${l.cidade || ''}/${l.uf || ''} ${l.rede ? `• Rede: ${l.rede}` : ''}`.trim(),
+                target: 'lojas' as ScreenId
+              }));
+            })()
+          : Promise.resolve([]);
+
+        // 3. Indústrias
+        const industriasPromise = (async () => {
+          let q = supabase
+            .from('industrias')
+            .select('id, codigo, nome')
+            .or(`nome.ilike.${pattern},codigo.ilike.${pattern}`)
+            .limit(5);
+
+          if (isClientIndustry && profile?.industria_codigo) {
+            q = q.eq('codigo', profile.industria_codigo);
+          }
+
+          const { data } = await q;
+          return (data || []).map((ind: any) => ({
+            id: ind.id || ind.codigo,
+            title: ind.nome || ind.codigo,
+            subtitle: `Código: ${ind.codigo}`,
+            target: (isClientIndustry ? 'portal-industria' : 'industrias') as ScreenId
+          }));
+        })();
+
+        // 4. Equipes
+        const equipesPromise = canViewOps
+          ? (async () => {
+              const { data } = await supabase
+                .from('equipes')
+                .select('id, codigo, nome, regional, supervisor_nome')
+                .or(`nome.ilike.${pattern},codigo.ilike.${pattern},regional.ilike.${pattern}`)
+                .limit(5);
+
+              return (data || []).map((eq: any) => ({
+                id: eq.id || eq.codigo,
+                title: eq.nome,
+                subtitle: `Código: ${eq.codigo} • Regional: ${eq.regional || 'N/A'} ${eq.supervisor_nome ? `• Sup: ${eq.supervisor_nome}` : ''}`.trim(),
+                target: 'gestao-equipes' as ScreenId
+              }));
+            })()
+          : Promise.resolve([]);
+
+        // 5. Rotas
+        const rotasPromise = canViewOps
+          ? (async () => {
+              const { data } = await supabase
+                .from('rotas')
+                .select('id, codigo_rota, promotor_matricula, loja_codigo, industria_codigo, frequencia')
+                .or(`codigo_rota.ilike.${pattern},promotor_matricula.ilike.${pattern},loja_codigo.ilike.${pattern},industria_codigo.ilike.${pattern}`)
+                .limit(5);
+
+              return (data || []).map((r: any) => ({
+                id: r.id || r.codigo_rota,
+                title: `Rota ${r.codigo_rota || r.id.slice(0, 8)}`,
+                subtitle: `Promotor: ${r.promotor_matricula} • Loja: ${r.loja_codigo} • ${r.frequencia || 'SEMANAL'}`.trim(),
+                target: 'rotas-fixas' as ScreenId
+              }));
+            })()
+          : Promise.resolve([]);
+
+        const [promotores, lojas, industrias, equipes, rotas] = await Promise.all([
+          promotoresPromise,
+          lojasPromise,
+          industriasPromise,
+          equipesPromise,
+          rotasPromise
+        ]);
+
+        if (seq === searchSeqRef.current) {
+          setSearchResults({ promotores, lojas, industrias, equipes, rotas });
+          setSearchLoading(false);
+        }
+      } catch (err: any) {
+        if (seq === searchSeqRef.current) {
+          console.error('Erro na pesquisa global:', err);
+          setSearchError('Falha ao consultar dados.');
+          setSearchLoading(false);
+        }
+      }
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [globalSearch, hasPermission, profile?.industria_codigo, role]);
 
   const loadUserNotifications = async () => {
     if (!session?.user?.id) return;
@@ -100,6 +295,7 @@ export const AppShell: React.FC<AppShellProps> = ({
     {
       group: 'CAMPO & ROTAS',
       items: [
+        { id: 'acompanhamento-visitas' as ScreenId, label: 'Acompanhamento de Visitas', icon: 'travel_explore', roles: ['admin', 'gestor', 'operador'] as UserRole[] },
         { id: 'portal-promotor' as ScreenId, label: 'Portal do Promotor', icon: 'smartphone', roles: ['admin', 'gestor', 'operador', 'promotor'] as UserRole[] },
         { id: 'presenca' as ScreenId, label: 'Controle de Presença', icon: 'how_to_reg', roles: ['admin', 'gestor', 'operador'] as UserRole[] },
         { id: 'rotas-fixas' as ScreenId, label: 'Rotas Fixas', icon: 'alt_route', roles: ['admin', 'gestor', 'operador'] as UserRole[] }
@@ -124,6 +320,7 @@ export const AppShell: React.FC<AppShellProps> = ({
     {
       group: 'CONFIGURAÇÕES & SEGURANÇA',
       items: [
+        { id: 'meu-perfil' as ScreenId, label: 'Meu Perfil', icon: 'account_circle', roles: ['admin', 'gestor', 'operador', 'promotor', 'client_industry'] as UserRole[] },
         { id: 'usuarios' as ScreenId, label: 'Perfis & Permissões', icon: 'admin_panel_settings', roles: ['admin'] as UserRole[] },
         { id: 'design-system' as ScreenId, label: 'Design System & Identidade', icon: 'palette', roles: ['admin', 'gestor', 'operador'] as UserRole[] }
       ]
@@ -262,20 +459,249 @@ export const AppShell: React.FC<AppShellProps> = ({
             <span className="material-symbols-outlined text-[22px]">menu</span>
           </button>
 
-          <div className="relative w-full max-w-md">
+          <div ref={searchContainerRef} className="relative w-full max-w-md">
             <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-[#737373] text-[18px]">
-              search
+              {searchLoading ? 'sync' : 'search'}
             </span>
             <input
+              ref={searchInputRef}
               type="text"
               value={globalSearch}
-              onChange={(e) => setGlobalSearch(e.target.value)}
-              placeholder="Buscar promotores, lojas, indústrias, rotas ou relatórios..."
-              className="w-full h-9 pl-9 pr-14 bg-[#EAE8E2] border border-[#CFCDC5] rounded-lg text-xs text-[#171717] placeholder:text-[#737373] focus:outline-none focus:border-[#111114] focus:bg-white transition-all font-sans"
+              onChange={(e) => {
+                setGlobalSearch(e.target.value);
+                setSearchFocused(true);
+              }}
+              onFocus={() => setSearchFocused(true)}
+              placeholder="Buscar promotores, lojas, indústrias, equipes ou rotas..."
+              className={`w-full h-9 pl-9 pr-14 bg-[#EAE8E2] border rounded-lg text-xs text-[#171717] placeholder:text-[#737373] transition-all font-sans ${
+                searchFocused
+                  ? 'border-[#111114] bg-white ring-1 ring-[#111114]'
+                  : 'border-[#CFCDC5] focus:outline-none'
+              }`}
             />
-            <div className="absolute right-2.5 top-1/2 -translate-y-1/2 hidden sm:flex items-center px-1.5 py-0.5 rounded bg-[#F7F6F2] border border-[#CFCDC5] text-[10px] text-[#737373] font-mono pointer-events-none">
-              Ctrl+K
-            </div>
+            {globalSearch ? (
+              <button
+                onClick={() => {
+                  setGlobalSearch('');
+                  setSearchResults({ promotores: [], lojas: [], industrias: [], equipes: [], rotas: [] });
+                }}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-[#737373] hover:text-[#171717] text-xs p-0.5 rounded cursor-pointer"
+                title="Limpar pesquisa"
+              >
+                <span className="material-symbols-outlined text-[16px]">close</span>
+              </button>
+            ) : (
+              <div className="absolute right-2.5 top-1/2 -translate-y-1/2 hidden sm:flex items-center px-1.5 py-0.5 rounded bg-[#F7F6F2] border border-[#CFCDC5] text-[10px] text-[#737373] font-mono pointer-events-none">
+                Ctrl+K
+              </div>
+            )}
+
+            {/* Dropdown de Resultados da Pesquisa Global */}
+            {searchFocused && globalSearch.trim().length >= 2 && (
+              <div className="absolute left-0 right-0 top-full mt-1.5 bg-[#F7F6F2] border border-[#CFCDC5] rounded-xl shadow-2xl overflow-hidden z-50 max-h-[75vh] flex flex-col animate-in fade-in slide-in-from-top-1 duration-150">
+                {/* Header de Status */}
+                <div className="px-3.5 py-2 bg-[#EAE8E2] border-b border-[#CFCDC5] flex items-center justify-between text-[11px] text-[#737373]">
+                  <span>
+                    Pesquisa para &quot;<strong className="text-[#171717]">{globalSearch.trim()}</strong>&quot;
+                  </span>
+                  {searchLoading && (
+                    <span className="inline-flex items-center gap-1 font-mono text-purple-700">
+                      <span className="material-symbols-outlined text-xs animate-spin">sync</span>
+                      Buscando...
+                    </span>
+                  )}
+                  {searchError && <span className="text-red-600 font-mono">{searchError}</span>}
+                </div>
+
+                <div className="overflow-y-auto divide-y divide-[#CFCDC5] text-xs">
+                  {/* Sem Resultados */}
+                  {!searchLoading &&
+                    !searchError &&
+                    searchResults.promotores.length === 0 &&
+                    searchResults.lojas.length === 0 &&
+                    searchResults.industrias.length === 0 &&
+                    searchResults.equipes.length === 0 &&
+                    searchResults.rotas.length === 0 && (
+                      <div className="p-6 text-center text-[#737373] space-y-1">
+                        <span className="material-symbols-outlined text-2xl text-[#A09E96]">search_off</span>
+                        <p className="font-semibold text-xs text-[#171717]">Nenhum registro encontrado</p>
+                        <p className="text-[11px]">Verifique a digitação ou tente outro termo de busca.</p>
+                      </div>
+                    )}
+
+                  {/* 1. Promotores */}
+                  {searchResults.promotores.length > 0 && (
+                    <div className="p-2 space-y-1">
+                      <div className="px-2 py-1 text-[10px] font-bold text-[#737373] uppercase font-mono flex items-center gap-1">
+                        <span className="material-symbols-outlined text-xs text-purple-600">badge</span>
+                        Promotores ({searchResults.promotores.length})
+                      </div>
+                      {searchResults.promotores.map((item) => (
+                        <button
+                          key={item.id}
+                          onClick={() => {
+                            onNavigate(item.target);
+                            setSearchFocused(false);
+                            setGlobalSearch('');
+                          }}
+                          className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-[#EAE8E2] transition-colors flex items-center justify-between group cursor-pointer"
+                        >
+                          <div className="min-w-0 pr-2">
+                            <span className="font-bold text-[#171717] block truncate group-hover:text-purple-700">
+                              {item.title}
+                            </span>
+                            <span className="text-[11px] text-[#737373] block truncate font-mono">
+                              {item.subtitle}
+                            </span>
+                          </div>
+                          <span className="material-symbols-outlined text-[16px] text-[#A09E96] group-hover:text-[#171717] shrink-0">
+                            arrow_forward
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* 2. Lojas / PDVs */}
+                  {searchResults.lojas.length > 0 && (
+                    <div className="p-2 space-y-1">
+                      <div className="px-2 py-1 text-[10px] font-bold text-[#737373] uppercase font-mono flex items-center gap-1">
+                        <span className="material-symbols-outlined text-xs text-cyan-600">store</span>
+                        Lojas / PDVs ({searchResults.lojas.length})
+                      </div>
+                      {searchResults.lojas.map((item) => (
+                        <button
+                          key={item.id}
+                          onClick={() => {
+                            onNavigate(item.target);
+                            setSearchFocused(false);
+                            setGlobalSearch('');
+                          }}
+                          className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-[#EAE8E2] transition-colors flex items-center justify-between group cursor-pointer"
+                        >
+                          <div className="min-w-0 pr-2">
+                            <span className="font-bold text-[#171717] block truncate group-hover:text-cyan-700">
+                              {item.title}
+                            </span>
+                            <span className="text-[11px] text-[#737373] block truncate font-mono">
+                              {item.subtitle}
+                            </span>
+                          </div>
+                          <span className="material-symbols-outlined text-[16px] text-[#A09E96] group-hover:text-[#171717] shrink-0">
+                            arrow_forward
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* 3. Indústrias */}
+                  {searchResults.industrias.length > 0 && (
+                    <div className="p-2 space-y-1">
+                      <div className="px-2 py-1 text-[10px] font-bold text-[#737373] uppercase font-mono flex items-center gap-1">
+                        <span className="material-symbols-outlined text-xs text-amber-600">factory</span>
+                        Indústrias ({searchResults.industrias.length})
+                      </div>
+                      {searchResults.industrias.map((item) => (
+                        <button
+                          key={item.id}
+                          onClick={() => {
+                            onNavigate(item.target);
+                            setSearchFocused(false);
+                            setGlobalSearch('');
+                          }}
+                          className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-[#EAE8E2] transition-colors flex items-center justify-between group cursor-pointer"
+                        >
+                          <div className="min-w-0 pr-2">
+                            <span className="font-bold text-[#171717] block truncate group-hover:text-amber-700">
+                              {item.title}
+                            </span>
+                            <span className="text-[11px] text-[#737373] block truncate font-mono">
+                              {item.subtitle}
+                            </span>
+                          </div>
+                          <span className="material-symbols-outlined text-[16px] text-[#A09E96] group-hover:text-[#171717] shrink-0">
+                            arrow_forward
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* 4. Equipes */}
+                  {searchResults.equipes.length > 0 && (
+                    <div className="p-2 space-y-1">
+                      <div className="px-2 py-1 text-[10px] font-bold text-[#737373] uppercase font-mono flex items-center gap-1">
+                        <span className="material-symbols-outlined text-xs text-blue-600">groups</span>
+                        Equipes ({searchResults.equipes.length})
+                      </div>
+                      {searchResults.equipes.map((item) => (
+                        <button
+                          key={item.id}
+                          onClick={() => {
+                            onNavigate(item.target);
+                            setSearchFocused(false);
+                            setGlobalSearch('');
+                          }}
+                          className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-[#EAE8E2] transition-colors flex items-center justify-between group cursor-pointer"
+                        >
+                          <div className="min-w-0 pr-2">
+                            <span className="font-bold text-[#171717] block truncate group-hover:text-blue-700">
+                              {item.title}
+                            </span>
+                            <span className="text-[11px] text-[#737373] block truncate font-mono">
+                              {item.subtitle}
+                            </span>
+                          </div>
+                          <span className="material-symbols-outlined text-[16px] text-[#A09E96] group-hover:text-[#171717] shrink-0">
+                            arrow_forward
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* 5. Rotas */}
+                  {searchResults.rotas.length > 0 && (
+                    <div className="p-2 space-y-1">
+                      <div className="px-2 py-1 text-[10px] font-bold text-[#737373] uppercase font-mono flex items-center gap-1">
+                        <span className="material-symbols-outlined text-xs text-emerald-600">alt_route</span>
+                        Rotas ({searchResults.rotas.length})
+                      </div>
+                      {searchResults.rotas.map((item) => (
+                        <button
+                          key={item.id}
+                          onClick={() => {
+                            onNavigate(item.target);
+                            setSearchFocused(false);
+                            setGlobalSearch('');
+                          }}
+                          className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-[#EAE8E2] transition-colors flex items-center justify-between group cursor-pointer"
+                        >
+                          <div className="min-w-0 pr-2">
+                            <span className="font-bold text-[#171717] block truncate group-hover:text-emerald-700">
+                              {item.title}
+                            </span>
+                            <span className="text-[11px] text-[#737373] block truncate font-mono">
+                              {item.subtitle}
+                            </span>
+                          </div>
+                          <span className="material-symbols-outlined text-[16px] text-[#A09E96] group-hover:text-[#171717] shrink-0">
+                            arrow_forward
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Footer do Dropdown com Atalhos */}
+                <div className="p-2 bg-[#EAE8E2] border-t border-[#CFCDC5] flex items-center justify-between text-[10px] text-[#737373] font-mono">
+                  <span>Pressione ESC para fechar</span>
+                  <span>Clique no item para navegar</span>
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="hidden xl:flex items-center gap-2 px-3 py-1 rounded-full bg-[#E8F5EE] border border-[#B9E5D0] shrink-0">
@@ -393,31 +819,49 @@ export const AppShell: React.FC<AppShellProps> = ({
 
           {/* Profile & Logout Action */}
           <div className="flex items-center gap-3">
-            <div className="flex flex-col text-right hidden sm:flex">
-              <span className="text-xs font-bold text-[#171717] leading-tight">
-                {profile?.promotor_nome || profile?.name || (session?.user?.email ? session.user.email.split('@')[0] : 'Usuário MK9')}
-              </span>
-              <div className="flex items-center justify-end gap-1.5 mt-0.5">
-                {profile?.promotor_matricula && (
-                  <span className="text-[10px] font-mono text-[#737373] font-bold bg-[#E4E2DB] border border-[#CFCDC5] px-1.5 py-0.2 rounded">
-                    Matrícula: {profile.promotor_matricula}
+            <button
+              onClick={() => onNavigate('meu-perfil')}
+              title="Meu Perfil"
+              className="flex items-center gap-2.5 text-left p-1 rounded-lg hover:bg-[#E4E2DB] transition-colors cursor-pointer group border border-transparent hover:border-[#CFCDC5]"
+            >
+              <div className="flex flex-col text-right hidden sm:flex">
+                <span className="text-xs font-bold text-[#171717] leading-tight group-hover:text-[#286FF5] transition-colors">
+                  {profile?.promotor_nome || profile?.name || (session?.user?.email ? session.user.email.split('@')[0] : 'Usuário MK9')}
+                </span>
+                <div className="flex items-center justify-end gap-1.5 mt-0.5">
+                  {profile?.promotor_matricula && (
+                    <span className="text-[10px] font-mono text-[#737373] font-bold bg-[#E4E2DB] border border-[#CFCDC5] px-1.5 py-0.2 rounded">
+                      Matrícula: {profile.promotor_matricula}
+                    </span>
+                  )}
+                  <span className={`px-1.5 py-0.2 rounded border font-mono font-bold text-[9px] uppercase tracking-wider ${roleInfo.color}`}>
+                    {roleInfo.text}
+                  </span>
+                </div>
+              </div>
+              <div className="w-9 h-9 rounded-full bg-[#111114] text-white flex items-center justify-center shrink-0 border border-[#CFCDC5] group-hover:ring-2 group-hover:ring-[#286FF5] transition-all overflow-hidden">
+                {profile?.avatar_url ? (
+                  <img
+                    src={profile.avatar_url}
+                    alt="Avatar"
+                    className="w-full h-full object-cover"
+                    onError={(e) => {
+                      // Fallback silencioso para iniciais caso URL expire ou falhe
+                      (e.currentTarget as HTMLElement).style.display = 'none';
+                    }}
+                  />
+                ) : (
+                  <span className="font-bold text-xs uppercase font-mono">
+                    {(() => {
+                      const n = profile?.promotor_nome || profile?.name || session?.user?.email || 'MK';
+                      const parts = n.trim().split(/\s+/);
+                      if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+                      return n.substring(0, 2).toUpperCase();
+                    })()}
                   </span>
                 )}
-                <span className={`px-1.5 py-0.2 rounded border font-mono font-bold text-[9px] uppercase tracking-wider ${roleInfo.color}`}>
-                  {roleInfo.text}
-                </span>
               </div>
-            </div>
-            <div className="w-9 h-9 rounded-full bg-[#111114] text-white flex items-center justify-center shrink-0 border border-[#CFCDC5]">
-              <span className="font-bold text-xs uppercase font-mono">
-                {(() => {
-                  const n = profile?.promotor_nome || profile?.name || session?.user?.email || 'MK';
-                  const parts = n.trim().split(/\s+/);
-                  if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
-                  return n.substring(0, 2).toUpperCase();
-                })()}
-              </span>
-            </div>
+            </button>
 
             <button
               onClick={() => signOut()}

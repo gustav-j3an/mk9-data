@@ -1,6 +1,7 @@
 export type ScreenId = 
   | 'cockpit'
   | 'painel-operacional'
+  | 'acompanhamento-visitas'
   | 'presenca'
   | 'rotas-fixas'
   | 'industrias'
@@ -14,7 +15,8 @@ export type ScreenId =
   | 'promotores'
   | 'importacao'
   | 'design-system'
-  | 'usuarios';
+  | 'usuarios'
+  | 'meu-perfil';
 
 export interface IndustryItem {
   id: string;
@@ -129,6 +131,7 @@ export interface UserProfile {
   industria_codigo?: string | null;
   industria_nome?: string | null;
   avatar_url?: string;
+  phone?: string | null;
   department?: string;
   status?: 'ativo' | 'inativo';
   created_at?: string;
@@ -345,6 +348,11 @@ export interface Equipe {
   status: EquipeStatus;
   created_at?: string;
   updated_at?: string;
+}
+
+export interface EquipeWithMetrics extends Equipe {
+  promotoresCount: number;
+  pdvsCount: number;
 }
 
 export interface CreateEquipeDTO {

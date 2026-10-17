@@ -21,7 +21,8 @@ interface AuthContextValue {
   deleteUser: (userId: string) => Promise<{ error: Error | null }>;
   updatePassword: (password: string) => Promise<{ error: Error | null }>;
   resetPasswordForEmail: (email: string) => Promise<{ error: Error | null }>;
-  clearPasswordRecovery: () => void;
+  updateMyProfile: (data: { name: string; phone?: string | null; avatarBlob?: Blob | null; removeAvatar?: boolean }) => Promise<{ error: Error | null; avatarUrl?: string | null }>;
+  updateMyEmail: (newEmail: string) => Promise<{ error: Error | null }>;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -114,6 +115,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const realRole = (data?.role as UserRole) || defaultProfile.role;
       const realName = promotorInfo?.nome || data?.name || defaultProfile.name;
 
+      // Resolver avatar_url estável (storage_path) para URL assinada válida
+      let resolvedAvatarUrl: string | undefined = undefined;
+      const rawAvatar = data?.avatar_url;
+      if (rawAvatar && typeof rawAvatar === 'string') {
+        if (rawAvatar.startsWith('http://') || rawAvatar.startsWith('https://')) {
+          resolvedAvatarUrl = rawAvatar;
+        } else {
+          try {
+            const { data: signData, error: signErr } = await supabase.storage
+              .from('avatars')
+              .createSignedUrl(rawAvatar, 86400); // 24 horas
+
+            if (!signErr && signData?.signedUrl) {
+              resolvedAvatarUrl = signData.signedUrl;
+            } else if (signErr) {
+              console.warn('Erro ao gerar URL assinada do avatar:', signErr.message);
+            }
+          } catch (signEx) {
+            console.warn('Exceção ao resolver avatar assinado:', signEx);
+          }
+        }
+      }
+
       setProfile({
         id: user.id,
         email: user.email || defaultProfile.email,
@@ -127,7 +151,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         promotor_equipe: promotorInfo?.equipe || null,
         industria_codigo: indCodigo,
         industria_nome: industriaNome,
-        avatar_url: data?.avatar_url,
+        avatar_url: resolvedAvatarUrl,
+        phone: (user.user_metadata?.phone as string) || (data as any)?.phone || null,
         department: data?.department || defaultProfile.department,
         created_at: data?.created_at,
         updated_at: data?.updated_at
@@ -374,6 +399,141 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return { error: null };
   }, [role, session]);
 
+  const updateMyProfile = useCallback(async ({ 
+    name, 
+    phone, 
+    avatarBlob, 
+    removeAvatar 
+  }: { 
+    name: string; 
+    phone?: string | null; 
+    avatarBlob?: Blob | null; 
+    removeAvatar?: boolean 
+  }) => {
+    if (!supabase) return { error: new Error('Supabase não configurado.') };
+    if (!session?.user?.id) return { error: new Error('Sessão de usuário não encontrada.') };
+
+    const trimmedName = name.trim();
+    if (!trimmedName) {
+      return { error: new Error('O nome de exibição não pode ser vazio.') };
+    }
+
+    const userId = session.user.id;
+    const stablePath = `${userId}/avatar.webp`;
+    let newRawPath: string | null | undefined = undefined;
+    let newSignedUrl: string | null | undefined = undefined;
+    let uploadSucceeded = false;
+
+    try {
+      // 1. Tratar remoção de avatar
+      if (removeAvatar) {
+        newRawPath = null;
+        newSignedUrl = null;
+        try {
+          await supabase.storage.from('avatars').remove([stablePath]);
+        } catch (delErr) {
+          console.warn('Aviso ao remover avatar do storage:', delErr);
+        }
+      } 
+      // 2. Tratar novo upload de avatar comprimido
+      else if (avatarBlob) {
+        newRawPath = stablePath;
+        const { error: uploadErr } = await supabase.storage
+          .from('avatars')
+          .upload(stablePath, avatarBlob, {
+            contentType: 'image/webp',
+            upsert: true
+          });
+
+        if (uploadErr) {
+          throw new Error(`Falha no upload do avatar: ${uploadErr.message}`);
+        }
+        uploadSucceeded = true;
+
+        // Gerar URL assinada imediata para atualizar o perfil
+        const { data: signData, error: signErr } = await supabase.storage
+          .from('avatars')
+          .createSignedUrl(stablePath, 86400);
+
+        if (signErr || !signData?.signedUrl) {
+          throw new Error(`Falha ao gerar URL de exibição do avatar: ${signErr?.message || 'URL inválida'}`);
+        }
+        newSignedUrl = signData.signedUrl;
+      }
+
+      // 3. Montar dados para atualização do banco
+      const profileUpdates: Record<string, any> = {
+        name: trimmedName,
+        updated_at: new Date().toISOString()
+      };
+      if (newRawPath !== undefined) {
+        profileUpdates.avatar_url = newRawPath;
+      }
+
+      // 4. Atualizar public.profiles (garantido por RLS onde auth.uid() = id)
+      const { error: profileErr } = await supabase
+        .from('profiles')
+        .update(profileUpdates)
+        .eq('id', userId);
+
+      if (profileErr) {
+        // Compensação: se o upload teve sucesso mas o update do banco falhou e era um novo upload
+        if (uploadSucceeded && avatarBlob) {
+          try {
+            await supabase.storage.from('avatars').remove([stablePath]);
+          } catch (compErr) {
+            console.warn('Falha na compensação do upload:', compErr);
+          }
+        }
+        throw profileErr;
+      }
+
+      // 5. Atualizar user_metadata no Supabase Auth para persistência do telefone e full_name
+      const { error: metaErr } = await supabase.auth.updateUser({
+        data: {
+          full_name: trimmedName,
+          phone: phone ? phone.trim() : null
+        }
+      });
+
+      if (metaErr) throw metaErr;
+
+      // 6. Atualizar estado local do perfil de forma reativa para toda a aplicação
+      setProfile((prev) => {
+        if (!prev) return null;
+        return {
+          ...prev,
+          name: trimmedName,
+          phone: phone ? phone.trim() : null,
+          avatar_url: newSignedUrl !== undefined ? (newSignedUrl || undefined) : prev.avatar_url
+        };
+      });
+
+      return { error: null, avatarUrl: newSignedUrl };
+    } catch (err: any) {
+      console.error('Erro ao atualizar perfil:', err);
+      return { error: new Error(err.message || 'Falha ao atualizar dados do perfil.') };
+    }
+  }, [session]);
+
+  const updateMyEmail = useCallback(async (newEmail: string) => {
+    if (!supabase) return { error: new Error('Supabase não configurado.') };
+    const trimmed = newEmail.trim().toLowerCase();
+    if (!trimmed || !trimmed.includes('@')) {
+      return { error: new Error('Informe um endereço de e-mail válido.') };
+    }
+
+    const { error: emailErr } = await supabase.auth.updateUser({
+      email: trimmed
+    });
+
+    if (emailErr) {
+      return { error: new Error(emailErr.message) };
+    }
+
+    return { error: null };
+  }, []);
+
   const value = useMemo<AuthContextValue>(() => ({
     session,
     profile,
@@ -407,8 +567,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     deleteUser,
     updatePassword,
     resetPasswordForEmail,
-    clearPasswordRecovery
-  }), [clearPasswordRecovery, deleteUser, error, fetchProfile, hasPermission, inviteUser, isPasswordRecovery, loading, profile, role, session, updatePassword, updateProfileRole, updateUserProfile, resetPasswordForEmail]);
+    clearPasswordRecovery,
+    updateMyProfile,
+    updateMyEmail
+  }), [clearPasswordRecovery, deleteUser, error, fetchProfile, hasPermission, inviteUser, isPasswordRecovery, loading, profile, role, session, updatePassword, updateProfileRole, updateUserProfile, resetPasswordForEmail, updateMyProfile, updateMyEmail]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

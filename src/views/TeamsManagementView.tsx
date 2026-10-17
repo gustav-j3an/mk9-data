@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { ScreenId, ToastMessage, Equipe, EquipeStatus, Supervisor } from '../types';
+import { ScreenId, ToastMessage, Equipe, EquipeWithMetrics, EquipeStatus, Supervisor } from '../types';
 import { equipesService } from '../lib/equipesService';
 import { supervisoresService } from '../lib/supervisoresService';
 
@@ -12,9 +12,9 @@ export const TeamsManagementView: React.FC<TeamsManagementViewProps> = ({
   onNavigate,
   onShowToast
 }) => {
-  // Service Data State
-  const [equipes, setEquipes] = useState<Equipe[]>([]);
-  const [selectedEquipe, setSelectedEquipe] = useState<Equipe | null>(null);
+  // Service Data State com Métricas Reais
+  const [equipes, setEquipes] = useState<EquipeWithMetrics[]>([]);
+  const [selectedEquipe, setSelectedEquipe] = useState<EquipeWithMetrics | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -57,12 +57,12 @@ export const TeamsManagementView: React.FC<TeamsManagementViewProps> = ({
   const [vincularSearch, setVincularSearch] = useState('');
   const [savingVinculacao, setSavingVinculacao] = useState(false);
 
-  // 1. Carregar Equipes do Banco via equipesService
+  // 1. Carregar Equipes do Banco via equipesService.fetchTeamsWithMetrics
   const fetchEquipes = useCallback(async (selectIdAfter?: string) => {
     setLoading(true);
     setError(null);
 
-    const res = await equipesService.listEquipes();
+    const res = await equipesService.fetchTeamsWithMetrics();
     if (res.error) {
       setError(res.error.message);
       setLoading(false);
@@ -449,6 +449,9 @@ export const TeamsManagementView: React.FC<TeamsManagementViewProps> = ({
     if (selectedEquipe?.nome) {
       fetchTeamPromoters(selectedEquipe.nome);
     }
+    if (selectedEquipe?.id) {
+      fetchEquipes(selectedEquipe.id);
+    }
   };
 
   // Carregar lista de promotores disponíveis para o modal de vinculação
@@ -535,6 +538,9 @@ export const TeamsManagementView: React.FC<TeamsManagementViewProps> = ({
     setSelectedToVincularIds([]);
     if (selectedEquipe?.nome) {
       fetchTeamPromoters(selectedEquipe.nome);
+    }
+    if (selectedEquipe?.id) {
+      fetchEquipes(selectedEquipe.id);
     }
   };
 
@@ -999,6 +1005,29 @@ export const TeamsManagementView: React.FC<TeamsManagementViewProps> = ({
                       >
                         <span className="material-symbols-outlined text-sm">edit</span> Editar
                       </button>
+                    </div>
+
+                    {/* Operational Metrics Block */}
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div className="flex items-center gap-2 p-2.5 rounded-lg bg-[#EAE8E2] border border-[#CFCDC5]">
+                        <span className="material-symbols-outlined text-purple-600 text-lg">badge</span>
+                        <div className="flex flex-col">
+                          <span className="font-bold text-[#171717]">
+                            {equipe.promotoresCount} {equipe.promotoresCount === 1 ? 'Promotor' : 'Promotores'}
+                          </span>
+                          <span className="text-[10px] text-[#77766F]">Alocados na equipe</span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 p-2.5 rounded-lg bg-[#EAE8E2] border border-[#CFCDC5]">
+                        <span className="material-symbols-outlined text-cyan-600 text-lg">storefront</span>
+                        <div className="flex flex-col">
+                          <span className="font-bold text-[#171717]">
+                            {equipe.pdvsCount} {equipe.pdvsCount === 1 ? 'PDV Atendido' : 'PDVs Atendidos'}
+                          </span>
+                          <span className="text-[10px] text-[#77766F]">Lojas distintas na grade</span>
+                        </div>
+                      </div>
                     </div>
 
                     {/* Footer Card */}

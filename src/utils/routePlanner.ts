@@ -95,6 +95,137 @@ export const getWeekDaysRange = (baseDate: Date = new Date(), weekOffset: number
   return days;
 };
 
+export const DAY_KEY_MAP: Record<string, number> = {
+  domingo: 0,
+  segunda: 1,
+  terca: 2,
+  quarta: 3,
+  quinta: 4,
+  sexta: 5,
+  sabado: 6
+};
+
+/**
+ * Retorna as datas programadas (máximo 2) para uma rota QUINZENAL em um determinado mês/ano.
+ * 
+ * Regras:
+ * 1. Respeita os dias da semana ativos cadastrados na rota.
+ * 2. Limite estrito de no máximo 2 visitas programadas no mês calendário.
+ * 3. Busca intervalo preferencial de ~14-15 dias entre visitas.
+ * 4. Leva em consideração o histórico do mês anterior (última visita realizada ou planejada da rota)
+ *    para manter o espaçamento e evitar visitas em semanas consecutivas.
+ * 5. Se o histórico do mês anterior teve visita nos últimos 10 dias do mês anterior,
+ *    a primeira visita do mês atual deve ser empurrada para a 2ª ocorrência (ou após intervalo seguro).
+ * 6. Fallback/Âncora quando não houver histórico: segunda semana e última semana do mês
+ *    (ex: ocorrências 2 e 4 em meses com 4 ocorrências, ou 2 e 5/4 em meses com 5 ocorrências).
+ */
+export function getMonthlyQuinzenalDates(
+  route: RouteItem,
+  year: number,
+  month: number, // 1-12
+  priorMonthLastVisitDate?: string | null
+): string[] {
+  // Identificar os dias da semana ativos na rota
+  const activeDaysOfWeek: number[] = [];
+  const daysOrder: Array<'segunda' | 'terca' | 'quarta' | 'quinta' | 'sexta' | 'sabado' | 'domingo'> = [
+    'segunda', 'terca', 'quarta', 'quinta', 'sexta', 'sabado', 'domingo'
+  ];
+
+  daysOrder.forEach((dayKey) => {
+    if (Boolean(route[dayKey as keyof RouteItem])) {
+      activeDaysOfWeek.push(DAY_KEY_MAP[dayKey]);
+    }
+  });
+
+  if (activeDaysOfWeek.length === 0) {
+    return [];
+  }
+
+  // Obter todos os dias do mês que coincidem com os dias da semana ativos
+  // O mês em JS Date é 0-indexed (0 = Jan, ..., 11 = Dez)
+  const monthIdx = month - 1;
+  const daysInMonth = new Date(year, month, 0).getDate(); // último dia do mês
+
+  const candidateDates: string[] = [];
+  for (let day = 1; day <= daysInMonth; day++) {
+    const d = new Date(year, monthIdx, day);
+    if (activeDaysOfWeek.includes(d.getDay())) {
+      candidateDates.push(getLocalDateString(d));
+    }
+  }
+
+  // Se houver 2 ou menos ocorrências no mês todo, retorna todas (máximo 2)
+  if (candidateDates.length <= 2) {
+    return candidateDates;
+  }
+
+  // Caso padrão: temos 4 ou 5 ocorrências do dia da semana (ou mais se múltiplos dias marcados)
+  // Determinar a melhor combinação de 2 datas respeitando o intervalo de ~14 dias (mínimo 10 dias)
+  // e o histórico do mês anterior se fornecido.
+  let bestPair: [string, string] | null = null;
+  let bestScore = -Infinity;
+
+  // Analisar priorMonthLastVisitDate se disponível
+  let priorDateMs: number | null = null;
+  if (priorMonthLastVisitDate) {
+    const pDate = new Date(`${priorMonthLastVisitDate}T12:00:00`);
+    if (!isNaN(pDate.getTime())) {
+      priorDateMs = pDate.getTime();
+    }
+  }
+
+  // Avaliar todos os pares possíveis (d1, d2) com d1 < d2
+  for (let i = 0; i < candidateDates.length; i++) {
+    for (let j = i + 1; j < candidateDates.length; j++) {
+      const d1Str = candidateDates[i];
+      const d2Str = candidateDates[j];
+      const ms1 = new Date(`${d1Str}T12:00:00`).getTime();
+      const ms2 = new Date(`${d2Str}T12:00:00`).getTime();
+      const daysBetween = Math.round((ms2 - ms1) / (1000 * 60 * 60 * 24));
+
+      // Penalidade se o intervalo for muito curto (< 10 dias)
+      if (daysBetween < 10) continue;
+
+      let score = 100 - Math.abs(daysBetween - 14) * 5;
+
+      // Se houver histórico do mês anterior, pontuar a distância da primeira visita em relação à visita anterior
+      if (priorDateMs !== null) {
+        const daysFromPrior = Math.round((ms1 - priorDateMs) / (1000 * 60 * 60 * 24));
+        if (daysFromPrior < 10) {
+          // Muito próximo da visita do mês anterior (ex: semana seguinte) -> penalização severa
+          score -= 200;
+        } else {
+          score += 50 - Math.abs(daysFromPrior - 14) * 3;
+        }
+      } else {
+        // Sem histórico: prioriza âncora na 2ª ocorrência (i === 1) e última ocorrência (j === candidateDates.length - 1)
+        if (i === 1) score += 25; // 2ª semana
+        if (j === candidateDates.length - 1) score += 25; // última semana
+        // Se houver 4 ocorrências, i=1 (2ª) e j=3 (4ª) terá score máximo
+        // Se houver 5 ocorrências, i=1 (2ª) e j=3 (4ª) [intervalo 14] ou j=4 (5ª) [intervalo 21]
+        // Se i=1 e j=3, daysBetween = 14 (score base 100 + 25 = 125)
+      }
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestPair = [d1Str, d2Str];
+      }
+    }
+  }
+
+  if (bestPair) {
+    return bestPair;
+  }
+
+  // Fallback seguro caso nenhum par atenda (ex: regras muito estritas): 2ª ocorrência e última ocorrência
+  const idx1 = Math.min(1, candidateDates.length - 1);
+  const idx2 = candidateDates.length - 1;
+  if (idx1 === idx2) {
+    return [candidateDates[idx1]];
+  }
+  return [candidateDates[idx1], candidateDates[idx2]];
+}
+
 /**
  * Motor central compartilhado de cálculo de Pendências e Agenda Operacional.
  * Garante que Gestor e Promotor utilizem EXATAMENTE a mesma verdade lógica.
@@ -152,13 +283,78 @@ export const calculateOperationalVisits = ({
     visitsMap.set(k, v);
   });
 
+  // 2.1 Pré-indexar visitas anteriores para consulta de histórico de rotas quinzenais
+  // Chave da rota: `promotor_matricula|loja_codigo|industria_codigo`
+  const visitsByRouteKey = new Map<string, Visit[]>();
+  visits.forEach((v) => {
+    const rKey = `${v.promotor_matricula}|${v.loja_codigo}|${v.industria_codigo}`;
+    const list = visitsByRouteKey.get(rKey) || [];
+    list.push(v);
+    visitsByRouteKey.set(rKey, list);
+  });
+
+  // Cache das datas programadas quinzenais por rota e mês (chave: `routeId_YYYY-MM`)
+  const quinzenalDatesCache = new Map<string, Set<string>>();
+
+  const getScheduledQuinzenalDates = (route: RouteItem, year: number, month: number): Set<string> => {
+    const cacheKey = `${route.id || route.codigo_rota || `${route.promotor_matricula}_${route.loja_codigo}`}_${year}-${String(month).padStart(2, '0')}`;
+    if (quinzenalDatesCache.has(cacheKey)) {
+      return quinzenalDatesCache.get(cacheKey)!;
+    }
+
+    // Buscar no histórico de visitas a última visita anterior a este mês para esta rota
+    const rKey = `${route.promotor_matricula}|${route.loja_codigo}|${route.industria_codigo}`;
+    const routeVisits = visitsByRouteKey.get(rKey) || [];
+
+    // Primeiro dia deste mês
+    const currentMonthFirstDate = `${year}-${String(month).padStart(2, '0')}-01`;
+
+    // Filtra visitas anteriores a este mês
+    const priorVisits = routeVisits
+      .filter((v) => v.data_visita < currentMonthFirstDate && (v.status === 'concluida' || v.status === 'em_andamento' || v.started_at))
+      .sort((a, b) => b.data_visita.localeCompare(a.data_visita));
+
+    let priorDate: string | null = priorVisits.length > 0 ? priorVisits[0].data_visita : null;
+
+    // Se não houver visita real anterior registrada, mas estamos em um mês subsequente,
+    // podemos verificar recursivamente as datas programadas do mês imediatamente anterior
+    if (!priorDate) {
+      const prevYear = month === 1 ? year - 1 : year;
+      const prevMonth = month === 1 ? 12 : month - 1;
+      const prevCacheKey = `${route.id || route.codigo_rota || `${route.promotor_matricula}_${route.loja_codigo}`}_${prevYear}-${String(prevMonth).padStart(2, '0')}`;
+      if (quinzenalDatesCache.has(prevCacheKey)) {
+        const prevDates = Array.from(quinzenalDatesCache.get(prevCacheKey)!).sort();
+        if (prevDates.length > 0) {
+          priorDate = prevDates[prevDates.length - 1];
+        }
+      }
+    }
+
+    const scheduled = getMonthlyQuinzenalDates(route, year, month, priorDate);
+    const dateSet = new Set(scheduled);
+    quinzenalDatesCache.set(cacheKey, dateSet);
+    return dateSet;
+  };
+
   const plannedItems: OperationalVisitItem[] = [];
   const matchedVisitKeys = new Set<string>();
 
   // 3. Processar cada rota ativa para os dias solicitados
   routes.forEach((r) => {
+    const isQuinzenal = (r.frequencia || '').toUpperCase() === 'QUINZENAL';
+
     daysRange.forEach((dayInfo) => {
-      const isDayActive = Boolean(r[dayInfo.dayKey as keyof RouteItem]);
+      let isDayActive = Boolean(r[dayInfo.dayKey as keyof RouteItem]);
+
+      // Para rota QUINZENAL, verifica se o dia é uma das 2 datas programadas do mês
+      if (isDayActive && isQuinzenal) {
+        const parts = dayInfo.dateStr.split('-');
+        const y = parseInt(parts[0], 10);
+        const m = parseInt(parts[1], 10);
+        const scheduledDates = getScheduledQuinzenalDates(r, y, m);
+        isDayActive = scheduledDates.has(dayInfo.dateStr);
+      }
+
       if (isDayActive) {
         const key = `${r.promotor_matricula}|${r.loja_codigo}|${r.industria_codigo}|${dayInfo.dateStr}`;
         const v = visitsMap.get(key);

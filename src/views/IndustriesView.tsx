@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useAuth } from '../auth/AuthProvider';
 import { supabase } from '../lib/supabase';
 import type { IndustryItem, StoreItem, RouteItem, Visit, ToastMessage } from '../types';
+import { getMonthlyQuinzenalDates } from '../utils/routePlanner';
 
 interface IndustriesViewProps {
   onShowToast: (toast: Omit<ToastMessage, 'id'>) => void;
@@ -208,9 +209,39 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
       frequencia: string;
     }>();
 
+    // Pré-computar mapa de datas quinzenais para rotas quinzenais
+    const quinzenalDatesMap = new Map<string, Set<string>>();
     filteredRoutes.forEach((r) => {
+      if ((r.frequencia || '').toUpperCase() === 'QUINZENAL') {
+        // Encontrar meses únicos presentes em datesInPeriod
+        const monthsSet = new Set<string>();
+        datesInPeriod.forEach(({ dateStr }) => {
+          monthsSet.add(dateStr.slice(0, 7)); // 'YYYY-MM'
+        });
+
+        const scheduledSet = new Set<string>();
+        monthsSet.forEach((ym) => {
+          const [yStr, mStr] = ym.split('-');
+          const y = parseInt(yStr, 10);
+          const m = parseInt(mStr, 10);
+          const dates = getMonthlyQuinzenalDates(r, y, m);
+          dates.forEach((d) => scheduledSet.add(d));
+        });
+
+        quinzenalDatesMap.set(r.id, scheduledSet);
+      }
+    });
+
+    filteredRoutes.forEach((r) => {
+      const isQuinzenal = (r.frequencia || '').toUpperCase() === 'QUINZENAL';
+      const scheduledSet = isQuinzenal ? quinzenalDatesMap.get(r.id) : null;
+
       datesInPeriod.forEach(({ dateStr, dayKey }) => {
-        const isDayActive = Boolean(r[dayKey as keyof RouteItem]);
+        let isDayActive = Boolean(r[dayKey as keyof RouteItem]);
+        if (isDayActive && isQuinzenal) {
+          isDayActive = scheduledSet ? scheduledSet.has(dateStr) : false;
+        }
+
         if (isDayActive) {
           const uniqueKey = `${r.promotor_matricula}|${r.loja_codigo}|${r.industria_codigo}|${dateStr}`;
           if (!plannedOccurrencesMap.has(uniqueKey)) {

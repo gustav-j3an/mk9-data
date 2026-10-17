@@ -29,8 +29,17 @@ const DEFAULT_CHECKLIST_ITEMS = [
 ];
 
 export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowToast }) => {
-  const { profile } = useAuth();
-  const promotorMatricula = profile?.promotor_matricula;
+  const { profile, role } = useAuth();
+  const isAdminUser = role === 'admin' || role === 'gestor' || role === 'operador';
+
+  // Para promotor de campo, usa estritamente a matrícula do perfil
+  // Para administrador/gestor/operador, permite selecionar um promotor para consulta
+  const [selectedPromoterMatricula, setSelectedPromoterMatricula] = useState<string>('');
+  const [adminPromotersList, setAdminPromotersList] = useState<Array<{ matricula: string; nome: string; cidade?: string; uf?: string; supervisor?: string; equipe?: string }>>([]);
+
+  const promotorMatricula = isAdminUser 
+    ? (selectedPromoterMatricula || null)
+    : profile?.promotor_matricula;
 
   const [loading, setLoading] = useState(true);
   const [routes, setRoutes] = useState<RouteItem[]>([]);
@@ -89,6 +98,12 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
   const [validityObservacao, setValidityObservacao] = useState('');
   const [savingValidity, setSavingValidity] = useState(false);
 
+  // Estado para Modal de Consulta de Detalhes da Visita (Modo Administrativo)
+  const [adminInspectionVisit, setAdminInspectionVisit] = useState<OperationalVisitItem | null>(null);
+  const [adminSignedPhotoUrls, setAdminSignedPhotoUrls] = useState<Record<string, string>>({});
+  const [loadingInspectionPhotos, setLoadingInspectionPhotos] = useState(false);
+  const [adminZoomedPhoto, setAdminZoomedPhoto] = useState<string | null>(null);
+
   const [generalObs, setGeneralObs] = useState('');
   const [completingVisit, setCompletingVisit] = useState(false);
   const [notDoneReason, setNotDoneReason] = useState('');
@@ -118,6 +133,21 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
       const dayKeys = ['domingo', 'segunda', 'terca', 'quarta', 'quinta', 'sexta', 'sabado'];
       const currentDayKey = dayKeys[dayIndex];
 
+      // Para administradores, carregar a lista de todos os promotores cadastrados para seleção
+      if (isAdminUser) {
+        try {
+          const { data: allPromoters } = await supabase
+            .from('promotores')
+            .select('matricula, nome, cidade, uf, supervisor, equipe')
+            .order('nome', { ascending: true });
+          if (allPromoters) {
+            setAdminPromotersList(allPromoters);
+          }
+        } catch (pListErr) {
+          console.warn('Erro ao listar promotores para admin:', pListErr);
+        }
+      }
+
       // Buscar cadastro do promotor em public.promotores usando profiles.promotor_matricula = promotores.matricula
       if (promotorMatricula) {
         try {
@@ -142,6 +172,8 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
         } catch (err) {
           console.error('Erro na consulta do promotor:', err);
         }
+      } else {
+        setPromoterDetails(null);
       }
 
       const weekDays = getWeekDaysRange(new Date(), weekOffset);
@@ -188,35 +220,11 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
           validity_items:visit_product_validity(*)
         `).in('status', ['em_andamento', 'nao_realizada']).lt('data_visita', todayStr).eq('promotor_matricula', promotorMatricula);
       } else if (isPrivilegedUser) {
-        // Usuário privilegiado (Admin/Gestor) sem matrícula específica
-        rotasQuery = supabase.from('rotas').select(`
-          *,
-          industria:industrias(codigo, nome),
-          loja:lojas(codigo, nome, cidade, uf, endereco),
-          promotor:promotores(matricula, nome)
-        `);
-
-        visitsQuery = supabase.from('visits').select(`
-          *,
-          industria:industrias(codigo, nome),
-          loja:lojas(codigo, nome, cidade, uf, endereco),
-          promotor:promotores(matricula, nome),
-          checklist_items:visit_checklist_items(*),
-          photos:visit_photos(*),
-          occurrences:visit_occurrences(*),
-          validity_items:visit_product_validity(*)
-        `).gte('data_visita', weekStartStr).lte('data_visita', weekEndStr);
-
-        openVisitsQuery = supabase.from('visits').select(`
-          *,
-          industria:industrias(codigo, nome),
-          loja:lojas(codigo, nome, cidade, uf, endereco),
-          promotor:promotores(matricula, nome),
-          checklist_items:visit_checklist_items(*),
-          photos:visit_photos(*),
-          occurrences:visit_occurrences(*),
-          validity_items:visit_product_validity(*)
-        `).in('status', ['em_andamento', 'nao_realizada']).lt('data_visita', todayStr);
+        // Usuário privilegiado (Admin/Gestor) que ainda não selecionou um promotor
+        // Não carrega a agenda pessoal de todos misturada como se fosse de um promotor
+        rotasQuery = Promise.resolve({ data: [], error: null });
+        visitsQuery = Promise.resolve({ data: [], error: null });
+        openVisitsQuery = Promise.resolve({ data: [], error: null });
       } else {
         // Usuário não privilegiado e sem matrícula vinculada: não carrega dados de outros promotores
         rotasQuery = Promise.resolve({ data: [], error: null });
@@ -338,11 +346,51 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
     } finally {
       setLoading(false);
     }
-  }, [promotorMatricula, onShowToast]);
+  }, [promotorMatricula, isAdminUser, weekOffset, onShowToast]);
 
   useEffect(() => {
     loadPortalData();
   }, [loadPortalData, weekOffset]);
+
+  // Carregar URLs assinadas para a visita inspecionada pelo administrador
+  useEffect(() => {
+    if (!adminInspectionVisit?.visitObj?.photos || adminInspectionVisit.visitObj.photos.length === 0) {
+      setAdminSignedPhotoUrls({});
+      return;
+    }
+
+    const photos = adminInspectionVisit.visitObj.photos;
+    let isCancelled = false;
+    setLoadingInspectionPhotos(true);
+
+    const generateUrls = async () => {
+      const urlMap: Record<string, string> = {};
+      for (const p of photos) {
+        if (p.storage_path && supabase) {
+          try {
+            const { data } = await supabase.storage
+              .from('visit-photos')
+              .createSignedUrl(p.storage_path, 3600);
+            if (data?.signedUrl) {
+              urlMap[p.id || p.storage_path] = data.signedUrl;
+            }
+          } catch (e) {
+            console.warn('Erro ao assinar foto para inspeção admin:', e);
+          }
+        }
+      }
+      if (!isCancelled) {
+        setAdminSignedPhotoUrls(urlMap);
+        setLoadingInspectionPhotos(false);
+      }
+    };
+
+    generateUrls();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [adminInspectionVisit]);
 
   const todayStr = useMemo(() => getLocalDateString(new Date()), []);
   const weekDaysRange = useMemo(() => getWeekDaysRange(new Date(), weekOffset), [weekOffset]);
@@ -399,6 +447,15 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
   // Iniciar Visita
   const handleStartVisit = async (route: RouteItem) => {
     if (!supabase) return;
+
+    if (isAdminUser) {
+      onShowToast({
+        title: 'Modo Somente Leitura',
+        message: 'A visualização administrativa é apenas para consulta. Administradores não devem registrar check-in em nome do promotor.',
+        type: 'info'
+      });
+      return;
+    }
 
     if (!promotorMatricula) {
       onShowToast({
@@ -1399,14 +1456,18 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
         <div>
           <div className="flex items-center gap-2.5">
             <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-purple-600 to-amber-500 flex items-center justify-center font-bold text-white shadow-[0_0_15px_rgba(245,158,11,0.4)]">
-              <span className="material-symbols-outlined text-[22px]">smartphone</span>
+              <span className="material-symbols-outlined text-[22px]">
+                {isAdminUser ? 'manage_accounts' : 'smartphone'}
+              </span>
             </div>
             <div>
               <h1 className="text-2xl font-extrabold text-[#171717] tracking-tight">
-                Portal do Promotor
+                {isAdminUser ? 'Portal do Promotor — Administração' : 'Portal do Promotor'}
               </h1>
               <p className="text-xs text-[#77766F] font-mono">
-                {realName} {realMatricula ? `• Matrícula: ${realMatricula}` : ''}
+                {isAdminUser
+                  ? 'Consulte promotores, suas rotas planejadas e os atendimentos realizados em campo.'
+                  : `${realName} ${realMatricula ? `• Matrícula: ${realMatricula}` : ''}`}
               </p>
             </div>
           </div>
@@ -1420,12 +1481,56 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
           <span className={`material-symbols-outlined text-[18px] ${loading ? 'animate-spin' : ''}`}>
             refresh
           </span>
-          <span>Atualizar Minha Rota</span>
+          <span>{isAdminUser ? 'Atualizar Dados' : 'Atualizar Minha Rota'}</span>
         </button>
       </section>
 
-      {/* BANNER DE AUTORIZAÇÃO INDIVIDUAL DO PROMOTOR (Etapa 4.1) */}
-      {isImplantacaoMode && !loading && (
+      {/* SELETOR ADMINISTRATIVO DE PROMOTOR (Exclusivo para perfis administrativos) */}
+      {isAdminUser && (
+        <section className="p-5 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5] shadow-xs space-y-4 font-mono">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <span className="text-xs font-bold uppercase tracking-wider text-[#171717] flex items-center gap-2">
+                <span className="material-symbols-outlined text-sm text-[#286FF5]">person_search</span>
+                Selecionar Promotor para Consulta
+              </span>
+              <p className="text-[11px] text-[#77766F] mt-0.5">
+                Escolha um profissional para visualizar sua programação, o andamento das visitas e os registros de campo.
+              </p>
+            </div>
+
+            <div className="w-full sm:w-72">
+              <select
+                value={selectedPromoterMatricula}
+                onChange={(e) => setSelectedPromoterMatricula(e.target.value)}
+                className="w-full p-2.5 bg-white border border-[#CFCDC5] rounded-xl text-xs font-semibold text-[#171717] focus:outline-hidden"
+              >
+                <option value="">Selecione um promotor...</option>
+                {adminPromotersList.map((p) => (
+                  <option key={p.matricula} value={p.matricula}>
+                    {p.nome} ({p.matricula})
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {!selectedPromoterMatricula && (
+            <div className="py-12 px-4 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] text-center space-y-2">
+              <span className="material-symbols-outlined text-3xl text-[#77766F]">person_search</span>
+              <h3 className="text-sm font-bold text-[#171717]">
+                Selecione um promotor para consultar seus atendimentos.
+              </h3>
+              <p className="text-xs text-[#5F5F5F] max-w-md mx-auto">
+                Escolha um profissional para visualizar sua programação, o andamento das visitas e os registros de campo.
+              </p>
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* BANNER DE AUTORIZAÇÃO INDIVIDUAL DO PROMOTOR (Etapa 4.1 - Exibido apenas para promotores reais de campo) */}
+      {!isAdminUser && isImplantacaoMode && !loading && (
         !isAuthorized ? (
           <section className="bg-amber-950/30 border border-amber-500/40 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs font-mono shadow-lg">
             <div className="flex items-start gap-3">
@@ -1469,116 +1574,137 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
         )
       )}
 
-      {/* CARTÃO DE PERFIL DETALHADO DO PROMOTOR */}
-      <div className="p-5 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5] shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <div className="flex items-center gap-4">
-          <div className="w-14 h-14 rounded-2xl bg-[#222222] flex items-center justify-center font-extrabold text-[#171717] text-lg font-mono border border-[#CFCDC5] shrink-0 shadow-xs">
-            {initials}
-          </div>
-          <div className="space-y-1">
-            <h2 className="text-xl font-extrabold text-[#171717] tracking-tight">
-              {realName}
-            </h2>
-            <div className="flex flex-wrap items-center gap-2 text-xs font-mono">
-              {realMatricula ? (
-                <span className="px-2.5 py-1 rounded-lg bg-[#E4E2DB] border border-[#CFCDC5] text-[#222222] font-bold">
-                  Matrícula: {realMatricula}
-                </span>
-              ) : (
-                <span className="px-2.5 py-1 rounded-lg bg-[#FDF2F2] border border-[#F8C8C8] text-[#C62828] font-bold flex items-center gap-1">
-                  <span className="material-symbols-outlined text-xs">warning</span>
-                  Promotor não vinculado
-                </span>
-              )}
-
-              {(realCidade || realUf) && (
-                <span className="text-[#5F5F5F] flex items-center gap-1 bg-[#E4E2DB] px-2.5 py-1 rounded-lg border border-[#CFCDC5]">
-                  <span className="material-symbols-outlined text-xs text-[#286FF5]">location_on</span>
-                  {realCidade}{realUf ? ` - ${realUf}` : ''}
-                </span>
-              )}
+      {/* CARTÃO DE PERFIL DETALHADO DO PROMOTOR (Exibido para promotores reais ou para administradores quando houver promotor selecionado) */}
+      {(!isAdminUser || selectedPromoterMatricula) && (
+        <div className="p-5 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5] shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div className="flex items-center gap-4">
+            <div className="w-14 h-14 rounded-2xl bg-[#222222] flex items-center justify-center font-extrabold text-[#171717] text-lg font-mono border border-[#CFCDC5] shrink-0 shadow-xs">
+              {initials}
             </div>
-          </div>
-        </div>
-
-        {(realSupervisor || realEquipe) && (
-          <div className="p-3.5 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5] text-xs font-mono space-y-1.5 w-full sm:w-auto text-left sm:text-right">
-            {realSupervisor && (
-              <div className="text-[#222222]">
-                <span className="text-[#5F5F5F]">Supervisor:</span> <strong className="text-[#171717]">{realSupervisor}</strong>
-              </div>
-            )}
-            {realEquipe && (
-              <div className="text-[#286FF5]">
-                <span className="text-[#5F5F5F]">Equipe:</span> <strong className="text-[#286FF5]">{realEquipe}</strong>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* 1. RESUMO EXECUTIVO DO DIA (HOJE) */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 font-mono">
-        <div className="p-3.5 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5]">
-          <span className="text-[10px] text-[#5F5F5F] block font-bold uppercase">PLANEJADAS HOJE</span>
-          <span className="text-2xl font-extrabold text-[#171717]">{totalPlanned}</span>
-        </div>
-
-        <div className="p-3.5 rounded-2xl bg-[#F7F6F2] border border-[#FCE19B]">
-          <span className="text-[10px] text-[#986000] block font-bold uppercase">EM ANDAMENTO</span>
-          <span className="text-2xl font-extrabold text-[#986000]">{inProgressCount}</span>
-        </div>
-
-        <div className="p-3.5 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5]">
-          <span className="text-[10px] text-[#5F5F5F] block font-bold uppercase">PENDENTES HOJE</span>
-          <span className="text-2xl font-extrabold text-[#222222]">{pendingCount}</span>
-        </div>
-
-        <div className="p-3.5 rounded-2xl bg-[#F7F6F2] border border-[#B9E5D0]">
-          <span className="text-[10px] text-[#16794F] block font-bold uppercase">CONCLUÍDAS HOJE</span>
-          <span className="text-2xl font-extrabold text-[#16794F]">{completedCount}</span>
-        </div>
-
-        <div className="p-3.5 rounded-2xl bg-[#F7F6F2] border border-[#F8C8C8] col-span-2 sm:col-span-1">
-          <span className="text-[10px] text-[#C62828] block font-bold uppercase">NÃO REALIZADAS</span>
-          <span className="text-2xl font-extrabold text-[#C62828]">{notDoneCount}</span>
-        </div>
-      </div>
-
-      {/* Barra de Progresso de Execução */}
-      <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5] space-y-2">
-        <div className="flex justify-between items-center text-xs font-mono">
-          <span className="text-[#171717] font-bold">Meta de Atendimento Diário:</span>
-          <span className="text-cyan-400 font-bold">{completedCount} de {totalPlanned} lojas atendidas</span>
-        </div>
-        <div className="w-full bg-[#E4E2DB] h-3 rounded-full overflow-hidden p-0.5 border border-[#CFCDC5]">
-          <div
-            className="bg-gradient-to-r from-amber-500 via-purple-500 to-emerald-400 h-2 rounded-full transition-all duration-500"
-            style={{ width: `${executionPerc}%` }}
-          />
-        </div>
-      </div>
-
-
-
-      {/* 2. AGENDA DE HOJE — VISITAS DO DIA ATUAL NO TOPO */}
-      <section className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-5 sm:p-6 shadow-2xl space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#CFCDC5] pb-4">
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="material-symbols-outlined text-purple-400 text-xl">today</span>
-              <h2 className="text-base font-extrabold text-[#171717] font-mono tracking-tight">
-                Agenda de Hoje ({todayStr.split('-').reverse().join('/')})
+            <div className="space-y-1">
+              <h2 className="text-xl font-extrabold text-[#171717] tracking-tight">
+                {realName}
               </h2>
-              <span className="px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 text-[10px] font-bold font-mono">
-                {todayOperationalVisits.length} {todayOperationalVisits.length === 1 ? 'loja' : 'lojas'}
-              </span>
+              <div className="flex flex-wrap items-center gap-2 text-xs font-mono">
+                {realMatricula ? (
+                  <span className="px-2.5 py-1 rounded-lg bg-[#E4E2DB] border border-[#CFCDC5] text-[#222222] font-bold">
+                    Matrícula: {realMatricula}
+                  </span>
+                ) : (
+                  !isAdminUser && (
+                    <span className="px-2.5 py-1 rounded-lg bg-[#FDF2F2] border border-[#F8C8C8] text-[#C62828] font-bold flex items-center gap-1">
+                      <span className="material-symbols-outlined text-xs">warning</span>
+                      Promotor não vinculado
+                    </span>
+                  )
+                )}
+
+                {(realCidade || realUf) && (
+                  <span className="text-[#5F5F5F] flex items-center gap-1 bg-[#E4E2DB] px-2.5 py-1 rounded-lg border border-[#CFCDC5]">
+                    <span className="material-symbols-outlined text-xs text-[#286FF5]">location_on</span>
+                    {realCidade}{realUf ? ` - ${realUf}` : ''}
+                  </span>
+                )}
+              </div>
             </div>
-            <p className="text-xs text-[#77766F] font-mono mt-0.5">
-              Rotas previstas e em atendimento ordenadas para o seu dia de trabalho.
-            </p>
           </div>
+
+          {(realSupervisor || realEquipe) && (
+            <div className="p-3.5 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5] text-xs font-mono space-y-1.5 w-full sm:w-auto text-left sm:text-right">
+              {realSupervisor && (
+                <div className="text-[#222222]">
+                  <span className="text-[#5F5F5F]">Supervisor:</span> <strong className="text-[#171717]">{realSupervisor}</strong>
+                </div>
+              )}
+              {realEquipe && (
+                <div className="text-[#286FF5]">
+                  <span className="text-[#5F5F5F]">Equipe:</span> <strong className="text-[#286FF5]">{realEquipe}</strong>
+                </div>
+              )}
+            </div>
+          )}
         </div>
+      )}
+
+      {/* 1. RESUMO EXECUTIVO DO DIA / RESUMO DO PROMOTOR */}
+      {(!isAdminUser || selectedPromoterMatricula) && (
+        <section className="space-y-3">
+          {isAdminUser && (
+            <div className="flex items-center gap-2 font-mono text-xs font-bold text-[#171717]">
+              <span className="material-symbols-outlined text-base text-[#286FF5]">analytics</span>
+              <span>Resumo do Promotor (Hoje)</span>
+            </div>
+          )}
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 font-mono">
+            <div className="p-3.5 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5]">
+              <span className="text-[10px] text-[#5F5F5F] block font-bold uppercase">PLANEJADAS HOJE</span>
+              <span className="text-2xl font-extrabold text-[#171717]">{totalPlanned}</span>
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-[#F7F6F2] border border-[#FCE19B]">
+              <span className="text-[10px] text-[#986000] block font-bold uppercase">EM ANDAMENTO</span>
+              <span className="text-2xl font-extrabold text-[#986000]">{inProgressCount}</span>
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5]">
+              <span className="text-[10px] text-[#5F5F5F] block font-bold uppercase">PENDENTES HOJE</span>
+              <span className="text-2xl font-extrabold text-[#222222]">{pendingCount}</span>
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-[#F7F6F2] border border-[#B9E5D0]">
+              <span className="text-[10px] text-[#16794F] block font-bold uppercase">CONCLUÍDAS HOJE</span>
+              <span className="text-2xl font-extrabold text-[#16794F]">{completedCount}</span>
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-[#F7F6F2] border border-[#F8C8C8] col-span-2 sm:col-span-1">
+              <span className="text-[10px] text-[#C62828] block font-bold uppercase">NÃO REALIZADAS</span>
+              <span className="text-2xl font-extrabold text-[#C62828]">{notDoneCount}</span>
+            </div>
+          </div>
+
+          {/* Barra de Progresso de Execução */}
+          <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5] space-y-2">
+            <div className="flex justify-between items-center text-xs font-mono">
+              <span className="text-[#171717] font-bold">Meta de Atendimento Diário:</span>
+              <span className="text-[#286FF5] font-bold">{completedCount} de {totalPlanned} lojas atendidas</span>
+            </div>
+            <div className="w-full bg-[#E4E2DB] h-3 rounded-full overflow-hidden p-0.5 border border-[#CFCDC5]">
+              <div
+                className="bg-gradient-to-r from-amber-500 via-purple-500 to-emerald-500 h-2 rounded-full transition-all duration-500"
+                style={{ width: `${executionPerc}%` }}
+              />
+            </div>
+          </div>
+        </section>
+      )}
+
+
+
+      {/* 2. AGENDA DE HOJE / PROGRAMAÇÃO DE VISITAS */}
+      {(!isAdminUser || selectedPromoterMatricula) && (
+        <section className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-5 sm:p-6 shadow-xs space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#CFCDC5] pb-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-[#286FF5] text-xl">
+                  {isAdminUser ? 'calendar_month' : 'today'}
+                </span>
+                <h2 className="text-base font-extrabold text-[#171717] font-mono tracking-tight">
+                  {isAdminUser
+                    ? `Programação de Visitas — Hoje (${todayStr.split('-').reverse().join('/')})`
+                    : `Agenda de Hoje (${todayStr.split('-').reverse().join('/')})`}
+                </h2>
+                <span className="px-2 py-0.5 rounded-full bg-[#E4E2DB] text-[#222222] text-[10px] font-bold font-mono">
+                  {todayOperationalVisits.length} {todayOperationalVisits.length === 1 ? 'loja' : 'lojas'}
+                </span>
+              </div>
+              <p className="text-xs text-[#77766F] font-mono mt-0.5">
+                {isAdminUser
+                  ? 'Rotas programadas e atendimentos registrados para este promotor na data atual.'
+                  : 'Rotas previstas e em atendimento ordenadas para o seu dia de trabalho.'}
+              </p>
+            </div>
+          </div>
 
         {/* ALERTA CONTEXTUAL DE ATENDIMENTO ATIVO (Etapa 1) */}
         {activeVisit && (
@@ -1716,49 +1842,61 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
 
                   {/* Ação Única e Clara por Cartão */}
                   <div className="flex items-center gap-2 shrink-0 pt-2 md:pt-0 border-t md:border-t-0 border-[#CFCDC5]">
-                    {(item.status === 'pendente' || item.status === 'planejada') && (
-                      isImplantacaoMode && !isAuthorized ? (
-                        <div className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#FFF8E6] border border-[#FCE19B] text-[#986000] text-xs font-mono font-bold">
-                          <span className="material-symbols-outlined text-sm">lock</span>
-                          <span>Aguardando Liberação</span>
-                        </div>
-                      ) : activeVisit ? (
-                        <div className="flex flex-wrap items-center gap-1.5 w-full md:w-auto">
-                          <button
-                            onClick={() => handleStartVisit(routeObj)}
-                            disabled={Boolean(startingRouteId)}
-                            className="px-3.5 py-2 rounded-xl bg-[#E4E2DB] hover:bg-[#CFCDC5] text-[#222222] border border-[#AAA79E] font-bold text-xs flex items-center justify-center gap-1 cursor-pointer transition-colors shadow-xs"
-                            title="Trocar para esta loja (exige finalizar ou interromper o atendimento atual)"
-                          >
-                            <span className="material-symbols-outlined text-sm">play_arrow</span>
-                            <span>Iniciar Esta</span>
-                          </button>
-                        </div>
-                      ) : (
-                        <>
-                          <button
-                            onClick={() => handleStartVisit(routeObj)}
-                            disabled={Boolean(startingRouteId)}
-                            className="w-full md:w-auto px-4 py-2.5 rounded-xl bg-[#222222] hover:bg-black disabled:bg-[#CFCDC5] disabled:text-[#737373] disabled:cursor-not-allowed text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-colors"
-                          >
-                            <span className={`material-symbols-outlined text-sm ${startingRouteId === routeObj.id ? 'animate-spin' : ''}`}>
-                              {startingRouteId === routeObj.id ? 'sync' : 'play_arrow'}
-                            </span>
-                            <span>{startingRouteId === routeObj.id ? 'Iniciando...' : 'Iniciar Visita'}</span>
-                          </button>
-                          <button
-                            onClick={() => setShowNotDoneModal(routeObj)}
-                            disabled={Boolean(startingRouteId)}
-                            className="px-3 py-2.5 rounded-xl bg-[#F7F6F2] hover:bg-[#FDF2F2] disabled:bg-[#E4E2DB] disabled:text-[#737373] text-[#5F5F5F] hover:text-[#C62828] border border-[#CFCDC5] text-xs font-bold cursor-pointer transition-colors"
-                            title="Registrar Não Atendimento"
-                          >
-                            Não Atendido
-                          </button>
-                        </>
+                    {isAdminUser ? (
+                      <button
+                        type="button"
+                        onClick={() => setAdminInspectionVisit(item)}
+                        className="px-3 py-1.5 rounded-xl bg-[#E4E2DB] hover:bg-[#CFCDC5] text-[#171717] border border-[#CFCDC5] text-xs font-bold font-mono flex items-center gap-1.5 cursor-pointer transition-colors"
+                        title="Inspecionar detalhes e evidências desta visita"
+                      >
+                        <span className="material-symbols-outlined text-sm text-[#286FF5]">visibility</span>
+                        <span>Ver Detalhes</span>
+                      </button>
+                    ) : (
+                      (item.status === 'pendente' || item.status === 'planejada') && (
+                        isImplantacaoMode && !isAuthorized ? (
+                          <div className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#FFF8E6] border border-[#FCE19B] text-[#986000] text-xs font-mono font-bold">
+                            <span className="material-symbols-outlined text-sm">lock</span>
+                            <span>Aguardando Liberação</span>
+                          </div>
+                        ) : activeVisit ? (
+                          <div className="flex flex-wrap items-center gap-1.5 w-full md:w-auto">
+                            <button
+                              onClick={() => handleStartVisit(routeObj)}
+                              disabled={Boolean(startingRouteId)}
+                              className="px-3.5 py-2 rounded-xl bg-[#E4E2DB] hover:bg-[#CFCDC5] text-[#222222] border border-[#AAA79E] font-bold text-xs flex items-center justify-center gap-1 cursor-pointer transition-colors shadow-xs"
+                              title="Trocar para esta loja (exige finalizar ou interromper o atendimento atual)"
+                            >
+                              <span className="material-symbols-outlined text-sm">play_arrow</span>
+                              <span>Iniciar Esta</span>
+                            </button>
+                          </div>
+                        ) : (
+                          <>
+                            <button
+                              onClick={() => handleStartVisit(routeObj)}
+                              disabled={Boolean(startingRouteId)}
+                              className="w-full md:w-auto px-4 py-2.5 rounded-xl bg-[#222222] hover:bg-black disabled:bg-[#CFCDC5] disabled:text-[#737373] disabled:cursor-not-allowed text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-colors"
+                            >
+                              <span className={`material-symbols-outlined text-sm ${startingRouteId === routeObj.id ? 'animate-spin' : ''}`}>
+                                {startingRouteId === routeObj.id ? 'sync' : 'play_arrow'}
+                              </span>
+                              <span>{startingRouteId === routeObj.id ? 'Iniciando...' : 'Iniciar Visita'}</span>
+                            </button>
+                            <button
+                              onClick={() => setShowNotDoneModal(routeObj)}
+                              disabled={Boolean(startingRouteId)}
+                              className="px-3 py-2.5 rounded-xl bg-[#F7F6F2] hover:bg-[#FDF2F2] disabled:bg-[#E4E2DB] disabled:text-[#737373] text-[#5F5F5F] hover:text-[#C62828] border border-[#CFCDC5] text-xs font-bold cursor-pointer transition-colors"
+                              title="Registrar Não Atendimento"
+                            >
+                              Não Atendido
+                            </button>
+                          </>
+                        )
                       )
                     )}
 
-                    {item.status === 'em_andamento' && (
+                    {!isAdminUser && item.status === 'em_andamento' && (
                       <div className="flex items-center gap-2 w-full md:w-auto">
                         <button
                           onClick={() => {
@@ -1807,9 +1945,10 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
           </div>
         )}
       </section>
+      )}
 
-      {/* 2. PENDÊNCIAS DE DIAS ANTERIORES (VISITAS ANTERIORES NÃO CONCLUÍDAS) */}
-      {(staleInProgressVisits.length > 0 || staleNotDoneVisits.length > 0) && (
+      {/* 2. PENDÊNCIAS DE DIAS ANTERIORES (VISITAS ANTERIORES NÃO CONCLUÍDAS - VISÍVEL APENAS PARA PROMOTOR OPERACIONAL) */}
+      {!isAdminUser && (staleInProgressVisits.length > 0 || staleNotDoneVisits.length > 0) && (
         <section className="bg-amber-950/20 border-2 border-amber-500/50 rounded-2xl p-5 sm:p-6 shadow-2xl space-y-6">
           <div className="flex items-start gap-3 border-b border-amber-500/30 pb-4">
             <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 shrink-0">
@@ -1990,8 +2129,8 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
         </section>
       )}
 
-      {/* TELA DE FLUXO DA VISITA EM ANDAMENTO */}
-      {activeVisit ? (
+      {/* TELA DE FLUXO DA VISITA EM ANDAMENTO (Apenas para promotores em campo) */}
+      {!isAdminUser && activeVisit ? (
         <section id="active-visit-section" className="bg-[#F7F6F2] border-2 border-amber-500/50 rounded-2xl p-6 shadow-2xl space-y-6">
           <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-4">
             <div className="flex items-center gap-2">
@@ -2552,26 +2691,33 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
         </section>
       ) : null}
 
-      {/* 3. HISTÓRICO E AGENDA DA SEMANA (RECOLHÍVEL POR PADRÃO NO MOBILE) */}
-      <section className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-5 sm:p-6 shadow-2xl space-y-5">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#CFCDC5] pb-4">
-          <div
-            onClick={() => setIsWeekHistoryOpen((prev) => !prev)}
-            className="cursor-pointer select-none flex-1 group"
-          >
-            <div className="flex items-center gap-2">
-              <span className="material-symbols-outlined text-purple-400">calendar_view_week</span>
-              <h3 className="text-sm font-bold text-[#171717] uppercase tracking-wider font-mono flex items-center gap-2">
-                3. Minha Semana & Histórico ({allWeekOperationalVisits.length} agendadas)
-              </h3>
-              <span className="px-2 py-0.5 rounded bg-[#E4E2DB] border border-[#CFCDC5] text-[#77766F] text-[10px] font-mono group-hover:text-[#171717] transition-colors">
-                {isWeekHistoryOpen ? 'Recolher ▲' : 'Ver Todos os Dias ▼'}
-              </span>
+      {/* 3. HISTÓRICO DE ATENDIMENTOS / AGENDA DA SEMANA */}
+      {(!isAdminUser || selectedPromoterMatricula) && (
+        <section className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-5 sm:p-6 shadow-xs space-y-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#CFCDC5] pb-4">
+            <div
+              onClick={() => setIsWeekHistoryOpen((prev) => !prev)}
+              className="cursor-pointer select-none flex-1 group"
+            >
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-[#286FF5]">
+                  {isAdminUser ? 'history_toggle_off' : 'calendar_view_week'}
+                </span>
+                <h3 className="text-sm font-bold text-[#171717] uppercase tracking-wider font-mono flex items-center gap-2">
+                  {isAdminUser
+                    ? `Histórico de Atendimentos — Semana (${allWeekOperationalVisits.length} registros)`
+                    : `3. Minha Semana & Histórico (${allWeekOperationalVisits.length} agendadas)`}
+                </h3>
+                <span className="px-2 py-0.5 rounded bg-[#E4E2DB] border border-[#CFCDC5] text-[#77766F] text-[10px] font-mono group-hover:text-[#171717] transition-colors">
+                  {isWeekHistoryOpen ? 'Recolher ▲' : 'Ver Todos os Dias ▼'}
+                </span>
+              </div>
+              <p className="text-[11px] text-[#77766F] font-mono mt-0.5">
+                {isAdminUser
+                  ? 'Grade semanal consolidada de visitas, presenças e histórico do promotor.'
+                  : 'Grade semanal completa de rotas planejadas, histórico e pendências de outros dias.'}
+              </p>
             </div>
-            <p className="text-[11px] text-[#77766F] font-mono mt-0.5">
-              Grade semanal completa de rotas planejadas, histórico e pendências de outros dias.
-            </p>
-          </div>
 
           {/* Navegação entre semanas (visível sempre) */}
           <div className="flex items-center gap-2 shrink-0 font-mono text-xs">
@@ -2734,53 +2880,67 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
 
                       {/* Ações */}
                       <div className="flex items-center gap-2 shrink-0 pt-2 md:pt-0 border-t md:border-t-0 border-[#CFCDC5]">
-                        {(item.status === 'pendente' || item.status === 'planejada') && isTodayItem && (
-                          isImplantacaoMode && !isAuthorized ? (
-                            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs font-mono">
-                              <span className="material-symbols-outlined text-sm">lock</span>
-                              <span>Aguardando Liberação</span>
-                            </div>
-                          ) : activeVisit ? (
-                            <button
-                              onClick={() => handleStartVisit(routeObj)}
-                              className="px-3 py-1.5 rounded-xl bg-[#EAE8E2] hover:bg-purple-600/30 text-purple-300 border border-purple-500/40 font-bold text-xs flex items-center gap-1 cursor-pointer transition-colors"
-                              title="Trocar para esta loja (exige finalizar ou interromper o atendimento atual)"
-                            >
-                              <span className="material-symbols-outlined text-sm">play_arrow</span>
-                              <span>Iniciar Esta</span>
-                            </button>
-                          ) : (
-                            <>
-                              <button
-                                onClick={() => handleStartVisit(routeObj)}
-                                className="px-4 py-2 rounded-xl bg-[#222222] hover:bg-black text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-md"
-                              >
-                                <span className="material-symbols-outlined text-sm">play_arrow</span>
-                                <span>Iniciar Visita</span>
-                              </button>
-                              <button
-                                onClick={() => setShowNotDoneModal(routeObj)}
-                                className="px-3 py-2 rounded-xl bg-[#F7F6F2] hover:bg-rose-500/20 text-[#77766F] hover:text-rose-300 border border-[#CFCDC5] text-xs font-bold cursor-pointer"
-                                title="Justificar Não Realização"
-                              >
-                                Não Atendido
-                              </button>
-                            </>
-                          )
-                        )}
+                        {isAdminUser ? (
+                          <button
+                            type="button"
+                            onClick={() => setAdminInspectionVisit(item)}
+                            className="px-2.5 py-1 rounded-xl bg-[#E4E2DB] hover:bg-[#CFCDC5] text-[#171717] border border-[#CFCDC5] text-[11px] font-bold font-mono flex items-center gap-1 cursor-pointer transition-colors"
+                            title="Inspecionar detalhes e evidências desta visita"
+                          >
+                            <span className="material-symbols-outlined text-sm text-[#286FF5]">visibility</span>
+                            <span>Ver Detalhes</span>
+                          </button>
+                        ) : (
+                          <>
+                            {(item.status === 'pendente' || item.status === 'planejada') && isTodayItem && (
+                              isImplantacaoMode && !isAuthorized ? (
+                                <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs font-mono">
+                                  <span className="material-symbols-outlined text-sm">lock</span>
+                                  <span>Aguardando Liberação</span>
+                                </div>
+                              ) : activeVisit ? (
+                                <button
+                                  onClick={() => handleStartVisit(routeObj)}
+                                  className="px-3 py-1.5 rounded-xl bg-[#EAE8E2] hover:bg-purple-600/30 text-purple-300 border border-purple-500/40 font-bold text-xs flex items-center gap-1 cursor-pointer transition-colors"
+                                  title="Trocar para esta loja (exige finalizar ou interromper o atendimento atual)"
+                                >
+                                  <span className="material-symbols-outlined text-sm">play_arrow</span>
+                                  <span>Iniciar Esta</span>
+                                </button>
+                              ) : (
+                                <>
+                                  <button
+                                    onClick={() => handleStartVisit(routeObj)}
+                                    className="px-4 py-2 rounded-xl bg-[#222222] hover:bg-black text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-md"
+                                  >
+                                    <span className="material-symbols-outlined text-sm">play_arrow</span>
+                                    <span>Iniciar Visita</span>
+                                  </button>
+                                  <button
+                                    onClick={() => setShowNotDoneModal(routeObj)}
+                                    className="px-3 py-2 rounded-xl bg-[#F7F6F2] hover:bg-rose-500/20 text-[#77766F] hover:text-rose-300 border border-[#CFCDC5] text-xs font-bold cursor-pointer"
+                                    title="Justificar Não Realização"
+                                  >
+                                    Não Atendido
+                                  </button>
+                                </>
+                              )
+                            )}
 
-                        {item.status === 'pendente' && !isTodayItem && item.isPastOverdue && !activeVisit && (
-                          isImplantacaoMode && !isAuthorized ? (
-                            <span className="text-xs text-[#5F5F5F] font-mono italic">Aguardando Liberação</span>
-                          ) : (
-                            <button
-                              onClick={() => handleStartVisit(routeObj)}
-                              className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-md"
-                            >
-                              <span className="material-symbols-outlined text-sm">play_arrow</span>
-                              <span>Regularizar Pendência</span>
-                            </button>
-                          )
+                            {item.status === 'pendente' && !isTodayItem && item.isPastOverdue && !activeVisit && (
+                              isImplantacaoMode && !isAuthorized ? (
+                                <span className="text-xs text-[#5F5F5F] font-mono italic">Aguardando Liberação</span>
+                              ) : (
+                                <button
+                                  onClick={() => handleStartVisit(routeObj)}
+                                  className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-md"
+                                >
+                                  <span className="material-symbols-outlined text-sm">play_arrow</span>
+                                  <span>Regularizar Pendência</span>
+                                </button>
+                              )
+                            )}
+                          </>
                         )}
 
                         {item.status === 'em_andamento' && (
@@ -2844,6 +3004,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
           </div>
         )}
       </section>
+      )}
 
       {/* MODAL JUSTIFICAR VISITA ANTERIOR EM ANDAMENTO COMO NÃO REALIZADA */}
       {staleNotDoneVisit && (
@@ -3169,6 +3330,287 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                 <span>{recoveringVisit ? 'Reabrindo Visita...' : 'Confirmar e Iniciar Hoje'}</span>
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE CONSULTA DE DETALHES DA VISITA (MODO ADMINISTRATIVO) */}
+      {adminInspectionVisit && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 overflow-y-auto">
+          <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl max-w-2xl w-full shadow-2xl overflow-hidden my-8 max-h-[90vh] flex flex-col font-sans">
+            {/* Modal Header */}
+            <div className="px-6 py-4 border-b border-[#CFCDC5] flex items-center justify-between bg-[#EAE8E2]">
+              <div>
+                <h3 className="font-extrabold text-[#171717] text-base flex items-center gap-2">
+                  <span className="material-symbols-outlined text-[#286FF5]">visibility</span>
+                  <span>Detalhes do Atendimento</span>
+                </h3>
+                <p className="text-xs text-[#5F5F5F] font-mono mt-0.5">
+                  {adminInspectionVisit.lojaNome} • {adminInspectionVisit.dataStr.split('-').reverse().join('/')}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAdminInspectionVisit(null)}
+                className="text-[#77766F] hover:text-[#171717] p-1 rounded-lg transition-colors cursor-pointer"
+              >
+                <span className="material-symbols-outlined">close</span>
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 overflow-y-auto space-y-6 text-xs">
+              {/* Informações Gerais */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div className="p-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl font-mono">
+                  <div className="text-[10px] text-[#5F5F5F] uppercase font-bold">Status</div>
+                  <div className="text-xs font-bold text-[#171717] mt-1 capitalize">
+                    {adminInspectionVisit.status.replace('_', ' ')}
+                  </div>
+                </div>
+
+                <div className="p-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl font-mono">
+                  <div className="text-[10px] text-[#5F5F5F] uppercase font-bold">Indústria</div>
+                  <div className="text-xs font-bold text-[#171717] mt-1 truncate">
+                    {adminInspectionVisit.industriaNome}
+                  </div>
+                </div>
+
+                <div className="p-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl font-mono">
+                  <div className="text-[10px] text-[#5F5F5F] uppercase font-bold">Check-in</div>
+                  <div className="text-xs font-bold text-[#171717] mt-1">
+                    {adminInspectionVisit.startedAt
+                      ? new Date(adminInspectionVisit.startedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+                      : '—'}
+                  </div>
+                </div>
+
+                <div className="p-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl font-mono">
+                  <div className="text-[10px] text-[#5F5F5F] uppercase font-bold">Conclusão</div>
+                  <div className="text-xs font-bold text-[#171717] mt-1">
+                    {adminInspectionVisit.completedAt
+                      ? new Date(adminInspectionVisit.completedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+                      : '—'}
+                  </div>
+                </div>
+              </div>
+
+              {/* Justificativa de Não Realização */}
+              {adminInspectionVisit.motivoNaoRealizada && (
+                <div className="p-4 bg-[#FDF2F2] border border-[#F8C8C8] rounded-xl">
+                  <div className="font-bold text-[#C62828] flex items-center gap-1.5 mb-1">
+                    <span className="material-symbols-outlined text-sm">report</span>
+                    <span>Justificativa de Não Atendimento</span>
+                  </div>
+                  <p className="text-[#C62828] text-xs font-mono">{adminInspectionVisit.motivoNaoRealizada}</p>
+                </div>
+              )}
+
+              {/* Galeria de Fotos com URLs Assinadas */}
+              <div>
+                <h4 className="font-bold text-sm text-[#171717] mb-2 flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-base text-[#286FF5]">photo_library</span>
+                  <span>Fotos e Evidências Fotográficas</span>
+                </h4>
+
+                {loadingInspectionPhotos ? (
+                  <div className="p-6 text-center bg-[#EAE8E2] rounded-xl border border-[#CFCDC5] text-[#5F5F5F] font-mono">
+                    Carregando fotos do bucket seguro...
+                  </div>
+                ) : !adminInspectionVisit.visitObj?.photos || adminInspectionVisit.visitObj.photos.length === 0 ? (
+                  <div className="p-4 text-center bg-[#EAE8E2] rounded-xl border border-[#CFCDC5] text-[#5F5F5F] font-mono">
+                    Nenhuma foto registrada nesta visita.
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                    {adminInspectionVisit.visitObj.photos.map((photo) => {
+                      const signedUrl = adminSignedPhotoUrls[photo.id || photo.storage_path];
+                      return (
+                        <div
+                          key={photo.id}
+                          className="border border-[#CFCDC5] rounded-xl overflow-hidden bg-[#EAE8E2] group cursor-pointer hover:border-[#286FF5] transition-all"
+                          onClick={() => signedUrl && setAdminZoomedPhoto(signedUrl)}
+                        >
+                          <div className="aspect-video w-full bg-[#E4E2DB] flex items-center justify-center relative overflow-hidden">
+                            {signedUrl ? (
+                              <img
+                                src={signedUrl}
+                                alt={photo.tipo_foto}
+                                className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                              />
+                            ) : (
+                              <span className="material-symbols-outlined text-2xl text-[#77766F]">
+                                photo_camera
+                              </span>
+                            )}
+                          </div>
+                          <div className="p-2 text-[10px] bg-[#F7F6F2] border-t border-[#CFCDC5]">
+                            <div className="font-bold uppercase text-[#286FF5] font-mono">{photo.tipo_foto}</div>
+                            {photo.legenda && (
+                              <div className="text-[#5F5F5F] truncate mt-0.5">{photo.legenda}</div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* Checklist Realizado */}
+              <div>
+                <h4 className="font-bold text-sm text-[#171717] mb-2 flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-base text-[#16794F]">checklist</span>
+                  <span>Checklist de Atendimento</span>
+                </h4>
+
+                {!adminInspectionVisit.visitObj?.checklist_items ||
+                adminInspectionVisit.visitObj.checklist_items.length === 0 ? (
+                  <div className="p-4 text-center bg-[#EAE8E2] rounded-xl border border-[#CFCDC5] text-[#5F5F5F] font-mono">
+                    Checklist não preenchido ou não iniciado.
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {adminInspectionVisit.visitObj.checklist_items.map((item) => (
+                      <div
+                        key={item.id || item.item_key}
+                        className={`p-2.5 rounded-xl border flex items-start gap-2 ${
+                          item.checked
+                            ? 'bg-[#EAF5EF] border-[#B9E5D0] text-[#16794F]'
+                            : 'bg-[#EAE8E2] border-[#CFCDC5] text-[#5F5F5F]'
+                        }`}
+                      >
+                        <span className="material-symbols-outlined text-base mt-0.5">
+                          {item.checked ? 'check_box' : 'check_box_outline_blank'}
+                        </span>
+                        <div>
+                          <div className="font-medium text-[#171717]">{item.item_label}</div>
+                          {item.observacao && (
+                            <div className="text-[11px] text-[#5F5F5F] mt-0.5">{item.observacao}</div>
+                          )}
+                          {item.valor_texto && (
+                            <div className="text-[11px] text-[#171717] font-semibold mt-0.5">
+                              Valor: {item.valor_texto}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Ocorrências e Rupturas */}
+              <div>
+                <h4 className="font-bold text-sm text-[#171717] mb-2 flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-base text-[#986000]">warning</span>
+                  <span>Ocorrências e Rupturas</span>
+                </h4>
+
+                {!adminInspectionVisit.visitObj?.occurrences ||
+                adminInspectionVisit.visitObj.occurrences.length === 0 ? (
+                  <div className="p-4 text-center bg-[#EAE8E2] rounded-xl border border-[#CFCDC5] text-[#5F5F5F] font-mono">
+                    Nenhuma ocorrência reportada nesta visita.
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {adminInspectionVisit.visitObj.occurrences.map((occ) => (
+                      <div
+                        key={occ.id}
+                        className="p-3 bg-[#FFF8E6] border border-[#FCE19B] rounded-xl flex items-start justify-between font-mono"
+                      >
+                        <div>
+                          <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-[#986000] text-white mr-2">
+                            {occ.tipo}
+                          </span>
+                          <span className="font-medium text-[#171717]">{occ.descricao}</span>
+                        </div>
+                        <span
+                          className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                            occ.resolvido ? 'bg-[#EAF5EF] text-[#16794F]' : 'bg-[#FDF2F2] text-[#C62828]'
+                          }`}
+                        >
+                          {occ.resolvido ? 'Resolvido' : 'Pendente'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Validade de Produtos */}
+              <div>
+                <h4 className="font-bold text-sm text-[#171717] mb-2 flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-base text-[#286FF5]">event</span>
+                  <span>Controle de Validade de Produtos</span>
+                </h4>
+
+                {!adminInspectionVisit.visitObj?.validity_items ||
+                adminInspectionVisit.visitObj.validity_items.length === 0 ? (
+                  <div className="p-4 text-center bg-[#EAE8E2] rounded-xl border border-[#CFCDC5] text-[#5F5F5F] font-mono">
+                    Nenhum apontamento de validade registrado.
+                  </div>
+                ) : (
+                  <div className="border border-[#CFCDC5] rounded-xl overflow-hidden font-mono">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-[#EAE8E2] text-[#5F5F5F] uppercase text-[10px] font-bold border-b border-[#CFCDC5]">
+                        <tr>
+                          <th className="px-4 py-2">Produto</th>
+                          <th className="px-3 py-2">Qtd</th>
+                          <th className="px-3 py-2">Vencimento</th>
+                          <th className="px-3 py-2">Lote</th>
+                          <th className="px-3 py-2">Observação</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[#CFCDC5]">
+                        {adminInspectionVisit.visitObj.validity_items.map((val) => (
+                          <tr key={val.id}>
+                            <td className="px-4 py-2 font-medium text-[#171717]">{val.produto_nome}</td>
+                            <td className="px-3 py-2 text-[#171717]">{val.quantidade}</td>
+                            <td className="px-3 py-2 font-bold text-[#C62828]">{val.data_vencimento}</td>
+                            <td className="px-3 py-2 text-[#5F5F5F]">{val.lote || '—'}</td>
+                            <td className="px-3 py-2 text-[#5F5F5F]">{val.observacao || '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Footer Modal */}
+            <div className="px-6 py-3 border-t border-[#CFCDC5] bg-[#EAE8E2] flex justify-end font-mono">
+              <button
+                type="button"
+                onClick={() => setAdminInspectionVisit(null)}
+                className="px-4 py-2 bg-[#222222] text-white rounded-xl text-xs font-semibold hover:bg-black transition-colors cursor-pointer"
+              >
+                Fechar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE ZOOM DE FOTO (MODO ADMINISTRATIVO) */}
+      {adminZoomedPhoto && (
+        <div
+          className="fixed inset-0 z-60 flex items-center justify-center bg-black/80 p-4"
+          onClick={() => setAdminZoomedPhoto(null)}
+        >
+          <div className="relative max-w-4xl max-h-[90vh] flex flex-col items-center">
+            <img
+              src={adminZoomedPhoto}
+              alt="Evidência ampliada"
+              className="max-w-full max-h-[85vh] object-contain rounded-lg shadow-2xl"
+            />
+            <button
+              onClick={() => setAdminZoomedPhoto(null)}
+              className="mt-3 px-4 py-1.5 bg-[#222222] hover:bg-black text-white text-xs font-mono font-bold rounded-lg cursor-pointer"
+            >
+              Fechar Visualização
+            </button>
           </div>
         </div>
       )}
