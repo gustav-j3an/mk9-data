@@ -2279,12 +2279,12 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
               <p role="alert" className="text-[11px] text-rose-400">{checklistSaveError}</p>
             )}
 
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               {CHECKLIST_GROUPS.map((group) => (
                 <section
                   key={group.title}
                   aria-label={group.title}
-                  className="p-3 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] space-y-3"
+                  className="p-3.5 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] space-y-3"
                 >
                   <h4 className="text-[11px] font-bold text-[#171717] uppercase tracking-wide font-mono">
                     {group.title}
@@ -2301,116 +2301,39 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                         valTxt: ''
                       };
                       const isQuantity = CHECKLIST_QUANTITY_KEYS.has(item.item_key);
-                      const isFrontCount = item.item_key === 'qtd_frentes';
 
                       return (
                         <div key={item.item_key} className="space-y-2">
-                          {isQuantity || isFrontCount ? (
-                            <>
-                              <label
-                                htmlFor={`visit-checklist-${item.item_key}`}
-                                className="block text-xs font-semibold text-[#171717]"
-                              >
-                                {item.item_label}
-                              </label>
-                              <input
-                                id={`visit-checklist-${item.item_key}`}
-                                type={isQuantity ? 'number' : 'text'}
-                                min={isQuantity ? 0 : undefined}
-                                step={isQuantity ? 1 : undefined}
-                                inputMode="numeric"
-                                value={state.valTxt}
-                                disabled={completingVisit}
-                                onChange={(event) =>
-                                  handleChecklistChange(
-                                    item,
-                                    state.checked,
-                                    state.obs,
-                                    event.target.value,
-                                    Boolean(event.target.value.trim())
-                                  )
-                                }
-                                placeholder={
-                                  item.item_key === 'qtd_produtos_deposito'
-                                    ? 'Informe a quantidade (0 se não houver)'
-                                    : item.item_key === 'qtd_produtos_venda'
-                                      ? 'Quantidade na área de vendas'
-                                      : 'Frentes na gôndola'
-                                }
-                                className="w-full h-10 px-3 bg-[#F7F6F2] border border-[#CFCDC5] rounded-lg text-sm text-[#171717] focus:outline-none focus:border-amber-500 disabled:opacity-60"
-                              />
-                            </>
-                          ) : (
-                            <>
-                              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-                                <span className="text-xs font-semibold text-[#171717]">{item.item_label}</span>
-                                <div role="group" aria-label={item.item_label} className="grid grid-cols-2 gap-2">
-                                  {[true, false].map((answer) => (
-                                    <button
-                                      key={String(answer)}
-                                      type="button"
-                                      aria-pressed={state.answered && state.checked === answer}
-                                      disabled={completingVisit}
-                                      onClick={() =>
-                                        handleChecklistChange(
-                                          item,
-                                          answer,
-                                          answer ? state.obs : '',
-                                          answer ? state.valTxt : '',
-                                          true
-                                        )
-                                      }
-                                      className={`min-h-10 px-4 rounded-lg border text-xs font-bold transition-colors disabled:opacity-60 ${
-                                        state.answered && state.checked === answer
-                                          ? answer
-                                            ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-700'
-                                            : 'bg-rose-500/15 border-rose-500/40 text-rose-700'
-                                          : 'bg-[#F7F6F2] border-[#CFCDC5] text-[#5F5F5F] hover:border-amber-500'
-                                      }`}
-                                    >
-                                      {answer ? 'Sim' : 'Não'}
-                                    </button>
-                                  ))}
-                                </div>
-                              </div>
-                              {item.item_key === 'ruptura_gondola' && state.checked && (
-                                <div className="space-y-2">
-                                  <input
-                                    type="text"
-                                    value={state.valTxt}
-                                    disabled={completingVisit}
-                                    onChange={(event) =>
-                                      handleChecklistChange(
-                                        item,
-                                        state.checked,
-                                        state.obs,
-                                        event.target.value,
-                                        state.answered
-                                      )
-                                    }
-                                    placeholder="Produtos em falta e quantidades"
-                                    className="w-full h-10 px-3 bg-[#F7F6F2] border border-[#CFCDC5] rounded-lg text-xs text-[#171717] focus:outline-none focus:border-amber-500 disabled:opacity-60"
-                                  />
-                                  <textarea
-                                    value={state.obs}
-                                    disabled={completingVisit}
-                                    onChange={(event) =>
-                                      handleChecklistChange(
-                                        item,
-                                        state.checked,
-                                        event.target.value,
-                                        state.valTxt,
-                                        state.answered
-                                      )
-                                    }
-                                    placeholder="Observação (opcional)"
-                                    rows={2}
-                                    className="w-full p-2.5 bg-[#F7F6F2] border border-[#CFCDC5] rounded-lg text-xs text-[#171717] focus:outline-none focus:border-amber-500 resize-y disabled:opacity-60"
-                                  />
-                                </div>
-                              )}
-                            </>
-                          )}
+                          <label
+                            htmlFor={`visit-checklist-${item.item_key}`}
+                            className="block text-xs font-semibold text-[#171717]"
+                          >
+                            {item.item_label}
+                          </label>
+                          <input
+                            id={`visit-checklist-${item.item_key}`}
+                            type="number"
+                            min={0}
+                            step={1}
+                            inputMode="numeric"
+                            value={state.valTxt}
+                            disabled={completingVisit}
+                            onChange={(event) =>
+                              handleChecklistChange(
+                                item,
+                                state.checked,
+                                state.obs,
+                                event.target.value,
+                                Boolean(event.target.value.trim())
+                              )
+                            }
+                            placeholder={
+                              item.item_key === 'qtd_produtos_deposito'
+                                ? 'Informe a quantidade (0 se não houver)'
+                                : 'Quantidade na área de vendas'
+                            }
+                            className="w-full h-10 px-3 bg-[#F7F6F2] border border-[#CFCDC5] rounded-lg text-sm text-[#171717] focus:outline-none focus:border-amber-500 disabled:opacity-60"
+                          />
                         </div>
                       );
                     })}

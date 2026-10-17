@@ -1,33 +1,18 @@
 import type { VisitChecklistItem } from '../types';
 
 export const DEFAULT_CHECKLIST_ITEMS = [
-  { item_key: 'loja_aberta', item_label: 'Loja aberta e em funcionamento' },
-  { item_key: 'presenca_produto', item_label: 'Existe produto disponível para venda?' },
-  { item_key: 'ruptura_gondola', item_label: 'Existe ruptura na gôndola?' },
-  { item_key: 'qtd_frentes', item_label: 'Contagem e verificação da quantidade de frentes' },
   { item_key: 'qtd_produtos_venda', item_label: 'Quantidade na área de vendas' },
-  { item_key: 'preco_encontrado', item_label: 'Preço etiquetado visível ao consumidor?' },
-  { item_key: 'preco_conforme', item_label: 'Preço em conformidade com a tabela acordada?' },
-  { item_key: 'ponto_extra', item_label: 'Produto exposto no PDC / ponto extra?' },
-  { item_key: 'exposicao_organizada', item_label: 'Exposição abastecida e organizada?' },
-  { item_key: 'material_pop', item_label: 'Material de merchandising e POP instalado?' },
-  { item_key: 'validade_ok', item_label: 'Validade adequada dos lotes expostos (FIFO)?' },
-  { item_key: 'estoque_disponivel', item_label: 'Existe produto no depósito?' },
   { item_key: 'qtd_produtos_deposito', item_label: 'Quantidade disponível no depósito' }
 ];
 
 export const CHECKLIST_GROUPS = [
   {
-    title: 'A. Estoque e ruptura',
-    itemKeys: ['loja_aberta', 'presenca_produto', 'ruptura_gondola', 'qtd_frentes', 'qtd_produtos_venda']
+    title: '1. Estoque e área de vendas',
+    itemKeys: ['qtd_produtos_venda']
   },
   {
-    title: 'B. Produto no depósito',
-    itemKeys: ['estoque_disponivel', 'qtd_produtos_deposito']
-  },
-  {
-    title: 'C. PDC e exposição',
-    itemKeys: ['ponto_extra', 'exposicao_organizada', 'material_pop', 'preco_encontrado', 'preco_conforme', 'validade_ok']
+    title: '2. Produto no depósito',
+    itemKeys: ['qtd_produtos_deposito']
   }
 ];
 
@@ -50,8 +35,7 @@ export const createChecklistState = (
         definition.item_key,
         {
           checked: found?.checked ?? false,
-          answered: CHECKLIST_QUANTITY_KEYS.has(definition.item_key) ||
-            definition.item_key === 'qtd_frentes'
+          answered: CHECKLIST_QUANTITY_KEYS.has(definition.item_key)
             ? Boolean(found?.valor_texto?.trim())
             : Boolean(found),
           obs: found?.observacao || '',

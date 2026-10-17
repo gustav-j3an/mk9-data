@@ -12,16 +12,12 @@ import {
 } from './visitExecution';
 
 describe('visit execution checklist and photo helpers', () => {
-  it('organizes the operational questions in the three checklist groups and retains compact controls', () => {
+  it('organizes the operational questions in the checklist groups with only quantity controls', () => {
     const groupedKeys = CHECKLIST_GROUPS.flatMap((group) => group.itemKeys);
     assert.equal(new Set(groupedKeys).size, DEFAULT_CHECKLIST_ITEMS.length);
-    assert.ok(groupedKeys.includes('ruptura_gondola'));
+    assert.equal(DEFAULT_CHECKLIST_ITEMS.length, 2);
     assert.ok(groupedKeys.includes('qtd_produtos_venda'));
     assert.ok(groupedKeys.includes('qtd_produtos_deposito'));
-    assert.ok(groupedKeys.includes('ponto_extra'));
-    assert.ok(groupedKeys.includes('exposicao_organizada'));
-    assert.ok(groupedKeys.includes('validade_ok'));
-    assert.ok(groupedKeys.includes('preco_conforme'));
   });
 
   it('preserves a numeric zero and leaves unanswered quantities blank when resuming', () => {
@@ -57,12 +53,12 @@ describe('visit execution checklist and photo helpers', () => {
   it('plans checklist updates/inserts without deleting unknown historical rows', () => {
     const state = createChecklistState([
       {
-        id: 'old-row',
-        item_key: 'ruptura_gondola',
-        item_label: 'Rótulo histórico',
-        checked: true,
-        observacao: 'Produto A: 2',
-        valor_texto: null
+        id: 'existing-venda-row',
+        item_key: 'qtd_produtos_venda',
+        item_label: 'Quantidade na área de vendas',
+        checked: false,
+        observacao: 'Área principal',
+        valor_texto: '15'
       } as VisitChecklistItem,
       {
         id: 'legacy-row',
@@ -71,6 +67,12 @@ describe('visit execution checklist and photo helpers', () => {
         checked: true
       } as VisitChecklistItem
     ]);
+    state.qtd_produtos_venda = {
+      checked: false,
+      answered: true,
+      obs: 'Área principal atualizada',
+      valTxt: '20'
+    };
     state.qtd_produtos_deposito = {
       checked: false,
       answered: true,
@@ -79,13 +81,14 @@ describe('visit execution checklist and photo helpers', () => {
     };
 
     const plan = buildChecklistSyncPlan('visit-1', state, [
-      { id: 'old-row', item_key: 'ruptura_gondola' },
+      { id: 'existing-venda-row', item_key: 'qtd_produtos_venda' },
       { id: 'legacy-row', item_key: 'controle_legado' }
     ]);
 
     assert.equal(plan.updates.length, 1);
-    assert.equal(plan.updates[0].id, 'old-row');
-    assert.equal(plan.updates[0].values.observacao, 'Produto A: 2');
+    assert.equal(plan.updates[0].id, 'existing-venda-row');
+    assert.equal(plan.updates[0].values.observacao, 'Área principal atualizada');
+    assert.equal(plan.updates[0].values.valor_texto, '20');
     assert.equal(plan.inserts.find((row) => row.item_key === 'qtd_produtos_deposito')?.valor_texto, '0');
     assert.equal(plan.updates.some((row) => row.id === 'legacy-row'), false);
     assert.equal(plan.inserts.some((row) => row.item_key === 'controle_legado'), false);
