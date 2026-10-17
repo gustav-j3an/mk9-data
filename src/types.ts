@@ -67,6 +67,76 @@ export interface RouteItem {
   promotor?: { matricula: string; nome: string; supervisor?: string; equipe?: string } | null;
 }
 
+export type ContratoFrequencia = 'SEMANAL' | 'QUINZENAL' | 'MENSAL';
+export type ContratoStatus = 'ativo' | 'inativo' | 'suspenso' | 'encerrado';
+export type CicloQuinzenal = 'PAR_IMPAR' | 'SEMANA_1_3' | 'SEMANA_2_4' | 'QUINZENAL_LIVRE';
+
+export interface ContratoLoja {
+  id: string;
+  industria_codigo: string;
+  loja_codigo: string;
+  frequencia: ContratoFrequencia;
+  visitas_por_semana?: number | null;
+  segunda: boolean;
+  terca: boolean;
+  quarta: boolean;
+  quinta: boolean;
+  sexta: boolean;
+  sabado: boolean;
+  domingo: boolean;
+  ciclo_quinzenal?: CicloQuinzenal;
+  data_inicio_vigencia: string;
+  data_fim_vigencia?: string | null;
+  status: ContratoStatus;
+  valor_por_visita?: number | null;
+  origem?: 'manual' | 'migracao_rotas' | 'importacao_planilha' | 'sistema';
+  observacao?: string | null;
+  created_at?: string;
+  updated_at?: string;
+
+  // Relacionamentos carregados via Join
+  industria?: { codigo: string; nome: string; cnpj?: string | null } | null;
+  loja?: { codigo: string; nome: string; cidade?: string; uf?: string; rede?: string | null } | null;
+}
+
+export interface CreateContratoLojaDTO {
+  industria_codigo: string;
+  loja_codigo: string;
+  frequencia: ContratoFrequencia;
+  visitas_por_semana?: number;
+  segunda?: boolean;
+  terca?: boolean;
+  quarta?: boolean;
+  quinta?: boolean;
+  sexta?: boolean;
+  sabado?: boolean;
+  domingo?: boolean;
+  ciclo_quinzenal?: CicloQuinzenal;
+  data_inicio_vigencia: string;
+  data_fim_vigencia?: string | null;
+  status?: ContratoStatus;
+  valor_por_visita?: number | null;
+  observacao?: string | null;
+}
+
+export interface UpdateContratoLojaDTO {
+  frequencia?: ContratoFrequencia;
+  visitas_por_semana?: number;
+  segunda?: boolean;
+  terca?: boolean;
+  quarta?: boolean;
+  quinta?: boolean;
+  sexta?: boolean;
+  sabado?: boolean;
+  domingo?: boolean;
+  ciclo_quinzenal?: CicloQuinzenal;
+  data_inicio_vigencia?: string;
+  data_fim_vigencia?: string | null;
+  status?: ContratoStatus;
+  valor_por_visita?: number | null;
+  observacao?: string | null;
+}
+
 export type ImportType = 'industrias' | 'lojas' | 'promotores' | 'rotas';
 
 export interface ImportRowError {

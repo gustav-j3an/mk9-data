@@ -23,6 +23,21 @@ export interface ExtendedUserProfile extends UserProfile {
   promotor?: PromoterRecord | null;
 }
 
+export const filterPilotPromoters = (
+  promoters: PromoterRecord[],
+  searchTerm: string
+): PromoterRecord[] => {
+  const normalize = (value: string) =>
+    value.trim().replace(/\s+/g, ' ').toLocaleLowerCase('pt-BR');
+  const query = normalize(searchTerm);
+
+  if (!query) return promoters;
+
+  return promoters.filter((promoter) =>
+    normalize(`${promoter.nome} ${promoter.matricula}`).includes(query)
+  );
+};
+
 export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onShowToast }) => {
   const { profile, role, updateUserProfile, inviteUser, deleteUser } = useAuth();
   const [usersList, setUsersList] = useState<ExtendedUserProfile[]>([]);
@@ -64,6 +79,7 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
   const [authorizationsMap, setAuthorizationsMap] = useState<Map<string, PromoterOperationAuthorization>>(new Map());
   const [authorizingMatricula, setAuthorizingMatricula] = useState<string | null>(null);
   const [promoterRoutesCount, setPromoterRoutesCount] = useState<Map<string, number>>(new Map());
+  const [pilotPromoterSearch, setPilotPromoterSearch] = useState('');
 
   // Modal de Liberação/Revogação
   const [authModalPromoter, setAuthModalPromoter] = useState<PromoterRecord | null>(null);
@@ -83,6 +99,10 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
 
   // Promotores options for linking
   const [promotoresOptions, setPromotoresOptions] = useState<PromoterRecord[]>([]);
+  const filteredPilotPromoters = useMemo(
+    () => filterPilotPromoters(promotoresOptions, pilotPromoterSearch),
+    [promotoresOptions, pilotPromoterSearch]
+  );
   // Industrias options for linking
   const [industriasOptions, setIndustriasOptions] = useState<Array<{ codigo: string; nome: string }>>([]);
 
@@ -954,8 +974,40 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
             </div>
           </div>
 
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div className="relative w-full sm:max-w-md">
+              <label htmlFor="pilot-promoter-search" className="sr-only">
+                Buscar promotor por nome ou matrícula
+              </label>
+              <span className="material-symbols-outlined pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-lg text-[#77766F]">
+                search
+              </span>
+              <input
+                id="pilot-promoter-search"
+                type="search"
+                value={pilotPromoterSearch}
+                onChange={(event) => setPilotPromoterSearch(event.target.value)}
+                placeholder="Buscar promotor por nome ou matrícula..."
+                className="w-full h-10 pl-10 pr-10 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-xs text-[#171717] placeholder:text-[#77766F] focus:outline-none focus:border-amber-500 transition-colors font-sans"
+              />
+              {pilotPromoterSearch && (
+                <button
+                  type="button"
+                  onClick={() => setPilotPromoterSearch('')}
+                  aria-label="Limpar pesquisa de promotores"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded text-[#77766F] hover:text-[#171717]"
+                >
+                  <span className="material-symbols-outlined text-base">close</span>
+                </button>
+              )}
+            </div>
+            <span className="text-[11px] text-[#77766F] font-mono">
+              {filteredPilotPromoters.length} de {promotoresOptions.length} promotores
+            </span>
+          </div>
+
           <div className="overflow-x-auto rounded-xl border border-[#CFCDC5]">
-            <table className="w-full text-left text-xs border-collapse">
+            <table className="w-full min-w-[900px] text-left text-xs border-collapse">
               <thead>
                 <tr className="bg-[#E3E1DA] border-b border-[#CFCDC5] text-[11px] font-bold text-[#171717] uppercase tracking-wider font-mono">
                   <th className="py-3.5 px-4">Promotor</th>
@@ -973,8 +1025,14 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                       Nenhum promotor cadastrado em public.promotores.
                     </td>
                   </tr>
+                ) : filteredPilotPromoters.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="py-12 text-center text-[#77766F] font-mono text-xs">
+                      Nenhum promotor encontrado para essa pesquisa.
+                    </td>
+                  </tr>
                 ) : (
-                  promotoresOptions.map((p) => {
+                  filteredPilotPromoters.map((p) => {
                     const auth = authorizationsMap.get(p.matricula);
                     const isLiberado = auth?.status === 'liberado';
                     const routesCount = promoterRoutesCount.get(p.matricula) || 0;

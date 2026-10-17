@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../auth/AuthProvider';
+import { SearchableSelect, type SearchableSelectOption } from '../components/SearchableSelect';
 import { supabase } from '../lib/supabase';
 import type { RouteItem, ToastMessage } from '../types';
 
@@ -10,6 +11,26 @@ interface RoutesViewProps {
 
 type GroupByOption = 'none' | 'promotor' | 'industria' | 'loja' | 'frequencia';
 type SortByOption = 'promotor' | 'industria' | 'loja' | 'frequencia' | 'codigo';
+
+const OPTIONS_PAGE_SIZE = 1000;
+
+const fetchAllPages = async <T,>(
+  fetchPage: (from: number, to: number) => PromiseLike<{
+    data: T[] | null;
+    error: { message: string } | null;
+  }>
+): Promise<T[]> => {
+  const rows: T[] = [];
+
+  for (let from = 0; ; from += OPTIONS_PAGE_SIZE) {
+    const { data, error } = await fetchPage(from, from + OPTIONS_PAGE_SIZE - 1);
+    if (error) throw error;
+
+    const page = data || [];
+    rows.push(...page);
+    if (page.length < OPTIONS_PAGE_SIZE) return rows;
+  }
+};
 
 export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
   const { hasPermission } = useAuth();
@@ -62,7 +83,9 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
 
   // Opções para select na criação
   const [industriasList, setIndustriasList] = useState<{ codigo: string; nome: string }[]>([]);
-  const [lojasList, setLojasList] = useState<{ codigo: string; nome: string; uf: string }[]>([]);
+  const [lojasList, setLojasList] = useState<
+    { codigo: string; nome: string; cidade: string | null; uf: string | null }[]
+  >([]);
   const [promotoresList, setPromotoresList] = useState<{ matricula: string; nome: string }[]>([]);
 
   // Carregar dados de public.rotas com joins para industrias, lojas e promotores
@@ -70,15 +93,16 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
     setLoading(true);
     setError(null);
 
-    if (!supabase) {
+    const client = supabase;
+    if (!client) {
       setError('Cliente Supabase não inicializado.');
       setLoading(false);
       return;
     }
 
     try {
-      const [rotasRes, indRes, lojRes, prmRes] = await Promise.all([
-        supabase
+      const [rotasRes, industrias, lojas, promotores] = await Promise.all([
+        client
           .from('rotas')
           .select(`
             *,
@@ -87,17 +111,38 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
             promotor:promotores(matricula, nome, supervisor, equipe)
           `)
           .order('created_at', { ascending: false }),
-        supabase.from('industrias').select('codigo, nome').eq('status', 'ativo'),
-        supabase.from('lojas').select('codigo, nome, uf').eq('status', 'ativo'),
-        supabase.from('promotores').select('matricula, nome').eq('status', 'ativo')
+        fetchAllPages((from, to) =>
+          client
+            .from('industrias')
+            .select('codigo, nome')
+            .eq('status', 'ativo')
+            .order('nome')
+            .range(from, to)
+        ),
+        fetchAllPages((from, to) =>
+          client
+            .from('lojas')
+            .select('codigo, nome, cidade, uf')
+            .eq('status', 'ativo')
+            .order('nome')
+            .range(from, to)
+        ),
+        fetchAllPages((from, to) =>
+          client
+            .from('promotores')
+            .select('matricula, nome')
+            .eq('status', 'ativo')
+            .order('nome')
+            .range(from, to)
+        )
       ]);
 
       if (rotasRes.error) throw rotasRes.error;
 
       setRoutes((rotasRes.data as unknown as RouteItem[]) || []);
-      if (indRes.data) setIndustriasList(indRes.data);
-      if (lojRes.data) setLojasList(lojRes.data);
-      if (prmRes.data) setPromotoresList(prmRes.data);
+      setIndustriasList(industrias);
+      setLojasList(lojas);
+      setPromotoresList(promotores);
     } catch (err: any) {
       console.error('Erro ao carregar rotas:', err);
       setError(err.message || 'Falha ao carregar rotas fixas do servidor.');
@@ -119,6 +164,37 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
     });
     return Array.from(set).sort();
   }, [routes]);
+
+  const industriaOptions = useMemo<SearchableSelectOption[]>(
+    () =>
+      industriasList.map((industry) => ({
+        value: industry.codigo,
+        label: `${industry.nome} (${industry.codigo})`,
+        searchText: `${industry.nome} ${industry.codigo}`
+      })),
+    [industriasList]
+  );
+
+  const lojaOptions = useMemo<SearchableSelectOption[]>(
+    () =>
+      lojasList.map((store) => ({
+        value: store.codigo,
+        label: `${store.nome} (${store.codigo})`,
+        detail: [store.cidade, store.uf].filter(Boolean).join(' - '),
+        searchText: `${store.nome} ${store.codigo} ${store.cidade || ''} ${store.uf || ''}`
+      })),
+    [lojasList]
+  );
+
+  const promotorOptions = useMemo<SearchableSelectOption[]>(
+    () =>
+      promotoresList.map((promoter) => ({
+        value: promoter.matricula,
+        label: `${promoter.nome} (${promoter.matricula})`,
+        searchText: `${promoter.nome} ${promoter.matricula}`
+      })),
+    [promotoresList]
+  );
 
   const availableIndustrias = useMemo(() => {
     const map = new Map<string, string>();
@@ -1192,7 +1268,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <form
             onSubmit={handleSaveNewRoute}
-            className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-5"
+            className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl max-w-lg w-full max-h-[calc(100dvh-2rem)] overflow-y-auto p-6 shadow-2xl space-y-5"
           >
             <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-3">
               <h3 className="text-sm font-bold text-[#171717] font-mono flex items-center gap-2">
@@ -1217,55 +1293,46 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
               </div>
 
               <div>
-                <label className="text-[#171717] block mb-1">INDÚSTRIA (*)</label>
-                <select
+                <label htmlFor="new-route-industry" className="text-[#171717] block mb-1">INDÚSTRIA (*)</label>
+                <SearchableSelect
+                  id="new-route-industry"
                   required
                   value={newRouteForm.industria_codigo}
-                  onChange={(e) => setNewRouteForm({ ...newRouteForm, industria_codigo: e.target.value })}
-                  className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-500"
-                >
-                  <option value="">Selecione a Indústria</option>
-                  {industriasList.map((i) => (
-                    <option key={i.codigo} value={i.codigo}>{i.nome} ({i.codigo})</option>
-                  ))}
-                </select>
+                  options={industriaOptions}
+                  placeholder="Selecione a Indústria"
+                  onChange={(industria_codigo) => setNewRouteForm({ ...newRouteForm, industria_codigo })}
+                />
               </div>
 
               <div>
-                <label className="text-[#171717] block mb-1">LOJA / PDV (*)</label>
-                <select
+                <label htmlFor="new-route-store" className="text-[#171717] block mb-1">LOJA / PDV (*)</label>
+                <SearchableSelect
+                  id="new-route-store"
                   required
                   value={newRouteForm.loja_codigo}
-                  onChange={(e) => {
-                    const selected = lojasList.find((l) => l.codigo === e.target.value);
+                  options={lojaOptions}
+                  placeholder="Selecione a Loja"
+                  onChange={(loja_codigo) => {
+                    const selected = lojasList.find((store) => store.codigo === loja_codigo);
                     setNewRouteForm({
                       ...newRouteForm,
-                      loja_codigo: e.target.value,
+                      loja_codigo,
                       uf: selected?.uf || newRouteForm.uf
                     });
                   }}
-                  className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-500"
-                >
-                  <option value="">Selecione a Loja</option>
-                  {lojasList.map((l) => (
-                    <option key={l.codigo} value={l.codigo}>{l.nome} ({l.codigo})</option>
-                  ))}
-                </select>
+                />
               </div>
 
               <div>
-                <label className="text-[#171717] block mb-1">PROMOTOR (*)</label>
-                <select
+                <label htmlFor="new-route-promoter" className="text-[#171717] block mb-1">PROMOTOR (*)</label>
+                <SearchableSelect
+                  id="new-route-promoter"
                   required
                   value={newRouteForm.promotor_matricula}
-                  onChange={(e) => setNewRouteForm({ ...newRouteForm, promotor_matricula: e.target.value })}
-                  className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-500"
-                >
-                  <option value="">Selecione o Promotor</option>
-                  {promotoresList.map((p) => (
-                    <option key={p.matricula} value={p.matricula}>{p.nome} ({p.matricula})</option>
-                  ))}
-                </select>
+                  options={promotorOptions}
+                  placeholder="Selecione o Promotor"
+                  onChange={(promotor_matricula) => setNewRouteForm({ ...newRouteForm, promotor_matricula })}
+                />
               </div>
 
               <div>
