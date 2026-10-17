@@ -9,6 +9,8 @@ import {
   OperationalVisitItem,
   DayOfWeekDate
 } from '../utils/routePlanner';
+import { buildGoogleMapsDirectionsUrl } from '../utils/googleMaps';
+import { CHECKLIST_QUANTITY_KEYS } from '../utils/visitExecution';
 
 interface OperationalDashboardViewProps {
   onNavigate: (screen: ScreenId) => void;
@@ -630,15 +632,25 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
     }
   });
 
+  // Rupturas considerando os filtros de contexto selecionados (Indústria, Promotor, Loja)
+  const rupturasFiltradasContexto = todasRupturas.filter((r) => {
+    const matchInd = filterIndustria === 'all' || r.industriaCodigo === filterIndustria;
+    const matchProm = filterPromotor === 'all' || r.promotorMatricula === filterPromotor;
+    const matchLoja = filterLoja === 'all' || r.lojaCodigo === filterLoja;
+    return matchInd && matchProm && matchLoja;
+  });
+
   const totalRupturasCount = todasRupturas.length;
   const rupturasAbertasCount = todasRupturas.filter((r) => !r.resolvido).length;
   const rupturasResolvidasCount = todasRupturas.filter((r) => r.resolvido).length;
 
+  // Contadores alinhados ao filtro operacional selecionado
+  const totalRupturasFiltradasContexto = rupturasFiltradasContexto.length;
+  const rupturasAbertasFiltradasCount = rupturasFiltradasContexto.filter((r) => !r.resolvido).length;
+  const rupturasResolvidasFiltradasCount = rupturasFiltradasContexto.filter((r) => r.resolvido).length;
+
   // Filtrar rupturas conforme controles da interface
-  const rupturasFiltradas = todasRupturas.filter((r) => {
-    const matchInd = filterIndustria === 'all' || r.industriaCodigo === filterIndustria;
-    const matchProm = filterPromotor === 'all' || r.promotorMatricula === filterPromotor;
-    const matchLoja = filterLoja === 'all' || r.lojaCodigo === filterLoja;
+  const rupturasFiltradas = rupturasFiltradasContexto.filter((r) => {
     const matchStatus =
       filterRupturaStatus === 'all'
         ? true
@@ -646,7 +658,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
         ? !r.resolvido
         : r.resolvido;
 
-    return matchInd && matchProm && matchLoja && matchStatus;
+    return matchStatus;
   }).sort((a, b) => new Date(b.createdAt || b.dataVisita).getTime() - new Date(a.createdAt || a.dataVisita).getTime());
 
   // 6. CONSOLIDAÇÃO DE VALIDADES E VENCIMENTOS (public.visit_product_validity)
@@ -768,7 +780,12 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
 
     if (v.checklist_items) {
       totalChecklistItems += v.checklist_items.length;
-      totalChecklistChecked += v.checklist_items.filter((c) => c.checked).length;
+      totalChecklistChecked += v.checklist_items.filter((c) => {
+        if (CHECKLIST_QUANTITY_KEYS.has(c.item_key)) {
+          return Boolean(c.valor_texto && c.valor_texto.trim() !== '');
+        }
+        return Boolean(c.checked);
+      }).length;
     }
 
     if (v.occurrences && v.occurrences.length > 0) {
@@ -1248,7 +1265,25 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
       .sort((a, b) => b.totalProblemas - a.totalProblemas);
   }, [todasRupturas, todasValidades, lojasSemAtendimento]);
 
-  // Lista única de Lojas com rupturas para o filtro
+  // Lista unificada de todas as Lojas presentes nas rotas e visitas para o filtro operacional
+  const todasLojasOperacionais = useMemo(() => {
+    const map = new Map<string, string>();
+    routes.forEach((r) => {
+      const code = r.loja_codigo;
+      const name = r.loja?.nome || code;
+      if (code && !map.has(code)) map.set(code, name);
+    });
+    visits.forEach((v) => {
+      const code = v.loja_codigo;
+      const name = v.loja?.nome || code;
+      if (code && !map.has(code)) map.set(code, name);
+    });
+    return Array.from(map.entries())
+      .map(([codigo, nome]) => ({ codigo, nome }))
+      .sort((a, b) => a.nome.localeCompare(b.nome));
+  }, [routes, visits]);
+
+  // Lista única de Lojas com rupturas para referência
   const lojasComRuptura = Array.from(new Set(todasRupturas.map((r) => r.lojaCodigo)))
     .map((code) => {
       const r = todasRupturas.find((item) => item.lojaCodigo === code);
@@ -1451,8 +1486,8 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
             onChange={(e) => setFilterLoja(e.target.value)}
             className="h-8 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-lg text-[#171717] focus:outline-none focus:border-purple-500 max-w-[200px]"
           >
-            <option value="all">Todas as Lojas</option>
-            {lojasComRuptura.map((l) => (
+            <option value="all">Todas as Lojas ({todasLojasOperacionais.length})</option>
+            {todasLojasOperacionais.map((l) => (
               <option key={l.codigo} value={l.codigo}>
                 {l.nome}
               </option>
@@ -2001,13 +2036,35 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
               )}
             </div>
 
-            <div className="pt-3 border-t border-[#CFCDC5] flex justify-end gap-2">
+            <div className="pt-3 border-t border-[#CFCDC5] flex flex-wrap items-center justify-end gap-2">
               <button
                 onClick={() => setSelectedPendingItem(null)}
                 className="px-4 py-2 rounded-xl bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] border border-[#CFCDC5] text-xs font-semibold"
               >
                 Fechar
               </button>
+              {(() => {
+                const pendingDirectionsUrl = buildGoogleMapsDirectionsUrl({
+                  name: selectedPendingItem.lojaNome || (selectedPendingItem.lojaCodigo ? `Loja ${selectedPendingItem.lojaCodigo}` : null),
+                  city: selectedPendingItem.lojaCidade,
+                  uf: selectedPendingItem.lojaUf
+                });
+
+                if (pendingDirectionsUrl) {
+                  return (
+                    <a
+                      href={pendingDirectionsUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs flex items-center gap-1.5 shadow"
+                    >
+                      <span className="material-symbols-outlined text-sm">directions</span>
+                      Rota Google Maps
+                    </a>
+                  );
+                }
+                return null;
+              })()}
               <button
                 onClick={() => {
                   setSelectedPendingItem(null);
@@ -2016,8 +2073,8 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
                 }}
                 className="px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs flex items-center gap-1.5"
               >
-                <span className="material-symbols-outlined text-sm">visibility</span>
-                Ver rota / Ver atendimento
+                <span className="material-symbols-outlined text-sm">filter_alt</span>
+                Filtrar nesta Central
               </button>
             </div>
           </div>
@@ -2540,18 +2597,22 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
           {/* METRICAS DE RUPTURA CONSOLIDADA */}
           <div className="flex items-center gap-3 text-xs">
             <div className="px-3.5 py-2 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] text-center">
-              <span className="text-[10px] text-[#77766F] block font-bold uppercase">Total</span>
+              <span className="text-[10px] text-[#77766F] block font-bold uppercase">Total Geral</span>
               <span className="text-base font-extrabold text-[#171717]">{totalRupturasCount} Rupturas</span>
             </div>
 
             <div className="px-3.5 py-2 rounded-xl bg-[#FDF2F2] border border-rose-500/40 text-center">
-              <span className="text-[10px] text-rose-400 block font-bold uppercase">Abertas</span>
-              <span className="text-base font-extrabold text-rose-300">{rupturasAbertasCount} 🔴 Abertas</span>
+              <span className="text-[10px] text-rose-400 block font-bold uppercase">
+                {filterIndustria !== 'all' || filterPromotor !== 'all' || filterLoja !== 'all' ? 'Abertas (Filtradas)' : 'Abertas'}
+              </span>
+              <span className="text-base font-extrabold text-rose-300">{rupturasAbertasFiltradasCount} 🔴 Abertas</span>
             </div>
 
             <div className="px-3.5 py-2 rounded-xl bg-emerald-950/40 border border-emerald-500/40 text-center">
-              <span className="text-[10px] text-emerald-400 block font-bold uppercase">Resolvidas</span>
-              <span className="text-base font-extrabold text-emerald-300">{rupturasResolvidasCount} 🟢 Resolvidas</span>
+              <span className="text-[10px] text-emerald-400 block font-bold uppercase">
+                {filterIndustria !== 'all' || filterPromotor !== 'all' || filterLoja !== 'all' ? 'Resolvidas (Filtradas)' : 'Resolvidas'}
+              </span>
+              <span className="text-base font-extrabold text-emerald-300">{rupturasResolvidasFiltradasCount} 🟢 Resolvidas</span>
             </div>
           </div>
         </div>
@@ -2565,7 +2626,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
                 filterRupturaStatus === 'abertas' ? 'bg-rose-600 text-white shadow-md' : 'text-[#77766F] hover:text-white'
               }`}
             >
-              🔴 Abertas ({rupturasAbertasCount})
+              🔴 Abertas ({rupturasAbertasFiltradasCount})
             </button>
             <button
               onClick={() => setFilterRupturaStatus('resolvidas')}
@@ -2573,7 +2634,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
                 filterRupturaStatus === 'resolvidas' ? 'bg-emerald-600 text-white shadow-md' : 'text-[#77766F] hover:text-white'
               }`}
             >
-              🟢 Resolvidas ({rupturasResolvidasCount})
+              🟢 Resolvidas ({rupturasResolvidasFiltradasCount})
             </button>
             <button
               onClick={() => setFilterRupturaStatus('all')}
@@ -2581,12 +2642,12 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
                 filterRupturaStatus === 'all' ? 'bg-[#222222] text-white shadow-md' : 'text-[#77766F] hover:text-white'
               }`}
             >
-              Todas ({totalRupturasCount})
+              Todas no Filtro ({totalRupturasFiltradasContexto})
             </button>
           </div>
 
           <span className="text-[11px] text-[#77766F]">
-            Exibindo <strong>{rupturasFiltradas.length}</strong> ocorrência(s)
+            Exibindo <strong>{rupturasFiltradas.length}</strong> de <strong>{totalRupturasCount}</strong> ocorrência(s)
           </span>
         </div>
 
@@ -3362,17 +3423,149 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
               </div>
             </div>
 
+            {/* Botão Traçar Rota de Atendimento para a Loja */}
+            <div className="p-3 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs font-mono">
+              <div className="space-y-0.5">
+                <span className="text-[#5F5F5F] block text-[10px] uppercase font-bold">Localização / Destino da Loja:</span>
+                <span className="text-[#171717] font-semibold">
+                  {selectedVisit.loja?.nome || selectedVisit.loja_codigo}
+                  {selectedVisit.loja?.endereco ? ` — ${selectedVisit.loja.endereco}` : ''}
+                  {selectedVisit.loja?.cidade ? ` (${selectedVisit.loja.cidade}${selectedVisit.loja?.uf ? ` - ${selectedVisit.loja.uf}` : ''})` : ''}
+                </span>
+              </div>
+              <div>
+                {(() => {
+                  const directionsUrl = buildGoogleMapsDirectionsUrl({
+                    name: selectedVisit.loja?.nome || (selectedVisit.loja_codigo ? `Loja ${selectedVisit.loja_codigo}` : null),
+                    address: selectedVisit.loja?.endereco,
+                    city: selectedVisit.loja?.cidade,
+                    uf: selectedVisit.loja?.uf
+                  });
+
+                  if (directionsUrl) {
+                    return (
+                      <a
+                        href={directionsUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs shadow-md transition-all active:scale-95 shrink-0"
+                      >
+                        <span className="material-symbols-outlined text-sm">directions</span>
+                        Ver rota de atendimento
+                      </a>
+                    );
+                  }
+
+                  return (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onShowToast({
+                          type: 'error',
+                          title: 'Rota Indisponível',
+                          message: 'Não há dados cadastrados suficientes de nome ou endereço da loja para traçar a rota no Google Maps.'
+                        });
+                      }}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#E4E2DB] text-[#77766F] font-bold text-xs border border-[#CFCDC5] cursor-pointer shrink-0"
+                    >
+                      <span className="material-symbols-outlined text-sm">location_off</span>
+                      Endereço da loja indisponível
+                    </button>
+                  );
+                })()}
+              </div>
+            </div>
+
             {/* Checklist */}
-            {selectedVisit.checklist_items && selectedVisit.checklist_items.length > 0 && (
-              <div className="space-y-2 font-mono text-xs">
-                <span className="text-[#77766F] font-bold uppercase block">Itens do Checklist Validados:</span>
-                <div className="space-y-1">
-                  {selectedVisit.checklist_items.map((item, idx) => (
-                    <div key={idx} className="p-2 rounded bg-[#EAE8E2] border border-[#CFCDC5] flex justify-between items-center">
-                      <span className={item.checked ? 'text-emerald-300 font-bold' : 'text-[#77766F]'}>
-                        {item.checked ? '✓' : '✗'} {item.item_label}
+            {(() => {
+              const items = selectedVisit.checklist_items || [];
+              const currentChecklistItems = items.filter((item) => CHECKLIST_QUANTITY_KEYS.has(item.item_key));
+              const legacyChecklistItems = items.filter((item) => !CHECKLIST_QUANTITY_KEYS.has(item.item_key));
+
+              return (
+                <div className="space-y-3 font-mono text-xs">
+                  {/* Checklist Operacional Atual */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[#171717] font-bold uppercase block flex items-center gap-1.5">
+                        <span className="material-symbols-outlined text-emerald-400 text-base">fact_check</span>
+                        Checklist Operacional:
                       </span>
-                      {item.valor_texto && <span className="text-cyan-300 font-bold">{item.valor_texto}</span>}
+                      <span className="text-[10px] text-[#77766F]">Novo Modelo Simplificado</span>
+                    </div>
+
+                    {currentChecklistItems.length > 0 ? (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {currentChecklistItems.map((item, idx) => (
+                          <div key={idx} className="p-3 rounded-xl bg-[#EAE8E2] border border-emerald-500/30 flex flex-col justify-between space-y-1">
+                            <span className="text-[#5F5F5F] text-[11px] block">{item.item_label}</span>
+                            <div className="flex items-center justify-between pt-1 border-t border-[#CFCDC5]/50">
+                              <span className="text-[10px] text-emerald-500 font-bold uppercase">Quantidade informada:</span>
+                              <span className="text-sm font-extrabold text-[#171717]">
+                                {item.valor_texto && item.valor_texto.trim() !== '' ? item.valor_texto : '0'}
+                              </span>
+                            </div>
+                            {item.observacao && (
+                              <span className="text-[10px] text-[#77766F] block italic">Obs: {item.observacao}</span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="p-3 rounded-xl bg-[#EAE8E2]/60 border border-[#CFCDC5] text-[#77766F] italic text-center">
+                        Nenhum item do checklist operacional atual registrado nesta visita.
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Respostas do Checklist Histórico (Legado) — Exibido apenas para consultas retroativas sem alterar dados */}
+                  {legacyChecklistItems.length > 0 && (
+                    <details className="mt-3 p-3 rounded-xl bg-[#EAE8E2]/60 border border-amber-500/30 space-y-2 text-xs">
+                      <summary className="cursor-pointer font-bold text-amber-500 uppercase flex items-center justify-between select-none">
+                        <span className="flex items-center gap-1.5">
+                          <span className="material-symbols-outlined text-sm">history</span>
+                          Consultar Respostas do Checklist Histórico ({legacyChecklistItems.length})
+                        </span>
+                        <span className="text-[10px] font-normal text-[#77766F] lowercase">clique para expandir/recolher</span>
+                      </summary>
+
+                      <div className="space-y-1 pt-2">
+                        {legacyChecklistItems.map((item, idx) => (
+                          <div key={idx} className="p-2 rounded bg-[#F7F6F2] border border-[#CFCDC5] flex justify-between items-center text-[11px]">
+                            <span className={item.checked ? 'text-emerald-500 font-bold' : 'text-[#77766F]'}>
+                              {item.checked ? '✓' : '✗'} {item.item_label}
+                            </span>
+                            {item.valor_texto && <span className="text-[#7E22CE] font-bold">{item.valor_texto}</span>}
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  )}
+                </div>
+              );
+            })()}
+
+            {/* Ocorrências e Rupturas */}
+            {selectedVisit.occurrences && selectedVisit.occurrences.length > 0 && (
+              <div className="space-y-2 font-mono text-xs">
+                <span className="text-rose-400 font-bold uppercase block flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-rose-500 text-sm">report_problem</span>
+                  Ocorrências e Rupturas Registradas ({selectedVisit.occurrences.length}):
+                </span>
+                <div className="space-y-1.5">
+                  {selectedVisit.occurrences.map((occ, idx) => (
+                    <div key={idx} className="p-2.5 rounded-xl bg-[#EAE8E2] border border-rose-500/30 flex justify-between items-center text-[#171717]">
+                      <div>
+                        <span className="px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-400 text-[9px] font-bold uppercase mr-2">
+                          {occ.tipo}
+                        </span>
+                        <strong className="text-xs">{occ.descricao}</strong>
+                      </div>
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                        occ.resolvido ? 'bg-emerald-500/20 text-emerald-300' : 'bg-rose-500/20 text-rose-300'
+                      }`}>
+                        {occ.resolvido ? 'Resolvido' : 'Pendente'}
+                      </span>
                     </div>
                   ))}
                 </div>
@@ -3390,7 +3583,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
                         <strong>{val.produto_nome}</strong> (Qtd: {val.quantidade})
                         {val.lote && <span className="text-[#77766F] text-[10px] block font-mono">Lote: {val.lote}</span>}
                       </div>
-                      <span className="text-amber-300 font-bold">
+                      <span className="text-amber-400 font-bold">
                         Venc: {new Date(val.data_vencimento).toLocaleDateString('pt-BR')}
                       </span>
                     </div>
