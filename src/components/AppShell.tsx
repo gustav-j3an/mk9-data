@@ -910,7 +910,7 @@ export const AppShell: React.FC<AppShellProps> = ({
       </div>
 
       {/* PWA INSTALLATION PROMPT BANNER */}
-      <PWAInstallPrompt />
+      <PWAInstallPrompt currentScreen={currentScreen} />
     </div>
   );
 };

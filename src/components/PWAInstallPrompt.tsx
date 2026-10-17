@@ -5,39 +5,70 @@ interface BeforeInstallPromptEvent extends Event {
   userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>;
 }
 
-const DISMISS_KEY = 'mk9_pwa_dismissed';
-const DISMISS_DURATION_MS = 7 * 24 * 60 * 60 * 1000; // Lembrar dispensa por 7 dias
+export const PWA_INSTALLED_KEY = 'mk9_pwa_installed';
+export const PWA_DISMISSED_SESSION_KEY = 'mk9_pwa_dismissed_session';
 
-export const PWAInstallPrompt: React.FC = () => {
+interface PWAInstallPromptProps {
+  currentScreen?: string;
+}
+
+export const PWAInstallPrompt: React.FC<PWAInstallPromptProps> = ({ currentScreen }) => {
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [showIOSPrompt, setShowIOSPrompt] = useState(false);
   const [dismissed, setDismissed] = useState(false);
+  const [hasActiveVisitInDOM, setHasActiveVisitInDOM] = useState(false);
+
+  // Monitorar se há visita em andamento na tela (para não atrapalhar preenchimento de visita)
+  useEffect(() => {
+    const checkActiveVisit = () => {
+      if (currentScreen === 'portal-promotor') {
+        const activeSection = document.getElementById('active-visit-section');
+        setHasActiveVisitInDOM(Boolean(activeSection));
+      } else {
+        setHasActiveVisitInDOM(false);
+      }
+    };
+
+    checkActiveVisit();
+    const interval = setInterval(checkActiveVisit, 1500);
+    return () => clearInterval(interval);
+  }, [currentScreen]);
 
   useEffect(() => {
-    // Verificar se já foi dispensado recentemente no localStorage
+    // 1. Se já sabemos que o aplicativo está instalado, não exibir em hipótese alguma
     try {
-      const dismissedTimestamp = localStorage.getItem(DISMISS_KEY);
-      if (dismissedTimestamp) {
-        const timeElapsed = Date.now() - parseInt(dismissedTimestamp, 10);
-        if (timeElapsed < DISMISS_DURATION_MS) {
-          setDismissed(true);
-          return;
-        }
+      if (localStorage.getItem(PWA_INSTALLED_KEY) === 'true') {
+        return;
       }
     } catch {
-      // LocalStorage pode falhar em ambientes com restrição de cookies
+      // Ignora erro de acesso a storage
     }
 
-    // Verificar se já está rodando em modo standalone (PWA instalado)
+    // 2. Verificar se o app está rodando em modo standalone (PWA instalado nativamente)
     const isStandalone =
       window.matchMedia('(display-mode: standalone)').matches ||
       (window.navigator as unknown as { standalone?: boolean }).standalone === true;
 
     if (isStandalone) {
+      try {
+        localStorage.setItem(PWA_INSTALLED_KEY, 'true');
+      } catch {
+        // Ignora
+      }
       return;
     }
 
-    // Handler para evento nativo no Android / Desktop Chromium
+    // 3. Verificar se o usuário já dispensou nesta sessão atual (ex: clicou em "Agora não" ou fechar)
+    try {
+      if (sessionStorage.getItem(PWA_DISMISSED_SESSION_KEY) === 'true') {
+        setDismissed(true);
+        return;
+      }
+    } catch {
+      // Ignora erro de acesso a storage
+    }
+
+    // 4. Handler para evento nativo no Android / Desktop Chromium
     const handleBeforeInstallPrompt = (e: Event) => {
       e.preventDefault();
       setDeferredPrompt(e as BeforeInstallPromptEvent);
@@ -47,7 +78,8 @@ export const PWAInstallPrompt: React.FC = () => {
       setDeferredPrompt(null);
       setShowIOSPrompt(false);
       try {
-        localStorage.setItem(DISMISS_KEY, Date.now().toString());
+        localStorage.setItem(PWA_INSTALLED_KEY, 'true');
+        sessionStorage.removeItem(PWA_DISMISSED_SESSION_KEY);
       } catch {
         // Ignora
       }
@@ -56,7 +88,7 @@ export const PWAInstallPrompt: React.FC = () => {
     window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
     window.addEventListener('appinstalled', handleAppInstalled);
 
-    // Detectar iOS Safari para instrução manual
+    // 5. Detectar iOS Safari para instrução manual
     const ua = window.navigator.userAgent;
     const isIOS = /iPad|iPhone|iPod/.test(ua) && !(window as unknown as { MSStream?: unknown }).MSStream;
     const isSafari = /Safari/.test(ua) && !/CriOS|FxiOS|EdgiOS/.test(ua);
@@ -78,7 +110,7 @@ export const PWAInstallPrompt: React.FC = () => {
     if (outcome === 'accepted') {
       setDeferredPrompt(null);
       try {
-        localStorage.setItem(DISMISS_KEY, Date.now().toString());
+        localStorage.setItem(PWA_INSTALLED_KEY, 'true');
       } catch {
         // Ignora
       }
@@ -88,13 +120,15 @@ export const PWAInstallPrompt: React.FC = () => {
   const handleDismiss = () => {
     setDismissed(true);
     try {
-      localStorage.setItem(DISMISS_KEY, Date.now().toString());
+      // Grava apenas na sessão atual, garantindo que em um novo acesso/sessão futura voltará a aparecer
+      sessionStorage.setItem(PWA_DISMISSED_SESSION_KEY, 'true');
     } catch {
       // Ignora
     }
   };
 
-  if (dismissed) return null;
+  // Se o usuário dispensou na sessão ou se há visita crítica sendo preenchida, não renderiza
+  if (dismissed || hasActiveVisitInDOM) return null;
 
   // Prompt nativo para Android / Chrome Desktop
   if (deferredPrompt) {
