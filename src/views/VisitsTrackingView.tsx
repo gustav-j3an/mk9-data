@@ -5,6 +5,7 @@ import { fetchSystemSettings } from '../lib/systemSettings';
 import { useAuth } from '../auth/AuthProvider';
 import { equipesService } from '../lib/equipesService';
 import { supervisoresService } from '../lib/supervisoresService';
+import { buildGoogleMapsDirectionsUrl } from '../utils/googleMaps';
 import {
   calculateOperationalVisits,
   getLocalDateString,
@@ -489,6 +490,19 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
     filterOcorrencia,
     searchQuery
   ]);
+
+  const storeMapUrl = selectedVisitItem
+    ? buildGoogleMapsDirectionsUrl({
+        name:
+          selectedVisitItem.visitObj?.loja?.nome ||
+          (selectedVisitItem.lojaNome !== selectedVisitItem.lojaCodigo
+            ? selectedVisitItem.lojaNome
+            : null),
+        address: selectedVisitItem.visitObj?.loja?.endereco,
+        city: selectedVisitItem.lojaCidade || selectedVisitItem.visitObj?.loja?.cidade,
+        uf: selectedVisitItem.lojaUf || selectedVisitItem.visitObj?.loja?.uf
+      })
+    : null;
 
   // 9. Indicadores Consolidados (KPIs)
   const kpis = useMemo(() => {
@@ -1192,16 +1206,20 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
                     {selectedVisitItem.lojaCidade ? ` • ${selectedVisitItem.lojaCidade}/${selectedVisitItem.lojaUf || ''}` : ''}
                   </div>
                 </div>
-                {selectedVisitItem.visitObj?.latitude && selectedVisitItem.visitObj?.longitude && (
+                {storeMapUrl ? (
                   <a
-                    href={`https://www.google.com/maps/search/?api=1&query=${selectedVisitItem.visitObj.latitude},${selectedVisitItem.visitObj.longitude}`}
+                    href={storeMapUrl}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#286FF5] hover:underline self-start sm:self-auto shrink-0"
                   >
                     <span className="material-symbols-outlined text-xs">open_in_new</span>
-                    <span>Ver no Mapa</span>
+                    <span>Traçar rota</span>
                   </a>
+                ) : (
+                  <span className="text-[11px] text-[#73726C] self-start sm:self-auto shrink-0">
+                    Nome da loja indisponível para traçar rota.
+                  </span>
                 )}
               </div>
 
@@ -1433,4 +1451,3 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
     </div>
   );
 };
-

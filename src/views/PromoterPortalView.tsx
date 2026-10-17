@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useAuth } from '../auth/AuthProvider';
 import { supabase } from '../lib/supabase';
-import type { RouteItem, Visit, ToastMessage, VisitChecklistItem, PromoterOperationAuthorization } from '../types';
+import type { RouteItem, Visit, ToastMessage, PromoterOperationAuthorization } from '../types';
 import { fetchSystemSettings } from '../lib/systemSettings';
 import {
   calculateOperationalVisits,
@@ -10,24 +10,21 @@ import {
   DayOfWeekDate,
   OperationalVisitItem
 } from '../utils/routePlanner';
+import {
+  buildChecklistSyncPlan,
+  CHECKLIST_GROUPS,
+  CHECKLIST_QUANTITY_KEYS,
+  createChecklistState,
+  DEFAULT_CHECKLIST_ITEMS,
+  findInvalidChecklistQuantity,
+  isSupportedVisitPhoto,
+  isWithinVisitPhotoLimit
+} from '../utils/visitExecution';
 import { AuthorSignature } from '../components/AuthorSignature';
 
 interface PromoterPortalViewProps {
   onShowToast: (toast: Omit<ToastMessage, 'id'>) => void;
 }
-
-const DEFAULT_CHECKLIST_ITEMS = [
-  { item_key: 'loja_aberta', item_label: 'Loja aberta e em funcionamento' },
-  { item_key: 'presenca_produto', item_label: 'Presença e exposição dos produtos da indústria' },
-  { item_key: 'ruptura_gondola', item_label: 'Identificação de ruptura em gôndola' },
-  { item_key: 'qtd_frentes', item_label: 'Contagem e verificação da quantidade de frentes' },
-  { item_key: 'preco_encontrado', item_label: 'Preço etiquetado visível ao consumidor' },
-  { item_key: 'preco_conforme', item_label: 'Preço em conformidade com a tabela acordada' },
-  { item_key: 'ponto_extra', item_label: 'Ponto extra / ilha de destaque montada' },
-  { item_key: 'material_pop', item_label: 'Material de merchandising e POP instalado' },
-  { item_key: 'validade_ok', item_label: 'Validade adequada dos lotes expostos (FIFO)' },
-  { item_key: 'estoque_disponivel', item_label: 'Estoque de retaguarda disponível' }
-];
 
 export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowToast }) => {
   const { profile, role } = useAuth();
@@ -81,11 +78,19 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
   const [selectedDayDateStr, setSelectedDayDateStr] = useState<string>(getLocalDateString(new Date()));
 
   // Form State para Visita em Andamento
-  const [checklist, setChecklist] = useState<Record<string, { checked: boolean; obs: string; valTxt: string }>>({});
-  const [savingChecklistKey, setSavingChecklistKey] = useState<string | null>(null);
+  const [checklist, setChecklist] = useState<
+    Record<string, { checked: boolean; answered: boolean; obs: string; valTxt: string }>
+  >({});
+  const [pendingChecklistWrites, setPendingChecklistWrites] = useState(0);
+  const pendingChecklistWritesRef = useRef(0);
+  const checklistWriteQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const [checklistSaveError, setChecklistSaveError] = useState<string | null>(null);
   const [photoType, setPhotoType] = useState<'fachada' | 'gondola' | 'preco' | 'ponto_extra' | 'ruptura' | 'outros'>('gondola');
   const [photoCaption, setPhotoCaption] = useState('');
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const uploadingPhotoRef = useRef(false);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const galleryInputRef = useRef<HTMLInputElement>(null);
   const [photoStatusMessage, setPhotoStatusMessage] = useState<string>('');
   const [occurrenceType, setOccurrenceType] = useState<'ruptura' | 'preco_divergente' | 'falta_espaco' | 'outro'>('ruptura');
   const [occurrenceDesc, setOccurrenceDesc] = useState('');
@@ -319,16 +324,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
           setActiveVisit(candidateActive);
           setGeneralObs(candidateActive.observacao_geral || '');
 
-          const initialChk: Record<string, { checked: boolean; obs: string; valTxt: string }> = {};
-          DEFAULT_CHECKLIST_ITEMS.forEach((def) => {
-            const found = candidateActive.checklist_items?.find((c) => c.item_key === def.item_key);
-            initialChk[def.item_key] = {
-              checked: found ? found.checked : false,
-              obs: found?.observacao || '',
-              valTxt: found?.valor_texto || ''
-            };
-          });
-          setChecklist(initialChk);
+          setChecklist(createChecklistState(candidateActive.checklist_items));
         } else {
           // Se for uma visita de dia anterior, NÃO sequestra o topo como visita ativa do dia
           // O banner dedicado de aviso exibirá os botões: "Continuar Visita" ou "Registrar como Não Realizada"
@@ -627,16 +623,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
       setActiveVisit(visitData);
 
       // Inicializar checklist padrão
-      const initialChk: Record<string, { checked: boolean; obs: string; valTxt: string }> = {};
-      DEFAULT_CHECKLIST_ITEMS.forEach((def) => {
-        const found = visitData.checklist_items?.find((c) => c.item_key === def.item_key);
-        initialChk[def.item_key] = {
-          checked: found ? found.checked : false,
-          obs: found?.observacao || '',
-          valTxt: found?.valor_texto || ''
-        };
-      });
-      setChecklist(initialChk);
+      setChecklist(createChecklistState(visitData.checklist_items));
 
       await loadPortalData();
     } catch (err: any) {
@@ -664,6 +651,75 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
     } finally {
       setStartingRouteId(null);
     }
+  };
+
+  const handleChecklistChange = (
+    item: { item_key: string; item_label: string },
+    checked: boolean,
+    obs: string,
+    valTxt: string,
+    answered: boolean
+  ) => {
+    if (completingVisit) return;
+
+    const updatedState = { checked, answered, obs, valTxt };
+    setChecklist((previous) => ({ ...previous, [item.item_key]: updatedState }));
+    setChecklistSaveError(null);
+
+    if (!activeVisit || activeVisit.status !== 'em_andamento' || !supabase) return;
+
+    pendingChecklistWritesRef.current += 1;
+    setPendingChecklistWrites(pendingChecklistWritesRef.current);
+
+    const saveItem = async () => {
+      const client = supabase;
+      if (!client) throw new Error('Cliente Supabase não inicializado.');
+
+      const { data: existing, error: lookupError } = await client
+        .from('visit_checklist_items')
+        .select('id')
+        .eq('visit_id', activeVisit.id)
+        .eq('item_key', item.item_key)
+        .maybeSingle();
+      if (lookupError) throw lookupError;
+
+      const values = {
+        checked,
+        observacao: obs.trim() || null,
+        valor_texto: valTxt.trim() || null
+      };
+
+      if (existing) {
+        const { error } = await client
+          .from('visit_checklist_items')
+          .update(values)
+          .eq('id', existing.id);
+        if (error) throw error;
+      } else {
+        const { error } = await client.from('visit_checklist_items').insert([
+          {
+            visit_id: activeVisit.id,
+            item_key: item.item_key,
+            item_label: item.item_label,
+            ...values
+          }
+        ]);
+        if (error) throw error;
+      }
+    };
+
+    const queuedSave = checklistWriteQueueRef.current.then(saveItem, saveItem);
+    const settledSave = queuedSave
+      .catch((error: unknown) => {
+        console.error('Erro ao persistir item de checklist:', error);
+        setChecklistSaveError('Não foi possível salvar uma resposta. Tente novamente antes de finalizar.');
+      })
+      .finally(() => {
+        pendingChecklistWritesRef.current = Math.max(0, pendingChecklistWritesRef.current - 1);
+        setPendingChecklistWrites(pendingChecklistWritesRef.current);
+      });
+
+    checklistWriteQueueRef.current = settledSave;
   };
 
   // Função nativa para Redimensionar e Comprimir Imagens no Dispositivo (Browser HTML5 Canvas API)
@@ -726,55 +782,65 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
   // Upload de Foto para o Bucket Privado 'visit-photos' com Compressão no Device e Validação
   const handleUploadPhoto = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !activeVisit || !supabase) return;
-
-    // 1. Validar tipo MIME de segurança (somente imagens seguras)
-    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'];
-    if (!file.type.startsWith('image/') || file.type.includes('svg') || (!allowedTypes.includes(file.type.toLowerCase()) && !file.type.startsWith('image/'))) {
-      onShowToast({
-        title: 'Formato Inválido',
-        message: 'Apenas arquivos de imagem válidos (JPG, PNG, WEBP) são permitidos.',
-        type: 'warning'
-      });
+    if (!file || !activeVisit || activeVisit.status !== 'em_andamento' || !supabase || completingVisit) return;
+    if (uploadingPhotoRef.current) {
+      e.target.value = '';
       return;
     }
 
+    if (!isSupportedVisitPhoto(file.type)) {
+      onShowToast({
+        title: 'Formato Inválido',
+        message: 'Selecione um arquivo de imagem válido (SVG não é permitido).',
+        type: 'warning'
+      });
+      e.target.value = '';
+      return;
+    }
+
+    uploadingPhotoRef.current = true;
     setUploadingPhoto(true);
     setPhotoStatusMessage('Otimizando foto...');
     let uploadedPath: string | null = null;
+    const selectedPhotoType = photoType;
+    const caption = photoCaption.trim();
 
     try {
       // 2. Compressão e Redimensionamento no Dispositivo antes do envio (Máx 1920px, Qualidade 82% JPEG)
       let fileToUpload: Blob = file;
+      let contentType = 'image/jpeg';
+      let fileExtension = 'jpg';
       try {
         fileToUpload = await compressImageFile(file, 1920, 0.82);
         console.log(`Foto otimizada: Original ${(file.size / 1024).toFixed(1)} KB -> Otimizada ${(fileToUpload.size / 1024).toFixed(1)} KB`);
       } catch (cErr) {
         console.warn('Falha na otimização nativa, enviando arquivo original:', cErr);
+        fileToUpload = file;
+        contentType = file.type.toLowerCase();
+        fileExtension = contentType.split('/')[1]?.replace('jpeg', 'jpg') || 'img';
       }
 
       // 3. Validar limite de tamanho pós-compressão (máximo 5MB)
-      if (fileToUpload.size > 5 * 1024 * 1024) {
+      if (!isWithinVisitPhotoLimit(fileToUpload.size)) {
         onShowToast({
           title: 'Tamanho Excedido',
           message: 'Mesmo após a otimização, a foto excedeu o limite seguro de 5MB.',
           type: 'warning'
         });
-        setUploadingPhoto(false);
-        setPhotoStatusMessage('');
         return;
       }
 
       setPhotoStatusMessage('Enviando foto...');
 
-      // Estrutura padrão de caminho: visits/{visit_id}/{timestamp}_{tipo}.jpg
-      const fileName = `${activeVisit.id}/${Date.now()}_${photoType}.jpg`;
+      // Estrutura padrão de caminho: visits/{visit_id}/{arquivo}_{tipo}.{extensão}
+      const uploadId = globalThis.crypto?.randomUUID?.() || `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      const fileName = `${activeVisit.id}/${uploadId}_${selectedPhotoType}.${fileExtension}`;
       uploadedPath = `visits/${fileName}`;
 
       // 4. Upload no Supabase Storage
       const { error: uploadErr } = await supabase.storage
         .from('visit-photos')
-        .upload(uploadedPath, fileToUpload, { upsert: true, contentType: 'image/jpeg' });
+        .upload(uploadedPath, fileToUpload, { contentType });
 
       if (uploadErr) throw uploadErr;
 
@@ -789,10 +855,10 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
       const { error: dbErr } = await supabase.from('visit_photos').insert([
         {
           visit_id: activeVisit.id,
-          tipo_foto: photoType,
+          tipo_foto: selectedPhotoType,
           storage_path: uploadedPath,
           file_url: signedUrl || uploadedPath,
-          legenda: photoCaption.trim() || null
+          legenda: caption || null
         }
       ]);
 
@@ -837,6 +903,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
       });
     } finally {
       setUploadingPhoto(false);
+      uploadingPhotoRef.current = false;
       setPhotoStatusMessage('');
       e.target.value = '';
     }
@@ -952,11 +1019,38 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
 
   // Finalizar Visita / Check-out
   const handleCompleteVisit = async () => {
-    if (!activeVisit || !supabase || completingVisit) return;
+    if (!activeVisit || activeVisit.status !== 'em_andamento' || !supabase || completingVisit) return;
+    const invalidQuantity = findInvalidChecklistQuantity(checklist);
+    if (invalidQuantity) {
+      onShowToast({
+        title: 'Quantidade Inválida',
+        message: `Informe um número inteiro igual ou maior que zero em "${invalidQuantity}".`,
+        type: 'warning'
+      });
+      return;
+    }
+    if (uploadingPhotoRef.current) {
+      onShowToast({
+        title: 'Upload em andamento',
+        message: 'Aguarde o envio da foto antes de finalizar a visita.',
+        type: 'info'
+      });
+      return;
+    }
+    if (pendingChecklistWritesRef.current > 0) {
+      onShowToast({
+        title: 'Salvando Checklist',
+        message: 'Aguarde o salvamento das respostas antes de finalizar a visita.',
+        type: 'info'
+      });
+      return;
+    }
 
     setCompletingVisit(true);
 
     try {
+      await checklistWriteQueueRef.current;
+
       // 1. Obter Geolocalização do dispositivo no check-out se disponível
       let lat: number | null = activeVisit.latitude || null;
       let lng: number | null = activeVisit.longitude || null;
@@ -973,23 +1067,34 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
         }
       }
 
-      // 2. Persistir itens finais do checklist no banco
-      const checklistPayload = Object.entries(checklist).map(([key, item]) => {
-        const label = DEFAULT_CHECKLIST_ITEMS.find((d) => d.item_key === key)?.item_label || key;
-        return {
-          visit_id: activeVisit.id,
-          item_key: key,
-          item_label: label,
-          checked: item.checked,
-          observacao: item.obs.trim() || null,
-          valor_texto: item.valTxt.trim() || null
-        };
-      });
+      // 2. Sincronizar o checklist sem apagar campos legados ou respostas fora do formulário atual
+      const { data: existingChecklist, error: checklistReadError } = await supabase
+        .from('visit_checklist_items')
+        .select('id, item_key')
+        .eq('visit_id', activeVisit.id);
+      if (checklistReadError) throw checklistReadError;
 
-      if (checklistPayload.length > 0) {
-        await supabase.from('visit_checklist_items').delete().eq('visit_id', activeVisit.id);
-        await supabase.from('visit_checklist_items').insert(checklistPayload);
+      const syncPlan = buildChecklistSyncPlan(
+        activeVisit.id,
+        checklist,
+        existingChecklist || []
+      );
+
+      for (const update of syncPlan.updates) {
+        const { error: updateChecklistError } = await supabase
+          .from('visit_checklist_items')
+          .update(update.values)
+          .eq('id', update.id);
+        if (updateChecklistError) throw updateChecklistError;
       }
+
+      if (syncPlan.inserts.length > 0) {
+        const { error: insertChecklistError } = await supabase
+          .from('visit_checklist_items')
+          .insert(syncPlan.inserts);
+        if (insertChecklistError) throw insertChecklistError;
+      }
+      setChecklistSaveError(null);
 
       // 3. Atualizar visita com status oficial 'concluida' e completed_at (preservando started_at)
       const nowIso = new Date().toISOString();
@@ -1099,16 +1204,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
       setActiveVisit(visit);
       setGeneralObs(visit.observacao_geral || '');
 
-      const initialChk: Record<string, { checked: boolean; obs: string; valTxt: string }> = {};
-      DEFAULT_CHECKLIST_ITEMS.forEach((def) => {
-        const found = visit.checklist_items?.find((c) => c.item_key === def.item_key);
-        initialChk[def.item_key] = {
-          checked: found ? found.checked : false,
-          obs: found?.observacao || '',
-          valTxt: found?.valor_texto || ''
-        };
-      });
-      setChecklist(initialChk);
+      setChecklist(createChecklistState(visit.checklist_items));
 
       onShowToast({
         title: 'Atendimento Retomado',
@@ -1413,16 +1509,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
       setGeneralObs(loadedVisit.observacao_geral || '');
 
       // Preservar checklist preenchido ou carregar padrão
-      const initialChk: Record<string, { checked: boolean; obs: string; valTxt: string }> = {};
-      DEFAULT_CHECKLIST_ITEMS.forEach((def) => {
-        const found = loadedVisit.checklist_items?.find((c) => c.item_key === def.item_key);
-        initialChk[def.item_key] = {
-          checked: found ? found.checked : false,
-          obs: found?.observacao || '',
-          valTxt: found?.valor_texto || ''
-        };
-      });
-      setChecklist(initialChk);
+      setChecklist(createChecklistState(loadedVisit.checklist_items));
 
       onShowToast({
         title: 'Visita Recuperada com Sucesso!',
@@ -2173,13 +2260,13 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <h3 className="text-xs font-bold text-slate-[#171717] uppercase tracking-wider font-mono flex items-center gap-2">
                 <span className="material-symbols-outlined text-amber-400 text-sm">fact_check</span>
-                1. Checklist de Atendimento ({DEFAULT_CHECKLIST_ITEMS.length} Itens)
+                Checklist operacional
               </h3>
               <div className="flex items-center gap-2 font-mono text-xs">
                 <span className="px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 font-bold border border-amber-500/30">
-                  {Object.values(checklist).filter((c) => c.checked).length} de {DEFAULT_CHECKLIST_ITEMS.length} concluídos
+                  {Object.values(checklist).filter((item) => item.answered).length} de {DEFAULT_CHECKLIST_ITEMS.length} respondidos
                 </span>
-                {savingChecklistKey && (
+                {pendingChecklistWrites > 0 && (
                   <span className="text-[10px] text-cyan-400 font-bold flex items-center gap-1 animate-pulse">
                     <span className="material-symbols-outlined text-xs animate-spin">sync</span>
                     Salvando...
@@ -2188,101 +2275,148 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
               </div>
             </div>
 
-            <div className="space-y-2">
-              {DEFAULT_CHECKLIST_ITEMS.map((item) => {
-                const state = checklist[item.item_key] || { checked: false, obs: '', valTxt: '' };
-                const isSaving = savingChecklistKey === item.item_key;
+            {checklistSaveError && (
+              <p role="alert" className="text-[11px] text-rose-400">{checklistSaveError}</p>
+            )}
 
-                const handleChecklistChange = async (newChecked: boolean, newObs: string, newValTxt: string) => {
-                  const updatedState = { checked: newChecked, obs: newObs, valTxt: newValTxt };
-                  setChecklist((prev) => ({
-                    ...prev,
-                    [item.item_key]: updatedState
-                  }));
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+              {CHECKLIST_GROUPS.map((group) => (
+                <section
+                  key={group.title}
+                  aria-label={group.title}
+                  className="p-3 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] space-y-3"
+                >
+                  <h4 className="text-[11px] font-bold text-[#171717] uppercase tracking-wide font-mono">
+                    {group.title}
+                  </h4>
+                  <div className="space-y-3">
+                    {group.itemKeys.map((itemKey) => {
+                      const item = DEFAULT_CHECKLIST_ITEMS.find((candidate) => candidate.item_key === itemKey);
+                      if (!item) return null;
 
-                  if (!activeVisit || !supabase) return;
+                      const state = checklist[item.item_key] || {
+                        checked: false,
+                        answered: false,
+                        obs: '',
+                        valTxt: ''
+                      };
+                      const isQuantity = CHECKLIST_QUANTITY_KEYS.has(item.item_key);
+                      const isFrontCount = item.item_key === 'qtd_frentes';
 
-                  setSavingChecklistKey(item.item_key);
-                  try {
-                    // Tentar upsert imediato em public.visit_checklist_items
-                    const { data: existing } = await supabase
-                      .from('visit_checklist_items')
-                      .select('id')
-                      .eq('visit_id', activeVisit.id)
-                      .eq('item_key', item.item_key)
-                      .maybeSingle();
-
-                    if (existing) {
-                      await supabase
-                        .from('visit_checklist_items')
-                        .update({
-                          checked: newChecked,
-                          observacao: newObs.trim() || null,
-                          valor_texto: newValTxt.trim() || null
-                        })
-                        .eq('id', existing.id);
-                    } else {
-                      await supabase
-                        .from('visit_checklist_items')
-                        .insert([
-                          {
-                            visit_id: activeVisit.id,
-                            item_key: item.item_key,
-                            item_label: item.item_label,
-                            checked: newChecked,
-                            observacao: newObs.trim() || null,
-                            valor_texto: newValTxt.trim() || null
-                          }
-                        ]);
-                    }
-                  } catch (err) {
-                    console.error('Erro ao persistir item de checklist:', err);
-                  } finally {
-                    setSavingChecklistKey(null);
-                  }
-                };
-
-                return (
-                  <div key={item.item_key} className="p-3 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] space-y-2">
-                    <label className="flex items-center justify-between cursor-pointer">
-                      <div className="flex items-center gap-3">
-                        <input
-                          type="checkbox"
-                          checked={state.checked}
-                          disabled={isSaving}
-                          onChange={(e) => handleChecklistChange(e.target.checked, state.obs, state.valTxt)}
-                          className="rounded border-[#CFCDC5] bg-[#F7F6F2] text-emerald-500 focus:ring-emerald-400 w-4 h-4 cursor-pointer"
-                        />
-                        <span className={`text-xs font-mono font-bold ${state.checked ? 'text-emerald-300' : 'text-slate-300'}`}>
-                          {item.item_label}
-                        </span>
-                      </div>
-                      <span className={`text-[10px] font-mono px-2 py-0.5 rounded font-bold uppercase ${state.checked ? 'bg-emerald-500/20 text-emerald-300' : 'bg-slate-800 text-[#77766F]'}`}>
-                        {state.checked ? 'Concluído' : 'Pendente'}
-                      </span>
-                    </label>
-
-                    {state.checked && (
-                      <div className="pl-7 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs font-mono">
-                        <input
-                          type="text"
-                          value={state.valTxt}
-                          onChange={(e) => handleChecklistChange(state.checked, state.obs, e.target.value)}
-                          placeholder="Valor / Preço / Qtd..."
-                          className="h-8 px-2.5 bg-[#F7F6F2] border border-[#CFCDC5] rounded-lg text-[#171717] focus:outline-none focus:border-amber-500"
-                        />
-                        <input
-                          type="text"
-                          value={state.obs}
-                          onChange={(e) => handleChecklistChange(state.checked, e.target.value, state.valTxt)}
-                          placeholder="Observações do item..."
-                          className="h-8 px-2.5 bg-[#F7F6F2] border border-[#CFCDC5] rounded-lg text-[#171717] focus:outline-none focus:border-amber-500"
-                        />
-                      </div>
-                    )}
+                      return (
+                        <div key={item.item_key} className="space-y-2">
+                          {isQuantity || isFrontCount ? (
+                            <>
+                              <label
+                                htmlFor={`visit-checklist-${item.item_key}`}
+                                className="block text-xs font-semibold text-[#171717]"
+                              >
+                                {item.item_label}
+                              </label>
+                              <input
+                                id={`visit-checklist-${item.item_key}`}
+                                type={isQuantity ? 'number' : 'text'}
+                                min={isQuantity ? 0 : undefined}
+                                step={isQuantity ? 1 : undefined}
+                                inputMode="numeric"
+                                value={state.valTxt}
+                                disabled={completingVisit}
+                                onChange={(event) =>
+                                  handleChecklistChange(
+                                    item,
+                                    state.checked,
+                                    state.obs,
+                                    event.target.value,
+                                    Boolean(event.target.value.trim())
+                                  )
+                                }
+                                placeholder={
+                                  item.item_key === 'qtd_produtos_deposito'
+                                    ? 'Informe a quantidade (0 se não houver)'
+                                    : item.item_key === 'qtd_produtos_venda'
+                                      ? 'Quantidade na área de vendas'
+                                      : 'Frentes na gôndola'
+                                }
+                                className="w-full h-10 px-3 bg-[#F7F6F2] border border-[#CFCDC5] rounded-lg text-sm text-[#171717] focus:outline-none focus:border-amber-500 disabled:opacity-60"
+                              />
+                            </>
+                          ) : (
+                            <>
+                              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                                <span className="text-xs font-semibold text-[#171717]">{item.item_label}</span>
+                                <div role="group" aria-label={item.item_label} className="grid grid-cols-2 gap-2">
+                                  {[true, false].map((answer) => (
+                                    <button
+                                      key={String(answer)}
+                                      type="button"
+                                      aria-pressed={state.answered && state.checked === answer}
+                                      disabled={completingVisit}
+                                      onClick={() =>
+                                        handleChecklistChange(
+                                          item,
+                                          answer,
+                                          answer ? state.obs : '',
+                                          answer ? state.valTxt : '',
+                                          true
+                                        )
+                                      }
+                                      className={`min-h-10 px-4 rounded-lg border text-xs font-bold transition-colors disabled:opacity-60 ${
+                                        state.answered && state.checked === answer
+                                          ? answer
+                                            ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-700'
+                                            : 'bg-rose-500/15 border-rose-500/40 text-rose-700'
+                                          : 'bg-[#F7F6F2] border-[#CFCDC5] text-[#5F5F5F] hover:border-amber-500'
+                                      }`}
+                                    >
+                                      {answer ? 'Sim' : 'Não'}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                              {item.item_key === 'ruptura_gondola' && state.checked && (
+                                <div className="space-y-2">
+                                  <input
+                                    type="text"
+                                    value={state.valTxt}
+                                    disabled={completingVisit}
+                                    onChange={(event) =>
+                                      handleChecklistChange(
+                                        item,
+                                        state.checked,
+                                        state.obs,
+                                        event.target.value,
+                                        state.answered
+                                      )
+                                    }
+                                    placeholder="Produtos em falta e quantidades"
+                                    className="w-full h-10 px-3 bg-[#F7F6F2] border border-[#CFCDC5] rounded-lg text-xs text-[#171717] focus:outline-none focus:border-amber-500 disabled:opacity-60"
+                                  />
+                                  <textarea
+                                    value={state.obs}
+                                    disabled={completingVisit}
+                                    onChange={(event) =>
+                                      handleChecklistChange(
+                                        item,
+                                        state.checked,
+                                        event.target.value,
+                                        state.valTxt,
+                                        state.answered
+                                      )
+                                    }
+                                    placeholder="Observação (opcional)"
+                                    rows={2}
+                                    className="w-full p-2.5 bg-[#F7F6F2] border border-[#CFCDC5] rounded-lg text-xs text-[#171717] focus:outline-none focus:border-amber-500 resize-y disabled:opacity-60"
+                                  />
+                                </div>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
-                );
-              })}
+                </section>
+              ))}
             </div>
           </div>
 
@@ -2290,7 +2424,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
           <div className="space-y-3 pt-3 border-t border-[#CFCDC5]">
             <h3 className="text-xs font-bold text-slate-[#171717] uppercase tracking-wider font-mono flex items-center gap-2">
               <span className="material-symbols-outlined text-cyan-400 text-sm">photo_camera</span>
-              2. Evidências Fotográficas do PDV (Bucket Privado Supabase)
+              D. Evidências fotográficas do PDV
             </h3>
 
             <div className="p-4 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] space-y-3 font-mono text-xs">
@@ -2309,6 +2443,9 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                     <option value="ruptura">RUPTURA</option>
                     <option value="outros">OUTROS</option>
                   </select>
+                  <span className="mt-1 block text-[10px] text-[#77766F]">
+                    Foto do depósito: use OUTROS e identifique na legenda.
+                  </span>
                 </div>
 
                 <div className="sm:col-span-2">
@@ -2317,30 +2454,52 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                     type="text"
                     value={photoCaption}
                     onChange={(e) => setPhotoCaption(e.target.value)}
-                    placeholder="Ex: Foto do ponto extra da marca no corredor 3..."
+                    placeholder="Ex.: foto do depósito ou ponto extra no corredor 3..."
                     className="w-full h-9 px-3 bg-[#F7F6F2] border border-[#CFCDC5] rounded-lg text-[#171717]"
                   />
                 </div>
               </div>
 
-              <div className="relative">
+              <div className="space-y-2">
                 <input
+                  ref={cameraInputRef}
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  onChange={handleUploadPhoto}
+                  disabled={uploadingPhoto || completingVisit}
+                  className="hidden"
+                />
+                <input
+                  ref={galleryInputRef}
                   type="file"
                   accept="image/*"
                   onChange={handleUploadPhoto}
-                  disabled={uploadingPhoto}
-                  className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                  disabled={uploadingPhoto || completingVisit}
+                  className="hidden"
                 />
-                <button
-                  type="button"
-                  disabled={uploadingPhoto}
-                  className="w-full py-2.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50"
-                >
-                  <span className={`material-symbols-outlined text-base ${uploadingPhoto ? 'animate-spin' : ''}`}>
-                    {uploadingPhoto ? 'sync' : 'cloud_upload'}
-                  </span>
-                  <span>{uploadingPhoto ? (photoStatusMessage || 'Otimizando & enviando foto...') : 'Tirar Foto ou Selecionar da Galeria'}</span>
-                </button>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => cameraInputRef.current?.click()}
+                    disabled={uploadingPhoto || completingVisit}
+                    className="min-h-11 px-4 py-2.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50"
+                  >
+                    <span className={`material-symbols-outlined text-base ${uploadingPhoto ? 'animate-spin' : ''}`}>
+                      {uploadingPhoto ? 'sync' : 'photo_camera'}
+                    </span>
+                    <span>{uploadingPhoto ? (photoStatusMessage || 'Otimizando e enviando...') : 'Tirar foto'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => galleryInputRef.current?.click()}
+                    disabled={uploadingPhoto || completingVisit}
+                    className="min-h-11 px-4 py-2.5 rounded-xl bg-[#F7F6F2] hover:bg-[#E4E2DB] text-[#171717] font-bold text-xs flex items-center justify-center gap-2 border border-[#CFCDC5] transition-all cursor-pointer disabled:opacity-50"
+                  >
+                    <span className="material-symbols-outlined text-base">photo_library</span>
+                    <span>Escolher da galeria</span>
+                  </button>
+                </div>
               </div>
 
               {/* Lista de Fotos Anexadas com Preview de Miniaturas */}
@@ -2631,7 +2790,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                 <div className="p-2.5 rounded-lg bg-[#F7F6F2] border border-[#CFCDC5]">
                   <span className="text-[10px] text-[#5F5F5F] block font-bold">CHECKLIST</span>
                   <span className="text-sm font-extrabold text-amber-300">
-                    {Object.values(checklist).filter((c) => c.checked).length} / {DEFAULT_CHECKLIST_ITEMS.length}
+                    {Object.values(checklist).filter((item) => item.answered).length} / {DEFAULT_CHECKLIST_ITEMS.length}
                   </span>
                 </div>
 
