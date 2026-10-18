@@ -1,19 +1,53 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useAuth } from '../auth/AuthProvider';
 import { supabase } from '../lib/supabase';
-import type { IndustryItem, StoreItem, RouteItem, Visit, ToastMessage } from '../types';
+import type { IndustryItem, StoreItem, RouteItem, Visit, ToastMessage, ContratoLoja, PeriodoContratual } from '../types';
 import { getMonthlyQuinzenalDates } from '../utils/routePlanner';
+import { analyzeRotasForContracts, contratosService, parseISODate, classificarParContratual } from '../lib/contratosService';
 
 interface IndustriesViewProps {
   onShowToast: (toast: Omit<ToastMessage, 'id'>) => void;
+}
+
+export interface ContratoItemElegivel {
+  industria_codigo: string;
+  loja_codigo: string;
+  frequencia: 'SEMANAL' | 'QUINZENAL' | 'MENSAL';
+  visitas_por_semana: number | null;
+  segunda: boolean;
+  terca: boolean;
+  quarta: boolean;
+  quinta: boolean;
+  sexta: boolean;
+  sabado: boolean;
+  domingo: boolean;
+  totalRotasVinculadas: number;
+  promotoresEnvolvidos: string[];
+  projecao_periodo?: PeriodoContratual;
+  industriaNome: string;
+  lojaInfo: { nome: string; cidade?: string; uf?: string };
+  dataCadastro: string | null;
+  cadastroAusente: boolean;
+  classificacao: 'ERRO_CONSULTA' | 'JA_POSSUI_ATIVO' | 'JA_POSSUI_SUSPENSO' | 'INICIO_NAO_INFORMADO' | 'ELEGIVEL';
+  motivoClassificacao: string;
+  contratoAtivoExistente: ContratoLoja | null;
+  contratoSuspensoExistente: ContratoLoja | null;
+  totalContratosHistoricos: number;
 }
 
 export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) => {
   const { hasPermission } = useAuth();
   const canEdit = hasPermission(['admin', 'gestor']);
 
-  // Aba selecionada ('frequencia' | 'cadastro')
-  const [activeTab, setActiveTab] = useState<'frequencia' | 'cadastro'>('frequencia');
+  // Aba selecionada ('frequencia' | 'cadastro' | 'contratos')
+  const [activeTab, setActiveTab] = useState<'frequencia' | 'cadastro' | 'contratos'>('frequencia');
+  const [contratosRefDate, setContratosRefDate] = useState(() => {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  });
 
   const [industries, setIndustries] = useState<IndustryItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -23,11 +57,23 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'todos' | 'ativo' | 'inativo'>('todos');
 
-  // Modais de Criação / Edição / Visualização
+  // Modais de Criação / Edição / Visualização de Indústria
   const [showModal, setShowModal] = useState(false);
   const [editingItem, setEditingItem] = useState<IndustryItem | null>(null);
   const [viewingItem, setViewingItem] = useState<IndustryItem | null>(null);
   const [saving, setSaving] = useState(false);
+
+  // MODAL DE REVISÃO E AUTORIZAÇÃO INDIVIDUAL DE CONTRATO (ETAPA H3.5)
+  // Somente protótipo e validação: NENHUM dado é gravado no banco
+  const [reviewingContrato, setReviewingContrato] = useState<ContratoItemElegivel | null>(null);
+  const [revisaoForm, setRevisaoForm] = useState({
+    valor_por_visita: '',
+    tipo_vigencia: 'continua' as 'continua' | 'determinada',
+    data_fim_vigencia: '',
+    observacao: ''
+  });
+  const [revisaoErrors, setRevisaoErrors] = useState<{ valor?: string; data_fim?: string }>({});
+  const [simulatedPayload, setSimulatedPayload] = useState<any | null>(null);
 
   // ESTADOS DO CONTROLE DE FREQUÊNCIA OPERACIONAL
   const [freqLoading, setFreqLoading] = useState(false);
@@ -41,6 +87,11 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
   const [routes, setRoutes] = useState<RouteItem[]>([]);
   const [visits, setVisits] = useState<Visit[]>([]);
 
+  // ESTADOS DE CONTRATOS EXISTENTES (ETAPA H3.3)
+  const [contratosList, setContratosList] = useState<ContratoLoja[]>([]);
+  const [contratosLoading, setContratosLoading] = useState(false);
+  const [contratosError, setContratosError] = useState<string | null>(null);
+
   // Visualização expandida no detalhamento por loja e por promotor
   const [expandedIndustria, setExpandedIndustria] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'industria' | 'promotor'>('industria');
@@ -51,7 +102,8 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
     nome: '',
     cnpj: '',
     status: 'ativo' as 'ativo' | 'inativo',
-    observacao: ''
+    observacao: '',
+    data_inicio_operacao: ''
   });
 
   // Busca dados de public.industrias
@@ -153,15 +205,46 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
     }
   }, [periodFilter, onShowToast]);
 
+  // Busca contratos existentes em public.contratos_lojas (Etapa H3.3)
+  const fetchContratos = useCallback(async () => {
+    setContratosLoading(true);
+    setContratosError(null);
+
+    try {
+      const { data, error: err, isMigrationPending } = await contratosService.listContratos();
+      if (err) {
+        if (isMigrationPending) {
+          // Tabela contratos_lojas ainda não criada no banco
+          setContratosList([]);
+          setContratosError('A tabela de contratos ainda não foi criada no banco (migração pendente).');
+        } else {
+          setContratosList([]);
+          setContratosError(err.message || 'Falha ao consultar contratos existentes.');
+        }
+      } else {
+        setContratosList(data || []);
+      }
+    } catch (err: any) {
+      console.error('Erro ao consultar contratos existentes:', err);
+      setContratosList([]);
+      setContratosError(err.message || 'Erro inesperado ao consultar contratos.');
+    } finally {
+      setContratosLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     fetchIndustries();
   }, []);
 
   useEffect(() => {
-    if (activeTab === 'frequencia') {
+    if (activeTab === 'frequencia' || activeTab === 'contratos') {
       fetchFrequencyData();
     }
-  }, [activeTab, fetchFrequencyData]);
+    if (activeTab === 'contratos') {
+      fetchContratos();
+    }
+  }, [activeTab, fetchFrequencyData, fetchContratos]);
 
   // -------------------------------------------------------------
   // LÓGICA DE PLANEJAMENTO E ADERÊNCIA OPERACIONAL (ETAPA 7A)
@@ -533,6 +616,113 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
     });
   }, [industries, searchTerm, statusFilter]);
 
+  // -------------------------------------------------------------
+  // -------------------------------------------------------------
+  // ETAPA E: PRÉ-VISUALIZAÇÃO ADMINISTRATIVA DE CONTRATOS E CICLOS (SOMENTE LEITURA)
+  // -------------------------------------------------------------
+  const contratosPreviewData = useMemo(() => {
+    // Monta mapa de início de operação formal (public.industrias.data_inicio_operacao)
+    // Regra de Negócio: Não utilizar created_at ou CURRENT_DATE como substitutos silenciosos.
+    const dataInicioOperacaoMap: Record<string, string> = {};
+    const industriasMap = new Map<string, string>();
+    industries.forEach((ind) => {
+      industriasMap.set(ind.codigo, ind.nome);
+      if (ind.data_inicio_operacao) {
+        dataInicioOperacaoMap[ind.codigo] = ind.data_inicio_operacao.slice(0, 10);
+      }
+    });
+
+    const lojasMap = new Map<string, { nome: string; cidade?: string; uf?: string }>();
+    lojasList.forEach((loj) => {
+      lojasMap.set(loj.codigo, { nome: loj.nome, cidade: loj.cidade, uf: loj.uf });
+    });
+
+    // Filtra rotas com base nos seletores ativos
+    const rotasParaAnalise = routes.filter((r) => {
+      if (selectedIndustria !== 'todas' && r.industria_codigo !== selectedIndustria) return false;
+      if (selectedLoja !== 'todas' && r.loja_codigo !== selectedLoja) return false;
+      return true;
+    });
+
+    const { elegiveis, conflitos } = analyzeRotasForContracts(rotasParaAnalise, {
+      data_referencia: contratosRefDate,
+      data_cadastro_map: dataInicioOperacaoMap
+    });
+
+    // Mapa de Contratos Existentes em public.contratos_lojas (Etapa H3.3)
+    // Chave: `industria_codigo|loja_codigo` -> array de contratos ordenados
+    const contratosExistentesMap = new Map<string, ContratoLoja[]>();
+    contratosList.forEach((c) => {
+      const ind = (c.industria_codigo || '').trim().toUpperCase();
+      const loj = (c.loja_codigo || '').trim().toUpperCase();
+      if (!ind || !loj) return;
+      const key = `${ind}|${loj}`;
+      const list = contratosExistentesMap.get(key) || [];
+      list.push(c);
+      contratosExistentesMap.set(key, list);
+    });
+
+    const elegiveisEnriquecidos = elegiveis.map((item) => {
+      const dataInicioOp = dataInicioOperacaoMap[item.industria_codigo];
+      const isKing = item.industria_codigo === 'IND-013';
+      const cadastroAusente = !dataInicioOp;
+
+      // Buscar contratos existentes para esta combinação
+      const key = `${item.industria_codigo.toUpperCase()}|${item.loja_codigo.toUpperCase()}`;
+      const contratosDoPar = contratosExistentesMap.get(key) || [];
+      
+      const {
+        classificacao,
+        motivoClassificacao,
+        contratoAtivo,
+        contratoSuspenso
+      } = classificarParContratual({
+        contratosDoPar,
+        dataInicioOperacao: dataInicioOp,
+        contratosError
+      });
+
+      return {
+        ...item,
+        // Projeção do período fica indisponível se a data de início da operação não estiver informada ou houver erro
+        projecao_periodo: (cadastroAusente || contratosError) ? undefined : item.projecao_periodo,
+        industriaNome: industriasMap.get(item.industria_codigo) || item.industria_codigo,
+        lojaInfo: lojasMap.get(item.loja_codigo) || { nome: item.loja_codigo },
+        dataCadastro: dataInicioOp || null,
+        cadastroAusente,
+        classificacao,
+        motivoClassificacao,
+        contratoAtivoExistente: contratoAtivo || null,
+        contratoSuspensoExistente: contratoSuspenso || null,
+        totalContratosHistoricos: contratosDoPar.length
+      };
+    });
+
+    const conflitosEnriquecidos = conflitos.map((c) => ({
+      ...c,
+      industriaNome: industriasMap.get(c.industria_codigo) || c.industria_codigo,
+      lojaInfo: lojasMap.get(c.loja_codigo) || { nome: c.loja_codigo },
+      classificacao: 'CONFLITO_FREQUENCIA' as const,
+      motivoClassificacao: 'Múltiplas rotas cadastradas com frequências divergentes para o mesmo PDV.'
+    }));
+
+    // Métricas consolidadas
+    const totalElegiveisAptos = elegiveisEnriquecidos.filter((e) => e.classificacao === 'ELEGIVEL').length;
+    const totalJaComContratoAtivo = elegiveisEnriquecidos.filter((e) => e.classificacao === 'JA_POSSUI_ATIVO').length;
+    const totalJaComContratoSuspenso = elegiveisEnriquecidos.filter((e) => e.classificacao === 'JA_POSSUI_SUSPENSO').length;
+    const totalInicioNaoInformado = elegiveisEnriquecidos.filter((e) => e.classificacao === 'INICIO_NAO_INFORMADO').length;
+
+    return {
+      elegiveis: elegiveisEnriquecidos,
+      conflitos: conflitosEnriquecidos,
+      totalParesAnalisados: elegiveis.length + conflitos.length,
+      totalElegiveisAptos,
+      totalJaComContratoAtivo,
+      totalJaComContratoSuspenso,
+      totalInicioNaoInformado
+    };
+  }, [routes, industries, lojasList, contratosList, contratosError, selectedIndustria, selectedLoja, contratosRefDate]);
+
   // Abrir Modal de Adição
   const handleOpenCreate = async () => {
     setEditingItem(null);
@@ -554,7 +744,8 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
       nome: '',
       cnpj: '',
       status: 'ativo',
-      observacao: ''
+      observacao: '',
+      data_inicio_operacao: ''
     });
     setShowModal(true);
   };
@@ -567,7 +758,8 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
       nome: item.nome,
       cnpj: item.cnpj || '',
       status: item.status,
-      observacao: item.observacao || ''
+      observacao: item.observacao || '',
+      data_inicio_operacao: item.data_inicio_operacao ? item.data_inicio_operacao.slice(0, 10) : ''
     });
     setShowModal(true);
   };
@@ -629,6 +821,7 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
         cnpj: formData.cnpj.trim() || null,
         status: formData.status,
         observacao: formData.observacao.trim() || null,
+        data_inicio_operacao: formData.data_inicio_operacao.trim() || null,
         updated_at: new Date().toISOString()
       };
 
@@ -751,6 +944,18 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
             >
               <span className="material-symbols-outlined text-[16px]">list_alt</span>
               <span>Cadastro ({industries.length})</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('contratos')}
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                activeTab === 'contratos'
+                  ? 'bg-[#222222] text-white shadow-[0_0_12px_rgba(147,51,234,0.5)]'
+                  : 'text-[#77766F] hover:text-white hover:bg-[#CFCDC5]'
+              }`}
+            >
+              <span className="material-symbols-outlined text-[16px]">contract</span>
+              <span>Prévia de Contratos</span>
             </button>
           </div>
         </div>
@@ -1396,7 +1601,7 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
                         <>
                           <button
                             onClick={() => handleOpenEdit(ind)}
-                            className="p-1.5 rounded-lg bg-purple-500/10 hover:bg-purple-500/20 text-purple-300 border border-purple-500/30 cursor-pointer"
+                            className="p-1.5 rounded-lg bg-purple-100 hover:bg-purple-200 text-purple-800 border border-purple-200 cursor-pointer transition-colors"
                             title="Editar"
                           >
                             <span className="material-symbols-outlined text-[16px]">edit</span>
@@ -1459,6 +1664,12 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
                 </span>
               </div>
               <div>
+                <span className="text-[#5F5F5F] block">INÍCIO DA OPERAÇÃO (COMERCIAL):</span>
+                <span className="text-[#171717] font-bold">
+                  {viewingItem.data_inicio_operacao ? viewingItem.data_inicio_operacao.slice(0, 10) : 'Não informado'}
+                </span>
+              </div>
+              <div>
                 <span className="text-[#5F5F5F] block">OBSERVAÇÃO:</span>
                 <span className="text-[#171717]">{viewingItem.observacao || '—'}</span>
               </div>
@@ -1475,6 +1686,464 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
           </div>
         </div>
       )}
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* ABA 3: PRÉ-VISUALIZAÇÃO ADMINISTRATIVA DE CONTRATOS E CICLOS (ETAPA E)     */}
+      {/* SOMENTE LEITURA: Projeta contratos a partir de rotas com períodos calculados*/}
+      {/* ========================================================================= */}
+      {activeTab === 'contratos' && (
+        <div className="space-y-8 animate-fadeIn">
+          {/* BANNER INFORMATIVO DE AUDITORIA (SOMENTE LEITURA) */}
+          <div className="p-4 bg-purple-500/10 border border-purple-500/30 rounded-2xl flex items-start gap-3.5">
+            <span className="material-symbols-outlined text-purple-400 text-2xl mt-0.5">info</span>
+            <div className="space-y-1">
+              <h4 className="text-xs font-bold text-purple-300 font-mono uppercase tracking-wider">
+                Auditoria e Pré-Visualização de Contratos (Somente Leitura)
+              </h4>
+              <p className="text-xs text-[#77766F] leading-relaxed">
+                Esta área projeta em memória os contratos elegíveis a partir da malha de rotas ativas, calculando
+                o período contratual conforme as regras comerciais homologadas. <strong>Nenhum contrato é gravado ou alterado automaticamente.</strong>
+              </p>
+            </div>
+          </div>
+
+          {/* BARRA DE CONTROLE: DATA DE REFERÊNCIA E FILTROS */}
+          <section className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-5 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-3">
+              <div className="flex items-center gap-2 text-xs font-mono font-bold text-[#171717]">
+                <span className="material-symbols-outlined text-purple-400 text-[18px]">tune</span>
+                <span>PARÂMETROS DE AUDITORIA</span>
+              </div>
+              <button
+                onClick={fetchFrequencyData}
+                disabled={freqLoading}
+                className="px-3 py-1.5 rounded-lg bg-[#EAE8E2] border border-[#CFCDC5] text-xs font-semibold text-[#171717] hover:text-white flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                <span className={`material-symbols-outlined text-[16px] ${freqLoading ? 'animate-spin' : ''}`}>
+                  refresh
+                </span>
+                <span>Recarregar Rotas</span>
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              {/* DATA DE REFERÊNCIA PARA CÁLCULO */}
+              <div>
+                <label className="text-[11px] font-mono font-bold text-[#77766F] block mb-1.5 uppercase">
+                  Data de Referência (YYYY-MM-DD)
+                </label>
+                <input
+                  type="date"
+                  value={contratosRefDate}
+                  onChange={(e) => setContratosRefDate(e.target.value)}
+                  className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-xs text-[#171717] focus:outline-none focus:border-purple-500 font-mono"
+                />
+              </div>
+
+              {/* FILTRO INDÚSTRIA */}
+              <div>
+                <label className="text-[11px] font-mono font-bold text-[#77766F] block mb-1.5 uppercase">
+                  Filtrar por Indústria
+                </label>
+                <select
+                  value={selectedIndustria}
+                  onChange={(e) => setSelectedIndustria(e.target.value)}
+                  className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-xs text-[#171717] focus:outline-none focus:border-purple-500 font-mono"
+                >
+                  <option value="todas">Todas as Indústrias ({industries.length})</option>
+                  {industries.map((ind) => (
+                    <option key={ind.id} value={ind.codigo}>
+                      {ind.nome} ({ind.codigo})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* FILTRO LOJA */}
+              <div>
+                <label className="text-[11px] font-mono font-bold text-[#77766F] block mb-1.5 uppercase">
+                  Filtrar por Loja / PDV
+                </label>
+                <select
+                  value={selectedLoja}
+                  onChange={(e) => setSelectedLoja(e.target.value)}
+                  className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-xs text-[#171717] focus:outline-none focus:border-purple-500 font-mono"
+                >
+                  <option value="todas">Todas as Lojas ({lojasList.length})</option>
+                  {lojasList.map((st) => (
+                    <option key={st.id} value={st.codigo}>
+                      {st.nome} ({st.codigo})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          </section>
+
+          {/* BANNER DE ERRO DE CONSULTA DE CONTRATOS (SE HOUVER) */}
+          {contratosError && (
+            <div className="p-4 bg-rose-500/10 border border-rose-500/30 rounded-2xl flex items-start gap-3.5">
+              <span className="material-symbols-outlined text-rose-400 text-2xl mt-0.5">error</span>
+              <div className="space-y-1">
+                <h4 className="text-xs font-bold text-rose-300 font-mono uppercase tracking-wider">
+                  Aviso: Falha ao Consultar Contratos Existentes
+                </h4>
+                <p className="text-xs text-rose-200 leading-relaxed">
+                  {contratosError}
+                  <br />
+                  <strong>Por segurança, a elegibilidade de todos os registros está preventivamente bloqueada até a normalização da consulta.</strong>
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* CARDS RESUMO DA PRÉ-VISUALIZAÇÃO COM CLASSIFICAÇÃO COMERCIAL */}
+          <div className="grid grid-cols-1 sm:grid-cols-5 gap-4">
+            <div className="p-5 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5] shadow-xl">
+              <div className="flex items-center justify-between text-[#77766F] font-mono text-xs">
+                <span>PARES ANALISADOS</span>
+                <span className="material-symbols-outlined text-purple-400">compare_arrows</span>
+              </div>
+              <div className="text-3xl font-extrabold text-[#171717] font-mono mt-2">
+                {contratosPreviewData.totalParesAnalisados}
+              </div>
+            </div>
+
+            <div className="p-5 rounded-2xl bg-[#F7F6F2] border border-emerald-500/30 shadow-xl">
+              <div className="flex items-center justify-between text-emerald-400 font-mono text-xs font-bold">
+                <span>APTOS P/ FORMALIZAR</span>
+                <span className="material-symbols-outlined">verified</span>
+              </div>
+              <div className="text-3xl font-extrabold text-emerald-400 font-mono mt-2">
+                {contratosPreviewData.totalElegiveisAptos}
+              </div>
+            </div>
+
+            <div className="p-5 rounded-2xl bg-[#F7F6F2] border border-blue-500/30 shadow-xl">
+              <div className="flex items-center justify-between text-blue-400 font-mono text-xs font-bold">
+                <span>JÁ CONTRATADOS (ATIVOS)</span>
+                <span className="material-symbols-outlined">lock</span>
+              </div>
+              <div className="text-3xl font-extrabold text-blue-400 font-mono mt-2">
+                {contratosPreviewData.totalJaComContratoAtivo}
+              </div>
+            </div>
+
+            <div className="p-5 rounded-2xl bg-[#F7F6F2] border border-amber-500/30 shadow-xl">
+              <div className="flex items-center justify-between text-amber-400 font-mono text-xs font-bold">
+                <span>CONTRATOS SUSPENSOS</span>
+                <span className="material-symbols-outlined">pause_circle</span>
+              </div>
+              <div className="text-3xl font-extrabold text-amber-400 font-mono mt-2">
+                {contratosPreviewData.totalJaComContratoSuspenso}
+              </div>
+            </div>
+
+            <div className="p-5 rounded-2xl bg-[#F7F6F2] border border-rose-500/30 shadow-xl">
+              <div className="flex items-center justify-between text-rose-400 font-mono text-xs font-bold">
+                <span>INÍCIO NÃO INFORMADO</span>
+                <span className="material-symbols-outlined">warning</span>
+              </div>
+              <div className="text-3xl font-extrabold text-rose-400 font-mono mt-2">
+                {contratosPreviewData.totalInicioNaoInformado}
+              </div>
+            </div>
+          </div>
+
+          {/* TABELA 1: CONTRATOS PROJETADOS / ELEGÍVEIS */}
+          <section className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-bold text-[#171717] uppercase tracking-wider font-mono flex items-center gap-2">
+                <span className="material-symbols-outlined text-emerald-400">assignment_turned_in</span>
+                Projeção de Contratos Elegíveis ({contratosPreviewData.elegiveis.length})
+              </h3>
+              <span className="text-[11px] font-mono text-[#77766F]">
+                *Ref: {contratosRefDate}
+              </span>
+            </div>
+
+            {contratosPreviewData.elegiveis.length === 0 ? (
+              <div className="py-12 text-center text-[#77766F] text-xs font-mono">
+                Nenhum par (indústria, loja) com rotas ativas encontrado para os filtros selecionados.
+              </div>
+            ) : (
+              <div className="overflow-x-auto rounded-xl border border-[#CFCDC5]">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="bg-[#E3E1DA] border-b border-[#CFCDC5] text-[11px] font-bold text-[#171717] uppercase tracking-wider font-mono">
+                      <th className="py-3 px-3">Indústria</th>
+                      <th className="py-3 px-3">Loja / PDV</th>
+                      <th className="py-3 px-3">Frequência</th>
+                      <th className="py-3 px-3">Dias de Visita</th>
+                      <th className="py-3 px-3">Período Sugerido</th>
+                      <th className="py-3 px-3">Competência</th>
+                      <th className="py-3 px-3">Tipo de Ciclo</th>
+                      <th className="py-3 px-3">Início da Operação</th>
+                      <th className="py-3 px-3">Situação Contratual</th>
+                      {canEdit && <th className="py-3 px-3 text-center">Ações</th>}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#CFCDC5] text-[#171717] font-mono">
+                    {contratosPreviewData.elegiveis.map((c, idx) => {
+                      const isKing = c.industria_codigo === 'IND-013';
+                      const proj = c.projecao_periodo;
+
+                      return (
+                        <tr key={`${c.industria_codigo}_${c.loja_codigo}_${idx}`} className="hover:bg-[#EAE8E1] transition-colors">
+                          <td className="py-3 px-3">
+                            <span className="font-bold text-white block">{c.industriaNome}</span>
+                            <span className={`text-[10px] font-mono ${isKing ? 'text-cyan-400 font-bold' : 'text-purple-400'}`}>
+                              {c.industria_codigo} {isKing && '★ (KING)'}
+                            </span>
+                          </td>
+
+                          <td className="py-3 px-3">
+                            <span className="text-[#171717] block font-bold">{c.lojaInfo.nome}</span>
+                            <span className="text-[10px] text-[#77766F] block">
+                              {c.loja_codigo} {c.lojaInfo.cidade ? `• ${c.lojaInfo.cidade}/${c.lojaInfo.uf}` : ''}
+                            </span>
+                          </td>
+
+                          <td className="py-3 px-3">
+                            <span
+                              className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
+                                c.frequencia === 'SEMANAL'
+                                  ? 'bg-blue-500/10 text-blue-400 border-blue-500/30'
+                                  : c.frequencia === 'QUINZENAL'
+                                  ? 'bg-purple-500/10 text-purple-400 border-purple-500/30'
+                                  : 'bg-amber-500/10 text-amber-400 border-amber-500/30'
+                              }`}
+                            >
+                              {c.frequencia}
+                              {c.visitas_por_semana ? ` (${c.visitas_por_semana}x/sem)` : ''}
+                            </span>
+                          </td>
+
+                          <td className="py-3 px-3">
+                            <div className="flex gap-1">
+                              {['segunda', 'terca', 'quarta', 'quinta', 'sexta', 'sabado', 'domingo'].map((d, dIdx) => {
+                                const labels = ['S', 'T', 'Q', 'Q', 'S', 'S', 'D'];
+                                const active = Boolean(c[d as keyof typeof c]);
+                                return (
+                                  <span
+                                    key={d}
+                                    className={`w-4 h-4 rounded text-[9px] flex items-center justify-center font-bold ${
+                                      active ? 'bg-purple-500 text-white' : 'bg-[#EAE8E2] text-[#5F5F5F]'
+                                    }`}
+                                  >
+                                    {labels[dIdx]}
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          </td>
+
+                          <td className="py-3 px-3">
+                            {proj ? (
+                              <div>
+                                <span className="text-white font-bold block">{proj.data_inicio}</span>
+                                <span className="text-[10px] text-[#77766F] block">até {proj.data_fim}</span>
+                              </div>
+                            ) : (
+                              <span className="text-rose-400 italic">Não calculado</span>
+                            )}
+                          </td>
+
+                          <td className="py-3 px-3">
+                            {proj ? (
+                              <span className="px-2 py-0.5 rounded bg-[#EAE8E2] border border-[#CFCDC5] text-amber-400 font-bold text-[11px]">
+                                {proj.competencia}
+                              </span>
+                            ) : (
+                              '—'
+                            )}
+                          </td>
+
+                          <td className="py-3 px-3">
+                            {proj ? (
+                              <span
+                                className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
+                                  proj.tipo_ciclo === 'ESPECIAL_KING_23_22'
+                                    ? 'bg-cyan-500/10 text-cyan-300 border-cyan-500/30'
+                                    : proj.tipo_ciclo === 'PRIMEIRA_VIGENCIA_PRO_RATA'
+                                    ? 'bg-amber-500/10 text-amber-300 border-amber-500/30'
+                                    : 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30'
+                                }`}
+                              >
+                                {proj.tipo_ciclo}
+                              </span>
+                            ) : (
+                              '—'
+                            )}
+                          </td>
+
+                          <td className="py-3 px-3">
+                            {c.dataCadastro ? (
+                              <span className="text-[#77766F] text-[11px]">{c.dataCadastro}</span>
+                            ) : (
+                              <span className="text-[10px] text-rose-400 font-bold flex items-center gap-1">
+                                <span className="material-symbols-outlined text-[12px]">warning</span>
+                                Indisponível
+                              </span>
+                            )}
+                          </td>
+
+                          {/* SITUAÇÃO CONTRATUAL / CLASSIFICAÇÃO (ETAPA H3.3) */}
+                          <td className="py-3 px-3">
+                            {c.classificacao === 'JA_POSSUI_ATIVO' && (
+                              <div>
+                                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-500/10 text-blue-400 border border-blue-500/30 flex items-center gap-1 w-max">
+                                  <span className="material-symbols-outlined text-[12px]">lock</span>
+                                  Contrato Ativo
+                                </span>
+                                <span className="text-[10px] text-[#77766F] block mt-0.5" title={c.motivoClassificacao}>
+                                  Desde {c.contratoAtivoExistente?.data_inicio_vigencia}
+                                </span>
+                              </div>
+                            )}
+
+                            {c.classificacao === 'JA_POSSUI_SUSPENSO' && (
+                              <div>
+                                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/10 text-amber-300 border border-amber-500/30 flex items-center gap-1 w-max">
+                                  <span className="material-symbols-outlined text-[12px]">pause_circle</span>
+                                  Suspenso
+                                </span>
+                                <span className="text-[10px] text-amber-400/80 block mt-0.5" title={c.motivoClassificacao}>
+                                  Revisar manual
+                                </span>
+                              </div>
+                            )}
+
+                            {c.classificacao === 'INICIO_NAO_INFORMADO' && (
+                              <div>
+                                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-500/10 text-rose-300 border border-rose-500/30 flex items-center gap-1 w-max">
+                                  <span className="material-symbols-outlined text-[12px]">block</span>
+                                  Início Ausente
+                                </span>
+                                <span className="text-[10px] text-rose-400/80 block mt-0.5" title={c.motivoClassificacao}>
+                                  Cadastrar indústria
+                                </span>
+                              </div>
+                            )}
+
+                            {c.classificacao === 'ERRO_CONSULTA' && (
+                              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/40 flex items-center gap-1 w-max" title={c.motivoClassificacao}>
+                                <span className="material-symbols-outlined text-[12px]">error</span>
+                                Erro Consulta
+                              </span>
+                            )}
+
+                            {c.classificacao === 'ELEGIVEL' && (
+                              <div>
+                                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 flex items-center gap-1 w-max">
+                                  <span className="material-symbols-outlined text-[12px]">check_circle</span>
+                                  Apto p/ Contrato
+                                </span>
+                                <span className="text-[10px] text-[#77766F] block mt-0.5">
+                                  Sem contrato ativo
+                                </span>
+                              </div>
+                            )}
+                          </td>
+
+                          {/* AÇÕES DE AUTORIZAÇÃO INDIVIDUAL (ETAPA H3.5) */}
+                          {canEdit && (
+                            <td className="py-3 px-3 text-center">
+                              {c.classificacao === 'ELEGIVEL' ? (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setReviewingContrato(c);
+                                    setRevisaoForm({
+                                      valor_por_visita: '',
+                                      tipo_vigencia: 'continua',
+                                      data_fim_vigencia: '',
+                                      observacao: ''
+                                    });
+                                    setRevisaoErrors({});
+                                    setSimulatedPayload(null);
+                                  }}
+                                  className="px-2.5 py-1.5 rounded-lg bg-[#222222] hover:bg-black text-white text-[11px] font-bold border border-[#171717] flex items-center gap-1.5 mx-auto transition-all cursor-pointer shadow-sm hover:shadow"
+                                  title="Revisar e autorizar contrato individualmente"
+                                >
+                                  <span className="material-symbols-outlined text-[14px] text-amber-400">rate_review</span>
+                                  <span>Revisar</span>
+                                </button>
+                              ) : (
+                                <span
+                                  className="text-[10px] text-[#77766F] italic flex items-center justify-center gap-1"
+                                  title={c.motivoClassificacao}
+                                >
+                                  <span className="material-symbols-outlined text-[12px] text-[#5F5F5F]">lock</span>
+                                  Bloqueado
+                                </span>
+                              )}
+                            </td>
+                          )}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+
+          {/* TABELA 2: ROTAS CONFLITANTES / NÃO ELEGÍVEIS */}
+          {contratosPreviewData.conflitos.length > 0 && (
+            <section className="bg-[#F7F6F2] border border-amber-500/30 rounded-2xl p-6 shadow-2xl space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-bold text-amber-400 uppercase tracking-wider font-mono flex items-center gap-2">
+                  <span className="material-symbols-outlined text-amber-400">report_problem</span>
+                  Conflitos Detectados nas Rotas ({contratosPreviewData.conflitos.length})
+                </h3>
+                <span className="text-[11px] font-mono text-amber-400/80">
+                  Bloqueados para Geração Contratual
+                </span>
+              </div>
+
+              <div className="overflow-x-auto rounded-xl border border-amber-500/20">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="bg-[#E3E1DA] border-b border-amber-500/20 text-[11px] font-bold text-amber-300 uppercase tracking-wider font-mono">
+                      <th className="py-3 px-3">Indústria</th>
+                      <th className="py-3 px-3">Loja / PDV</th>
+                      <th className="py-3 px-3">Total de Rotas</th>
+                      <th className="py-3 px-3">Frequências Divergentes</th>
+                      <th className="py-3 px-3">Motivo do Bloqueio</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-amber-500/10 text-[#171717] font-mono">
+                    {contratosPreviewData.conflitos.map((conf, cIdx) => (
+                      <tr key={`conf_${conf.industria_codigo}_${conf.loja_codigo}_${cIdx}`} className="hover:bg-amber-500/5">
+                        <td className="py-3 px-3 font-bold text-white">
+                          {conf.industriaNome} ({conf.industria_codigo})
+                        </td>
+                        <td className="py-3 px-3 text-[#171717]">
+                          {conf.lojaInfo.nome} ({conf.loja_codigo})
+                        </td>
+                        <td className="py-3 px-3 text-amber-400 font-bold">{conf.totalRotas}</td>
+                        <td className="py-3 px-3">
+                          <div className="flex gap-1.5">
+                            {conf.frequenciasEncontradas.map((f) => (
+                              <span key={f} className="px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/30 text-[10px] font-bold">
+                                {f}
+                              </span>
+                            ))}
+                          </div>
+                        </td>
+                        <td className="py-3 px-3 text-[#77766F] text-[11px]">
+                          {conf.motivo}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          )}
         </div>
       )}
 
@@ -1558,6 +2227,21 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
               </div>
 
               <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-[#171717]">INÍCIO DA OPERAÇÃO (COMERCIAL)</label>
+                  <span className="text-[10px] text-[#77766F] font-mono">
+                    (Opcional - define ciclo pro-rata)
+                  </span>
+                </div>
+                <input
+                  type="date"
+                  value={formData.data_inicio_operacao}
+                  onChange={(e) => setFormData({ ...formData, data_inicio_operacao: e.target.value })}
+                  className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-purple-500 font-mono"
+                />
+              </div>
+
+              <div>
                 <label className="text-[#171717] block mb-1">OBSERVAÇÕES</label>
                 <textarea
                   value={formData.observacao}
@@ -1592,6 +2276,399 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      {/* MODAL DE REVISÃO E AUTORIZAÇÃO INDIVIDUAL DE CONTRATO (ETAPA H3.5) */}
+      {/* ATENÇÃO: NENHUMA gravação no banco é executada nesta etapa (somente prototipação e validação local) */}
+      {reviewingContrato && canEdit && (
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl max-w-2xl w-full p-6 shadow-2xl space-y-5 max-h-[90vh] overflow-y-auto">
+            {/* Cabeçalho */}
+            <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-3">
+              <div>
+                <h3 className="text-sm font-bold text-[#171717] font-mono flex items-center gap-2">
+                  <span className="material-symbols-outlined text-amber-500">verified</span>
+                  Revisão e Autorização Individual de Contrato
+                </h3>
+                <span className="text-[11px] text-[#77766F] font-mono block mt-0.5">
+                  Prototipação comercial para validação antes de emissão
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setReviewingContrato(null);
+                  setSimulatedPayload(null);
+                }}
+                className="text-[#77766F] hover:text-[#171717] p-1 rounded-lg"
+              >
+                <span className="material-symbols-outlined">close</span>
+              </button>
+            </div>
+
+            {/* Aviso de Modo Seguro / Prototipação */}
+            <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 flex items-start gap-2.5">
+              <span className="material-symbols-outlined text-amber-500 text-lg shrink-0 mt-0.5">info</span>
+              <div className="text-xs font-mono text-amber-800 space-y-1">
+                <p className="font-bold">MODO DE PROTOTIPAÇÃO E VALIDAÇÃO ATIVO</p>
+                <p className="text-[11px] leading-relaxed text-amber-900/80">
+                  Nenhum registro será criado ou alterado no Supabase. O objetivo deste formulário é validar os parâmetros comerciais (valor por visita, término da vigência e ciclo calculado) antes da formalização.
+                </p>
+              </div>
+            </div>
+
+            {/* Dados do Par (Indústria e Loja) */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl p-4 text-xs font-mono">
+              <div>
+                <span className="text-[#5F5F5F] block text-[10px] uppercase">Indústria:</span>
+                <span className="text-[#171717] font-bold text-sm block">
+                  {reviewingContrato.industriaNome}
+                </span>
+                <span className="text-purple-600 font-bold text-[11px]">
+                  {reviewingContrato.industria_codigo}
+                  {reviewingContrato.industria_codigo === 'IND-013' && ' ★ (KING - Ciclo 23 a 22)'}
+                </span>
+              </div>
+              <div>
+                <span className="text-[#5F5F5F] block text-[10px] uppercase">Loja / PDV:</span>
+                <span className="text-[#171717] font-bold text-sm block">
+                  {reviewingContrato.lojaInfo.nome}
+                </span>
+                <span className="text-[#77766F] text-[11px] block">
+                  {reviewingContrato.loja_codigo}
+                  {reviewingContrato.lojaInfo.cidade ? ` • ${reviewingContrato.lojaInfo.cidade}/${reviewingContrato.lojaInfo.uf}` : ''}
+                </span>
+              </div>
+            </div>
+
+            {/* Frequência e Dias de Visita Operacionais */}
+            <div className="space-y-2 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl p-4 text-xs font-mono">
+              <div className="flex items-center justify-between">
+                <span className="text-[#5F5F5F] text-[10px] uppercase font-bold">Frequência Operacional:</span>
+                <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-blue-500/10 text-blue-700 border border-blue-500/30">
+                  {reviewingContrato.frequencia}
+                  {reviewingContrato.visitas_por_semana ? ` (${reviewingContrato.visitas_por_semana}x/sem)` : ''}
+                </span>
+              </div>
+              <div>
+                <span className="text-[#5F5F5F] block text-[10px] uppercase mb-1">Dias de Visita na Semana:</span>
+                <div className="flex gap-1.5">
+                  {['segunda', 'terca', 'quarta', 'quinta', 'sexta', 'sabado', 'domingo'].map((d, dIdx) => {
+                    const labels = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'];
+                    const shortLabels = ['S', 'T', 'Q', 'Q', 'S', 'S', 'D'];
+                    const active = Boolean(reviewingContrato[d as keyof typeof reviewingContrato]);
+                    return (
+                      <span
+                        key={d}
+                        title={`${labels[dIdx]}: ${active ? 'Com visita' : 'Sem visita'}`}
+                        className={`px-2 py-1 rounded text-[11px] font-bold flex items-center justify-center border ${
+                          active
+                            ? 'bg-purple-600 text-white border-purple-600'
+                            : 'bg-[#F7F6F2] text-[#77766F] border-[#CFCDC5]'
+                        }`}
+                      >
+                        {shortLabels[dIdx]}
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {/* Início Operacional e Período de Apuração */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl p-4 text-xs font-mono">
+              <div>
+                <span className="text-[#5F5F5F] block text-[10px] uppercase">Início Operacional Informado:</span>
+                <span className="text-[#171717] font-bold">
+                  {reviewingContrato.dataCadastro || 'Não cadastrado'}
+                </span>
+              </div>
+              <div>
+                <span className="text-[#5F5F5F] block text-[10px] uppercase">Período de Apuração Projetado:</span>
+                {reviewingContrato.projecao_periodo ? (
+                  <div>
+                    <span className="text-[#171717] font-bold block">
+                      {reviewingContrato.projecao_periodo.data_inicio} até {reviewingContrato.projecao_periodo.data_fim}
+                    </span>
+                    <span className="text-[10px] text-amber-700 font-semibold block">
+                      Competência: {reviewingContrato.projecao_periodo.competencia} ({reviewingContrato.projecao_periodo.tipo_ciclo})
+                    </span>
+                  </div>
+                ) : (
+                  <span className="text-rose-600 italic">Indisponível</span>
+                )}
+              </div>
+            </div>
+
+            {/* Formulário Comercial de Revisão */}
+            <div className="space-y-4 pt-2">
+              <h4 className="text-xs font-bold text-[#171717] font-mono uppercase tracking-wider">
+                Definições Contratuais Obrigatórias
+              </h4>
+
+              {/* 1. Valor por Visita (OBRIGATÓRIO) */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs font-mono font-bold text-[#171717]">
+                    VALOR POR VISITA (R$) *
+                  </label>
+                  <span className="text-[10px] text-[#77766F] font-mono">
+                    Não inferido das rotas (preenchimento mandatório)
+                  </span>
+                </div>
+                <div className="relative">
+                  <span className="absolute left-3 top-2.5 text-xs font-mono font-bold text-[#5F5F5F]">R$</span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0.01"
+                    placeholder="0,00"
+                    value={revisaoForm.valor_por_visita}
+                    onChange={(e) => {
+                      setRevisaoForm({ ...revisaoForm, valor_por_visita: e.target.value });
+                      if (revisaoErrors.valor) setRevisaoErrors({ ...revisaoErrors, valor: undefined });
+                    }}
+                    className={`w-full h-10 pl-10 pr-3 bg-white border rounded-xl text-[#171717] font-mono text-sm focus:outline-none focus:border-purple-600 ${
+                      revisaoErrors.valor ? 'border-rose-500' : 'border-[#CFCDC5]'
+                    }`}
+                  />
+                </div>
+                {revisaoErrors.valor && (
+                  <span className="text-[11px] text-rose-600 font-mono block mt-1">
+                    {revisaoErrors.valor}
+                  </span>
+                )}
+              </div>
+
+              {/* 2. Vigência Comercial (Contínua vs Determinada) */}
+              <div>
+                <label className="text-xs font-mono font-bold text-[#171717] block mb-1">
+                  TIPO DE VIGÊNCIA COMERCIAL *
+                </label>
+                <div className="grid grid-cols-2 gap-3 font-mono text-xs">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRevisaoForm({ ...revisaoForm, tipo_vigencia: 'continua', data_fim_vigencia: '' });
+                      if (revisaoErrors.data_fim) setRevisaoErrors({ ...revisaoErrors, data_fim: undefined });
+                    }}
+                    className={`p-3 rounded-xl border text-left flex flex-col gap-1 transition-all cursor-pointer ${
+                      revisaoForm.tipo_vigencia === 'continua'
+                        ? 'bg-purple-50 border-purple-600 text-purple-900 font-bold shadow-sm'
+                        : 'bg-white border-[#CFCDC5] text-[#5F5F5F] hover:bg-[#EAE8E2]'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <span className="material-symbols-outlined text-sm">all_inclusive</span>
+                      <span>Contrato Contínuo</span>
+                    </div>
+                    <span className="text-[10px] text-[#77766F] font-normal">
+                      Vigência por prazo indeterminado (data fim = nula)
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRevisaoForm({ ...revisaoForm, tipo_vigencia: 'determinada' });
+                    }}
+                    className={`p-3 rounded-xl border text-left flex flex-col gap-1 transition-all cursor-pointer ${
+                      revisaoForm.tipo_vigencia === 'determinada'
+                        ? 'bg-purple-50 border-purple-600 text-purple-900 font-bold shadow-sm'
+                        : 'bg-white border-[#CFCDC5] text-[#5F5F5F] hover:bg-[#EAE8E2]'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <span className="material-symbols-outlined text-sm">event</span>
+                      <span>Prazo Determinado</span>
+                    </div>
+                    <span className="text-[10px] text-[#77766F] font-normal">
+                      Com data final de vigência estipulada
+                    </span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Data Final de Vigência (se determinada) */}
+              {revisaoForm.tipo_vigencia === 'determinada' && (
+                <div className="p-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl space-y-1">
+                  <label className="text-xs font-mono font-bold text-[#171717] block">
+                    DATA FINAL DA VIGÊNCIA COMERCIAL *
+                  </label>
+                  <input
+                    type="date"
+                    value={revisaoForm.data_fim_vigencia}
+                    onChange={(e) => {
+                      setRevisaoForm({ ...revisaoForm, data_fim_vigencia: e.target.value });
+                      if (revisaoErrors.data_fim) setRevisaoErrors({ ...revisaoErrors, data_fim: undefined });
+                    }}
+                    className={`w-full h-10 px-3 bg-white border rounded-xl text-[#171717] font-mono text-sm focus:outline-none focus:border-purple-600 ${
+                      revisaoErrors.data_fim ? 'border-rose-500' : 'border-[#CFCDC5]'
+                    }`}
+                  />
+                  {revisaoErrors.data_fim ? (
+                    <span className="text-[11px] text-rose-600 font-mono block">
+                      {revisaoErrors.data_fim}
+                    </span>
+                  ) : (
+                    <span className="text-[10px] text-[#77766F] font-mono block">
+                      A data de término deve ser posterior ou igual ao início da vigência ({reviewingContrato.dataCadastro || contratosRefDate}).
+                    </span>
+                  )}
+                </div>
+              )}
+
+              {/* Observações Contratuais */}
+              <div>
+                <label className="text-xs font-mono font-bold text-[#171717] block mb-1">
+                  OBSERVAÇÕES DO CONTRATO
+                </label>
+                <textarea
+                  value={revisaoForm.observacao}
+                  onChange={(e) => setRevisaoForm({ ...revisaoForm, observacao: e.target.value })}
+                  placeholder="Informações adicionais ou justificativas comerciais..."
+                  className="w-full p-3 bg-white border border-[#CFCDC5] rounded-xl text-[#171717] font-mono text-xs focus:outline-none focus:border-purple-600 h-16 resize-none"
+                />
+              </div>
+            </div>
+
+            {/* Simulação do Payload Validado (Sem Gravação) */}
+            {simulatedPayload && (
+              <div className="bg-emerald-50 border border-emerald-500/40 rounded-xl p-4 space-y-3">
+                <div className="flex items-center gap-2 text-emerald-800 text-xs font-mono font-bold">
+                  <span className="material-symbols-outlined text-sm text-emerald-600">task_alt</span>
+                  <span>Payload Validado com Sucesso (100% Compatível com o Banco)</span>
+                </div>
+                <p className="text-[11px] text-emerald-900/80 font-mono">
+                  O objeto abaixo é exatamente o payload sanitizado que será enviado ao Supabase por <code className="font-bold">prepareContratoInsertData()</code>, contendo apenas colunas existentes na tabela <code className="font-bold">contratos_lojas</code>:
+                </p>
+                <div className="space-y-1">
+                  <span className="text-[10px] text-emerald-800 font-mono font-bold block uppercase">
+                    Payload Real para o Supabase (public.contratos_lojas):
+                  </span>
+                  <pre className="p-3 bg-white border border-emerald-200 rounded-lg text-[10px] font-mono text-[#171717] overflow-x-auto max-h-40">
+                    {JSON.stringify(simulatedPayload.databasePayload, null, 2)}
+                  </pre>
+                </div>
+                <div className="p-2.5 bg-emerald-100/60 border border-emerald-300 rounded-lg text-[10px] font-mono text-emerald-900 space-y-1">
+                  <span className="font-bold block uppercase">Metadados de Simulação e Auditoria:</span>
+                  <p>• Indústria KING: {simulatedPayload.metadata.isKing ? 'Sim (Ciclo 23 a 22)' : 'Não (Calendário Regular)'}</p>
+                  <p>• Tipo de Vigência Comercial: {simulatedPayload.metadata.tipo_vigencia === 'continua' ? 'Contínua (Indeterminada)' : 'Determinada'}</p>
+                  <p>• Ciclo de Apuração Calculado: {simulatedPayload.metadata.ciclo_apuracao ? `${simulatedPayload.metadata.ciclo_apuracao.data_inicio} até ${simulatedPayload.metadata.ciclo_apuracao.data_fim} (Competência: ${simulatedPayload.metadata.ciclo_apuracao.competencia})` : 'Não aplicável'}</p>
+                  <p className="font-bold text-emerald-950">✓ {simulatedPayload.metadata.aviso}</p>
+                </div>
+              </div>
+            )}
+
+            {/* Rodapé / Ações */}
+            <div className="pt-3 border-t border-[#CFCDC5] flex items-center justify-between">
+              <span className="text-[10px] text-[#77766F] font-mono">
+                MK9 Date • Autorização Individual de Contratos
+              </span>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setReviewingContrato(null);
+                    setSimulatedPayload(null);
+                  }}
+                  className="px-4 py-2 rounded-xl bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] border border-[#CFCDC5] text-xs font-semibold cursor-pointer"
+                >
+                  Fechar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    // Validação estrita dos campos
+                    const errors: { valor?: string; data_fim?: string } = {};
+
+                    const valorNum = parseFloat(revisaoForm.valor_por_visita);
+                    if (isNaN(valorNum) || valorNum <= 0) {
+                      errors.valor = 'Informe um valor por visita válido e maior que zero (R$).';
+                    }
+
+                    const dataInicio = reviewingContrato.dataCadastro || contratosRefDate;
+
+                    if (revisaoForm.tipo_vigencia === 'determinada') {
+                      if (!revisaoForm.data_fim_vigencia) {
+                        errors.data_fim = 'A data final da vigência é obrigatória para contratos de prazo determinado.';
+                      } else {
+                        try {
+                          parseISODate(revisaoForm.data_fim_vigencia);
+                          if (revisaoForm.data_fim_vigencia < dataInicio) {
+                            errors.data_fim = `A data final (${revisaoForm.data_fim_vigencia}) não pode ser anterior ao início da vigência (${dataInicio}).`;
+                          }
+                        } catch (err: any) {
+                          errors.data_fim = err.message || 'Data final inválida.';
+                        }
+                      }
+                    }
+
+                    if (Object.keys(errors).length > 0) {
+                      setRevisaoErrors(errors);
+                      setSimulatedPayload(null);
+                      return;
+                    }
+
+                    setRevisaoErrors({});
+
+                    // Testar validação com prepareContratoInsertData (função pura sem chamada SQL)
+                    const isKing = reviewingContrato.industria_codigo === 'IND-013';
+                    const prepared = contratosService.prepareContratoInsertData({
+                      industria_codigo: reviewingContrato.industria_codigo,
+                      loja_codigo: reviewingContrato.loja_codigo,
+                      frequencia: reviewingContrato.frequencia,
+                      visitas_por_semana: reviewingContrato.visitas_por_semana || undefined,
+                      segunda: reviewingContrato.segunda,
+                      terca: reviewingContrato.terca,
+                      quarta: reviewingContrato.quarta,
+                      quinta: reviewingContrato.quinta,
+                      sexta: reviewingContrato.sexta,
+                      sabado: reviewingContrato.sabado,
+                      domingo: reviewingContrato.domingo,
+                      data_inicio_vigencia: dataInicio,
+                      data_fim_vigencia: revisaoForm.tipo_vigencia === 'continua' ? null : revisaoForm.data_fim_vigencia,
+                      valor_por_visita: valorNum,
+                      observacao: revisaoForm.observacao.trim() || null,
+                      status: 'ativo'
+                    });
+
+                    if (prepared.error || !prepared.data) {
+                      onShowToast({
+                        title: 'Inconsistência no Contrato',
+                        message: prepared.error?.message || 'Falha ao validar dados contratuais.',
+                        type: 'error'
+                      });
+                      setSimulatedPayload(null);
+                      return;
+                    }
+
+                    // Exibir resumo do payload simulado sem gravar no banco
+                    setSimulatedPayload({
+                      databasePayload: prepared.data,
+                      metadata: {
+                        isKing,
+                        ciclo_apuracao: reviewingContrato.projecao_periodo,
+                        tipo_vigencia: revisaoForm.tipo_vigencia,
+                        aviso: 'Nenhum dado gravado no banco de dados (validação simulada aprovada).'
+                      }
+                    });
+
+                    onShowToast({
+                      title: 'Simulação Aprovada',
+                      message: 'Os dados do contrato foram validados com sucesso. Nenhuma gravação efetuada nesta etapa.',
+                      type: 'success'
+                    });
+                  }}
+                  className="px-5 py-2 rounded-xl bg-[#222222] hover:bg-black text-white font-bold text-xs flex items-center gap-2 cursor-pointer shadow-sm hover:shadow"
+                >
+                  <span className="material-symbols-outlined text-sm text-emerald-400">check_circle</span>
+                  <span>Validar e Simular Contrato</span>
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>

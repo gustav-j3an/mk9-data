@@ -116,14 +116,14 @@ export const DailiesControlView: React.FC<DailiesControlViewProps> = ({
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-2">
         <div className="flex flex-col">
           <div className="flex items-center gap-3">
-            <span className="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-purple-600/20 text-purple-300 border border-purple-500/30">
+            <span className="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-purple-100 text-purple-700 border border-purple-200">
               <span className="material-symbols-outlined text-[20px]">payments</span>
             </span>
             <h1 className="text-2xl sm:text-3xl font-extrabold text-[#171717] tracking-tight">
               Controle de Diárias
             </h1>
-            <span className="px-2.5 py-0.5 rounded-full bg-[#F7F6F2] text-cyan-400 font-mono text-xs flex items-center gap-1.5 border border-cyan-500/20">
-              <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+            <span className="px-2.5 py-0.5 rounded-full bg-[#F7F6F2] text-cyan-700 font-mono text-xs flex items-center gap-1.5 border border-cyan-200">
+              <span className="w-1.5 h-1.5 rounded-full bg-cyan-600 animate-pulse" />
               SYNC LIVE
             </span>
           </div>
@@ -131,7 +131,7 @@ export const DailiesControlView: React.FC<DailiesControlViewProps> = ({
             Registre diárias e acompanhe os pagamentos quinzenais com conciliação biométrica e de rota.
           </p>
           <div className="flex items-center gap-2 mt-2">
-            <span className="material-symbols-outlined text-sm text-purple-400">verified_user</span>
+            <span className="material-symbols-outlined text-sm text-purple-700">verified_user</span>
             <span className="font-mono text-xs text-[#171717]">
               Ciclo Operacional Vigente • Fechamento Quinzenal Automático
             </span>
@@ -243,7 +243,7 @@ export const DailiesControlView: React.FC<DailiesControlViewProps> = ({
         <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4 pb-5 border-b border-[#CFCDC5]">
           <div>
             <div className="flex items-center gap-2">
-              <span className="px-2.5 py-0.5 rounded bg-purple-600/20 text-purple-300 font-mono text-[11px] font-bold uppercase border border-purple-500/30">
+              <span className="px-2.5 py-0.5 rounded bg-purple-100 text-purple-800 font-mono text-[11px] font-bold uppercase border border-purple-200">
                 CICLO CORRENTE
               </span>
               <span className="font-mono text-xs text-[#77766F]">• Fechamento automático integrado</span>
@@ -281,17 +281,17 @@ export const DailiesControlView: React.FC<DailiesControlViewProps> = ({
                 className={`w-full text-left p-3 rounded-lg border flex items-center justify-between transition-all ${
                   selectedQuinzena === 'current'
                     ? 'bg-[#E4E2DB] border-purple-500/50 shadow-md ring-1 ring-purple-500/20'
-                    : 'bg-[#EAE8E2] border-[#CFCDC5] hover:bg-[#1a202d]'
+                    : 'bg-[#EAE8E2] border-[#CFCDC5] hover:bg-[#E4E2DB]'
                 }`}
               >
                 <div className="flex items-center gap-2.5">
-                  <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping" />
+                  <span className="w-2 h-2 rounded-full bg-cyan-600 animate-ping" />
                   <div>
-                    <div className="text-xs font-bold text-white">Quinzena Atual</div>
+                    <div className="text-xs font-bold text-[#171717]">Quinzena Atual</div>
                     <div className="font-mono text-[11px] text-[#77766F]">Em aberto • {dailies.filter((d) => d.status === 'a_pagar').length} diárias</div>
                   </div>
                 </div>
-                <span className="font-mono text-xs font-bold text-cyan-300">R$ {dailies.filter((d) => d.status === 'a_pagar').reduce((sum, d) => sum + d.amount, 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                <span className="font-mono text-xs font-bold text-cyan-700">R$ {dailies.filter((d) => d.status === 'a_pagar').reduce((sum, d) => sum + d.amount, 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
               </button>
 
               <button
@@ -299,17 +299,17 @@ export const DailiesControlView: React.FC<DailiesControlViewProps> = ({
                 className={`w-full text-left p-3 rounded-lg border flex items-center justify-between transition-all ${
                   selectedQuinzena === 'past'
                     ? 'bg-[#E4E2DB] border-purple-500/50 shadow-md ring-1 ring-purple-500/20'
-                    : 'bg-[#EAE8E2] border-[#CFCDC5] hover:bg-[#1a202d]'
+                    : 'bg-[#EAE8E2] border-[#CFCDC5] hover:bg-[#E4E2DB]'
                 }`}
               >
                 <div className="flex items-center gap-2.5">
-                  <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                  <span className="w-2 h-2 rounded-full bg-emerald-600" />
                   <div>
-                    <div className="text-xs font-bold text-white">Quinzena Anterior</div>
+                    <div className="text-xs font-bold text-[#171717]">Quinzena Anterior</div>
                     <div className="font-mono text-[11px] text-[#77766F]">Liquidada • {dailies.filter((d) => d.status === 'pago').length} diárias</div>
                   </div>
                 </div>
-                <span className="font-mono text-xs font-bold text-emerald-400">R$ {dailies.filter((d) => d.status === 'pago').reduce((sum, d) => sum + d.amount, 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                <span className="font-mono text-xs font-bold text-emerald-700">R$ {dailies.filter((d) => d.status === 'pago').reduce((sum, d) => sum + d.amount, 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
               </button>
             </div>
           </div>
@@ -451,7 +451,7 @@ export const DailiesControlView: React.FC<DailiesControlViewProps> = ({
                 className={`px-3 py-1 rounded-md transition-all ${
                   filterStatus === 'a_pagar'
                     ? 'bg-amber-600 text-white font-bold'
-                    : 'bg-[#EAE8E2] text-amber-300 hover:text-white border border-[#CFCDC5]'
+                    : 'bg-[#EAE8E2] text-amber-700 hover:text-amber-800 border border-[#CFCDC5]'
                 }`}
               >
                 A PAGAR ({dailies.filter((d) => d.status === 'a_pagar').length})
@@ -461,7 +461,7 @@ export const DailiesControlView: React.FC<DailiesControlViewProps> = ({
                 className={`px-3 py-1 rounded-md transition-all ${
                   filterStatus === 'pago'
                     ? 'bg-emerald-600 text-white font-bold'
-                    : 'bg-[#EAE8E2] text-emerald-400 hover:text-white border border-[#CFCDC5]'
+                    : 'bg-[#EAE8E2] text-emerald-700 hover:text-emerald-800 border border-[#CFCDC5]'
                 }`}
               >
                 PAGO ({dailies.filter((d) => d.status === 'pago').length})
@@ -484,7 +484,7 @@ export const DailiesControlView: React.FC<DailiesControlViewProps> = ({
             </button>
             <button
               onClick={() => onShowToast({ title: 'Filtros Aplicados', message: 'Tabela recalculada.', type: 'info' })}
-              className="px-4 py-1.5 rounded-lg bg-purple-600/30 hover:bg-purple-600/50 text-purple-200 border border-purple-500/40 text-xs font-bold flex items-center gap-1.5"
+              className="px-4 py-1.5 rounded-lg bg-purple-700 hover:bg-purple-800 text-white font-bold text-xs flex items-center gap-1.5 transition-all shadow-xs cursor-pointer"
             >
               <span className="material-symbols-outlined text-sm">search</span>
               Aplicar busca
@@ -509,12 +509,12 @@ export const DailiesControlView: React.FC<DailiesControlViewProps> = ({
                 <th className="py-2.5 px-4 font-semibold text-center">Ações</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-[#CFCDC5] text-slate-200">
+            <tbody className="divide-y divide-[#CFCDC5] text-[#171717]">
               {filteredDailies.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="text-center py-12 text-[#77766F] font-sans">
                     <div className="flex flex-col items-center justify-center space-y-2">
-                      <span className="material-symbols-outlined text-4xl text-slate-600">receipt_long</span>
+                      <span className="material-symbols-outlined text-4xl text-[#AAA79E]">receipt_long</span>
                       <p className="text-sm font-semibold text-[#171717]">Não há dados cadastrados ainda.</p>
                     </div>
                   </td>
@@ -523,16 +523,16 @@ export const DailiesControlView: React.FC<DailiesControlViewProps> = ({
                 filteredDailies.map((daily) => (
                 <tr key={daily.id} className="hover:bg-[#E4E2DB] transition-colors group">
                   <td className="py-3 px-4 font-mono whitespace-nowrap">
-                    <div className="text-white font-bold">{daily.date}</div>
+                    <div className="text-[#171717] font-bold">{daily.date}</div>
                     <div className="text-[10px] text-[#77766F]">{daily.dayOfWeek}</div>
                   </td>
                   <td className="py-3 px-4">
                     <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-purple-600/30 text-purple-300 border border-purple-500/40 flex items-center justify-center font-bold text-xs shrink-0">
+                      <div className="w-8 h-8 rounded-full bg-purple-100 text-purple-800 border border-purple-200 flex items-center justify-center font-bold text-xs shrink-0">
                         {daily.freelancerInitials}
                       </div>
                       <div>
-                        <div className="font-bold text-[#171717] group-hover:text-purple-300 transition-colors">
+                        <div className="font-bold text-[#171717] group-hover:text-purple-700 transition-colors">
                           {daily.freelancerName}
                         </div>
                         <div className="font-mono text-[11px] text-[#77766F]">CPF: {daily.freelancerCpf}</div>
@@ -540,7 +540,7 @@ export const DailiesControlView: React.FC<DailiesControlViewProps> = ({
                     </div>
                   </td>
                   <td className="py-3 px-4">
-                    <div className="font-semibold text-slate-100">{daily.storeName}</div>
+                    <div className="font-semibold text-[#171717]">{daily.storeName}</div>
                     <div className="text-[#77766F] text-[11px]">{daily.storeCity}</div>
                   </td>
                   <td className="py-3 px-4">
@@ -549,7 +549,7 @@ export const DailiesControlView: React.FC<DailiesControlViewProps> = ({
                       {daily.industry}
                     </span>
                   </td>
-                  <td className="py-3 px-4 text-right font-mono text-sm font-bold text-white whitespace-nowrap">
+                  <td className="py-3 px-4 text-right font-mono text-sm font-bold text-[#171717] whitespace-nowrap">
                     R$ {daily.amount.toFixed(2).replace('.', ',')}
                   </td>
                   <td className="py-3 px-4 text-center">
@@ -573,7 +573,7 @@ export const DailiesControlView: React.FC<DailiesControlViewProps> = ({
                     <div className="flex items-center justify-center gap-1">
                       <button
                         onClick={() => onShowToast({ title: 'Detalhes da Diária', message: `${daily.freelancerName} • ${daily.storeName}`, type: 'info' })}
-                        className="p-1.5 rounded-lg text-[#77766F] hover:text-cyan-400 hover:bg-[#EAE8E2]"
+                        className="p-1.5 rounded-lg text-[#5F5F5F] hover:text-[#171717] hover:bg-[#EAE8E2] transition-colors"
                         title="Visualizar Detalhes"
                       >
                         <span className="material-symbols-outlined text-base">visibility</span>
@@ -581,7 +581,7 @@ export const DailiesControlView: React.FC<DailiesControlViewProps> = ({
                       {daily.status === 'a_pagar' ? (
                         <button
                           onClick={() => handleApprovePix(daily.id, daily.freelancerName)}
-                          className="p-1.5 rounded-lg text-[#77766F] hover:text-emerald-400 hover:bg-[#EAE8E2]"
+                          className="p-1.5 rounded-lg text-emerald-700 hover:text-emerald-800 hover:bg-[#EAE8E2] transition-colors"
                           title="Aprovar para PIX"
                         >
                           <span className="material-symbols-outlined text-base">price_check</span>
@@ -589,7 +589,7 @@ export const DailiesControlView: React.FC<DailiesControlViewProps> = ({
                       ) : (
                         <button
                           onClick={() => onShowToast({ title: 'Comprovante PIX', message: `Autenticação bancária de R$ ${daily.amount.toFixed(2)} emitida.`, type: 'success' })}
-                          className="p-1.5 rounded-lg text-emerald-400 hover:text-white hover:bg-[#EAE8E2]"
+                          className="p-1.5 rounded-lg text-emerald-700 hover:text-emerald-800 hover:bg-[#EAE8E2] transition-colors"
                           title="Comprovante PIX"
                         >
                           <span className="material-symbols-outlined text-base">receipt_long</span>
@@ -613,15 +613,11 @@ export const DailiesControlView: React.FC<DailiesControlViewProps> = ({
           </div>
 
           <div className="flex items-center gap-1">
-            <button disabled className="p-1.5 rounded-lg bg-[#F7F6F2] border border-[#CFCDC5] text-slate-600 cursor-not-allowed">
+            <button disabled className="p-1.5 rounded-lg bg-[#EAE8E2] border border-[#CFCDC5] text-[#AAA79E] cursor-not-allowed">
               <span className="material-symbols-outlined text-sm">chevron_left</span>
             </button>
             <button className="w-8 h-8 rounded-lg bg-[#222222] text-white font-bold flex items-center justify-center shadow-xs">1</button>
-
-
-
-
-            <button disabled className="p-1.5 rounded-lg bg-[#F7F6F2] border border-[#CFCDC5] text-slate-600 cursor-not-allowed">
+            <button disabled className="p-1.5 rounded-lg bg-[#EAE8E2] border border-[#CFCDC5] text-[#AAA79E] cursor-not-allowed">
               <span className="material-symbols-outlined text-sm">chevron_right</span>
             </button>
           </div>
@@ -642,7 +638,7 @@ export const DailiesControlView: React.FC<DailiesControlViewProps> = ({
                   <p className="text-[11px] text-[#77766F]">Cadastre uma diária avulsa de campo para a quinzena em curso</p>
                 </div>
               </div>
-              <button onClick={() => setModalOpen(false)} className="text-[#77766F] hover:text-white p-1">
+              <button onClick={() => setModalOpen(false)} className="text-[#5F5F5F] hover:text-[#171717] p-1 transition-colors">
                 <span className="material-symbols-outlined text-lg">close</span>
               </button>
             </div>
@@ -731,8 +727,8 @@ export const DailiesControlView: React.FC<DailiesControlViewProps> = ({
                 <div className="flex flex-col gap-1.5">
                   <label className="font-bold text-[#171717]">Quinzena Vinculada</label>
                   <div className="w-full h-10 px-3 bg-[#E4E2DB] border border-[#CFCDC5] rounded-lg flex items-center justify-between text-[#171717] font-mono">
-                    <span className="text-white font-semibold">18–31 Outubro / 2024</span>
-                    <span className="text-purple-400 font-bold">Repasse 05/11</span>
+                    <span className="text-[#171717] font-semibold">18–31 Outubro / 2024</span>
+                    <span className="text-purple-700 font-bold">Repasse 05/11</span>
                   </div>
                 </div>
               </div>

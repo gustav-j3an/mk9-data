@@ -59,6 +59,64 @@ export function checkVigenciaOverlap(
 }
 
 /**
+ * Classificação comercial e elegibilidade de um par (indústria, loja) para autorização contratual.
+ * Função pura e desacoplada de UI/React.
+ */
+export type ClassificacaoParContratual =
+  | 'ERRO_CONSULTA'
+  | 'JA_POSSUI_ATIVO'
+  | 'JA_POSSUI_SUSPENSO'
+  | 'INICIO_NAO_INFORMADO'
+  | 'ELEGIVEL';
+
+export function classificarParContratual(options: {
+  contratosDoPar: ContratoLoja[];
+  dataInicioOperacao?: string | null;
+  contratosError?: string | null;
+}): {
+  classificacao: ClassificacaoParContratual;
+  motivoClassificacao: string;
+  contratoAtivo: ContratoLoja | null;
+  contratoSuspenso: ContratoLoja | null;
+  contratoEncerrado: ContratoLoja | null;
+} {
+  const { contratosDoPar, dataInicioOperacao, contratosError } = options;
+
+  const contratoAtivo = contratosDoPar.find((c) => c.status === 'ativo') || null;
+  const contratoSuspenso = contratosDoPar.find((c) => c.status === 'suspenso') || null;
+  const contratoEncerrado = contratosDoPar.find((c) => c.status === 'encerrado') || null;
+  const cadastroAusente = !dataInicioOperacao || !dataInicioOperacao.trim();
+
+  let classificacao: ClassificacaoParContratual;
+  let motivoClassificacao: string;
+
+  if (contratosError) {
+    classificacao = 'ERRO_CONSULTA';
+    motivoClassificacao = 'Consulta de contratos indisponível. Elegibilidade bloqueada preventivamente.';
+  } else if (contratoAtivo) {
+    classificacao = 'JA_POSSUI_ATIVO';
+    motivoClassificacao = `Já possui contrato ativo vigente desde ${contratoAtivo.data_inicio_vigencia}.`;
+  } else if (contratoSuspenso) {
+    classificacao = 'JA_POSSUI_SUSPENSO';
+    motivoClassificacao = `Possui contrato suspenso desde ${contratoSuspenso.data_inicio_vigencia}. Requer revisão manual.`;
+  } else if (cadastroAusente) {
+    classificacao = 'INICIO_NAO_INFORMADO';
+    motivoClassificacao = 'Data de início da operação não cadastrada na indústria. Regularize no cadastro.';
+  } else {
+    classificacao = 'ELEGIVEL';
+    motivoClassificacao = 'Sem contrato ativo/suspenso. Apto para futura formalização.';
+  }
+
+  return {
+    classificacao,
+    motivoClassificacao,
+    contratoAtivo,
+    contratoSuspenso,
+    contratoEncerrado
+  };
+}
+
+/**
  * Função pura para validar regras de negócio do contrato antes de submeter ao banco
  */
 export function validateContratoPayload(
@@ -405,7 +463,7 @@ export const contratosService = {
           return {
             data: null,
             error: new Error(
-              `Cálculo de competência para a indústria "${indCodigo}" exige a data efetiva de cadastro (data_cadastro / industrias.created_at). Não é permitido inferir ou substituir silenciosamente por data atual.`
+              `Cálculo de competência para a indústria "${indCodigo}" exige a data efetiva de início da operação (data_inicio_operacao). Não é permitido inferir ou substituir silenciosamente por data atual.`
             )
           };
         }

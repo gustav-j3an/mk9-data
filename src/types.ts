@@ -25,6 +25,7 @@ export interface IndustryItem {
   cnpj: string | null;
   status: 'ativo' | 'inativo';
   observacao?: string | null;
+  data_inicio_operacao?: string | null;
   created_at?: string;
   updated_at?: string;
 }

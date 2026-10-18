@@ -666,7 +666,7 @@ export const FreelancersView: React.FC<FreelancersViewProps> = ({
           </button>
           <button
             onClick={() => onShowToast({ title: 'Sincronizar Lote', message: 'Validação de CPFs na Receita Federal atualizada.', type: 'info' })}
-            className="px-3 py-1.5 rounded-lg bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/30 text-purple-300 text-xs font-semibold transition-colors flex items-center gap-1.5"
+            className="px-3 py-1.5 rounded-lg bg-purple-700 hover:bg-purple-800 text-white text-xs font-semibold transition-colors flex items-center gap-1.5 shadow-xs cursor-pointer"
           >
             <span className="material-symbols-outlined text-[15px]">sync</span>
             Sincronizar Lote
