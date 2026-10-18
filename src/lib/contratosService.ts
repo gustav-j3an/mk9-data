@@ -3,7 +3,8 @@ import type {
   ContratoLoja,
   CreateContratoLojaDTO,
   UpdateContratoLojaDTO,
-  RouteItem
+  RouteItem,
+  PeriodoContratual
 } from '../types';
 
 /**
@@ -106,7 +107,16 @@ export function validateContratoPayload(
     }
   }
 
-  // Validação de Vigência
+  // Validação de Vigência e Cálculo de Período
+  if ('calcular_periodo' in payload && payload.calcular_periodo) {
+    if (!payload.data_referencia?.trim()) {
+      errors.push('Para cálculo automático de período contratual, a data de referência (data_referencia) é obrigatória.');
+    }
+  } else if ('data_inicio_vigencia' in payload && !payload.data_inicio_vigencia?.trim()) {
+    // Para criação sem calcular_periodo, data_inicio_vigencia é obrigatória
+    errors.push('A data de início da vigência é obrigatória quando o cálculo automático não for solicitado.');
+  }
+
   if (payload.data_inicio_vigencia && payload.data_fim_vigencia) {
     if (payload.data_fim_vigencia < payload.data_inicio_vigencia) {
       errors.push('A data de término da vigência não pode ser anterior à data de início.');
@@ -125,11 +135,20 @@ export function validateContratoPayload(
   };
 }
 
+export interface AnalyzeRotasOptions {
+  data_referencia?: string;
+  data_cadastro_map?: Record<string, string>; // industria_codigo -> data_cadastro (YYYY-MM-DD)
+}
+
 /**
  * Agrupa rotas existentes por (industria_codigo, loja_codigo) para auditoria e pré-visualização de carga.
  * Detecta conflitos de frequência e conta dias de atendimento.
+ * Opcionalmente enriquece com a projeção do período contratual quando options.data_referencia for informada.
  */
-export function analyzeRotasForContracts(rotas: RouteItem[]): {
+export function analyzeRotasForContracts(
+  rotas: RouteItem[],
+  options?: AnalyzeRotasOptions
+): {
   elegiveis: Array<{
     industria_codigo: string;
     loja_codigo: string;
@@ -144,6 +163,7 @@ export function analyzeRotasForContracts(rotas: RouteItem[]): {
     domingo: boolean;
     totalRotasVinculadas: number;
     promotoresEnvolvidos: string[];
+    projecao_periodo?: PeriodoContratual;
   }>;
   conflitos: Array<{
     industria_codigo: string;
@@ -234,6 +254,12 @@ export function analyzeRotasForContracts(rotas: RouteItem[]): {
     if (item.sabado) diasCount++;
     if (item.domingo) diasCount++;
 
+    let projecao: PeriodoContratual | undefined;
+    if (options?.data_referencia) {
+      const cad = options.data_cadastro_map ? options.data_cadastro_map[item.industria_codigo] : undefined;
+      projecao = calcularPeriodoContratual(item.industria_codigo, options.data_referencia, cad);
+    }
+
     elegiveis.push({
       industria_codigo: item.industria_codigo,
       loja_codigo: item.loja_codigo,
@@ -247,7 +273,8 @@ export function analyzeRotasForContracts(rotas: RouteItem[]): {
       sabado: item.sabado,
       domingo: item.domingo,
       totalRotasVinculadas: item.rotasCount,
-      promotoresEnvolvidos: Array.from(item.promotores)
+      promotoresEnvolvidos: Array.from(item.promotores),
+      ...(projecao ? { projecao_periodo: projecao } : {})
     });
   });
 
@@ -325,14 +352,122 @@ export const contratosService = {
   },
 
   /**
-   * Cria um novo contrato com validação de payload
+   * Prepara e valida o objeto de inserção para public.contratos_lojas,
+   * calculando o período contratual quando expressamente solicitado (calcular_periodo = true).
+   * Garante que campos auxiliares de cálculo (calcular_periodo, data_referencia, data_cadastro, competencia)
+   * NUNCA sejam enviados no payload SQL do Supabase.
+   */
+  prepareContratoInsertData(payload: CreateContratoLojaDTO): {
+    data: {
+      industria_codigo: string;
+      loja_codigo: string;
+      frequencia: ContratoLoja['frequencia'];
+      visitas_por_semana: number | null;
+      segunda: boolean;
+      terca: boolean;
+      quarta: boolean;
+      quinta: boolean;
+      sexta: boolean;
+      sabado: boolean;
+      domingo: boolean;
+      ciclo_quinzenal: ContratoLoja['ciclo_quinzenal'] | null;
+      data_inicio_vigencia: string;
+      data_fim_vigencia: string | null;
+      status: ContratoLoja['status'];
+      valor_por_visita: number | null;
+      origem: string;
+      observacao: string | null;
+    } | null;
+    error: Error | null;
+  } {
+    const val = validateContratoPayload(payload);
+    if (!val.valid) {
+      return { data: null, error: new Error(val.errors.join(' ')) };
+    }
+
+    const indCodigo = normalizeCode(payload.industria_codigo);
+    const lojCodigo = normalizeCode(payload.loja_codigo);
+
+    let inicioVigencia = payload.data_inicio_vigencia;
+    let fimVigencia = payload.data_fim_vigencia ?? null;
+
+    if (payload.calcular_periodo) {
+      if (!payload.data_referencia) {
+        return {
+          data: null,
+          error: new Error('Para cálculo automático de período contratual, data_referencia é obrigatória.')
+        };
+      }
+
+      // Se não for KING (IND-013), data_cadastro é obrigatória quando for primeiro ciclo ou para validar se é primeiro mês
+      if (indCodigo !== 'IND-013') {
+        if (!payload.data_cadastro || !payload.data_cadastro.trim()) {
+          return {
+            data: null,
+            error: new Error(
+              `Cálculo de competência para a indústria "${indCodigo}" exige a data efetiva de cadastro (data_cadastro / industrias.created_at). Não é permitido inferir ou substituir silenciosamente por data atual.`
+            )
+          };
+        }
+      }
+
+      try {
+        const periodo = calcularPeriodoContratual(
+          indCodigo,
+          payload.data_referencia,
+          payload.data_cadastro
+        );
+        inicioVigencia = periodo.data_inicio;
+        fimVigencia = periodo.data_fim;
+      } catch (calcErr: any) {
+        return { data: null, error: calcErr };
+      }
+    }
+
+    if (!inicioVigencia) {
+      return {
+        data: null,
+        error: new Error('A data de início da vigência é obrigatória para criar o contrato.')
+      };
+    }
+
+    const visitasSemana = payload.frequencia === 'SEMANAL' ? (payload.visitas_por_semana || 1) : null;
+    const cicloQuinzenal = payload.frequencia === 'QUINZENAL' ? (payload.ciclo_quinzenal || 'QUINZENAL_LIVRE') : null;
+
+    return {
+      data: {
+        industria_codigo: indCodigo,
+        loja_codigo: lojCodigo,
+        frequencia: payload.frequencia,
+        visitas_por_semana: visitasSemana,
+        segunda: Boolean(payload.segunda),
+        terca: Boolean(payload.terca),
+        quarta: Boolean(payload.quarta),
+        quinta: Boolean(payload.quinta),
+        sexta: Boolean(payload.sexta),
+        sabado: Boolean(payload.sabado),
+        domingo: Boolean(payload.domingo),
+        ciclo_quinzenal: cicloQuinzenal,
+        data_inicio_vigencia: inicioVigencia,
+        data_fim_vigencia: fimVigencia,
+        status: payload.status || 'ativo',
+        valor_por_visita: payload.valor_por_visita ?? null,
+        origem: 'manual',
+        observacao: payload.observacao ?? null
+      },
+      error: null
+    };
+  },
+
+  /**
+   * Cria um novo contrato com validação de payload e integração com cálculo de período contratual
    */
   async createContrato(
     payload: CreateContratoLojaDTO
   ): Promise<{ data: ContratoLoja | null; error: Error | null; isMigrationPending?: boolean }> {
-    const val = validateContratoPayload(payload);
-    if (!val.valid) {
-      return { data: null, error: new Error(val.errors.join(' ')) };
+    const prepared = contratosService.prepareContratoInsertData(payload);
+    if (prepared.error || !prepared.data) {
+      return { data: null, error: prepared.error };
     }
 
     if (!supabase) {
@@ -340,31 +475,9 @@ export const contratosService = {
     }
 
     try {
-      const visitasSemana = payload.frequencia === 'SEMANAL' ? (payload.visitas_por_semana || 1) : null;
-      const cicloQuinzenal = payload.frequencia === 'QUINZENAL' ? (payload.ciclo_quinzenal || 'QUINZENAL_LIVRE') : null;
-
       const { data, error } = await supabase
         .from('contratos_lojas')
-        .insert({
-          industria_codigo: normalizeCode(payload.industria_codigo),
-          loja_codigo: normalizeCode(payload.loja_codigo),
-          frequencia: payload.frequencia,
-          visitas_por_semana: visitasSemana,
-          segunda: Boolean(payload.segunda),
-          terca: Boolean(payload.terca),
-          quarta: Boolean(payload.quarta),
-          quinta: Boolean(payload.quinta),
-          sexta: Boolean(payload.sexta),
-          sabado: Boolean(payload.sabado),
-          domingo: Boolean(payload.domingo),
-          ciclo_quinzenal: cicloQuinzenal,
-          data_inicio_vigencia: payload.data_inicio_vigencia,
-          data_fim_vigencia: payload.data_fim_vigencia || null,
-          status: payload.status || 'ativo',
-          valor_por_visita: payload.valor_por_visita || null,
-          origem: 'manual',
-          observacao: payload.observacao || null
-        })
+        .insert(prepared.data)
         .select(`
           *,
           industria:industrias(codigo, nome, cnpj),
@@ -469,3 +582,169 @@ export const contratosService = {
     }
   }
 };
+
+/**
+ * Utilitários puros de manipulação de data sem dependência de fuso horário.
+ * Trabalham exclusivamente com aritmética de inteiros (ano, mês, dia).
+ */
+export function isLeapYear(year: number): boolean {
+  return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+}
+
+export function getLastDayOfMonth(year: number, month: number): number {
+  if (month === 2) {
+    return isLeapYear(year) ? 29 : 28;
+  }
+  if ([4, 6, 9, 11].includes(month)) {
+    return 30;
+  }
+  return 31;
+}
+
+export function parseISODate(dateStr: string): { year: number; month: number; day: number } {
+  if (typeof dateStr !== 'string') {
+    throw new Error(`Data deve ser uma string no formato YYYY-MM-DD. Recebido: ${typeof dateStr}`);
+  }
+  const match = dateStr.trim().match(/^(\d{4})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/);
+  if (!match) {
+    throw new Error(`Formato de data inválido: "${dateStr}". Esperado formato estrito YYYY-MM-DD.`);
+  }
+
+  const year = parseInt(match[1], 10);
+  const month = parseInt(match[2], 10);
+  const day = parseInt(match[3], 10);
+
+  const maxDays = getLastDayOfMonth(year, month);
+  if (day > maxDays) {
+    throw new Error(`Data calendário impossível: "${dateStr}". O mês ${month}/${year} possui no máximo ${maxDays} dias.`);
+  }
+
+  return { year, month, day };
+}
+
+export function formatISODate(year: number, month: number, day: number): string {
+  const y = String(year).padStart(4, '0');
+  const m = String(month).padStart(2, '0');
+  const d = String(day).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+/**
+ * Calcula o período contratual (início, fim e competência) com base no código da indústria e na data de referência.
+ * 
+ * Regras:
+ * 1. KING (identificada EXCLUSIVAMENTE pelo código 'IND-013'):
+ *    - Ciclo do dia 23 de um mês ao dia 22 do mês subsequente.
+ *    - Se dia >= 23: vigência de 23/Mês até 22/(Mês+1). Competência é Mês+1.
+ *    - Se dia < 23: vigência de 23/(Mês-1) até 22/Mês. Competência é Mês.
+ * 
+ * 2. Demais indústrias:
+ *    - Primeiro ciclo: se fornecida dataCadastro e a referência estiver no mesmo mês de cadastro,
+ *      a vigência começa na dataCadastro e vai até o último dia daquele mês (pro-rata).
+ *    - Ciclos subsequentes ou padrão: vigência do dia 01 ao último dia do mês de referência.
+ */
+export function calcularPeriodoContratual(
+  industriaCodigo: string,
+  dataReferencia: string,
+  dataCadastro?: string | null
+): PeriodoContratual {
+  const codigo = normalizeCode(industriaCodigo);
+  if (!codigo) {
+    throw new Error('Código da indústria é obrigatório.');
+  }
+
+  const ref = parseISODate(dataReferencia);
+
+  // 1. Regra KING (IND-013)
+  if (codigo === 'IND-013') {
+    let inicioYear: number;
+    let inicioMonth: number;
+    let fimYear: number;
+    let fimMonth: number;
+    let competenciaYear: number;
+    let competenciaMonth: number;
+
+    if (ref.day >= 23) {
+      // Começa dia 23 do mês atual, vai até dia 22 do próximo mês
+      inicioYear = ref.year;
+      inicioMonth = ref.month;
+
+      if (ref.month === 12) {
+        fimYear = ref.year + 1;
+        fimMonth = 1;
+      } else {
+        fimYear = ref.year;
+        fimMonth = ref.month + 1;
+      }
+      competenciaYear = fimYear;
+      competenciaMonth = fimMonth;
+    } else {
+      // Começa dia 23 do mês anterior, vai até dia 22 do mês atual
+      if (ref.month === 1) {
+        inicioYear = ref.year - 1;
+        inicioMonth = 12;
+      } else {
+        inicioYear = ref.year;
+        inicioMonth = ref.month - 1;
+      }
+      fimYear = ref.year;
+      fimMonth = ref.month;
+      competenciaYear = ref.year;
+      competenciaMonth = ref.month;
+    }
+
+    const data_inicio = formatISODate(inicioYear, inicioMonth, 23);
+    const data_fim = formatISODate(fimYear, fimMonth, 22);
+    const compStr = `${String(competenciaYear).padStart(4, '0')}-${String(competenciaMonth).padStart(2, '0')}`;
+
+    return {
+      data_inicio,
+      data_fim,
+      competencia: compStr,
+      industria_codigo: codigo,
+      tipo_ciclo: 'ESPECIAL_KING_23_22'
+    };
+  }
+
+  // 2. Demais Indústrias (Mensal Padrão ou Primeiro Ciclo Pro-Rata)
+  let dataInicioStr: string;
+  let tipoCiclo: 'MENSAL_PADRAO' | 'PRIMEIRA_VIGENCIA_PRO_RATA' = 'MENSAL_PADRAO';
+
+  if (dataCadastro && dataCadastro.trim() !== '') {
+    const cad = parseISODate(dataCadastro);
+    const refDateFormatted = formatISODate(ref.year, ref.month, ref.day);
+    const cadDateFormatted = formatISODate(cad.year, cad.month, cad.day);
+
+    if (refDateFormatted < cadDateFormatted) {
+      throw new Error(
+        `Data de referência (${refDateFormatted}) não pode ser anterior à data de cadastro (${cadDateFormatted}).`
+      );
+    }
+
+    // Se a referência estiver no mesmo ano e mês do cadastro:
+    if (ref.year === cad.year && ref.month === cad.month) {
+      dataInicioStr = cadDateFormatted;
+      if (cad.day > 1) {
+        tipoCiclo = 'PRIMEIRA_VIGENCIA_PRO_RATA';
+      }
+    } else {
+      // Meses subsequentes ao cadastro
+      dataInicioStr = formatISODate(ref.year, ref.month, 1);
+    }
+  } else {
+    // Sem data de cadastro informada: ciclo padrão mês cheio
+    dataInicioStr = formatISODate(ref.year, ref.month, 1);
+  }
+
+  const lastDay = getLastDayOfMonth(ref.year, ref.month);
+  const dataFimStr = formatISODate(ref.year, ref.month, lastDay);
+  const compStr = `${String(ref.year).padStart(4, '0')}-${String(ref.month).padStart(2, '0')}`;
+
+  return {
+    data_inicio: dataInicioStr,
+    data_fim: dataFimStr,
+    competencia: compStr,
+    industria_codigo: codigo,
+    tipo_ciclo: tipoCiclo
+  };
+}

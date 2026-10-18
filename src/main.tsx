@@ -1,8 +1,13 @@
 import { createRoot } from 'react-dom/client';
 import App from './App.tsx';
+import { ErrorBoundary } from './components/ErrorBoundary.tsx';
 import './index.css';
 
-createRoot(document.getElementById('root')!).render(<App />);
+createRoot(document.getElementById('root')!).render(
+  <ErrorBoundary>
+    <App />
+  </ErrorBoundary>
+);
 
 // Registro Seguro do Service Worker PWA em Produção / Produção Web
 if ('serviceWorker' in navigator && import.meta.env.PROD) {
@@ -18,7 +23,7 @@ if ('serviceWorker' in navigator && import.meta.env.PROD) {
           if (installingWorker) {
             installingWorker.onstatechange = () => {
               if (installingWorker.state === 'installed' && navigator.serviceWorker.controller) {
-                console.log('[PWA] Nova versão do MK9 Trade disponível. O app será atualizado na próxima inicialização.');
+                console.log('[PWA] Nova versão do MK9 Date disponível. O app será atualizado na próxima inicialização.');
               }
             };
           }
@@ -29,3 +34,4 @@ if ('serviceWorker' in navigator && import.meta.env.PROD) {
       });
   });
 }
+

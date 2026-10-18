@@ -6,7 +6,11 @@ import {
   validateContratoPayload,
   analyzeRotasForContracts,
   isTableNotFoundError,
-  MigrationPendingError
+  MigrationPendingError,
+  calcularPeriodoContratual,
+  parseISODate,
+  getLastDayOfMonth,
+  isLeapYear
 } from './contratosService';
 import type { RouteItem, ContratoLoja } from '../types';
 
@@ -337,4 +341,153 @@ describe('ContratosService — Testes Unitários de Regras Contratuais e Integri
       assert.strictEqual(isTableNotFoundError(networkError), false);
     });
   });
+
+  describe('6. Cálculo de Período Contratual e Competências (calcularPeriodoContratual)', () => {
+    describe('6.1. Utilitários Puros de Data (Sem Fuso Horário)', () => {
+      it('deve identificar anos bissextos corretamente', () => {
+        assert.strictEqual(isLeapYear(2024), true); // divisível por 4
+        assert.strictEqual(isLeapYear(2026), false); // não bissexto
+        assert.strictEqual(isLeapYear(1900), false); // divisível por 100 mas não 400
+        assert.strictEqual(isLeapYear(2000), true); // divisível por 400
+      });
+
+      it('deve retornar último dia do mês com precisão incluindo anos bissextos', () => {
+        assert.strictEqual(getLastDayOfMonth(2026, 1), 31);
+        assert.strictEqual(getLastDayOfMonth(2026, 2), 28);
+        assert.strictEqual(getLastDayOfMonth(2024, 2), 29);
+        assert.strictEqual(getLastDayOfMonth(2026, 4), 30);
+        assert.strictEqual(getLastDayOfMonth(2026, 12), 31);
+      });
+
+      it('deve fazer parse estrito de YYYY-MM-DD e rejeitar datas malformadas ou impossíveis', () => {
+        assert.deepStrictEqual(parseISODate('2026-10-17'), { year: 2026, month: 10, day: 17 });
+        assert.throws(() => parseISODate('2026-02-30'), /impossível/);
+        assert.throws(() => parseISODate('2026-04-31'), /impossível/);
+        assert.throws(() => parseISODate('2026-13-01'), /inválido/);
+        assert.throws(() => parseISODate('invalid-date'), /inválido/);
+      });
+    });
+
+    describe('6.2. Regras Especiais da Indústria KING (IND-013) — Ciclo 23 a 22', () => {
+      it('caso 1: referência 2026-10-17 (< 23) -> início 2026-09-23, fim 2026-10-22, competência 2026-10', () => {
+        const res = calcularPeriodoContratual('IND-013', '2026-10-17');
+        assert.strictEqual(res.data_inicio, '2026-09-23');
+        assert.strictEqual(res.data_fim, '2026-10-22');
+        assert.strictEqual(res.competencia, '2026-10');
+        assert.strictEqual(res.tipo_ciclo, 'ESPECIAL_KING_23_22');
+        assert.strictEqual(res.industria_codigo, 'IND-013');
+      });
+
+      it('caso 2: referência 2026-10-23 (>= 23) -> início 2026-10-23, fim 2026-11-22, competência 2026-11', () => {
+        const res = calcularPeriodoContratual('IND-013', '2026-10-23');
+        assert.strictEqual(res.data_inicio, '2026-10-23');
+        assert.strictEqual(res.data_fim, '2026-11-22');
+        assert.strictEqual(res.competencia, '2026-11');
+        assert.strictEqual(res.tipo_ciclo, 'ESPECIAL_KING_23_22');
+      });
+
+      it('caso 3: referência 2026-11-22 (limite fim ciclo) -> início 2026-10-23, fim 2026-11-22, competência 2026-11', () => {
+        const res = calcularPeriodoContratual('IND-013', '2026-11-22');
+        assert.strictEqual(res.data_inicio, '2026-10-23');
+        assert.strictEqual(res.data_fim, '2026-11-22');
+        assert.strictEqual(res.competencia, '2026-11');
+      });
+
+      it('caso 4: referência 2026-11-23 (novo ciclo) -> início 2026-11-23, fim 2026-12-22, competência 2026-12', () => {
+        const res = calcularPeriodoContratual('IND-013', '2026-11-23');
+        assert.strictEqual(res.data_inicio, '2026-11-23');
+        assert.strictEqual(res.data_fim, '2026-12-22');
+        assert.strictEqual(res.competencia, '2026-12');
+      });
+
+      it('caso 5: virada de ano dezembro para janeiro (ref 2026-12-25)', () => {
+        const res = calcularPeriodoContratual('IND-013', '2026-12-25');
+        assert.strictEqual(res.data_inicio, '2026-12-23');
+        assert.strictEqual(res.data_fim, '2027-01-22');
+        assert.strictEqual(res.competencia, '2027-01');
+      });
+
+      it('caso 6: virada de ano início de janeiro (ref 2027-01-05)', () => {
+        const res = calcularPeriodoContratual('IND-013', '2027-01-05');
+        assert.strictEqual(res.data_inicio, '2026-12-23');
+        assert.strictEqual(res.data_fim, '2027-01-22');
+        assert.strictEqual(res.competencia, '2027-01');
+      });
+
+      it('caso 7: fevereiro e março (ref 2026-02-20 e ref 2026-02-25)', () => {
+        const resFev1 = calcularPeriodoContratual('IND-013', '2026-02-20');
+        assert.strictEqual(resFev1.data_inicio, '2026-01-23');
+        assert.strictEqual(resFev1.data_fim, '2026-02-22');
+        assert.strictEqual(resFev1.competencia, '2026-02');
+
+        const resFev2 = calcularPeriodoContratual('IND-013', '2026-02-25');
+        assert.strictEqual(resFev2.data_inicio, '2026-02-23');
+        assert.strictEqual(resFev2.data_fim, '2026-03-22');
+        assert.strictEqual(resFev2.competencia, '2026-03');
+      });
+
+      it('deve reconhecer IND-013 independentemente de maiúsculas/espaços', () => {
+        const res = calcularPeriodoContratual(' ind-013 ', '2026-10-17');
+        assert.strictEqual(res.industria_codigo, 'IND-013');
+        assert.strictEqual(res.tipo_ciclo, 'ESPECIAL_KING_23_22');
+      });
+    });
+
+    describe('6.3. Demais Indústrias — Ciclo Mensal Padrão e Primeiro Ciclo Pro-Rata', () => {
+      it('deve aplicar pro-rata no mês de cadastro (ex: cadastro 2026-10-17, ref 2026-10-20 -> 2026-10-17 a 2026-10-31)', () => {
+        const res = calcularPeriodoContratual('IND-001', '2026-10-20', '2026-10-17');
+        assert.strictEqual(res.data_inicio, '2026-10-17');
+        assert.strictEqual(res.data_fim, '2026-10-31');
+        assert.strictEqual(res.competencia, '2026-10');
+        assert.strictEqual(res.tipo_ciclo, 'PRIMEIRA_VIGENCIA_PRO_RATA');
+      });
+
+      it('deve aplicar mês cheio nos meses subsequentes ao cadastro (ex: cadastro 2026-10-17, ref 2026-11-15 -> 2026-11-01 a 2026-11-30)', () => {
+        const res = calcularPeriodoContratual('IND-001', '2026-11-15', '2026-10-17');
+        assert.strictEqual(res.data_inicio, '2026-11-01');
+        assert.strictEqual(res.data_fim, '2026-11-30');
+        assert.strictEqual(res.competencia, '2026-11');
+        assert.strictEqual(res.tipo_ciclo, 'MENSAL_PADRAO');
+      });
+
+      it('se cadastro for no dia 01, tipo de ciclo deve ser MENSAL_PADRAO mesmo no mês de cadastro', () => {
+        const res = calcularPeriodoContratual('IND-002', '2026-10-15', '2026-10-01');
+        assert.strictEqual(res.data_inicio, '2026-10-01');
+        assert.strictEqual(res.data_fim, '2026-10-31');
+        assert.strictEqual(res.competencia, '2026-10');
+        assert.strictEqual(res.tipo_ciclo, 'MENSAL_PADRAO');
+      });
+
+      it('se cadastro for no último dia do mês (ex: 2026-10-31), vigência pro-rata de 1 único dia', () => {
+        const res = calcularPeriodoContratual('IND-003', '2026-10-31', '2026-10-31');
+        assert.strictEqual(res.data_inicio, '2026-10-31');
+        assert.strictEqual(res.data_fim, '2026-10-31');
+        assert.strictEqual(res.competencia, '2026-10');
+        assert.strictEqual(res.tipo_ciclo, 'PRIMEIRA_VIGENCIA_PRO_RATA');
+      });
+
+      it('sem data de cadastro informada: ciclo padrão do dia 01 ao fim do mês de referência', () => {
+        const res = calcularPeriodoContratual('IND-999', '2026-02-14');
+        assert.strictEqual(res.data_inicio, '2026-02-01');
+        assert.strictEqual(res.data_fim, '2026-02-28');
+        assert.strictEqual(res.competencia, '2026-02');
+        assert.strictEqual(res.tipo_ciclo, 'MENSAL_PADRAO');
+      });
+
+      it('deve lançar erro se dataReferencia for anterior à dataCadastro', () => {
+        assert.throws(
+          () => calcularPeriodoContratual('IND-001', '2026-10-10', '2026-10-17'),
+          /não pode ser anterior à data de cadastro/
+        );
+      });
+
+      it('deve lançar erro se código da indústria estiver em branco', () => {
+        assert.throws(
+          () => calcularPeriodoContratual('   ', '2026-10-10'),
+          /Código da indústria é obrigatório/
+        );
+      });
+    });
+  });
 });
+

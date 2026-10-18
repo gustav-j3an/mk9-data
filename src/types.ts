@@ -112,11 +112,17 @@ export interface CreateContratoLojaDTO {
   sabado?: boolean;
   domingo?: boolean;
   ciclo_quinzenal?: CicloQuinzenal;
-  data_inicio_vigencia: string;
+  data_inicio_vigencia?: string;
   data_fim_vigencia?: string | null;
   status?: ContratoStatus;
   valor_por_visita?: number | null;
   observacao?: string | null;
+
+  // Parâmetros opcionais para solicitar expressamente o cálculo do período contratual:
+  // Se calcular_periodo = true, o serviço usa calcularPeriodoContratual()
+  calcular_periodo?: boolean;
+  data_referencia?: string;
+  data_cadastro?: string | null;
 }
 
 export interface UpdateContratoLojaDTO {
@@ -135,6 +141,14 @@ export interface UpdateContratoLojaDTO {
   status?: ContratoStatus;
   valor_por_visita?: number | null;
   observacao?: string | null;
+}
+
+export interface PeriodoContratual {
+  data_inicio: string; // YYYY-MM-DD
+  data_fim: string;    // YYYY-MM-DD
+  competencia: string; // Identificador da competência YYYY-MM
+  industria_codigo: string;
+  tipo_ciclo: 'ESPECIAL_KING_23_22' | 'MENSAL_PADRAO' | 'PRIMEIRA_VIGENCIA_PRO_RATA';
 }
 
 export type ImportType = 'industrias' | 'lojas' | 'promotores' | 'rotas';
