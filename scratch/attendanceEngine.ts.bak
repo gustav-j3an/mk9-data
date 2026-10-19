@@ -1,0 +1,629 @@
+import { getMonthlyQuinzenalDates } from './routePlanner';
+import type {
+  AttendanceItem,
+  AttendanceKpiBucket,
+  AttendanceLocationStatus,
+  AttendanceOperationalStatus,
+  AttendanceOverrideRecord,
+  AttendanceOverrideStatus,
+  AttendanceRules,
+  Equipe,
+  RouteItem,
+  UserRole,
+  Visit
+} from '../types';
+
+export const DEFAULT_ATTENDANCE_RULES: AttendanceRules = {
+  timezone: 'America/Sao_Paulo',
+  dayCloseTime: '23:59',
+  lateToleranceMinutes: 15,
+  expectedCheckInTime: null,
+  geofenceRadiusMeters: 200
+};
+
+export const WEEKDAY_KEYS: Array<'domingo' | 'segunda' | 'terca' | 'quarta' | 'quinta' | 'sexta' | 'sabado'> = [
+  'domingo',
+  'segunda',
+  'terca',
+  'quarta',
+  'quinta',
+  'sexta',
+  'sabado'
+];
+
+export interface AttendancePromoterInput {
+  id: string;
+  matricula: string;
+  nome: string;
+  cidade?: string | null;
+  uf?: string | null;
+  telefone?: string | null;
+  equipe?: string | null;
+  supervisor?: string | null;
+  status?: string | null;
+}
+
+export interface StoreCoordinates {
+  codigo: string;
+  latitude?: number | null;
+  longitude?: number | null;
+}
+
+export interface AttendanceFilterState {
+  search?: string;
+  supervisor?: string;
+  squad?: string;
+  promoter?: string;
+  quickFilter?: 'all' | AttendanceKpiBucket;
+}
+
+const CHECKIN_STATUSES = new Set(['concluida', 'em_andamento']);
+
+export function parseAttendanceRules(raw: unknown): AttendanceRules {
+  const source = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  const timezone = typeof source.timezone === 'string' && source.timezone.trim()
+    ? source.timezone.trim()
+    : DEFAULT_ATTENDANCE_RULES.timezone;
+  const dayCloseTime = typeof source.day_close_time === 'string' && /^\d{2}:\d{2}$/.test(source.day_close_time)
+    ? source.day_close_time
+    : typeof source.dayCloseTime === 'string' && /^\d{2}:\d{2}$/.test(source.dayCloseTime)
+      ? source.dayCloseTime
+      : DEFAULT_ATTENDANCE_RULES.dayCloseTime;
+  const lateToleranceMinutes = Number.isFinite(Number(source.late_tolerance_minutes ?? source.lateToleranceMinutes))
+    ? Math.max(0, Number(source.late_tolerance_minutes ?? source.lateToleranceMinutes))
+    : DEFAULT_ATTENDANCE_RULES.lateToleranceMinutes;
+  const expectedRaw = source.expected_checkin_time ?? source.expectedCheckInTime;
+  const expectedCheckInTime = typeof expectedRaw === 'string' && /^\d{2}:\d{2}$/.test(expectedRaw)
+    ? expectedRaw
+    : null;
+  const geofenceRadiusMeters = Number.isFinite(Number(source.geofence_radius_meters ?? source.geofenceRadiusMeters))
+    ? Math.max(0, Number(source.geofence_radius_meters ?? source.geofenceRadiusMeters))
+    : DEFAULT_ATTENDANCE_RULES.geofenceRadiusMeters;
+
+  return {
+    timezone,
+    dayCloseTime,
+    lateToleranceMinutes,
+    expectedCheckInTime,
+    geofenceRadiusMeters
+  };
+}
+
+export function getDayKeyFromDateStr(
+  dateStr: string
+): 'domingo' | 'segunda' | 'terca' | 'quarta' | 'quinta' | 'sexta' | 'sabado' {
+  const [year, month, day] = dateStr.split('-').map((part) => parseInt(part, 10));
+  if (!year || !month || !day) return 'segunda';
+  const d = new Date(year, month - 1, day, 12, 0, 0);
+  return WEEKDAY_KEYS[d.getDay()] || 'segunda';
+}
+
+export function normalizeEquipeLabel(value?: string | null): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.toLowerCase() === 'nenhum') return null;
+  return trimmed;
+}
+
+export function resolveSupervisorName(
+  promoterSupervisor?: string | null,
+  equipeNome?: string | null,
+  equipes: Array<Pick<Equipe, 'nome' | 'supervisor_nome'>> = []
+): string {
+  const direct = promoterSupervisor?.trim();
+  if (direct) return direct;
+
+  const team = normalizeEquipeLabel(equipeNome);
+  if (!team) return 'Não atribuído';
+
+  const match = equipes.find((eq) => eq.nome.trim().toLowerCase() === team.toLowerCase());
+  const fromTeam = match?.supervisor_nome?.trim();
+  return fromTeam || 'Não atribuído';
+}
+
+export function canMutateAttendance(role: UserRole | null | undefined): boolean {
+  return role === 'admin' || role === 'gestor';
+}
+
+export function isValidCoordinate(lat?: number | null, lng?: number | null): boolean {
+  if (lat == null || lng == null) return false;
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
+  if (lat === 0 && lng === 0) return false;
+  if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return false;
+  return true;
+}
+
+export function haversineMeters(
+  lat1: number,
+  lng1: number,
+  lat2: number,
+  lng2: number
+): number {
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const earth = 6371000;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return 2 * earth * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+export function classifyLocation(input: {
+  latitude?: number | null;
+  longitude?: number | null;
+  accuracyMeters?: number | null;
+  storeLatitude?: number | null;
+  storeLongitude?: number | null;
+  geofenceRadiusMeters?: number;
+}): { status: AttendanceLocationStatus; detail: string; distanceMeters?: number } {
+  const { latitude, longitude, accuracyMeters, storeLatitude, storeLongitude } = input;
+  const radius = input.geofenceRadiusMeters ?? DEFAULT_ATTENDANCE_RULES.geofenceRadiusMeters;
+
+  if (latitude == null && longitude == null) {
+    return { status: 'nao_disponivel', detail: 'Localização não disponível no check-in' };
+  }
+  if (!isValidCoordinate(latitude, longitude)) {
+    return { status: 'invalida', detail: 'Localização inválida ou imprecisa' };
+  }
+  if (typeof accuracyMeters === 'number' && Number.isFinite(accuracyMeters) && accuracyMeters > 1000) {
+    return { status: 'invalida', detail: 'Precisão do GPS insuficiente para validação' };
+  }
+  if (!isValidCoordinate(storeLatitude, storeLongitude)) {
+    return {
+      status: 'capturada_nao_validada',
+      detail: 'Coordenadas capturadas; loja sem georreferência para validar distância'
+    };
+  }
+
+  const distance = haversineMeters(latitude!, longitude!, storeLatitude!, storeLongitude!);
+  if (distance <= radius) {
+    return {
+      status: 'validada',
+      detail: `Localização validada a ${Math.round(distance)} m da loja`,
+      distanceMeters: distance
+    };
+  }
+  return {
+    status: 'invalida',
+    detail: `Localização fora do raio da loja (${Math.round(distance)} m)`,
+    distanceMeters: distance
+  };
+}
+
+export function formatTimeInTimezone(iso: string | null | undefined, timeZone: string): string {
+  if (!iso) return '--:--';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '--:--';
+  return new Intl.DateTimeFormat('pt-BR', {
+    timeZone,
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  }).format(date);
+}
+
+export function getZonedDateTime(nowIso: string, timeZone: string): { dateStr: string; minutes: number } {
+  const date = new Date(nowIso);
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23'
+  }).formatToParts(date);
+
+  const get = (type: string) => parts.find((part) => part.type === type)?.value || '00';
+  const dateStr = `${get('year')}-${get('month')}-${get('day')}`;
+  const minutes = parseInt(get('hour'), 10) * 60 + parseInt(get('minute'), 10);
+  return { dateStr, minutes };
+}
+
+export function parseHmToMinutes(value: string): number {
+  const [h, m] = value.split(':').map((part) => parseInt(part, 10));
+  return (h || 0) * 60 + (m || 0);
+}
+
+export function isOperationalDayClosed(
+  operationalDate: string,
+  nowIso: string,
+  rules: AttendanceRules
+): boolean {
+  const zoned = getZonedDateTime(nowIso, rules.timezone);
+  if (zoned.dateStr > operationalDate) return true;
+  if (zoned.dateStr < operationalDate) return false;
+  return zoned.minutes >= parseHmToMinutes(rules.dayCloseTime);
+}
+
+export function isOperationalDateFuture(
+  operationalDate: string,
+  nowIso: string,
+  rules: AttendanceRules
+): boolean {
+  const zoned = getZonedDateTime(nowIso, rules.timezone);
+  return operationalDate > zoned.dateStr;
+}
+
+export function isRouteScheduledOnDate(
+  route: RouteItem,
+  dateStr: string,
+  priorMonthLastVisitDate?: string | null
+): boolean {
+  const dayKey = getDayKeyFromDateStr(dateStr);
+  if (!Boolean(route[dayKey as keyof RouteItem])) return false;
+
+  if ((route.frequencia || 'SEMANAL').toUpperCase() !== 'QUINZENAL') {
+    return true;
+  }
+
+  const [year, month] = dateStr.split('-').map((part) => parseInt(part, 10));
+  const scheduled = getMonthlyQuinzenalDates(route, year, month, priorMonthLastVisitDate);
+  return scheduled.includes(dateStr);
+}
+
+export function pickCanonicalCheckIn(visits: Visit[]): Visit | null {
+  const withCheckIn = visits
+    .filter((visit) => CHECKIN_STATUSES.has(visit.status) || Boolean(visit.started_at))
+    .sort((a, b) => {
+      const aTime = a.started_at || a.created_at || '';
+      const bTime = b.started_at || b.created_at || '';
+      return aTime.localeCompare(bTime);
+    });
+  return withCheckIn[0] || null;
+}
+
+export function toKpiBucket(status: AttendanceOperationalStatus): AttendanceKpiBucket {
+  if (status === 'presente' || status === 'atrasado') return 'presente';
+  if (status === 'falta_confirmada') return 'falta';
+  if (status === 'atestado_pendente' || status === 'atestado_aprovado') return 'atestado';
+  return 'sem_registro';
+}
+
+export function attendanceStatusLabel(status: AttendanceOperationalStatus): string {
+  switch (status) {
+    case 'presente':
+      return 'PRESENTE';
+    case 'atrasado':
+      return 'ATRASADO';
+    case 'aguardando_expediente':
+      return 'AGUARDANDO EXPEDIENTE';
+    case 'expediente_futuro':
+      return 'EXPEDIENTE FUTURO';
+    case 'falta_confirmada':
+      return 'FALTA CONFIRMADA';
+    case 'folga':
+      return 'FOLGA';
+    case 'sem_expediente':
+      return 'SEM EXPEDIENTE';
+    case 'atestado_pendente':
+      return 'ATESTADO PENDENTE';
+    case 'atestado_aprovado':
+      return 'ATESTADO APROVADO';
+    default:
+      return 'SEM REGISTRO';
+  }
+}
+
+export function locationStatusLabel(status: AttendanceLocationStatus): string {
+  switch (status) {
+    case 'validada':
+      return 'Localização validada';
+    case 'invalida':
+      return 'Localização inválida';
+    case 'capturada_nao_validada':
+      return 'Localização capturada, não validada';
+    default:
+      return 'Localização não disponível';
+  }
+}
+
+function isLateCheckIn(checkInIso: string, operationalDate: string, rules: AttendanceRules): boolean {
+  if (!rules.expectedCheckInTime) return false;
+  const zoned = getZonedDateTime(checkInIso, rules.timezone);
+  if (zoned.dateStr !== operationalDate) {
+    return zoned.dateStr > operationalDate;
+  }
+  const limit = parseHmToMinutes(rules.expectedCheckInTime) + rules.lateToleranceMinutes;
+  return zoned.minutes > limit;
+}
+
+export function classifyPromoterAttendance(input: {
+  scheduled: boolean;
+  hasAnyRoute: boolean;
+  visits: Visit[];
+  override?: AttendanceOverrideRecord | null;
+  operationalDate: string;
+  nowIso: string;
+  rules: AttendanceRules;
+  storeByCode?: Map<string, StoreCoordinates>;
+}): {
+  operationalStatus: AttendanceOperationalStatus;
+  telemetryTime: string;
+  telemetryDetail: string;
+  locationStatus: AttendanceLocationStatus;
+  checkInAt: string | null;
+} {
+  const { scheduled, hasAnyRoute, visits, override, operationalDate, nowIso, rules, storeByCode } = input;
+
+  if (override?.override_status === 'atestado_aprovado') {
+    return {
+      operationalStatus: 'atestado_aprovado',
+      telemetryTime: '--:--',
+      telemetryDetail: `Atestado aprovado${override.medical_days ? ` (${override.medical_days} dia(s))` : ''}`,
+      locationStatus: 'nao_disponivel',
+      checkInAt: null
+    };
+  }
+  if (override?.override_status === 'atestado_pendente') {
+    return {
+      operationalStatus: 'atestado_pendente',
+      telemetryTime: '--:--',
+      telemetryDetail: `Atestado pendente de validação${override.justification ? `: ${override.justification}` : ''}`,
+      locationStatus: 'nao_disponivel',
+      checkInAt: null
+    };
+  }
+
+  const canonical = pickCanonicalCheckIn(visits);
+  const location = classifyLocation({
+    latitude: canonical?.latitude,
+    longitude: canonical?.longitude,
+    storeLatitude: canonical ? storeByCode?.get(canonical.loja_codigo)?.latitude : null,
+    storeLongitude: canonical ? storeByCode?.get(canonical.loja_codigo)?.longitude : null,
+    geofenceRadiusMeters: rules.geofenceRadiusMeters
+  });
+
+  if (canonical) {
+    const late = isLateCheckIn(canonical.started_at || canonical.created_at || nowIso, operationalDate, rules);
+    const operationalStatus: AttendanceOperationalStatus =
+      override?.override_status === 'falta'
+        ? 'falta_confirmada'
+        : late
+          ? 'atrasado'
+          : 'presente';
+    const time = formatTimeInTimezone(canonical.started_at, rules.timezone);
+    const visitLabel = canonical.status === 'concluida' ? 'Atendimento concluído' : 'Check-in ativo';
+    return {
+      operationalStatus,
+      telemetryTime: time,
+      telemetryDetail: `${visitLabel} • ${location.detail}`,
+      locationStatus: location.status,
+      checkInAt: canonical.started_at || null
+    };
+  }
+
+  if (override?.override_status === 'presente') {
+    return {
+      operationalStatus: 'presente',
+      telemetryTime: 'Manual',
+      telemetryDetail: `Presença lançada manualmente${override.justification ? `: ${override.justification}` : ''}`,
+      locationStatus: 'nao_disponivel',
+      checkInAt: null
+    };
+  }
+  if (override?.override_status === 'falta') {
+    return {
+      operationalStatus: 'falta_confirmada',
+      telemetryTime: '--:--',
+      telemetryDetail: `Falta confirmada manualmente${override.justification ? `: ${override.justification}` : ''}`,
+      locationStatus: 'nao_disponivel',
+      checkInAt: null
+    };
+  }
+
+  if (!scheduled) {
+    return {
+      operationalStatus: hasAnyRoute ? 'folga' : 'sem_expediente',
+      telemetryTime: '--:--',
+      telemetryDetail: hasAnyRoute
+        ? 'Folga ou dia sem programação nesta data'
+        : 'Sem expediente programado na escala',
+      locationStatus: 'nao_disponivel',
+      checkInAt: null
+    };
+  }
+
+  if (isOperationalDateFuture(operationalDate, nowIso, rules)) {
+    return {
+      operationalStatus: 'expediente_futuro',
+      telemetryTime: '--:--',
+      telemetryDetail: 'Expediente ainda não iniciado nesta data operacional',
+      locationStatus: 'nao_disponivel',
+      checkInAt: null
+    };
+  }
+
+  if (isOperationalDayClosed(operationalDate, nowIso, rules)) {
+    return {
+      operationalStatus: 'falta_confirmada',
+      telemetryTime: '--:--',
+      telemetryDetail: 'Sem check-in após o fechamento da data operacional',
+      locationStatus: 'nao_disponivel',
+      checkInAt: null
+    };
+  }
+
+  return {
+    operationalStatus: 'aguardando_expediente',
+    telemetryTime: '--:--',
+    telemetryDetail: 'Aguardando check-in. Ausência ainda não é falta.',
+    locationStatus: 'nao_disponivel',
+    checkInAt: null
+  };
+}
+
+export function buildAttendanceRoster(input: {
+  promoters: AttendancePromoterInput[];
+  routes: RouteItem[];
+  visits: Visit[];
+  equipes?: Array<Pick<Equipe, 'nome' | 'supervisor_nome'>>;
+  overrides?: AttendanceOverrideRecord[];
+  stores?: StoreCoordinates[];
+  operationalDate: string;
+  nowIso: string;
+  rules?: AttendanceRules;
+  includeOffSchedule?: boolean;
+}): AttendanceItem[] {
+  const rules = input.rules || DEFAULT_ATTENDANCE_RULES;
+  const equipes = input.equipes || [];
+  const includeOffSchedule = Boolean(input.includeOffSchedule);
+  const storeByCode = new Map((input.stores || []).map((store) => [store.codigo, store]));
+  const overrideByMatricula = new Map(
+    (input.overrides || []).map((record) => [record.promotor_matricula, record])
+  );
+
+  const routesByPromoter = new Map<string, RouteItem[]>();
+  input.routes.forEach((route) => {
+    if (!route.promotor_matricula) return;
+    const list = routesByPromoter.get(route.promotor_matricula) || [];
+    list.push(route);
+    routesByPromoter.set(route.promotor_matricula, list);
+  });
+
+  const visitsByPromoter = new Map<string, Visit[]>();
+  input.visits.forEach((visit) => {
+    const list = visitsByPromoter.get(visit.promotor_matricula) || [];
+    list.push(visit);
+    visitsByPromoter.set(visit.promotor_matricula, list);
+  });
+
+  const items: AttendanceItem[] = [];
+
+  input.promoters.forEach((promoter) => {
+    const equipe = normalizeEquipeLabel(promoter.equipe);
+    const status = (promoter.status || 'ativo').toLowerCase();
+    if (status !== 'ativo') return;
+    if (!equipe) return;
+
+    const promoterRoutes = routesByPromoter.get(promoter.matricula) || [];
+    const scheduled = promoterRoutes.some((route) => isRouteScheduledOnDate(route, input.operationalDate));
+    const override = overrideByMatricula.get(promoter.matricula) || null;
+    const medicalOverride = override?.override_status === 'atestado_pendente' || override?.override_status === 'atestado_aprovado';
+    const eligible = scheduled || medicalOverride;
+
+    if (!eligible && !includeOffSchedule) return;
+
+    const classified = classifyPromoterAttendance({
+      scheduled,
+      hasAnyRoute: promoterRoutes.length > 0,
+      visits: visitsByPromoter.get(promoter.matricula) || [],
+      override,
+      operationalDate: input.operationalDate,
+      nowIso: input.nowIso,
+      rules,
+      storeByCode
+    });
+
+    const nameParts = (promoter.nome || '').trim().split(' ').filter(Boolean);
+    const initials = nameParts.length > 1
+      ? (nameParts[0][0] + nameParts[nameParts.length - 1][0]).toUpperCase()
+      : (nameParts[0] ? nameParts[0].slice(0, 2).toUpperCase() : 'PR');
+
+    items.push({
+      id: promoter.id,
+      promoterId: promoter.id,
+      name: promoter.nome,
+      initials,
+      matricula: promoter.matricula,
+      type: 'CLT',
+      squad: equipe,
+      supervisor: resolveSupervisorName(promoter.supervisor, equipe, equipes),
+      city: promoter.cidade || 'Não informada',
+      state: promoter.uf || 'UF',
+      phone: promoter.telefone || undefined,
+      status: toKpiBucket(classified.operationalStatus),
+      operationalStatus: classified.operationalStatus,
+      eligible,
+      telemetryTime: classified.telemetryTime,
+      telemetryDetail: classified.telemetryDetail,
+      locationStatus: classified.locationStatus,
+      checkInAt: classified.checkInAt,
+      isJustified: Boolean(override?.justification),
+      medicalNoteAttached: medicalOverride,
+      medicalDays: override?.medical_days || undefined,
+      hasManualOverride: Boolean(override),
+      overrideJustification: override?.justification || null
+    });
+  });
+
+  return items.sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+}
+
+export function filterAttendanceItems(
+  items: AttendanceItem[],
+  filters: AttendanceFilterState = {}
+): AttendanceItem[] {
+  const search = (filters.search || '').trim().toLowerCase();
+  const supervisor = (filters.supervisor || '').trim().toLowerCase();
+  const squad = (filters.squad || '').trim().toLowerCase();
+  const promoter = (filters.promoter || '').trim().toLowerCase();
+  const quick = filters.quickFilter || 'all';
+
+  return items.filter((item) => {
+    const matchesSearch = !search
+      || item.name.toLowerCase().includes(search)
+      || item.matricula.toLowerCase().includes(search)
+      || item.city.toLowerCase().includes(search);
+    const matchesSupervisor = !supervisor || item.supervisor.toLowerCase() === supervisor;
+    const matchesSquad = !squad || item.squad.toLowerCase() === squad;
+    const matchesPromoter = !promoter
+      || item.matricula.toLowerCase() === promoter
+      || item.name.toLowerCase() === promoter;
+    const matchesQuick = quick === 'all' || item.status === quick;
+    return matchesSearch && matchesSupervisor && matchesSquad && matchesPromoter && matchesQuick;
+  });
+}
+
+export function summarizeAttendance(items: AttendanceItem[]): {
+  total: number;
+  presentes: number;
+  faltas: number;
+  atestados: number;
+  semRegistro: number;
+} {
+  return {
+    total: items.length,
+    presentes: items.filter((item) => item.status === 'presente').length,
+    faltas: items.filter((item) => item.status === 'falta').length,
+    atestados: items.filter((item) => item.status === 'atestado').length,
+    semRegistro: items.filter((item) => item.status === 'sem_registro').length
+  };
+}
+
+export function buildAttendanceExportRows(items: AttendanceItem[]): Array<Record<string, string>> {
+  return items.map((item) => ({
+    Promotor: item.name,
+    Matrícula: item.matricula,
+    Equipe: item.squad,
+    Supervisor: item.supervisor,
+    'Praça / UF': `${item.city}, ${item.state}`,
+    Status: attendanceStatusLabel(item.operationalStatus),
+    Indicador: item.status,
+    'Horário check-in': item.telemetryTime,
+    Localização: locationStatusLabel(item.locationStatus),
+    Telemetria: item.telemetryDetail
+  }));
+}
+
+export function validateAttendanceOverride(input: {
+  role: UserRole | null | undefined;
+  overrideStatus: AttendanceOverrideStatus;
+  justification: string;
+  medicalDays?: number;
+}): { valid: boolean; message?: string } {
+  if (!canMutateAttendance(input.role)) {
+    return { valid: false, message: 'Somente administrador ou gestor podem alterar presença.' };
+  }
+  if (input.justification.trim().length < 5) {
+    return { valid: false, message: 'Informe uma justificativa com pelo menos 5 caracteres.' };
+  }
+  if (
+    (input.overrideStatus === 'atestado_pendente' || input.overrideStatus === 'atestado_aprovado')
+    && (!input.medicalDays || input.medicalDays < 1)
+  ) {
+    return { valid: false, message: 'Informe a quantidade de dias do atestado.' };
+  }
+  return { valid: true };
+}

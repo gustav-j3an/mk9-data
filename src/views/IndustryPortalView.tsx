@@ -94,6 +94,44 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
   // Modal de Foto Ampliada da Central de Evidências
   const [zoomedEvidencia, setZoomedEvidencia] = useState<any | null>(null);
 
+  // Registro de fotos com falha de carregamento (HTTP ou rede) para exibir fallback elegante sem quadro branco
+  const [failedPhotoKeys, setFailedPhotoKeys] = useState<Set<string>>(new Set());
+
+  // --- Estado do Relatório Executivo Compacto ---
+  // Tabela de PDV: inicia recolhida, com paginação de 20 e campo de busca
+  const [pdvTableExpanded, setPdvTableExpanded] = useState<boolean>(false);
+  const [pdvPage, setPdvPage] = useState<number>(1);
+  const [pdvSearch, setPdvSearch] = useState<string>('');
+  const PDV_PAGE_SIZE = 20;
+
+  // Tabela de Promotores: inicia recolhida
+  const [promotorTableExpanded, setPromotorTableExpanded] = useState<boolean>(false);
+
+  // Função utilitária segura para resolver Signed URL (com sanitização de caminho no bucket visit-photos)
+  const resolvePhotoUrl = useCallback(async (rawStoragePath: string): Promise<string> => {
+    if (!supabase || !rawStoragePath) return '';
+
+    let cleanPath = rawStoragePath.trim();
+    if (cleanPath.startsWith('visit-photos/')) {
+      cleanPath = cleanPath.replace(/^visit-photos\//, '');
+    }
+    cleanPath = cleanPath.replace(/^\/+/, '');
+
+    try {
+      const { data: signData, error: signErr } = await supabase.storage
+        .from('visit-photos')
+        .createSignedUrl(cleanPath, 3600);
+
+      if (!signErr && signData?.signedUrl) {
+        return signData.signedUrl;
+      }
+    } catch (e) {
+      console.warn('Erro ao gerar signed URL para foto:', cleanPath, e);
+    }
+
+    return '';
+  }, [supabase]);
+
   // Métrica de Última Atualização
   const [lastUpdate, setLastUpdate] = useState<string>('—');
 
@@ -136,7 +174,7 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
         startDateStr = getLocalDateString(monthAgo);
       }
 
-      // Query RLS leve de Visitas (sem carregar relutantemente fotos e tabelas filhas completas)
+      // Consulta das tabelas canônicas oficiais do Supabase
       let visitsQuery = supabase
         .from('visits')
         .select(`
@@ -144,9 +182,9 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
           promotor:promotores(matricula, nome),
           loja:lojas(codigo, nome, cidade, uf, endereco),
           industria:industrias(codigo, nome),
-          photos:visit_photos(id, storage_path, tipo_foto),
-          occurrences:visit_occurrences(id, tipo, descricao, resolvido),
-          validity_items:visit_product_validity(id, produto_nome, quantidade, data_vencimento)
+          photos:visit_photos(*),
+          occurrences:visit_occurrences(*),
+          validity_items:visit_product_validity(*)
         `)
         .order('created_at', { ascending: false });
 
@@ -160,7 +198,6 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
         visitsQuery = visitsQuery.gte('data_visita', startDateStr);
       }
 
-      // Query de Rotas respeitando o filtro de indústria ativo
       let rotasQuery = supabase.from('rotas').select(`
         *,
         industria:industrias(codigo, nome),
@@ -176,13 +213,14 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
       const [visitsRes, rotasRes, promotoresRes, lojasRes, settingsData] = await Promise.all([
         visitsQuery,
         rotasQuery,
-        supabase.from('promotores').select('*'),
+        supabase.from('promotores').select('id,matricula,nome'),
         supabase.from('lojas').select('*'),
         fetchSystemSettings()
       ]);
 
       if (visitsRes.error) throw visitsRes.error;
       if (rotasRes.error) throw rotasRes.error;
+      if (promotoresRes.error) throw promotoresRes.error;
 
       const realVisits = (visitsRes.data as unknown as Visit[]) || [];
       const realRoutes = (rotasRes.data as unknown as RouteItem[]) || [];
@@ -455,6 +493,30 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
     return lojasPerformance.slice(0, 10);
   }, [lojasPerformance]);
 
+  // PDV filtrado pela busca textual (nome, código, cidade, UF)
+  const filteredLojasPerformance = useMemo(() => {
+    if (!pdvSearch.trim()) return lojasPerformance;
+    const term = pdvSearch.toLowerCase().trim();
+    return lojasPerformance.filter((l) =>
+      l.nome.toLowerCase().includes(term) ||
+      l.codigo.toLowerCase().includes(term) ||
+      l.cidade.toLowerCase().includes(term) ||
+      l.uf.toLowerCase().includes(term)
+    );
+  }, [lojasPerformance, pdvSearch]);
+
+  // Paginação real: 20 lojas por página sobre a lista filtrada
+  const pdvTotalPages = Math.max(1, Math.ceil(filteredLojasPerformance.length / PDV_PAGE_SIZE));
+  const paginatedLojas = useMemo(() => {
+    const start = (pdvPage - 1) * PDV_PAGE_SIZE;
+    return filteredLojasPerformance.slice(start, start + PDV_PAGE_SIZE);
+  }, [filteredLojasPerformance, pdvPage]);
+
+  // Reset da paginação ao alterar busca
+  useEffect(() => {
+    setPdvPage(1);
+  }, [pdvSearch]);
+
   const occurrencesSummary = useMemo(() => {
     let rupturas = 0;
     let preco = 0;
@@ -564,9 +626,11 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
         .select(`
           *,
           promotor:promotores(matricula, nome),
-          loja:lojas(codigo, nome, cidade, uf, endereco),
+          loja:lojas(codigo, nome, cidade, uf),
           industria:industrias(codigo, nome),
-          photos:visit_photos(id, storage_path)
+          photos:visit_photos(*),
+          occurrences:visit_occurrences(*),
+          validity_items:visit_product_validity(*)
         `)
         .eq('loja_codigo', lojaCodigo)
         .order('data_visita', { ascending: false });
@@ -698,26 +762,29 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
       let query = supabase
         .from('visit_photos')
         .select(`
-          *,
+          id,
+          tipo_foto,
+          storage_path,
+          created_at,
+          legenda,
           visit:visits!inner(
             id,
+            rota_id,
             data_visita,
-            status,
-            industria_codigo,
             loja_codigo,
+            industria_codigo,
             promotor_matricula,
-            observacao_geral,
+            status,
             loja:lojas(codigo, nome, cidade, uf),
-            promotor:promotores(matricula, nome)
+            promotor:promotores(matricula, nome),
+            industria:industrias(codigo, nome)
           )
         `, { count: 'exact' });
 
-      // Filtro RLS por indústria
       if (activeIndCode) {
         query = query.eq('visit.industria_codigo', activeIndCode);
       }
 
-      // Filtro de Período (baseado em visits.data_visita)
       if (evidenciasPeriod !== 'all') {
         const days = parseInt(evidenciasPeriod, 10);
         const pastDate = new Date();
@@ -726,12 +793,10 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
         query = query.gte('visit.data_visita', pastDateStr);
       }
 
-      // Filtro de Loja
       if (evidenciasLoja !== 'all') {
         query = query.eq('visit.loja_codigo', evidenciasLoja);
       }
 
-      // Filtro de Promotor
       if (evidenciasPromotor !== 'all') {
         query = query.eq('visit.promotor_matricula', evidenciasPromotor);
       }
@@ -756,11 +821,12 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
         const urlMap: Record<string, string> = {};
         for (const p of rawPhotos) {
           if (p.storage_path) {
-            const { data: signData } = await supabase.storage
-              .from('visit-photos')
-              .createSignedUrl(p.storage_path, 3600);
-            if (signData?.signedUrl) {
-              urlMap[p.storage_path] = signData.signedUrl;
+            const url = await resolvePhotoUrl(p.storage_path);
+            if (url) {
+              urlMap[p.storage_path] = url;
+              if (p.id) {
+                urlMap[p.id] = url;
+              }
             }
           }
         }
@@ -773,7 +839,7 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
     } finally {
       setLoadingEvidencias(false);
     }
-  }, [evidenciasPage, evidenciasPeriod, evidenciasLoja, evidenciasPromotor, evidenciasTipo, activeIndCode]);
+  }, [evidenciasPage, evidenciasPeriod, evidenciasLoja, evidenciasPromotor, evidenciasTipo, activeIndCode, resolvePhotoUrl]);
 
   useEffect(() => {
     if (activeTab === 'evidencias') {
@@ -837,6 +903,8 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
         supabase.from('visit_occurrences').select('*').eq('visit_id', visitId),
         supabase.from('visit_product_validity').select('*').eq('visit_id', visitId)
       ]);
+      const detailError = checkRes.error || photosRes.error || occRes.error || valRes.error;
+      if (detailError) throw detailError;
 
       const fullPhotos = (photosRes.data as VisitPhoto[]) || [];
 
@@ -861,11 +929,12 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
         const urlMap: Record<string, string> = {};
         for (const photo of fullPhotos) {
           if (photo.storage_path) {
-            const { data } = await supabase.storage
-              .from('visit-photos')
-              .createSignedUrl(photo.storage_path, 3600);
-            if (data?.signedUrl) {
-              urlMap[photo.storage_path] = data.signedUrl;
+            const url = await resolvePhotoUrl(photo.storage_path);
+            if (url) {
+              urlMap[photo.storage_path] = url;
+              if (photo.id) {
+                urlMap[photo.id] = url;
+              }
             }
           }
         }
@@ -873,6 +942,11 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
       }
     } catch (err) {
       console.warn('Erro ao carregar detalhes completos da visita sob demanda:', err);
+      onShowToast({
+        title: 'Detalhes indisponíveis',
+        message: err && typeof err === 'object' && 'message' in err ? String(err.message) : 'Não foi possível carregar as evidências da visita.',
+        type: 'error'
+      });
     } finally {
       setLoadingDetails(false);
       setLoadingPhotos(false);
@@ -905,7 +979,7 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
         ['Visitas Pendentes', kpis.pendentes, `${kpis.atrasadas} atrasadas • ${kpis.pendentesHoje} para hoje`],
         ['Visitas Atrasadas', kpis.atrasadas, 'Excederam a data limite de atendimento'],
         ['Não Realizadas', kpis.naoRealizadas, 'Visitas com justificativa registrada'],
-        ['Aderência Operacional (%)', systemSettings.mode !== 'OPERACAO_OFICIAL' || systemSettings.status !== 'loaded' ? 'Fase de implantação — SLA não ativo' : `${kpis.aderencia}%`, systemSettings.mode !== 'OPERACAO_OFICIAL' || systemSettings.status !== 'loaded' ? 'SLA oficial não ativo na fase de implantação' : 'Taxa de execução em relação ao planejado'],
+        ['Aderência Operacional (%)', kpis.planejadas > 0 ? `${kpis.aderencia}%` : '—', systemSettings.mode !== 'OPERACAO_OFICIAL' ? 'Execução operacional (SLA contratual em fase de implantação)' : 'Taxa de execução em relação ao planejado'],
         ['Cobertura de PDVs (%)', `${kpis.lojas > 0 ? Math.round((kpis.lojasComVisita / kpis.lojas) * 100) : 0}%`, `${kpis.lojasComVisita} de ${kpis.lojas} PDVs atendidos no período`],
         [''],
         ['RESUMO DE CAMPO'],
@@ -1225,18 +1299,28 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
             </div>
 
             <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-indigo-500/40 bg-indigo-950/20">
-              <span className="text-[10px] text-indigo-300 block font-bold uppercase">ADERÊNCIA</span>
-              {loading || systemSettings.status === 'loading' ? (
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] text-indigo-300 block font-bold uppercase">ADERÊNCIA</span>
+                {systemSettings.mode !== 'OPERACAO_OFICIAL' && (
+                  <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                    IMPLANTAÇÃO
+                  </span>
+                )}
+              </div>
+              {loading ? (
                 <span className="text-sm font-bold text-[#77766F] mt-2 block">Carregando...</span>
-              ) : systemSettings.mode !== 'OPERACAO_OFICIAL' || systemSettings.status !== 'loaded' ? (
-                <div className="mt-1">
-                  <span className="text-xs font-bold text-amber-300 block leading-tight">Fase de implantação — SLA não ativo</span>
-                  <span className="text-[9px] text-[#77766F] block mt-0.5">Indicador oficial desativado</span>
-                </div>
               ) : (
-                <span className="text-2xl font-extrabold text-indigo-200 mt-1 block">{`${kpis.aderencia}%`}</span>
+                <>
+                  <span className="text-2xl font-extrabold text-indigo-200 mt-1 block">
+                    {kpis.planejadas > 0 ? `${kpis.aderencia}%` : '—'}
+                  </span>
+                  <span className="text-[10px] text-indigo-400/70 block mt-0.5">
+                    {systemSettings.mode !== 'OPERACAO_OFICIAL'
+                      ? 'Execução operacional (SLA contratual em implantação)'
+                      : 'Taxa de Execução do Período'}
+                  </span>
+                </>
               )}
-              <span className="text-[10px] text-indigo-400/70 block mt-0.5">Taxa de Execução</span>
             </div>
           </div>
 
@@ -1605,15 +1689,22 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                     onClick={() => setZoomedEvidencia(photo)}
                     className="p-2.5 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5] hover:border-indigo-500/50 transition-all cursor-pointer flex flex-col justify-between space-y-2 group"
                   >
-                    <div className="relative aspect-square rounded-lg bg-[#F7F6F2] overflow-hidden border border-[#CFCDC5] flex items-center justify-center">
-                      {signedUrl ? (
+                    <div className="relative aspect-square rounded-lg bg-[#E4E2DB] overflow-hidden border border-[#CFCDC5] flex items-center justify-center">
+                      {signedUrl && !failedPhotoKeys.has(photo.id || photo.storage_path) ? (
                         <img
                           src={signedUrl}
                           alt={photo.legenda || photo.tipo_foto}
+                          loading="lazy"
                           className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                          onError={() => {
+                            setFailedPhotoKeys((prev) => new Set(prev).add(photo.id || photo.storage_path));
+                          }}
                         />
                       ) : (
-                        <span className="material-symbols-outlined text-slate-600 text-3xl">image</span>
+                        <div className="flex flex-col items-center justify-center p-3 text-center text-[#77766F] space-y-1">
+                          <span className="material-symbols-outlined text-slate-500 text-3xl">broken_image</span>
+                          <span className="text-[9px] font-bold text-[#5F5F5F] uppercase">Foto Indisponível</span>
+                        </div>
                       )}
 
                       <span className="absolute top-1.5 left-1.5 px-2 py-0.5 rounded bg-black/75 backdrop-blur-sm text-cyan-300 text-[9px] font-bold border border-cyan-500/30 uppercase">
@@ -1776,23 +1867,32 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
 
             {/* Card 7: Aderência Operacional */}
             <div className="bg-[#F7F6F2] border border-purple-500/40 rounded-2xl p-4 flex flex-col justify-between shadow-lg">
-              <span className="text-[10px] font-bold text-purple-300 uppercase tracking-wider">Aderência Operacional</span>
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-bold text-purple-300 uppercase tracking-wider">Aderência Operacional</span>
+                {systemSettings.mode !== 'OPERACAO_OFICIAL' && (
+                  <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                    IMPLANTAÇÃO
+                  </span>
+                )}
+              </div>
               {loading || systemSettings.status === 'loading' ? (
                 <span className="text-sm font-bold text-[#77766F] mt-2 block">Carregando...</span>
-              ) : systemSettings.mode !== 'OPERACAO_OFICIAL' || systemSettings.status !== 'loaded' ? (
-                <div className="mt-2">
-                  <span className="text-xs font-bold text-amber-300 block leading-tight">Fase de implantação — SLA não ativo</span>
-                  <span className="text-[9px] text-[#77766F] block mt-0.5">Indicador oficial desativado</span>
-                </div>
               ) : (
                 <>
                   <div className="flex items-baseline justify-between mt-2">
-                    <span className="text-2xl font-black text-purple-300">{kpis.aderencia}%</span>
+                    <span className="text-2xl font-black text-purple-300">
+                      {kpis.planejadas > 0 ? `${kpis.aderencia}%` : '—'}
+                    </span>
                     <span className="material-symbols-outlined text-purple-400 text-xl">speed</span>
                   </div>
                   <div className="w-full bg-[#E4E2DB] h-1.5 rounded-full overflow-hidden mt-1.5 border border-[#CFCDC5]">
                     <div className="bg-purple-500 h-full rounded-full transition-all duration-500" style={{ width: `${Math.min(100, kpis.aderencia)}%` }} />
                   </div>
+                  <span className="text-[10px] text-[#77766F] mt-1">
+                    {systemSettings.mode !== 'OPERACAO_OFICIAL'
+                      ? 'Execução operacional (SLA em implantação)'
+                      : `${kpis.concluidas} de ${kpis.planejadas} atendimentos`}
+                  </span>
                 </>
               )}
             </div>
@@ -2008,121 +2108,236 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
             </div>
           </div>
 
-          {/* 5. TABELA DE DESEMPENHO POR LOJA */}
-          <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-5 space-y-4 shadow-xl font-mono text-xs">
-            <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-3">
-              <div>
-                <h3 className="text-sm font-bold text-[#171717] uppercase tracking-wider flex items-center gap-2">
-                  <span className="material-symbols-outlined text-indigo-400 text-base">store</span>
-                  Desempenho por PDV / Loja ({lojasPerformance.length})
+          {/* 5. TABELA DE DESEMPENHO POR LOJA — COMPACTA COM TOGGLE + PAGINAÇÃO */}
+          <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-5 shadow-xl font-mono text-xs">
+            <div
+              className="flex items-center justify-between cursor-pointer select-none"
+              onClick={() => setPdvTableExpanded((v) => !v)}
+            >
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-indigo-400 text-base">store</span>
+                <h3 className="text-sm font-bold text-[#171717] uppercase tracking-wider">
+                  Desempenho por PDV / Loja
                 </h3>
-                <p className="text-[10px] text-[#77766F] mt-0.5">Clique em qualquer loja para abrir o histórico operacional detalhado.</p>
+                <span className="px-2 py-0.5 rounded-full bg-indigo-500/15 text-indigo-600 text-[10px] font-bold border border-indigo-500/30">
+                  {lojasPerformance.length} lojas
+                </span>
               </div>
-              <span className="text-[10px] text-[#5F5F5F] hidden sm:inline">Ordenado por atrasos e menor aderência</span>
+              <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-[11px] transition-all shadow-md cursor-pointer no-print">
+                <span className="material-symbols-outlined text-sm" style={{ transition: 'transform 0.2s', transform: pdvTableExpanded ? 'rotate(180deg)' : 'rotate(0deg)' }}>
+                  expand_more
+                </span>
+                {pdvTableExpanded ? 'Recolher lojas' : 'Visualizar lojas'}
+              </button>
             </div>
 
-            <div className="overflow-x-auto rounded-xl border border-[#CFCDC5]">
-              <table className="w-full text-left">
-                <thead>
-                  <tr className="bg-[#E4E2DB] text-[#77766F] text-[10px] uppercase border-b border-[#CFCDC5]">
-                    <th className="py-2.5 px-3">PDV / Loja</th>
-                    <th className="py-2.5 px-3 text-center">Planejadas</th>
-                    <th className="py-2.5 px-3 text-center">Realizadas</th>
-                    <th className="py-2.5 px-3 text-center">Pendentes</th>
-                    <th className="py-2.5 px-3 text-center">Atrasadas</th>
-                    <th className="py-2.5 px-3 text-center">Aderência</th>
-                    <th className="py-2.5 px-3 text-center">Ocorrências</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[#CFCDC5] text-[#171717]">
-                  {lojasPerformance.map((loja) => (
-                    <tr
-                      key={loja.codigo}
-                      onClick={() => handleOpenStoreHistory(loja.codigo)}
-                      className="hover:bg-[#E4E2DB]/70 cursor-pointer transition-colors"
-                    >
-                      <td className="py-2.5 px-3">
-                        <strong className="text-[#171717] block">{loja.nome}</strong>
-                        <span className="text-[10px] text-[#77766F]">{loja.cidade} - {loja.uf} ({loja.codigo})</span>
-                      </td>
-                      <td className="py-2.5 px-3 text-center text-cyan-300 font-bold">{loja.planejadas}</td>
-                      <td className="py-2.5 px-3 text-center text-emerald-400 font-bold">{loja.concluidas}</td>
-                      <td className="py-2.5 px-3 text-center text-amber-400 font-bold">{loja.pendentes}</td>
-                      <td className="py-2.5 px-3 text-center">
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${loja.atrasadas > 0 ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40' : 'text-[#5F5F5F]'}`}>
-                          {loja.atrasadas}
-                        </span>
-                      </td>
-                      <td className="py-2.5 px-3 text-center">
-                        {systemSettings.mode !== 'OPERACAO_OFICIAL' || systemSettings.status !== 'loaded' ? (
-                          <span className="text-[10px] text-[#5F5F5F] font-normal">SLA n/a</span>
-                        ) : (
-                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                            loja.aderencia >= 80 ? 'bg-emerald-500/20 text-emerald-300' : loja.aderencia >= 50 ? 'bg-amber-500/20 text-amber-300' : 'bg-rose-500/20 text-rose-300'
-                          }`}>
-                            {loja.aderencia}%
-                          </span>
-                        )}
-                      </td>
-                      <td className="py-2.5 px-3 text-center text-[#77766F]">{loja.ocorrencias}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            {pdvTableExpanded && (
+              <div className="mt-4 space-y-3 animate-fadeIn">
+                {/* Barra de busca */}
+                <div className="flex items-center gap-2">
+                  <div className="relative flex-1 max-w-sm">
+                    <span className="material-symbols-outlined text-[#77766F] text-base absolute left-2.5 top-1/2 -translate-y-1/2">search</span>
+                    <input
+                      type="text"
+                      placeholder="Buscar loja por nome, código, cidade ou UF..."
+                      value={pdvSearch}
+                      onChange={(e) => setPdvSearch(e.target.value)}
+                      className="w-full pl-8 pr-3 py-2 rounded-xl bg-white border border-[#CFCDC5] text-[#171717] text-xs focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/30 placeholder:text-[#9F9F9F]"
+                    />
+                  </div>
+                  <span className="text-[10px] text-[#77766F]">
+                    {filteredLojasPerformance.length} de {lojasPerformance.length} lojas
+                    {pdvSearch.trim() ? ` • filtro: "${pdvSearch.trim()}"` : ''}
+                  </span>
+                </div>
+
+                {/* Tabela paginada */}
+                <div className="overflow-x-auto rounded-xl border border-[#CFCDC5]">
+                  <table className="w-full text-left">
+                    <thead>
+                      <tr className="bg-[#E4E2DB] text-[#77766F] text-[10px] uppercase border-b border-[#CFCDC5]">
+                        <th className="py-2.5 px-3">PDV / Loja</th>
+                        <th className="py-2.5 px-3 text-center">Planejadas</th>
+                        <th className="py-2.5 px-3 text-center">Realizadas</th>
+                        <th className="py-2.5 px-3 text-center">Pendentes</th>
+                        <th className="py-2.5 px-3 text-center">Atrasadas</th>
+                        <th className="py-2.5 px-3 text-center">Aderência</th>
+                        <th className="py-2.5 px-3 text-center">Ocorrências</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[#CFCDC5] text-[#171717]">
+                      {paginatedLojas.map((loja) => (
+                        <tr
+                          key={loja.codigo}
+                          onClick={() => handleOpenStoreHistory(loja.codigo)}
+                          className="hover:bg-[#E4E2DB]/70 cursor-pointer transition-colors"
+                        >
+                          <td className="py-2.5 px-3">
+                            <strong className="text-[#171717] block">{loja.nome}</strong>
+                            <span className="text-[10px] text-[#77766F]">{loja.cidade} - {loja.uf} ({loja.codigo})</span>
+                          </td>
+                          <td className="py-2.5 px-3 text-center text-cyan-300 font-bold">{loja.planejadas}</td>
+                          <td className="py-2.5 px-3 text-center text-emerald-400 font-bold">{loja.concluidas}</td>
+                          <td className="py-2.5 px-3 text-center text-amber-400 font-bold">{loja.pendentes}</td>
+                          <td className="py-2.5 px-3 text-center">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${loja.atrasadas > 0 ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40' : 'text-[#5F5F5F]'}`}>
+                              {loja.atrasadas}
+                            </span>
+                          </td>
+                          <td className="py-2.5 px-3 text-center">
+                            {systemSettings.mode !== 'OPERACAO_OFICIAL' || systemSettings.status !== 'loaded' ? (
+                              <span className="text-[10px] text-[#5F5F5F] font-normal">SLA n/a</span>
+                            ) : (
+                              <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                loja.aderencia >= 80 ? 'bg-emerald-500/20 text-emerald-300' : loja.aderencia >= 50 ? 'bg-amber-500/20 text-amber-300' : 'bg-rose-500/20 text-rose-300'
+                              }`}>
+                                {loja.aderencia}%
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-2.5 px-3 text-center text-[#77766F]">{loja.ocorrencias}</td>
+                        </tr>
+                      ))}
+                      {paginatedLojas.length === 0 && (
+                        <tr>
+                          <td colSpan={7} className="py-6 text-center text-[#77766F]">
+                            {pdvSearch.trim() ? 'Nenhuma loja encontrada para o filtro aplicado.' : 'Nenhuma loja disponível.'}
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Paginação */}
+                {pdvTotalPages > 1 && (
+                  <div className="flex items-center justify-between pt-2">
+                    <span className="text-[10px] text-[#77766F]">
+                      Página {pdvPage} de {pdvTotalPages} • Exibindo {((pdvPage - 1) * PDV_PAGE_SIZE) + 1}–{Math.min(pdvPage * PDV_PAGE_SIZE, filteredLojasPerformance.length)} de {filteredLojasPerformance.length}
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        disabled={pdvPage <= 1}
+                        onClick={(e) => { e.stopPropagation(); setPdvPage((p) => Math.max(1, p - 1)); }}
+                        className="px-2.5 py-1 rounded-lg bg-[#E4E2DB] border border-[#CFCDC5] text-[#171717] text-[10px] font-bold hover:bg-[#D8D6CF] disabled:opacity-40 disabled:cursor-not-allowed transition-colors cursor-pointer"
+                      >
+                        ← Anterior
+                      </button>
+                      {Array.from({ length: Math.min(5, pdvTotalPages) }, (_, i) => {
+                        let pageNum: number;
+                        if (pdvTotalPages <= 5) {
+                          pageNum = i + 1;
+                        } else if (pdvPage <= 3) {
+                          pageNum = i + 1;
+                        } else if (pdvPage >= pdvTotalPages - 2) {
+                          pageNum = pdvTotalPages - 4 + i;
+                        } else {
+                          pageNum = pdvPage - 2 + i;
+                        }
+                        return (
+                          <button
+                            key={pageNum}
+                            onClick={(e) => { e.stopPropagation(); setPdvPage(pageNum); }}
+                            className={`w-7 h-7 rounded-lg text-[10px] font-bold transition-colors cursor-pointer ${
+                              pageNum === pdvPage
+                                ? 'bg-indigo-600 text-white border border-indigo-500'
+                                : 'bg-[#E4E2DB] border border-[#CFCDC5] text-[#171717] hover:bg-[#D8D6CF]'
+                            }`}
+                          >
+                            {pageNum}
+                          </button>
+                        );
+                      })}
+                      <button
+                        disabled={pdvPage >= pdvTotalPages}
+                        onClick={(e) => { e.stopPropagation(); setPdvPage((p) => Math.min(pdvTotalPages, p + 1)); }}
+                        className="px-2.5 py-1 rounded-lg bg-[#E4E2DB] border border-[#CFCDC5] text-[#171717] text-[10px] font-bold hover:bg-[#D8D6CF] disabled:opacity-40 disabled:cursor-not-allowed transition-colors cursor-pointer"
+                      >
+                        Próxima →
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                <p className="text-[10px] text-[#77766F] mt-1">Clique em qualquer loja para abrir o histórico operacional detalhado. Ordenado por atrasos e menor aderência.</p>
+              </div>
+            )}
           </div>
 
-          {/* 6. TABELA DE DESEMPENHO POR PROMOTOR */}
-          <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-5 space-y-4 shadow-xl font-mono text-xs">
-            <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-3">
-              <div>
-                <h3 className="text-sm font-bold text-[#171717] uppercase tracking-wider flex items-center gap-2">
-                  <span className="material-symbols-outlined text-purple-400 text-base">badge</span>
-                  Desempenho por Promotor ({promotoresPerformance.length})
+          {/* 6. TABELA DE DESEMPENHO POR PROMOTOR — COMPACTA COM TOGGLE */}
+          <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-5 shadow-xl font-mono text-xs">
+            <div
+              className="flex items-center justify-between cursor-pointer select-none"
+              onClick={() => setPromotorTableExpanded((v) => !v)}
+            >
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-purple-400 text-base">badge</span>
+                <h3 className="text-sm font-bold text-[#171717] uppercase tracking-wider">
+                  Desempenho por Promotor
                 </h3>
-                <p className="text-[10px] text-[#77766F] mt-0.5">Produtividade e aderência da equipe no período.</p>
+                <span className="px-2 py-0.5 rounded-full bg-purple-500/15 text-purple-600 text-[10px] font-bold border border-purple-500/30">
+                  {promotoresPerformance.length} promotores
+                </span>
               </div>
+              <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-[11px] transition-all shadow-md cursor-pointer no-print">
+                <span className="material-symbols-outlined text-sm" style={{ transition: 'transform 0.2s', transform: promotorTableExpanded ? 'rotate(180deg)' : 'rotate(0deg)' }}>
+                  expand_more
+                </span>
+                {promotorTableExpanded ? 'Recolher' : 'Visualizar equipe'}
+              </button>
             </div>
 
-            <div className="overflow-x-auto rounded-xl border border-[#CFCDC5]">
-              <table className="w-full text-left">
-                <thead>
-                  <tr className="bg-[#E4E2DB] text-[#77766F] text-[10px] uppercase border-b border-[#CFCDC5]">
-                    <th className="py-2.5 px-3">Promotor</th>
-                    <th className="py-2.5 px-3 text-center">Planejadas</th>
-                    <th className="py-2.5 px-3 text-center">Realizadas</th>
-                    <th className="py-2.5 px-3 text-center">Pendentes</th>
-                    <th className="py-2.5 px-3 text-center">Atrasadas</th>
-                    <th className="py-2.5 px-3 text-center">Aderência</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[#CFCDC5] text-[#171717]">
-                  {promotoresPerformance.map((prom) => (
-                    <tr key={prom.matricula} className="hover:bg-[#E4E2DB]/70 transition-colors">
-                      <td className="py-2.5 px-3">
-                        <strong className="text-[#171717] block">{prom.nome}</strong>
-                        <span className="text-[10px] text-[#77766F]">Matrícula: {prom.matricula}</span>
-                      </td>
-                      <td className="py-2.5 px-3 text-center text-cyan-300 font-bold">{prom.planejadas}</td>
-                      <td className="py-2.5 px-3 text-center text-emerald-400 font-bold">{prom.concluidas}</td>
-                      <td className="py-2.5 px-3 text-center text-amber-400 font-bold">{prom.pendentes}</td>
-                      <td className="py-2.5 px-3 text-center font-bold text-rose-400">{prom.atrasadas}</td>
-                      <td className="py-2.5 px-3 text-center">
-                        {systemSettings.mode !== 'OPERACAO_OFICIAL' || systemSettings.status !== 'loaded' ? (
-                          <span className="text-[10px] text-[#5F5F5F] font-normal">SLA n/a</span>
-                        ) : (
-                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                            prom.aderencia >= 80 ? 'bg-emerald-500/20 text-emerald-300' : prom.aderencia >= 50 ? 'bg-amber-500/20 text-amber-300' : 'bg-rose-500/20 text-rose-300'
-                          }`}>
-                            {prom.aderencia}%
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            {promotorTableExpanded && (
+              <div className="mt-4 animate-fadeIn">
+                {promotoresPerformance.length === 0 ? (
+                  <div className="py-6 text-center text-[#77766F] border border-[#CFCDC5] rounded-xl bg-[#E4E2DB]/50">
+                    <span className="material-symbols-outlined text-2xl text-[#B0B0A8] block mb-1">person_off</span>
+                    Nenhum promotor com atendimento no período selecionado.
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto rounded-xl border border-[#CFCDC5]">
+                    <table className="w-full text-left">
+                      <thead>
+                        <tr className="bg-[#E4E2DB] text-[#77766F] text-[10px] uppercase border-b border-[#CFCDC5]">
+                          <th className="py-2.5 px-3">Promotor</th>
+                          <th className="py-2.5 px-3 text-center">Planejadas</th>
+                          <th className="py-2.5 px-3 text-center">Realizadas</th>
+                          <th className="py-2.5 px-3 text-center">Pendentes</th>
+                          <th className="py-2.5 px-3 text-center">Atrasadas</th>
+                          <th className="py-2.5 px-3 text-center">Aderência</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[#CFCDC5] text-[#171717]">
+                        {promotoresPerformance.map((prom) => (
+                          <tr key={prom.matricula} className="hover:bg-[#E4E2DB]/70 transition-colors">
+                            <td className="py-2.5 px-3">
+                              <strong className="text-[#171717] block">{prom.nome}</strong>
+                              <span className="text-[10px] text-[#77766F]">Matrícula: {prom.matricula}</span>
+                            </td>
+                            <td className="py-2.5 px-3 text-center text-cyan-300 font-bold">{prom.planejadas}</td>
+                            <td className="py-2.5 px-3 text-center text-emerald-400 font-bold">{prom.concluidas}</td>
+                            <td className="py-2.5 px-3 text-center text-amber-400 font-bold">{prom.pendentes}</td>
+                            <td className="py-2.5 px-3 text-center font-bold text-rose-400">{prom.atrasadas}</td>
+                            <td className="py-2.5 px-3 text-center">
+                              {systemSettings.mode !== 'OPERACAO_OFICIAL' || systemSettings.status !== 'loaded' ? (
+                                <span className="text-[10px] text-[#5F5F5F] font-normal">SLA n/a</span>
+                              ) : (
+                                <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                  prom.aderencia >= 80 ? 'bg-emerald-500/20 text-emerald-300' : prom.aderencia >= 50 ? 'bg-amber-500/20 text-amber-300' : 'bg-rose-500/20 text-rose-300'
+                                }`}>
+                                  {prom.aderencia}%
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                <p className="text-[10px] text-[#77766F] mt-2">Produtividade e aderência da equipe no período.</p>
+              </div>
+            )}
           </div>
 
           {/* RODAPÉ DO RELATÓRIO IMPRESSO */}
@@ -2157,14 +2372,21 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
 
             {/* FOTO GRANDE */}
             <div className="relative aspect-video rounded-xl bg-[#E4E2DB] overflow-hidden border border-[#CFCDC5] flex items-center justify-center">
-              {evidenciasSignedUrls[zoomedEvidencia.storage_path] ? (
+              {evidenciasSignedUrls[zoomedEvidencia.storage_path] && !failedPhotoKeys.has(zoomedEvidencia.id || zoomedEvidencia.storage_path) ? (
                 <img
                   src={evidenciasSignedUrls[zoomedEvidencia.storage_path]}
                   alt={zoomedEvidencia.legenda || zoomedEvidencia.tipo_foto}
                   className="w-full h-full object-contain"
+                  onError={() => {
+                    setFailedPhotoKeys((prev) => new Set(prev).add(zoomedEvidencia.id || zoomedEvidencia.storage_path));
+                  }}
                 />
               ) : (
-                <span className="material-symbols-outlined text-slate-600 text-4xl">image</span>
+                <div className="flex flex-col items-center justify-center p-6 text-center text-[#77766F] space-y-2">
+                  <span className="material-symbols-outlined text-slate-500 text-5xl">broken_image</span>
+                  <p className="text-xs font-bold text-[#171717]">Imagem não pôde ser carregada pelo navegador</p>
+                  <p className="text-[11px] text-[#5F5F5F]">O arquivo pode ter expirado ou estar protegido pelas regras de segurança de armazenamento.</p>
+                </div>
               )}
             </div>
 
@@ -2971,4 +3193,3 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
     </div>
   );
 };
-

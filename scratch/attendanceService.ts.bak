@@ -1,0 +1,173 @@
+import * as XLSX from 'xlsx';
+import { supabase } from './supabase';
+import type {
+  AttendanceItem,
+  AttendanceOverrideRecord,
+  AttendanceOverrideStatus,
+  AttendanceRules,
+  Equipe,
+  RouteItem,
+  UserRole,
+  Visit
+} from '../types';
+import {
+  buildAttendanceExportRows,
+  buildAttendanceRoster,
+  DEFAULT_ATTENDANCE_RULES,
+  parseAttendanceRules,
+  validateAttendanceOverride
+} from '../utils/attendanceEngine';
+import { getLocalDateString } from '../utils/routePlanner';
+
+export class AttendanceMigrationPendingError extends Error {
+  constructor(message = 'Migração de presença ainda não aplicada neste ambiente.') {
+    super(message);
+    this.name = 'AttendanceMigrationPendingError';
+  }
+}
+
+function isMissingRelationError(err: any): boolean {
+  if (!err) return false;
+  const msg = String(err.message || err.details || '').toLowerCase();
+  const code = String(err.code || '');
+  return code === '42P01' || msg.includes('does not exist') || msg.includes('promoter_attendance');
+}
+
+export async function fetchAttendanceRules(): Promise<AttendanceRules> {
+  if (!supabase) return DEFAULT_ATTENDANCE_RULES;
+  try {
+    const { data, error } = await supabase
+      .from('system_settings')
+      .select('key, value')
+      .eq('key', 'attendance_rules')
+      .maybeSingle();
+    if (error || !data) return DEFAULT_ATTENDANCE_RULES;
+    return parseAttendanceRules(data.value);
+  } catch {
+    return DEFAULT_ATTENDANCE_RULES;
+  }
+}
+
+export async function fetchAttendanceRoster(input: {
+  operationalDate: string;
+  nowIso?: string;
+}): Promise<{ items: AttendanceItem[]; error: Error | null; migrationPending?: boolean; fetchedAt: string }> {
+  const fetchedAt = new Date().toISOString();
+  if (!supabase) {
+    return { items: [], error: new Error('Cliente Supabase não inicializado.'), fetchedAt };
+  }
+
+  try {
+    const [promotoresRes, rotasRes, visitsRes, equipesRes, overridesRes, settingsRes] = await Promise.all([
+      supabase
+        .from('promotores')
+        .select('id, matricula, nome, cidade, uf, telefone, equipe, supervisor, status')
+        .eq('status', 'ativo'),
+      supabase
+        .from('rotas')
+        .select('id, codigo_rota, promotor_matricula, loja_codigo, industria_codigo, frequencia, domingo, segunda, terca, quarta, quinta, sexta, sabado'),
+      supabase
+        .from('visits')
+        .select('id, promotor_matricula, loja_codigo, industria_codigo, status, data_visita, started_at, completed_at, latitude, longitude, motivo_nao_realizada, created_at')
+        .eq('data_visita', input.operationalDate),
+      supabase
+        .from('equipes')
+        .select('nome, supervisor_nome'),
+      supabase
+        .from('promoter_attendance_records')
+        .select('id, promotor_matricula, data_operacional, override_status, medical_days, justification, updated_at, updated_by')
+        .eq('data_operacional', input.operationalDate),
+      supabase
+        .from('system_settings')
+        .select('key, value')
+        .eq('key', 'attendance_rules')
+        .maybeSingle()
+    ]);
+
+    if (promotoresRes.error) throw new Error(`Erro ao buscar promotores: ${promotoresRes.error.message}`);
+    if (rotasRes.error) throw new Error(`Erro ao buscar rotas: ${rotasRes.error.message}`);
+    if (visitsRes.error) throw new Error(`Erro ao buscar visitas: ${visitsRes.error.message}`);
+
+    let migrationPending = false;
+    let overrides: AttendanceOverrideRecord[] = [];
+    if (overridesRes.error) {
+      if (isMissingRelationError(overridesRes.error)) {
+        migrationPending = true;
+      } else {
+        throw new Error(`Erro ao buscar ajustes de presença: ${overridesRes.error.message}`);
+      }
+    } else {
+      overrides = (overridesRes.data as AttendanceOverrideRecord[]) || [];
+    }
+
+    const rules = parseAttendanceRules(settingsRes.data?.value);
+    const items = buildAttendanceRoster({
+      promoters: promotoresRes.data || [],
+      routes: (rotasRes.data as RouteItem[]) || [],
+      visits: (visitsRes.data as Visit[]) || [],
+      equipes: (equipesRes.data as Array<Pick<Equipe, 'nome' | 'supervisor_nome'>>) || [],
+      overrides,
+      operationalDate: input.operationalDate,
+      nowIso: input.nowIso || new Date().toISOString(),
+      rules
+    });
+
+    return { items, error: null, migrationPending, fetchedAt };
+  } catch (err: any) {
+    return { items: [], error: err instanceof Error ? err : new Error(err?.message || 'Falha ao carregar presença.'), fetchedAt };
+  }
+}
+
+export async function saveAttendanceOverride(input: {
+  role: UserRole | null | undefined;
+  matricula: string;
+  operationalDate: string;
+  overrideStatus: AttendanceOverrideStatus;
+  justification: string;
+  medicalDays?: number;
+}): Promise<{ error: Error | null; migrationPending?: boolean }> {
+  const validation = validateAttendanceOverride({
+    role: input.role,
+    overrideStatus: input.overrideStatus,
+    justification: input.justification,
+    medicalDays: input.medicalDays
+  });
+  if (!validation.valid) {
+    return { error: new Error(validation.message) };
+  }
+  if (!supabase) {
+    return { error: new Error('Cliente Supabase não inicializado.') };
+  }
+
+  try {
+    const { error } = await supabase.rpc('set_promoter_attendance_override', {
+      p_promotor_matricula: input.matricula,
+      p_data_operacional: input.operationalDate,
+      p_override_status: input.overrideStatus,
+      p_justification: input.justification,
+      p_medical_days: input.medicalDays ?? null
+    });
+    if (error) {
+      if (isMissingRelationError(error)) {
+        return { error: new AttendanceMigrationPendingError(), migrationPending: true };
+      }
+      return { error: new Error(error.message) };
+    }
+    return { error: null };
+  } catch (err: any) {
+    if (isMissingRelationError(err)) {
+      return { error: new AttendanceMigrationPendingError(), migrationPending: true };
+    }
+    return { error: err instanceof Error ? err : new Error(err?.message || 'Falha ao salvar ajuste de presença.') };
+  }
+}
+
+export function downloadAttendanceExcel(items: AttendanceItem[], operationalDate: string): string {
+  const rows = buildAttendanceExportRows(items);
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet(rows.length > 0 ? rows : [{ Aviso: 'Nenhum registro com os filtros atuais' }]);
+  XLSX.utils.book_append_sheet(wb, ws, 'Presenca');
+  const fileName = `MK9_Presenca_${operationalDate || getLocalDateString(new Date())}.xlsx`;
+  XLSX.writeFile(wb, fileName);
+  return fileName;
+}

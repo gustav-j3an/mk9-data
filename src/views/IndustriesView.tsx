@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useAuth } from '../auth/AuthProvider';
 import { supabase } from '../lib/supabase';
-import type { IndustryItem, StoreItem, RouteItem, Visit, ToastMessage, ContratoLoja, PeriodoContratual } from '../types';
+import type { IndustryItem, StoreItem, RouteItem, Visit, ToastMessage, ContratoLoja, PeriodoContratual, CreateContratoLojaDTO } from '../types';
 import { getMonthlyQuinzenalDates } from '../utils/routePlanner';
 import { analyzeRotasForContracts, contratosService, parseISODate, classificarParContratual } from '../lib/contratosService';
+import { StatCard, StatusBadge, DataTable, Column } from '../components/ui';
 
 interface IndustriesViewProps {
   onShowToast: (toast: Omit<ToastMessage, 'id'>) => void;
@@ -33,6 +34,36 @@ export interface ContratoItemElegivel {
   contratoAtivoExistente: ContratoLoja | null;
   contratoSuspensoExistente: ContratoLoja | null;
   totalContratosHistoricos: number;
+}
+
+// Normalização de texto para busca amigável (sem acentos e case-insensitive)
+export function normalizeText(str: string): string {
+  if (!str) return '';
+  return str
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+}
+
+// Formatação amigável de percentual de aderência (Onda 3.2: precisão decimal para percentuais pequenos e tratamento seguro de divisão por zero)
+export function formatAderencia(realizadas: number, planejadas: number): string {
+  if (!planejadas || planejadas <= 0) {
+    return '—';
+  }
+  if (!realizadas || realizadas <= 0) {
+    return '0%';
+  }
+  const pct = (realizadas / planejadas) * 100;
+  if (pct > 0 && pct < 1) {
+    // Para percentuais baixos (ex: 6/2148 = 0.279%), exibe uma casa decimal (0,3%) para não mascarar execução real como 0%
+    return `${pct.toFixed(1).replace('.', ',')}%`;
+  }
+  const rounded = Math.round(pct);
+  if (Math.abs(pct - rounded) < 0.05) {
+    return `${rounded}%`;
+  }
+  return `${pct.toFixed(1).replace('.', ',')}%`;
 }
 
 export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) => {
@@ -74,6 +105,7 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
   });
   const [revisaoErrors, setRevisaoErrors] = useState<{ valor?: string; data_fim?: string }>({});
   const [simulatedPayload, setSimulatedPayload] = useState<any | null>(null);
+  const [savingContrato, setSavingContrato] = useState(false);
 
   // ESTADOS DO CONTROLE DE FREQUÊNCIA OPERACIONAL
   const [freqLoading, setFreqLoading] = useState(false);
@@ -94,7 +126,34 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
 
   // Visualização expandida no detalhamento por loja e por promotor
   const [expandedIndustria, setExpandedIndustria] = useState<string | null>(null);
+  const [expandedPromotor, setExpandedPromotor] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'industria' | 'promotor'>('industria');
+
+  // Estados de busca rápida e paginação para Visão por Indústria e Visão por Promotor (Onda 3.2)
+  const [searchIndustriaTerm, setSearchIndustriaTerm] = useState('');
+  const [industriaPage, setIndustriaPage] = useState(1);
+  const [industriaPageSize, setIndustriaPageSize] = useState<10 | 25 | 50>(10);
+
+  const [searchPromotorTerm, setSearchPromotorTerm] = useState('');
+  const [promotorPage, setPromotorPage] = useState(1);
+  const [promotorPageSize, setPromotorPageSize] = useState<10 | 25 | 50>(10);
+
+  // Resetar expansões e retornar à primeira página ao alterar filtros operacionais ou modo de visualização
+  useEffect(() => {
+    setExpandedIndustria(null);
+    setExpandedPromotor(null);
+    setIndustriaPage(1);
+    setPromotorPage(1);
+  }, [periodFilter, selectedIndustria, selectedLoja, selectedPromotor, viewMode]);
+
+  // Resetar página ao mudar termo de busca
+  useEffect(() => {
+    setIndustriaPage(1);
+  }, [searchIndustriaTerm, industriaPageSize]);
+
+  useEffect(() => {
+    setPromotorPage(1);
+  }, [searchPromotorTerm, promotorPageSize]);
 
   // Form State
   const [formData, setFormData] = useState({
@@ -534,6 +593,17 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
       realizadas: number;
       pendentes: number;
       naoRealizadas: number;
+      atendimentosDetalhamento: Map<string, {
+        lojaCodigo: string;
+        lojaNome: string;
+        industriaCodigo: string;
+        industriaNome: string;
+        frequencia: string;
+        planejadas: number;
+        realizadas: number;
+        pendentes: number;
+        naoRealizadas: number;
+      }>;
     }>();
 
     plannedList.forEach((p) => {
@@ -548,7 +618,8 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
           planejadas: 0,
           realizadas: 0,
           pendentes: 0,
-          naoRealizadas: 0
+          naoRealizadas: 0,
+          atendimentosDetalhamento: new Map()
         };
         promotorGroupMap.set(p.promotorMatricula, pg);
       }
@@ -557,19 +628,55 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
       pg.lojasUnicas.add(p.lojaCodigo);
       pg.industriasUnicas.add(p.industriaCodigo);
 
+      let status = 'pendente';
       const key = `${p.promotorMatricula}|${p.lojaCodigo}|${p.industriaCodigo}|${p.dataStr}`;
       const v = visitsMap.get(key);
       if (v) {
-        if (v.status === 'concluida') pg.realizadas++;
-        else if (v.status === 'nao_realizada') pg.naoRealizadas++;
-        else pg.pendentes++;
+        if (v.status === 'concluida') {
+          pg.realizadas++;
+          status = 'concluida';
+        } else if (v.status === 'nao_realizada') {
+          pg.naoRealizadas++;
+          status = 'nao_realizada';
+        } else {
+          pg.pendentes++;
+        }
       } else {
         pg.pendentes++;
       }
+
+      const subKey = `${p.lojaCodigo}|${p.industriaCodigo}`;
+      let sub = pg.atendimentosDetalhamento.get(subKey);
+      if (!sub) {
+        const stObj = lojasList.find((st) => st.codigo === p.lojaCodigo);
+        const indObj = industries.find((i) => i.codigo === p.industriaCodigo);
+        sub = {
+          lojaCodigo: p.lojaCodigo,
+          lojaNome: stObj?.nome || p.lojaCodigo,
+          industriaCodigo: p.industriaCodigo,
+          industriaNome: indObj?.nome || p.industriaCodigo,
+          frequencia: p.frequencia,
+          planejadas: 0,
+          realizadas: 0,
+          pendentes: 0,
+          naoRealizadas: 0
+        };
+        pg.atendimentosDetalhamento.set(subKey, sub);
+      }
+
+      sub.planejadas++;
+      if (status === 'concluida') sub.realizadas++;
+      else if (status === 'nao_realizada') sub.naoRealizadas++;
+      else sub.pendentes++;
     });
 
     const tabelaPromotores = Array.from(promotorGroupMap.values()).map((pg) => {
       const aderencia = pg.planejadas > 0 ? Math.round((pg.realizadas / pg.planejadas) * 100) : 0;
+      const detalhamentoAtendimentos = Array.from(pg.atendimentosDetalhamento.values()).map((d) => ({
+        ...d,
+        aderencia: d.planejadas > 0 ? Math.round((d.realizadas / d.planejadas) * 100) : 0
+      }));
+
       return {
         matricula: pg.matricula,
         nome: pg.nome,
@@ -579,7 +686,8 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
         realizadas: pg.realizadas,
         pendentes: pg.pendentes,
         naoRealizadas: pg.naoRealizadas,
-        aderencia
+        aderencia,
+        detalhamentoAtendimentos
       };
     });
 
@@ -615,6 +723,50 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
       return matchesSearch && matchesStatus;
     });
   }, [industries, searchTerm, statusFilter]);
+
+  // Onda 3.2: Filtragem por busca e paginação para Visão por Indústria (Aba 1)
+  const { filteredIndustriasList, paginatedIndustrias, totalIndustriasPages } = useMemo(() => {
+    const term = normalizeText(searchIndustriaTerm);
+    const filtered = processedData.tabelaIndustrias.filter((ind) => {
+      if (!term) return true;
+      const nomeNorm = normalizeText(ind.nome);
+      const codigoNorm = normalizeText(ind.codigo);
+      return nomeNorm.includes(term) || codigoNorm.includes(term);
+    });
+
+    const totalPages = Math.max(1, Math.ceil(filtered.length / industriaPageSize));
+    const currentPage = Math.min(industriaPage, totalPages);
+    const startIndex = (currentPage - 1) * industriaPageSize;
+    const paginated = filtered.slice(startIndex, startIndex + industriaPageSize);
+
+    return {
+      filteredIndustriasList: filtered,
+      paginatedIndustrias: paginated,
+      totalIndustriasPages: totalPages
+    };
+  }, [processedData.tabelaIndustrias, searchIndustriaTerm, industriaPage, industriaPageSize]);
+
+  // Onda 3.2: Filtragem por busca e paginação para Visão por Promotor (Aba 1)
+  const { filteredPromotoresList, paginatedPromotores, totalPromotoresPages } = useMemo(() => {
+    const term = normalizeText(searchPromotorTerm);
+    const filtered = processedData.tabelaPromotores.filter((prm) => {
+      if (!term) return true;
+      const nomeNorm = normalizeText(prm.nome);
+      const matNorm = normalizeText(prm.matricula);
+      return nomeNorm.includes(term) || matNorm.includes(term);
+    });
+
+    const totalPages = Math.max(1, Math.ceil(filtered.length / promotorPageSize));
+    const currentPage = Math.min(promotorPage, totalPages);
+    const startIndex = (currentPage - 1) * promotorPageSize;
+    const paginated = filtered.slice(startIndex, startIndex + promotorPageSize);
+
+    return {
+      filteredPromotoresList: filtered,
+      paginatedPromotores: paginated,
+      totalPromotoresPages: totalPages
+    };
+  }, [processedData.tabelaPromotores, searchPromotorTerm, promotorPage, promotorPageSize]);
 
   // -------------------------------------------------------------
   // -------------------------------------------------------------
@@ -722,6 +874,354 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
       totalInicioNaoInformado
     };
   }, [routes, industries, lojasList, contratosList, contratosError, selectedIndustria, selectedLoja, contratosRefDate]);
+
+  // Colunas padronizadas para a tabela de Contratos Elegíveis com DataTable
+  const contratosColumns: Column<ContratoItemElegivel>[] = useMemo(() => [
+    {
+      key: 'industria',
+      header: 'Indústria',
+      sortable: true,
+      accessor: (c) => c.industriaNome,
+      render: (c) => {
+        const isKing = c.industria_codigo === 'IND-013';
+        return (
+          <div>
+            <span className="font-bold text-[#171717] block">{c.industriaNome}</span>
+            <span className={`text-[10px] font-mono ${isKing ? 'text-[#286FF5] font-bold' : 'text-[#737373]'}`}>
+              {c.industria_codigo} {isKing && '★ (KING)'}
+            </span>
+          </div>
+        );
+      }
+    },
+    {
+      key: 'loja',
+      header: 'Loja / PDV',
+      sortable: true,
+      accessor: (c) => c.lojaInfo.nome,
+      render: (c) => (
+        <div>
+          <span className="text-[#171717] block font-bold">{c.lojaInfo.nome}</span>
+          <span className="text-[10px] text-[#737373] block font-mono">
+            {c.loja_codigo} {c.lojaInfo.cidade ? `• ${c.lojaInfo.cidade}/${c.lojaInfo.uf}` : ''}
+          </span>
+        </div>
+      )
+    },
+    {
+      key: 'frequencia',
+      header: 'Frequência',
+      sortable: true,
+      accessor: (c) => c.frequencia,
+      render: (c) => (
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <StatusBadge
+            status={c.frequencia}
+            variant={
+              c.frequencia === 'SEMANAL'
+                ? 'semanal'
+                : c.frequencia === 'QUINZENAL'
+                ? 'quinzenal'
+                : 'mensal'
+            }
+            label={c.frequencia}
+          />
+          {c.visitas_por_semana && (
+            <span className="text-[10px] font-mono font-bold text-[#525252]">
+              ({c.visitas_por_semana}x/sem)
+            </span>
+          )}
+        </div>
+      )
+    },
+    {
+      key: 'dias_visita',
+      header: 'Dias de Visita',
+      render: (c) => (
+        <div className="flex gap-1">
+          {['segunda', 'terca', 'quarta', 'quinta', 'sexta', 'sabado', 'domingo'].map((d, dIdx) => {
+            const labels = ['S', 'T', 'Q', 'Q', 'S', 'S', 'D'];
+            const active = Boolean(c[d as keyof ContratoItemElegivel]);
+            return (
+              <span
+                key={d}
+                className={`w-4 h-4 rounded text-[9px] flex items-center justify-center font-bold ${
+                  active ? 'bg-[#111114] text-white shadow-xs' : 'bg-[#EAE8E2] text-[#A3A3A3]'
+                }`}
+              >
+                {labels[dIdx]}
+              </span>
+            );
+          })}
+        </div>
+      )
+    },
+    {
+      key: 'periodo_sugerido',
+      header: 'Período Sugerido',
+      sortable: true,
+      accessor: (c) => c.projecao_periodo?.data_inicio || '',
+      render: (c) => {
+        const proj = c.projecao_periodo;
+        if (!proj) return <span className="text-[#D93636] italic text-xs">Não calculado</span>;
+        return (
+          <div className="font-mono text-xs">
+            <span className="text-[#171717] font-bold block">{proj.data_inicio}</span>
+            <span className="text-[10px] text-[#737373] block">até {proj.data_fim}</span>
+          </div>
+        );
+      }
+    },
+    {
+      key: 'competencia',
+      header: 'Competência',
+      sortable: true,
+      accessor: (c) => c.projecao_periodo?.competencia || '',
+      render: (c) => {
+        const proj = c.projecao_periodo;
+        if (!proj) return <span className="text-[#737373]">—</span>;
+        return (
+          <span className="px-2 py-0.5 rounded bg-[#EAE8E2] border border-[#CFCDC5] text-[#D98A00] font-mono font-bold text-xs">
+            {proj.competencia}
+          </span>
+        );
+      }
+    },
+    {
+      key: 'tipo_ciclo',
+      header: 'Tipo de Ciclo',
+      sortable: true,
+      accessor: (c) => c.projecao_periodo?.tipo_ciclo || '',
+      render: (c) => {
+        const proj = c.projecao_periodo;
+        if (!proj) return <span className="text-[#737373]">—</span>;
+        return (
+          <span
+            className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border ${
+              proj.tipo_ciclo === 'ESPECIAL_KING_23_22'
+                ? 'bg-[#EBF2FE] text-[#286FF5] border-[#C3D9FD]'
+                : proj.tipo_ciclo === 'PRIMEIRA_VIGENCIA_PRO_RATA'
+                ? 'bg-[#FFF8E6] text-[#D98A00] border-[#FCE19B]'
+                : 'bg-[#E8F5EE] text-[#16845B] border-[#B9E5D0]'
+            }`}
+          >
+            {proj.tipo_ciclo}
+          </span>
+        );
+      }
+    },
+    {
+      key: 'data_inicio_operacao',
+      header: 'Início Operação',
+      sortable: true,
+      accessor: (c) => c.dataCadastro || '',
+      render: (c) => {
+        if (c.dataCadastro) {
+          return <span className="text-[#525252] text-xs font-mono">{c.dataCadastro}</span>;
+        }
+        return (
+          <span className="text-[10px] text-[#D93636] font-bold flex items-center gap-1 font-mono">
+            <span className="material-symbols-outlined text-[12px]">warning</span>
+            Indisponível
+          </span>
+        );
+      }
+    },
+    {
+      key: 'situacao_contratual',
+      header: 'Situação Contratual',
+      sortable: true,
+      accessor: (c) => c.classificacao,
+      render: (c) => {
+        if (c.classificacao === 'JA_POSSUI_ATIVO') {
+          return (
+            <div>
+              <StatusBadge status="ativo" label="CONTRATO ATIVO" variant="ativo" />
+              <span className="text-[10px] text-[#737373] font-mono block mt-0.5" title={c.motivoClassificacao}>
+                Desde {c.contratoAtivoExistente?.data_inicio_vigencia}
+              </span>
+            </div>
+          );
+        }
+        if (c.classificacao === 'JA_POSSUI_SUSPENSO') {
+          return (
+            <div>
+              <StatusBadge status="suspenso" label="SUSPENSO" variant="pendente" />
+              <span className="text-[10px] text-[#D98A00] font-mono block mt-0.5" title={c.motivoClassificacao}>
+                Revisar manual
+              </span>
+            </div>
+          );
+        }
+        if (c.classificacao === 'INICIO_NAO_INFORMADO') {
+          return (
+            <div>
+              <StatusBadge status="bloqueado" label="INÍCIO AUSENTE" variant="falta" />
+              <span className="text-[10px] text-[#D93636] font-mono block mt-0.5" title={c.motivoClassificacao}>
+                Cadastrar indústria
+              </span>
+            </div>
+          );
+        }
+        if (c.classificacao === 'ERRO_CONSULTA') {
+          return (
+            <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-[#FDF2F2] text-[#D93636] border border-[#F8C8C8] flex items-center gap-1 w-max" title={c.motivoClassificacao}>
+              <span className="material-symbols-outlined text-[12px]">error</span>
+              Erro Consulta
+            </span>
+          );
+        }
+        return (
+          <div>
+            <StatusBadge status="elegivel" label="APTO P/ CONTRATO" variant="ativo" />
+            <span className="text-[10px] text-[#737373] font-mono block mt-0.5">
+              Sem contrato ativo
+            </span>
+          </div>
+        );
+      }
+    },
+    {
+      key: 'acoes',
+      header: 'Ações',
+      headerClassName: 'text-center',
+      className: 'text-center',
+      render: (c) => {
+        if (!canEdit) return null;
+        if (c.classificacao === 'ELEGIVEL') {
+          return (
+            <button
+              type="button"
+              onClick={() => {
+                setReviewingContrato(c);
+                setRevisaoForm({
+                  valor_por_visita: '',
+                  tipo_vigencia: 'continua',
+                  data_fim_vigencia: '',
+                  observacao: ''
+                });
+                setRevisaoErrors({});
+                setSimulatedPayload(null);
+              }}
+              className="px-2.5 py-1.5 rounded-lg bg-[#111114] hover:bg-black text-white text-xs font-bold border border-[#111114] flex items-center gap-1.5 mx-auto transition-all cursor-pointer shadow-xs hover:shadow-md"
+              title="Revisar e autorizar contrato individualmente"
+            >
+              <span className="material-symbols-outlined text-[14px] text-[#D98A00]">rate_review</span>
+              <span>Revisar</span>
+            </button>
+          );
+        }
+        return (
+          <span
+            className="text-[10px] text-[#737373] italic flex items-center justify-center gap-1 font-mono"
+            title={c.motivoClassificacao}
+          >
+            <span className="material-symbols-outlined text-[12px] text-[#A3A3A3]">lock</span>
+            Bloqueado
+          </span>
+        );
+      }
+    }
+  ], [canEdit]);
+
+  // Colunas do DataTable para a aba de Cadastro de Indústrias (Onda 3.1)
+  const columnsIndustrias = useMemo<Column<IndustryItem>[]>(() => [
+    {
+      key: 'codigo',
+      header: 'Código',
+      className: 'font-mono font-bold text-purple-700 whitespace-nowrap',
+      render: (ind) => (
+        <span className="font-mono font-bold text-purple-700">{ind.codigo}</span>
+      )
+    },
+    {
+      key: 'nome',
+      header: 'Nome da Indústria',
+      className: 'font-semibold text-[#171717]',
+      render: (ind) => (
+        <div>
+          <span className="font-bold text-[#171717] block">{ind.nome}</span>
+          {ind.data_inicio_operacao && (
+            <span className="text-[10px] font-mono text-[#5F5F5F] block">
+              Início: {ind.data_inicio_operacao.slice(0, 10)}
+            </span>
+          )}
+        </div>
+      )
+    },
+    {
+      key: 'cnpj',
+      header: 'CNPJ',
+      className: 'font-mono text-[#5F5F5F] whitespace-nowrap',
+      render: (ind) => <span>{ind.cnpj || '—'}</span>
+    },
+    {
+      key: 'status',
+      header: 'Status',
+      className: 'whitespace-nowrap',
+      render: (ind) => (
+        <StatusBadge
+          status={ind.status === 'ativo' ? 'ativo' : 'inativo'}
+          label={ind.status.toUpperCase()}
+          variant={ind.status === 'ativo' ? 'ativo' : 'inativo'}
+        />
+      )
+    },
+    {
+      key: 'observacao',
+      header: 'Observação',
+      className: 'text-[#5F5F5F] max-w-xs truncate',
+      render: (ind) => <span title={ind.observacao || ''}>{ind.observacao || '—'}</span>
+    },
+    {
+      key: 'acoes',
+      header: 'Ações',
+      headerClassName: 'text-right',
+      className: 'text-right whitespace-nowrap space-x-2',
+      render: (ind) => (
+        <div className="flex items-center justify-end gap-1.5">
+          <button
+            type="button"
+            onClick={() => setViewingItem(ind)}
+            className="p-1.5 rounded-lg bg-[#EAE8E2] hover:bg-[#DFDDD6] text-[#171717] border border-[#CFCDC5] cursor-pointer transition-colors"
+            title="Ver Detalhes"
+            aria-label={`Ver detalhes de ${ind.nome}`}
+          >
+            <span className="material-symbols-outlined text-[16px]">visibility</span>
+          </button>
+
+          {canEdit && (
+            <>
+              <button
+                type="button"
+                onClick={() => handleOpenEdit(ind)}
+                className="p-1.5 rounded-lg bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200 cursor-pointer transition-colors"
+                title="Editar"
+                aria-label={`Editar ${ind.nome}`}
+              >
+                <span className="material-symbols-outlined text-[16px]">edit</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleToggleStatus(ind)}
+                className={`p-1.5 rounded-lg border cursor-pointer transition-colors ${
+                  ind.status === 'ativo'
+                    ? 'bg-rose-50 hover:bg-rose-100 text-rose-700 border-rose-200'
+                    : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-200'
+                }`}
+                title={ind.status === 'ativo' ? 'Inativar Indústria' : 'Ativar Indústria'}
+                aria-label={ind.status === 'ativo' ? `Inativar ${ind.nome}` : `Ativar ${ind.nome}`}
+              >
+                <span className="material-symbols-outlined text-[16px]">
+                  {ind.status === 'ativo' ? 'block' : 'check_circle'}
+                </span>
+              </button>
+            </>
+          )}
+        </div>
+      )
+    }
+  ], [canEdit]);
 
   // Abrir Modal de Adição
   const handleOpenCreate = async () => {
@@ -926,8 +1426,8 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
               onClick={() => setActiveTab('frequencia')}
               className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
                 activeTab === 'frequencia'
-                  ? 'bg-[#222222] text-white shadow-[0_0_12px_rgba(147,51,234,0.5)]'
-                  : 'text-[#77766F] hover:text-white hover:bg-[#CFCDC5]'
+                  ? 'bg-[#111114] text-white shadow-sm'
+                  : 'text-[#5F5F5F] hover:text-[#171717] hover:bg-[#D5D3CB]'
               }`}
             >
               <span className="material-symbols-outlined text-[16px]">analytics</span>
@@ -938,8 +1438,8 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
               onClick={() => setActiveTab('cadastro')}
               className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
                 activeTab === 'cadastro'
-                  ? 'bg-[#222222] text-white shadow-[0_0_12px_rgba(147,51,234,0.5)]'
-                  : 'text-[#77766F] hover:text-white hover:bg-[#CFCDC5]'
+                  ? 'bg-[#111114] text-white shadow-sm'
+                  : 'text-[#5F5F5F] hover:text-[#171717] hover:bg-[#D5D3CB]'
               }`}
             >
               <span className="material-symbols-outlined text-[16px]">list_alt</span>
@@ -950,8 +1450,8 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
               onClick={() => setActiveTab('contratos')}
               className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
                 activeTab === 'contratos'
-                  ? 'bg-[#222222] text-white shadow-[0_0_12px_rgba(147,51,234,0.5)]'
-                  : 'text-[#77766F] hover:text-white hover:bg-[#CFCDC5]'
+                  ? 'bg-[#111114] text-white shadow-sm'
+                  : 'text-[#5F5F5F] hover:text-[#171717] hover:bg-[#D5D3CB]'
               }`}
             >
               <span className="material-symbols-outlined text-[16px]">contract</span>
@@ -970,13 +1470,13 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
           <section className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-5 shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-3">
               <div className="flex items-center gap-2 text-xs font-mono font-bold text-[#171717]">
-                <span className="material-symbols-outlined text-purple-400 text-[18px]">filter_alt</span>
+                <span className="material-symbols-outlined text-purple-600 text-[18px]">filter_alt</span>
                 <span>FILTROS OPERACIONAIS</span>
               </div>
               <button
                 onClick={fetchFrequencyData}
                 disabled={freqLoading}
-                className="px-3 py-1.5 rounded-lg bg-[#EAE8E2] border border-[#CFCDC5] text-xs font-semibold text-[#171717] hover:text-white flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                className="px-3 py-1.5 rounded-lg bg-[#EAE8E2] border border-[#CFCDC5] text-xs font-semibold text-[#171717] hover:bg-[#DFDDD6] flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
               >
                 <span className={`material-symbols-outlined text-[16px] ${freqLoading ? 'animate-spin' : ''}`}>
                   refresh
@@ -1063,12 +1563,12 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
 
           {/* ALERTA DE RESTRIÇÃO DE ROTAS QUINZENAIS */}
           {processedData.temRotasQuinzenais && (
-            <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-start gap-3 text-amber-300 text-xs">
-              <span className="material-symbols-outlined text-[20px] text-amber-400 shrink-0 mt-0.5">
+            <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-start gap-3 text-amber-900 text-xs font-mono">
+              <span className="material-symbols-outlined text-[20px] text-amber-600 shrink-0 mt-0.5">
                 warning
               </span>
               <div>
-                <span className="font-bold block uppercase tracking-wide">Atenção sobre Rotas Quinzenais:</span>
+                <span className="font-bold block uppercase tracking-wide text-amber-950">Atenção sobre Rotas Quinzenais:</span>
                 <span>
                   As rotas com frequência quinzenal dependem de referência de semana A/B ou data-base não cadastrada no modelo atual. As ocorrências foram calculadas considerando os dias ativos no período.
                 </span>
@@ -1082,7 +1582,7 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
             <div className="p-5 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5] shadow-xl">
               <div className="flex items-center justify-between text-[#77766F] font-mono text-[11px] font-bold">
                 <span>PLANEJADAS</span>
-                <span className="material-symbols-outlined text-purple-400">calendar_month</span>
+                <span className="material-symbols-outlined text-purple-600">calendar_month</span>
               </div>
               <div className="text-3xl font-extrabold text-[#171717] font-mono mt-2">
                 {processedData.totalPlanejadas}
@@ -1092,11 +1592,11 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
 
             {/* REALIZADAS */}
             <div className="p-5 rounded-2xl bg-[#F7F6F2] border border-emerald-500/30 shadow-xl">
-              <div className="flex items-center justify-between text-emerald-400 font-mono text-[11px] font-bold">
+              <div className="flex items-center justify-between text-emerald-700 font-mono text-[11px] font-bold">
                 <span>REALIZADAS</span>
-                <span className="material-symbols-outlined">task_alt</span>
+                <span className="material-symbols-outlined text-emerald-600">task_alt</span>
               </div>
-              <div className="text-3xl font-extrabold text-emerald-400 font-mono mt-2">
+              <div className="text-3xl font-extrabold text-emerald-700 font-mono mt-2">
                 {processedData.totalRealizadas}
               </div>
               <p className="text-[10px] text-[#5F5F5F] mt-1">Visitas com status concluída</p>
@@ -1104,11 +1604,11 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
 
             {/* PENDENTES */}
             <div className="p-5 rounded-2xl bg-[#F7F6F2] border border-amber-500/30 shadow-xl">
-              <div className="flex items-center justify-between text-amber-400 font-mono text-[11px] font-bold">
+              <div className="flex items-center justify-between text-amber-700 font-mono text-[11px] font-bold">
                 <span>PENDENTES</span>
-                <span className="material-symbols-outlined">pending_actions</span>
+                <span className="material-symbols-outlined text-amber-600">pending_actions</span>
               </div>
-              <div className="text-3xl font-extrabold text-amber-400 font-mono mt-2">
+              <div className="text-3xl font-extrabold text-amber-700 font-mono mt-2">
                 {processedData.totalPendentes}
               </div>
               <p className="text-[10px] text-[#5F5F5F] mt-1">Visitas sem execução no dia</p>
@@ -1116,11 +1616,11 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
 
             {/* NÃO REALIZADAS */}
             <div className="p-5 rounded-2xl bg-[#F7F6F2] border border-rose-500/30 shadow-xl">
-              <div className="flex items-center justify-between text-rose-400 font-mono text-[11px] font-bold">
+              <div className="flex items-center justify-between text-rose-700 font-mono text-[11px] font-bold">
                 <span>NÃO REALIZADAS</span>
-                <span className="material-symbols-outlined">cancel</span>
+                <span className="material-symbols-outlined text-rose-600">cancel</span>
               </div>
-              <div className="text-3xl font-extrabold text-rose-400 font-mono mt-2">
+              <div className="text-3xl font-extrabold text-rose-700 font-mono mt-2">
                 {processedData.totalNaoRealizadas}
               </div>
               <p className="text-[10px] text-[#5F5F5F] mt-1">Com justificativa / ocorrência</p>
@@ -1128,14 +1628,16 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
 
             {/* ADERÊNCIA OPERACIONAL */}
             <div className="p-5 rounded-2xl bg-[#F7F6F2] border border-indigo-500/30 shadow-xl">
-              <div className="flex items-center justify-between text-indigo-400 font-mono text-[11px] font-bold">
+              <div className="flex items-center justify-between text-indigo-700 font-mono text-[11px] font-bold">
                 <span>ADERÊNCIA OPERACIONAL</span>
-                <span className="material-symbols-outlined">trending_up</span>
+                <span className="material-symbols-outlined text-indigo-600">trending_up</span>
               </div>
-              <div className="text-3xl font-extrabold text-indigo-400 font-mono mt-2">
-                {processedData.taxaAderenciaGeral}%
+              <div className="text-3xl font-extrabold text-indigo-700 font-mono mt-2">
+                {formatAderencia(processedData.totalRealizadas, processedData.totalPlanejadas)}
               </div>
-              <p className="text-[10px] text-[#5F5F5F] mt-1">Realizadas / Planejadas</p>
+              <p className="text-[10px] text-[#5F5F5F] mt-1">
+                Realizadas / Planejadas {processedData.totalEmAndamento > 0 && `(${processedData.totalEmAndamento} em andamento)`}
+              </p>
             </div>
           </div>
 
@@ -1146,8 +1648,8 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
                 onClick={() => setViewMode('industria')}
                 className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
                   viewMode === 'industria'
-                    ? 'bg-[#222222] text-white shadow-lg'
-                    : 'bg-[#F7F6F2] text-[#77766F] hover:text-white border border-[#CFCDC5]'
+                    ? 'bg-[#111114] text-white shadow-sm'
+                    : 'bg-[#F7F6F2] text-[#5F5F5F] hover:text-[#171717] hover:bg-[#EAE8E2] border border-[#CFCDC5]'
                 }`}
               >
                 <span className="material-symbols-outlined text-[18px]">factory</span>
@@ -1158,8 +1660,8 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
                 onClick={() => setViewMode('promotor')}
                 className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
                   viewMode === 'promotor'
-                    ? 'bg-[#222222] text-white shadow-lg'
-                    : 'bg-[#F7F6F2] text-[#77766F] hover:text-white border border-[#CFCDC5]'
+                    ? 'bg-[#111114] text-white shadow-sm'
+                    : 'bg-[#F7F6F2] text-[#5F5F5F] hover:text-[#171717] hover:bg-[#EAE8E2] border border-[#CFCDC5]'
                 }`}
               >
                 <span className="material-symbols-outlined text-[18px]">badge</span>
@@ -1177,47 +1679,124 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
           {/* TABELA DE VISÃO POR INDÚSTRIA & DETALHAMENTO POR LOJA */}
           {viewMode === 'industria' && (
             <section className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-6 shadow-2xl space-y-4">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div>
                   <h3 className="text-lg font-bold text-[#171717] tracking-tight flex items-center gap-2">
-                    <span className="material-symbols-outlined text-purple-400">table_chart</span>
+                    <span className="material-symbols-outlined text-purple-600">table_chart</span>
                     Frequência e Aderência Operacional por Indústria
                   </h3>
                   <p className="text-xs text-[#77766F] mt-0.5">
                     Ordenado inicialmente por menor aderência para identificação rápida de desvios. Clique na linha para detalhar por loja.
                   </p>
                 </div>
+
+                <div className="text-xs font-mono text-[#77766F] bg-[#EAE8E2] px-3 py-1.5 rounded-xl border border-[#CFCDC5] w-fit">
+                  {filteredIndustriasList.length === processedData.tabelaIndustrias.length ? (
+                    <span>Total: <strong>{processedData.tabelaIndustrias.length}</strong> indústrias</span>
+                  ) : (
+                    <span>Encontradas: <strong>{filteredIndustriasList.length}</strong> de {processedData.tabelaIndustrias.length}</span>
+                  )}
+                </div>
               </div>
 
-              {processedData.tabelaIndustrias.length === 0 ? (
-                <div className="p-12 text-center text-[#5F5F5F] font-mono text-xs border border-dashed border-[#CFCDC5] rounded-xl">
-                  Nenhum registro encontrado para os filtros selecionados.
+              {/* BARRA DE PESQUISA RÁPIDA E SELETOR DE PÁGINAS */}
+              <div className="p-3.5 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+                <div className="relative flex-1 max-w-md">
+                  <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-[#77766F] text-[18px]">
+                    search
+                  </span>
+                  <input
+                    type="text"
+                    value={searchIndustriaTerm}
+                    onChange={(e) => setSearchIndustriaTerm(e.target.value)}
+                    placeholder="Buscar indústria por nome ou código..."
+                    className="w-full h-9 pl-9 pr-8 bg-[#F7F6F2] border border-[#CFCDC5] rounded-lg text-xs text-[#171717] placeholder:text-[#5F5F5F] focus:outline-none focus:border-purple-600 font-sans"
+                  />
+                  {searchIndustriaTerm && (
+                    <button
+                      type="button"
+                      onClick={() => setSearchIndustriaTerm('')}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#77766F] hover:text-[#171717]"
+                      aria-label="Limpar busca"
+                    >
+                      <span className="material-symbols-outlined text-[16px]">close</span>
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex items-center justify-between sm:justify-end gap-3 text-xs font-mono text-[#5F5F5F]">
+                  <div className="flex items-center gap-1.5">
+                    <span>Exibir:</span>
+                    <select
+                      value={industriaPageSize}
+                      onChange={(e) => setIndustriaPageSize(Number(e.target.value) as 10 | 25 | 50)}
+                      className="h-8 px-2 bg-[#F7F6F2] border border-[#CFCDC5] rounded-lg text-xs text-[#171717] font-mono focus:outline-none focus:border-purple-600"
+                    >
+                      <option value={10}>10</option>
+                      <option value={25}>25</option>
+                      <option value={50}>50</option>
+                    </select>
+                  </div>
+
+                  <span className="text-[11px]">
+                    Pág. <strong>{Math.min(industriaPage, totalIndustriasPages)}</strong> de <strong>{totalIndustriasPages}</strong>
+                  </span>
+
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      disabled={industriaPage <= 1}
+                      onClick={() => setIndustriaPage((p) => Math.max(1, p - 1))}
+                      className="px-2.5 py-1 rounded bg-[#F7F6F2] border border-[#CFCDC5] text-xs font-semibold text-[#171717] hover:bg-[#D5D3CB] disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer flex items-center"
+                      title="Página Anterior"
+                    >
+                      <span className="material-symbols-outlined text-[16px]">chevron_left</span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={industriaPage >= totalIndustriasPages}
+                      onClick={() => setIndustriaPage((p) => Math.min(totalIndustriasPages, p + 1))}
+                      className="px-2.5 py-1 rounded bg-[#F7F6F2] border border-[#CFCDC5] text-xs font-semibold text-[#171717] hover:bg-[#D5D3CB] disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer flex items-center"
+                      title="Próxima Página"
+                    >
+                      <span className="material-symbols-outlined text-[16px]">chevron_right</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {filteredIndustriasList.length === 0 ? (
+                <div className="p-12 text-center text-[#5F5F5F] font-mono text-xs border border-dashed border-[#CFCDC5] rounded-xl space-y-1">
+                  <p className="font-bold text-[#171717]">Nenhuma indústria encontrada para os critérios informados.</p>
+                  <p className="text-[11px] text-[#77766F]">Tente ajustar o termo de pesquisa ou os filtros operacionais no topo.</p>
                 </div>
               ) : (
-                <div className="overflow-x-auto">
+                <div className="overflow-x-auto rounded-xl border border-[#CFCDC5]">
                   <table className="w-full text-left text-xs font-sans border-collapse">
                     <thead>
-                      <tr className="border-b border-[#CFCDC5] text-[#77766F] font-mono text-[11px] uppercase bg-[#EAE8E2]">
-                        <th className="py-3 px-4 font-semibold">Indústria</th>
-                        <th className="py-3 px-4 font-semibold text-right">Planejadas</th>
-                        <th className="py-3 px-4 font-semibold text-right">Realizadas</th>
-                        <th className="py-3 px-4 font-semibold text-right">Pendentes</th>
-                        <th className="py-3 px-4 font-semibold text-right">Não Realiz.</th>
-                        <th className="py-3 px-4 font-semibold text-right">Ocorrências</th>
-                        <th className="py-3 px-4 font-semibold text-center">Aderência</th>
-                        <th className="py-3 px-4 font-semibold text-center">Detalhamento</th>
+                      <tr className="border-b border-[#CFCDC5] text-[#5F5F5F] font-mono text-[11px] uppercase bg-[#E3E1DA]">
+                        <th className="py-3 px-4 font-bold text-[#171717]">Indústria</th>
+                        <th className="py-3 px-4 font-bold text-[#171717] text-right">Planejadas</th>
+                        <th className="py-3 px-4 font-bold text-emerald-800 text-right">Realizadas</th>
+                        <th className="py-3 px-4 font-bold text-amber-800 text-right">Pendentes</th>
+                        <th className="py-3 px-4 font-bold text-rose-800 text-right">Não Realiz.</th>
+                        <th className="py-3 px-4 font-bold text-purple-900 text-right">Ocorrências</th>
+                        <th className="py-3 px-4 font-bold text-[#171717] text-center">Aderência</th>
+                        <th className="py-3 px-4 font-bold text-[#171717] text-center">Detalhamento</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-[#CFCDC5]">
-                      {processedData.tabelaIndustrias.map((ind) => {
+                      {paginatedIndustrias.map((ind) => {
                         const isExpanded = expandedIndustria === ind.codigo;
                         return (
                           <React.Fragment key={ind.codigo}>
                             <tr
                               onClick={() => setExpandedIndustria(isExpanded ? null : ind.codigo)}
-                              className="hover:bg-[#1d2230]/60 transition-colors cursor-pointer"
+                              className={`transition-colors cursor-pointer ${
+                                isExpanded ? 'bg-[#EAE8E2] border-l-4 border-l-purple-600' : 'hover:bg-[#EAE8E2]/60'
+                              }`}
                             >
-                              <td className="py-3.5 px-4 font-bold text-white flex items-center gap-2">
+                              <td className="py-3.5 px-4 font-bold text-[#171717] flex items-center gap-2">
                                 <span className="material-symbols-outlined text-[#77766F] text-[18px]">
                                   factory
                                 </span>
@@ -1228,42 +1807,48 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
                                 {ind.temQuinzenal && (
                                   <span
                                     title="Possui rotas quinzenais"
-                                    className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 font-mono text-[9px] border border-amber-500/30"
+                                    className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-800 font-mono text-[9px] border border-amber-500/30"
                                   >
                                     QZN
                                   </span>
                                 )}
                               </td>
-                              <td className="py-3.5 px-4 font-mono font-semibold text-slate-200 text-right">
+                              <td className="py-3.5 px-4 font-mono font-semibold text-[#171717] text-right">
                                 {ind.planejadas}
                               </td>
-                              <td className="py-3.5 px-4 font-mono font-bold text-emerald-400 text-right">
+                              <td className="py-3.5 px-4 font-mono font-bold text-emerald-700 text-right">
                                 {ind.realizadas}
                               </td>
-                              <td className="py-3.5 px-4 font-mono text-amber-400 text-right">
+                              <td className="py-3.5 px-4 font-mono text-amber-700 text-right">
                                 {ind.pendentes}
                               </td>
-                              <td className="py-3.5 px-4 font-mono text-rose-400 text-right">
+                              <td className="py-3.5 px-4 font-mono text-rose-700 text-right">
                                 {ind.naoRealizadas}
                               </td>
-                              <td className="py-3.5 px-4 font-mono text-purple-300 text-right">
+                              <td className="py-3.5 px-4 font-mono text-purple-700 text-right">
                                 {ind.ocorrenciasCount}
                               </td>
                               <td className="py-3.5 px-4 text-center">
                                 <span
                                   className={`px-2.5 py-1 rounded-lg font-mono font-bold text-xs inline-block ${
-                                    ind.aderencia >= 80
-                                      ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
+                                    ind.planejadas === 0
+                                      ? 'bg-slate-100 text-slate-600 border border-slate-300'
+                                      : ind.aderencia >= 80
+                                      ? 'bg-emerald-500/20 text-emerald-800 border border-emerald-500/40'
                                       : ind.aderencia >= 50
-                                      ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
-                                      : 'bg-rose-500/20 text-rose-400 border border-rose-500/40'
+                                      ? 'bg-amber-500/20 text-amber-800 border border-amber-500/40'
+                                      : 'bg-rose-500/20 text-rose-800 border border-rose-500/40'
                                   }`}
                                 >
-                                  {ind.aderencia}%
+                                  {formatAderencia(ind.realizadas, ind.planejadas)}
                                 </span>
                               </td>
                               <td className="py-3.5 px-4 text-center">
-                                <button className="text-[#77766F] hover:text-white transition-colors">
+                                <button
+                                  type="button"
+                                  className="text-[#5F5F5F] hover:text-[#171717] transition-colors p-1 rounded-md"
+                                  aria-label={isExpanded ? 'Recolher detalhamento' : 'Expandir detalhamento'}
+                                >
                                   <span className="material-symbols-outlined text-[20px]">
                                     {isExpanded ? 'expand_less' : 'expand_more'}
                                   </span>
@@ -1274,37 +1859,37 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
                             {/* LINHA EXPANDIDA COM DETALHAMENTO POR LOJA */}
                             {isExpanded && (
                               <tr>
-                                <td colSpan={8} className="p-0 bg-[#121622] border-b border-[#CFCDC5]">
+                                <td colSpan={8} className="p-0 bg-[#EAE8E2] border-y border-[#CFCDC5]">
                                   <div className="p-4 space-y-3">
                                     <div className="text-xs font-mono font-bold text-[#171717] flex items-center justify-between border-b border-[#CFCDC5] pb-2">
-                                      <span>DETALHAMENTO POR LOJA — {ind.nome.toUpperCase()}</span>
+                                      <span>DETALHAMENTO POR LOJA — {ind.nome.toUpperCase()} ({ind.codigo})</span>
                                       <span className="text-[#5F5F5F] font-normal">
-                                        {ind.detalhamentoLojas.length} Lojas Atendidas
+                                        {ind.detalhamentoLojas.length} {ind.detalhamentoLojas.length === 1 ? 'Loja Atendida' : 'Lojas Atendidas'}
                                       </span>
                                     </div>
 
                                     {ind.detalhamentoLojas.length === 0 ? (
-                                      <div className="p-4 text-[#5F5F5F] font-mono text-xs">
-                                        Sem detalhamento de lojas para esta indústria no período.
+                                      <div className="p-4 text-[#5F5F5F] font-mono text-xs bg-[#F7F6F2] rounded-lg border border-[#CFCDC5]">
+                                        Esta indústria não possui lojas relacionadas ou visitas registradas para o período selecionado.
                                       </div>
                                     ) : (
-                                      <div className="overflow-x-auto">
+                                      <div className="overflow-x-auto rounded-lg border border-[#CFCDC5] bg-[#F7F6F2]">
                                         <table className="w-full text-left text-xs font-sans">
                                           <thead>
-                                            <tr className="text-[#77766F] font-mono text-[10px] uppercase border-b border-[#CFCDC5]">
-                                              <th className="py-2 px-3">Loja</th>
-                                              <th className="py-2 px-3">Promotor</th>
-                                              <th className="py-2 px-3">Frequência</th>
-                                              <th className="py-2 px-3 text-right">Planejadas</th>
-                                              <th className="py-2 px-3 text-right">Realizadas</th>
-                                              <th className="py-2 px-3 text-right">Pendentes</th>
-                                              <th className="py-2 px-3 text-center">Aderência</th>
+                                            <tr className="text-[#5F5F5F] font-mono text-[10px] uppercase border-b border-[#CFCDC5] bg-[#E3E1DA]">
+                                              <th className="py-2 px-3 font-bold text-[#171717]">Loja</th>
+                                              <th className="py-2 px-3 font-bold text-[#171717]">Promotor</th>
+                                              <th className="py-2 px-3 font-bold text-[#171717]">Frequência</th>
+                                              <th className="py-2 px-3 font-bold text-[#171717] text-right">Planejadas</th>
+                                              <th className="py-2 px-3 font-bold text-emerald-800 text-right">Realizadas</th>
+                                              <th className="py-2 px-3 font-bold text-amber-800 text-right">Pendentes</th>
+                                              <th className="py-2 px-3 font-bold text-[#171717] text-center">Aderência</th>
                                             </tr>
                                           </thead>
                                           <tbody className="divide-y divide-[#CFCDC5]">
                                             {ind.detalhamentoLojas.map((d, idx) => (
-                                              <tr key={idx} className="hover:bg-[#181d2c]">
-                                                <td className="py-2.5 px-3 font-semibold text-slate-200">
+                                              <tr key={idx} className="hover:bg-[#EAE8E2] transition-colors">
+                                                <td className="py-2.5 px-3 font-semibold text-[#171717]">
                                                   {d.lojaNome}
                                                   <span className="block text-[10px] font-mono text-[#5F5F5F]">
                                                     {d.lojaCodigo}
@@ -1317,22 +1902,22 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
                                                   </span>
                                                 </td>
                                                 <td className="py-2.5 px-3 font-mono text-[11px] uppercase">
-                                                  <span className="px-2 py-0.5 rounded bg-[#CFCDC5] text-[#7E22CE] font-bold border border-purple-500/20">
+                                                  <span className="px-2 py-0.5 rounded bg-[#E3E1DA] text-[#7E22CE] font-bold border border-purple-500/20">
                                                     {d.frequencia}
                                                   </span>
                                                 </td>
                                                 <td className="py-2.5 px-3 font-mono text-[#171717] text-right">
                                                   {d.planejadas}
                                                 </td>
-                                                <td className="py-2.5 px-3 font-mono text-emerald-400 font-bold text-right">
+                                                <td className="py-2.5 px-3 font-mono text-emerald-700 font-bold text-right">
                                                   {d.realizadas}
                                                 </td>
-                                                <td className="py-2.5 px-3 font-mono text-amber-400 text-right">
+                                                <td className="py-2.5 px-3 font-mono text-amber-700 text-right">
                                                   {d.pendentes}
                                                 </td>
                                                 <td className="py-2.5 px-3 text-center">
-                                                  <span className="font-mono font-bold text-xs text-indigo-300">
-                                                    {d.aderencia}%
+                                                  <span className="font-mono font-bold text-xs text-indigo-700">
+                                                    {formatAderencia(d.realizadas, d.planejadas)}
                                                   </span>
                                                 </td>
                                               </tr>
@@ -1350,6 +1935,36 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
                       })}
                     </tbody>
                   </table>
+
+                  {/* RODAPÉ DA TABELA DE INDÚSTRIAS COM CONTROLES DE PAGINAÇÃO */}
+                  {totalIndustriasPages > 1 && (
+                    <div className="p-3 bg-[#EAE8E2] border-t border-[#CFCDC5] flex items-center justify-between text-xs font-mono text-[#5F5F5F]">
+                      <span>
+                        Mostrando {paginatedIndustrias.length} de {filteredIndustriasList.length} indústrias
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          disabled={industriaPage <= 1}
+                          onClick={() => setIndustriaPage((p) => Math.max(1, p - 1))}
+                          className="px-3 py-1 rounded bg-[#F7F6F2] border border-[#CFCDC5] text-[#171717] hover:bg-[#D5D3CB] disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                        >
+                          Anterior
+                        </button>
+                        <span>
+                          Página {Math.min(industriaPage, totalIndustriasPages)} de {totalIndustriasPages}
+                        </span>
+                        <button
+                          type="button"
+                          disabled={industriaPage >= totalIndustriasPages}
+                          onClick={() => setIndustriaPage((p) => Math.min(totalIndustriasPages, p + 1))}
+                          className="px-3 py-1 rounded bg-[#F7F6F2] border border-[#CFCDC5] text-[#171717] hover:bg-[#D5D3CB] disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                        >
+                          Próxima
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </section>
@@ -1358,80 +1973,283 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
           {/* TABELA DE VISÃO POR PROMOTOR */}
           {viewMode === 'promotor' && (
             <section className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-6 shadow-2xl space-y-4">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div>
                   <h3 className="text-lg font-bold text-[#171717] tracking-tight flex items-center gap-2">
-                    <span className="material-symbols-outlined text-purple-400">badge</span>
+                    <span className="material-symbols-outlined text-purple-600">badge</span>
                     Aderência Operacional por Promotor
                   </h3>
                   <p className="text-xs text-[#77766F] mt-0.5">
-                    Métricas acumuladas de cumprimento do roteiro individual.
+                    Métricas acumuladas de cumprimento do roteiro individual. Clique na linha para detalhar lojas e indústrias atendidas.
                   </p>
+                </div>
+
+                {/* CONTROLES DE BUSCA E PAGINAÇÃO SUPERIOR */}
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="relative min-w-[240px]">
+                    <span className="material-symbols-outlined absolute left-3 top-2.5 text-[#77766F] text-[18px]">
+                      search
+                    </span>
+                    <input
+                      type="text"
+                      placeholder="Buscar promotor por nome ou matrícula..."
+                      value={searchPromotorTerm}
+                      onChange={(e) => setSearchPromotorTerm(e.target.value)}
+                      className="w-full pl-9 pr-8 py-1.5 text-xs bg-[#EAE8E2] border border-[#CFCDC5] rounded-lg text-[#171717] placeholder-[#77766F] focus:outline-none focus:border-purple-600 focus:bg-[#F7F6F2] transition-colors"
+                    />
+                    {searchPromotorTerm && (
+                      <button
+                        type="button"
+                        onClick={() => setSearchPromotorTerm('')}
+                        className="absolute right-2.5 top-2 text-[#77766F] hover:text-[#171717] cursor-pointer"
+                        title="Limpar busca"
+                      >
+                        <span className="material-symbols-outlined text-[16px]">close</span>
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-1.5 text-xs text-[#5F5F5F] font-mono">
+                    <span>Exibir:</span>
+                    <select
+                      value={promotorPageSize}
+                      onChange={(e) => setPromotorPageSize(Number(e.target.value) as 10 | 25 | 50)}
+                      className="bg-[#EAE8E2] border border-[#CFCDC5] rounded px-2 py-1 text-xs text-[#171717] focus:outline-none focus:border-purple-600 cursor-pointer"
+                    >
+                      <option value={10}>10</option>
+                      <option value={25}>25</option>
+                      <option value={50}>50</option>
+                    </select>
+                  </div>
                 </div>
               </div>
 
-              {processedData.tabelaPromotores.length === 0 ? (
+              {/* BARRA DE STATUS DOS RESULTADOS */}
+              <div className="flex items-center justify-between text-xs font-mono text-[#5F5F5F] px-1 pt-1 border-t border-[#EAE8E2]">
+                <span>
+                  Encontrados: {filteredPromotoresList.length} de {processedData.tabelaPromotores.length} promotores
+                  {searchPromotorTerm && ` (filtrado por "${searchPromotorTerm}")`}
+                </span>
+
+                {totalPromotoresPages > 1 && (
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={promotorPage <= 1}
+                      onClick={() => setPromotorPage((p) => Math.max(1, p - 1))}
+                      className="px-2.5 py-1 rounded bg-[#EAE8E2] border border-[#CFCDC5] text-[#171717] hover:bg-[#D5D3CB] disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer text-xs"
+                    >
+                      Anterior
+                    </button>
+                    <span>
+                      Pág. {Math.min(promotorPage, totalPromotoresPages)} de {totalPromotoresPages}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={promotorPage >= totalPromotoresPages}
+                      onClick={() => setPromotorPage((p) => Math.min(totalPromotoresPages, p + 1))}
+                      className="px-2.5 py-1 rounded bg-[#EAE8E2] border border-[#CFCDC5] text-[#171717] hover:bg-[#D5D3CB] disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer text-xs"
+                    >
+                      Próxima
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {filteredPromotoresList.length === 0 ? (
                 <div className="p-12 text-center text-[#5F5F5F] font-mono text-xs border border-dashed border-[#CFCDC5] rounded-xl">
-                  Nenhum promotor encontrado para os filtros selecionados.
+                  {searchPromotorTerm
+                    ? `Nenhum promotor encontrado correspondente ao termo "${searchPromotorTerm}".`
+                    : 'Nenhum promotor encontrado para os filtros selecionados.'}
                 </div>
               ) : (
-                <div className="overflow-x-auto">
+                <div className="overflow-x-auto rounded-xl border border-[#CFCDC5]">
                   <table className="w-full text-left text-xs font-sans border-collapse">
                     <thead>
-                      <tr className="border-b border-[#CFCDC5] text-[#77766F] font-mono text-[11px] uppercase bg-[#EAE8E2]">
-                        <th className="py-3 px-4 font-semibold">Promotor</th>
-                        <th className="py-3 px-4 font-semibold text-center">Indústrias</th>
-                        <th className="py-3 px-4 font-semibold text-center">Lojas</th>
-                        <th className="py-3 px-4 font-semibold text-right">Planejadas</th>
-                        <th className="py-3 px-4 font-semibold text-right">Realizadas</th>
-                        <th className="py-3 px-4 font-semibold text-right">Pendentes</th>
-                        <th className="py-3 px-4 font-semibold text-center">Aderência</th>
+                      <tr className="border-b border-[#CFCDC5] text-[#5F5F5F] font-mono text-[11px] uppercase bg-[#E3E1DA]">
+                        <th className="py-3 px-4 font-bold text-[#171717]">Promotor</th>
+                        <th className="py-3 px-4 font-bold text-[#171717] text-center">Indústrias</th>
+                        <th className="py-3 px-4 font-bold text-[#171717] text-center">Lojas</th>
+                        <th className="py-3 px-4 font-bold text-[#171717] text-right">Planejadas</th>
+                        <th className="py-3 px-4 font-bold text-emerald-800 text-right">Realizadas</th>
+                        <th className="py-3 px-4 font-bold text-amber-800 text-right">Pendentes</th>
+                        <th className="py-3 px-4 font-bold text-[#171717] text-center">Aderência</th>
+                        <th className="py-3 px-4 font-bold text-[#171717] text-center">Detalhamento</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-[#CFCDC5]">
-                      {processedData.tabelaPromotores.map((prm) => (
-                        <tr key={prm.matricula} className="hover:bg-[#1d2230]/60 transition-colors">
-                          <td className="py-3.5 px-4 font-bold text-white flex items-center gap-2">
-                            <span className="material-symbols-outlined text-purple-400 text-[18px]">
-                              person
-                            </span>
-                            <div>
-                              <span className="block">{prm.nome}</span>
-                              <span className="text-[10px] font-mono text-[#5F5F5F]">{prm.matricula}</span>
-                            </div>
-                          </td>
-                          <td className="py-3.5 px-4 text-center font-mono text-[#171717]">
-                            {prm.qtdIndustrias}
-                          </td>
-                          <td className="py-3.5 px-4 text-center font-mono text-[#171717]">
-                            {prm.qtdLojas}
-                          </td>
-                          <td className="py-3.5 px-4 font-mono font-semibold text-slate-200 text-right">
-                            {prm.planejadas}
-                          </td>
-                          <td className="py-3.5 px-4 font-mono font-bold text-emerald-400 text-right">
-                            {prm.realizadas}
-                          </td>
-                          <td className="py-3.5 px-4 font-mono text-amber-400 text-right">
-                            {prm.pendentes}
-                          </td>
-                          <td className="py-3.5 px-4 text-center">
-                            <span
-                              className={`px-2.5 py-1 rounded-lg font-mono font-bold text-xs inline-block ${
-                                prm.aderencia >= 80
-                                  ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
-                                  : prm.aderencia >= 50
-                                  ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
-                                  : 'bg-rose-500/20 text-rose-400 border border-rose-500/40'
+                      {paginatedPromotores.map((prm) => {
+                        const isExpanded = expandedPromotor === prm.matricula;
+                        const aderenciaNum = prm.planejadas > 0 ? (prm.realizadas / prm.planejadas) * 100 : 0;
+                        return (
+                          <React.Fragment key={prm.matricula}>
+                            <tr
+                              onClick={() => setExpandedPromotor(isExpanded ? null : prm.matricula)}
+                              className={`transition-colors cursor-pointer ${
+                                isExpanded ? 'bg-[#EAE8E2] border-l-4 border-l-purple-600' : 'hover:bg-[#EAE8E2]/60'
                               }`}
                             >
-                              {prm.aderencia}%
-                            </span>
-                          </td>
-                        </tr>
-                      ))}
+                              <td className="py-3.5 px-4 font-bold text-[#171717] flex items-center gap-2">
+                                <span className="material-symbols-outlined text-purple-600 text-[18px]">
+                                  person
+                                </span>
+                                <div>
+                                  <span className="block">{prm.nome}</span>
+                                  <span className="text-[10px] font-mono text-[#5F5F5F]">{prm.matricula}</span>
+                                </div>
+                              </td>
+                              <td className="py-3.5 px-4 text-center font-mono text-[#171717]">
+                                {prm.qtdIndustrias}
+                              </td>
+                              <td className="py-3.5 px-4 text-center font-mono text-[#171717]">
+                                {prm.qtdLojas}
+                              </td>
+                              <td className="py-3.5 px-4 font-mono font-semibold text-[#171717] text-right">
+                                {prm.planejadas}
+                              </td>
+                              <td className="py-3.5 px-4 font-mono font-bold text-emerald-700 text-right">
+                                {prm.realizadas}
+                              </td>
+                              <td className="py-3.5 px-4 font-mono text-amber-700 text-right">
+                                {prm.pendentes}
+                              </td>
+                              <td className="py-3.5 px-4 text-center">
+                                <span
+                                  className={`px-2.5 py-1 rounded-lg font-mono font-bold text-xs inline-block ${
+                                    prm.planejadas === 0
+                                      ? 'bg-neutral-200 text-[#5F5F5F]'
+                                      : aderenciaNum >= 80
+                                      ? 'bg-emerald-500/20 text-emerald-800 border border-emerald-500/40'
+                                      : aderenciaNum >= 50
+                                      ? 'bg-amber-500/20 text-amber-800 border border-amber-500/40'
+                                      : 'bg-rose-500/20 text-rose-800 border border-rose-500/40'
+                                  }`}
+                                >
+                                  {formatAderencia(prm.realizadas, prm.planejadas)}
+                                </span>
+                              </td>
+                              <td className="py-3.5 px-4 text-center">
+                                <button
+                                  type="button"
+                                  className="text-[#5F5F5F] hover:text-[#171717] transition-colors p-1 rounded-md cursor-pointer"
+                                  aria-label={isExpanded ? 'Recolher detalhamento' : 'Expandir detalhamento'}
+                                >
+                                  <span className="material-symbols-outlined text-[20px]">
+                                    {isExpanded ? 'expand_less' : 'expand_more'}
+                                  </span>
+                                </button>
+                              </td>
+                            </tr>
+
+                            {/* LINHA EXPANDIDA COM DETALHAMENTO DE ATENDIMENTOS DO PROMOTOR */}
+                            {isExpanded && (
+                              <tr>
+                                <td colSpan={8} className="p-0 bg-[#EAE8E2] border-y border-[#CFCDC5] border-l-4 border-l-purple-600">
+                                  <div className="p-4 space-y-3">
+                                    <div className="text-xs font-mono font-bold text-[#171717] flex items-center justify-between border-b border-[#CFCDC5] pb-2">
+                                      <span>ATENDIMENTOS DO PROMOTOR — {prm.nome.toUpperCase()} ({prm.matricula})</span>
+                                      <span className="text-[#5F5F5F] font-normal">
+                                        {prm.detalhamentoAtendimentos.length} Relações Loja × Indústria
+                                      </span>
+                                    </div>
+
+                                    {prm.detalhamentoAtendimentos.length === 0 ? (
+                                      <div className="p-4 text-[#5F5F5F] font-mono text-xs">
+                                        Sem detalhamento de atendimentos para este promotor no período.
+                                      </div>
+                                    ) : (
+                                      <div className="overflow-x-auto rounded-lg border border-[#CFCDC5] bg-[#F7F6F2]">
+                                        <table className="w-full text-left text-xs font-sans">
+                                          <thead>
+                                            <tr className="text-[#5F5F5F] font-mono text-[10px] uppercase border-b border-[#CFCDC5] bg-[#E3E1DA]">
+                                              <th className="py-2 px-3 font-bold text-[#171717]">Loja</th>
+                                              <th className="py-2 px-3 font-bold text-[#171717]">Indústria</th>
+                                              <th className="py-2 px-3 font-bold text-[#171717]">Frequência</th>
+                                              <th className="py-2 px-3 font-bold text-[#171717] text-right">Planejadas</th>
+                                              <th className="py-2 px-3 font-bold text-emerald-800 text-right">Realizadas</th>
+                                              <th className="py-2 px-3 font-bold text-amber-800 text-right">Pendentes</th>
+                                              <th className="py-2 px-3 font-bold text-[#171717] text-center">Aderência</th>
+                                            </tr>
+                                          </thead>
+                                          <tbody className="divide-y divide-[#CFCDC5]">
+                                            {prm.detalhamentoAtendimentos.map((d, idx) => (
+                                              <tr key={idx} className="hover:bg-[#EAE8E2] transition-colors">
+                                                <td className="py-2.5 px-3 font-semibold text-[#171717]">
+                                                  {d.lojaNome}
+                                                  <span className="block text-[10px] font-mono text-[#5F5F5F]">
+                                                    {d.lojaCodigo}
+                                                  </span>
+                                                </td>
+                                                <td className="py-2.5 px-3 text-[#171717]">
+                                                  {d.industriaNome}
+                                                  <span className="block text-[10px] font-mono text-[#5F5F5F]">
+                                                    {d.industriaCodigo}
+                                                  </span>
+                                                </td>
+                                                <td className="py-2.5 px-3 font-mono text-[11px] uppercase">
+                                                  <span className="px-2 py-0.5 rounded bg-[#E3E1DA] text-[#7E22CE] font-bold border border-purple-500/20">
+                                                    {d.frequencia}
+                                                  </span>
+                                                </td>
+                                                <td className="py-2.5 px-3 font-mono text-[#171717] text-right">
+                                                  {d.planejadas}
+                                                </td>
+                                                <td className="py-2.5 px-3 font-mono text-emerald-700 font-bold text-right">
+                                                  {d.realizadas}
+                                                </td>
+                                                <td className="py-2.5 px-3 font-mono text-amber-700 text-right">
+                                                  {d.pendentes}
+                                                </td>
+                                                <td className="py-2.5 px-3 text-center">
+                                                  <span className="font-mono font-bold text-xs text-indigo-700">
+                                                    {formatAderencia(d.realizadas, d.planejadas)}
+                                                  </span>
+                                                </td>
+                                              </tr>
+                                            ))}
+                                          </tbody>
+                                        </table>
+                                      </div>
+                                    )}
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
+                          </React.Fragment>
+                        );
+                      })}
                     </tbody>
                   </table>
+
+                  {/* RODAPÉ DA TABELA DE PROMOTORES COM CONTROLES DE PAGINAÇÃO */}
+                  {totalPromotoresPages > 1 && (
+                    <div className="p-3 bg-[#EAE8E2] border-t border-[#CFCDC5] flex items-center justify-between text-xs font-mono text-[#5F5F5F]">
+                      <span>
+                        Mostrando {paginatedPromotores.length} de {filteredPromotoresList.length} promotores
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          disabled={promotorPage <= 1}
+                          onClick={() => setPromotorPage((p) => Math.max(1, p - 1))}
+                          className="px-3 py-1 rounded bg-[#F7F6F2] border border-[#CFCDC5] text-[#171717] hover:bg-[#D5D3CB] disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                        >
+                          Anterior
+                        </button>
+                        <span>
+                          Página {Math.min(promotorPage, totalPromotoresPages)} de {totalPromotoresPages}
+                        </span>
+                        <button
+                          type="button"
+                          disabled={promotorPage >= totalPromotoresPages}
+                          onClick={() => setPromotorPage((p) => Math.min(totalPromotoresPages, p + 1))}
+                          className="px-3 py-1 rounded bg-[#F7F6F2] border border-[#CFCDC5] text-[#171717] hover:bg-[#D5D3CB] disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                        >
+                          Próxima
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </section>
@@ -1442,250 +2260,195 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
       {/* ========================================================================= */}
       {/* ABA 2: CADASTRO DAS INDÚSTRIAS (TELA ORIGINAL PRESERVADA INTEGRAMENTE)    */}
       {/* ========================================================================= */}
+      {/* ========================================================================= */}
+      {/* ABA 2: CADASTRO DAS INDÚSTRIAS (ONDA 3.1 — STATCARD, DATATABLE, STATUSBIADGE) */}
+      {/* ========================================================================= */}
       {activeTab === 'cadastro' && (
         <div className="space-y-8 animate-fadeIn">
-          {/* CARDS DE METRICAS */}
+          {/* CARDS DE METRICAS COM STATCARD */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
-            <div className="p-5 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5] shadow-xl">
-              <div className="flex items-center justify-between text-[#77766F] font-mono text-xs">
-                <span>TOTAL DE INDÚSTRIAS</span>
-                <span className="material-symbols-outlined text-purple-400">factory</span>
-              </div>
-              <div className="text-3xl font-extrabold text-[#171717] font-mono mt-2">{industries.length}</div>
-            </div>
-
-            <div className="p-5 rounded-2xl bg-[#F7F6F2] border border-emerald-500/30 shadow-xl">
-              <div className="flex items-center justify-between text-emerald-400 font-mono text-xs font-bold">
-                <span>INDÚSTRIAS ATIVAS</span>
-                <span className="material-symbols-outlined">check_circle</span>
-              </div>
-              <div className="text-3xl font-extrabold text-emerald-400 font-mono mt-2">
-                {industries.filter((i) => i.status === 'ativo').length}
-              </div>
-            </div>
-
-            <div className="p-5 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5] shadow-xl">
-              <div className="flex items-center justify-between text-[#77766F] font-mono text-xs">
-                <span>INATIVAS / ARQUIVADAS</span>
-                <span className="material-symbols-outlined text-rose-400">block</span>
-              </div>
-              <div className="text-3xl font-extrabold text-rose-400 font-mono mt-2">
-                {industries.filter((i) => i.status === 'inativo').length}
-              </div>
-            </div>
-          </div>
-
-      {/* BARRA DE BUSCA E FILTRO */}
-      <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-5 shadow-2xl space-y-4">
-        <div className="grid grid-cols-1 sm:grid-cols-12 gap-4">
-          <div className="sm:col-span-8 relative">
-            <span className="material-symbols-outlined absolute left-3.5 top-1/2 -translate-y-1/2 text-[#77766F] text-lg">
-              search
-            </span>
-            <input
-              type="text"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Buscar por código ou nome da indústria..."
-              className="w-full h-10 pl-10 pr-4 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-xs text-[#171717] placeholder:text-[#5F5F5F] focus:outline-none focus:border-purple-500 transition-all font-sans"
+            <StatCard
+              title="TOTAL DE INDÚSTRIAS"
+              value={industries.length}
+              icon="factory"
+              variant="default"
+              description="Marcas parceiras cadastradas no MK9"
+            />
+            <StatCard
+              title="INDÚSTRIAS ATIVAS"
+              value={industries.filter((i) => i.status === 'ativo').length}
+              icon="check_circle"
+              variant="success"
+              description="Disponíveis para vinculação e rotas"
+            />
+            <StatCard
+              title="INATIVAS / ARQUIVADAS"
+              value={industries.filter((i) => i.status === 'inativo').length}
+              icon="block"
+              variant="danger"
+              description="Suspensas ou fora de operação"
             />
           </div>
 
-          <div className="sm:col-span-4">
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value as any)}
-              className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-xs text-[#171717] focus:outline-none focus:border-purple-500 font-mono"
-            >
-              <option value="todos">Status: Todos</option>
-              <option value="ativo">Ativas</option>
-              <option value="inativo">Inativas</option>
-            </select>
-          </div>
-        </div>
-      </div>
-
-      {/* TABELA DE REGISTROS */}
-      <section className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-6 shadow-2xl space-y-4">
-        <div className="flex items-center justify-between">
-          <h3 className="text-sm font-bold text-[#171717] uppercase tracking-wider font-mono flex items-center gap-2">
-            <span className="material-symbols-outlined text-purple-400">table_chart</span>
-            Indústrias Cadastradas ({filteredIndustries.length})
-          </h3>
-
-          {canEdit && (
-            <button
-              onClick={handleOpenCreate}
-              className="px-3.5 py-1.5 rounded-xl bg-[#222222] hover:bg-black text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-all shadow-[0_0_12px_rgba(147,51,234,0.3)] active:scale-95"
-            >
-              <span className="material-symbols-outlined text-[16px]">add</span>
-              <span>Nova Indústria</span>
-            </button>
-          )}
-        </div>
-
-        {/* LOADING */}
-        {loading && (
-          <div className="py-16 text-center space-y-3">
-            <div className="w-10 h-10 border-4 border-purple-500/20 border-t-purple-500 rounded-full animate-spin mx-auto"></div>
-            <p className="text-xs font-mono text-[#77766F]">Carregando indústrias do Supabase...</p>
-          </div>
-        )}
-
-        {/* ERRO */}
-        {!loading && error && (
-          <div className="p-6 bg-rose-500/10 border border-rose-500/30 rounded-xl text-center space-y-3">
-            <span className="material-symbols-outlined text-rose-400 text-3xl">warning</span>
-            <h4 className="text-sm font-bold text-rose-300">Erro de Carregamento</h4>
-            <p className="text-xs text-[#77766F] font-mono">{error}</p>
-          </div>
-        )}
-
-        {/* VAZIO */}
-        {!loading && !error && filteredIndustries.length === 0 && (
-          <div className="py-16 text-center space-y-3">
-            <div className="w-14 h-14 rounded-full bg-[#EAE8E2] border border-[#CFCDC5] flex items-center justify-center text-[#5F5F5F] mx-auto">
-              <span className="material-symbols-outlined text-3xl">search_off</span>
-            </div>
-            <h4 className="text-sm font-bold text-[#171717]">Nenhuma Indústria Encontrada</h4>
-            <p className="text-xs text-[#77766F] max-w-sm mx-auto">
-              Não há registros de indústrias correspondentes aos filtros aplicados.
-            </p>
-          </div>
-        )}
-
-        {/* LISTA */}
-        {!loading && !error && filteredIndustries.length > 0 && (
-          <div className="overflow-x-auto rounded-xl border border-[#CFCDC5]">
-            <table className="w-full text-left text-xs border-collapse">
-              <thead>
-                <tr className="bg-[#E3E1DA] border-b border-[#CFCDC5] text-[11px] font-bold text-[#171717] uppercase tracking-wider font-mono">
-                  <th className="py-3.5 px-4">Código</th>
-                  <th className="py-3.5 px-4">Nome da Indústria</th>
-                  <th className="py-3.5 px-4">CNPJ</th>
-                  <th className="py-3.5 px-4">Status</th>
-                  <th className="py-3.5 px-4">Observação</th>
-                  <th className="py-3.5 px-4 text-right">Ações</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#CFCDC5] text-[#171717] font-mono">
-                {filteredIndustries.map((ind) => (
-                  <tr key={ind.id} className="hover:bg-[#EAE8E1] transition-colors">
-                    <td className="py-3.5 px-4 font-bold text-purple-400">{ind.codigo}</td>
-                    <td className="py-3.5 px-4 font-bold text-white">{ind.nome}</td>
-                    <td className="py-3.5 px-4 text-[#77766F]">{ind.cnpj || '—'}</td>
-                    <td className="py-3.5 px-4">
-                      <span
-                        className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${
-                          ind.status === 'ativo'
-                            ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
-                            : 'bg-rose-500/10 text-rose-400 border-rose-500/30'
-                        }`}
-                      >
-                        {ind.status.toUpperCase()}
-                      </span>
-                    </td>
-                    <td className="py-3.5 px-4 text-[#77766F] max-w-xs truncate">
-                      {ind.observacao || '—'}
-                    </td>
-                    <td className="py-3.5 px-4 text-right space-x-2">
-                      <button
-                        onClick={() => setViewingItem(ind)}
-                        className="p-1.5 rounded-lg bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] border border-[#CFCDC5] cursor-pointer"
-                        title="Ver Detalhes"
-                      >
-                        <span className="material-symbols-outlined text-[16px]">visibility</span>
-                      </button>
-
-                      {canEdit && (
-                        <>
-                          <button
-                            onClick={() => handleOpenEdit(ind)}
-                            className="p-1.5 rounded-lg bg-purple-100 hover:bg-purple-200 text-purple-800 border border-purple-200 cursor-pointer transition-colors"
-                            title="Editar"
-                          >
-                            <span className="material-symbols-outlined text-[16px]">edit</span>
-                          </button>
-                          <button
-                            onClick={() => handleToggleStatus(ind)}
-                            className={`p-1.5 rounded-lg border cursor-pointer ${
-                              ind.status === 'ativo'
-                                ? 'bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border-rose-500/30'
-                                : 'bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
-                            }`}
-                            title={ind.status === 'ativo' ? 'Inativar' : 'Ativar'}
-                          >
-                            <span className="material-symbols-outlined text-[16px]">
-                              {ind.status === 'ativo' ? 'block' : 'check_circle'}
-                            </span>
-                          </button>
-                        </>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-
-      {/* MODAL VER DETALHES */}
-      {viewingItem && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5">
-            <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-3">
-              <h3 className="text-sm font-bold text-[#171717] font-mono flex items-center gap-2">
-                <span className="material-symbols-outlined text-purple-400">factory</span>
-                Detalhes da Indústria
-              </h3>
-              <button onClick={() => setViewingItem(null)} className="text-[#77766F] hover:text-white">
-                <span className="material-symbols-outlined">close</span>
-              </button>
-            </div>
-
-            <div className="space-y-3 text-xs font-mono">
-              <div>
-                <span className="text-[#5F5F5F] block">CÓDIGO:</span>
-                <span className="text-purple-400 font-bold text-sm">{viewingItem.codigo}</span>
-              </div>
-              <div>
-                <span className="text-[#5F5F5F] block">NOME DA INDÚSTRIA:</span>
-                <span className="text-[#171717] font-bold">{viewingItem.nome}</span>
-              </div>
-              <div>
-                <span className="text-[#5F5F5F] block">CNPJ:</span>
-                <span className="text-[#171717]">{viewingItem.cnpj || '—'}</span>
-              </div>
-              <div>
-                <span className="text-[#5F5F5F] block">STATUS:</span>
-                <span className={`font-bold uppercase ${viewingItem.status === 'ativo' ? 'text-emerald-400' : 'text-rose-400'}`}>
-                  {viewingItem.status}
-                </span>
-              </div>
-              <div>
-                <span className="text-[#5F5F5F] block">INÍCIO DA OPERAÇÃO (COMERCIAL):</span>
-                <span className="text-[#171717] font-bold">
-                  {viewingItem.data_inicio_operacao ? viewingItem.data_inicio_operacao.slice(0, 10) : 'Não informado'}
-                </span>
-              </div>
-              <div>
-                <span className="text-[#5F5F5F] block">OBSERVAÇÃO:</span>
-                <span className="text-[#171717]">{viewingItem.observacao || '—'}</span>
-              </div>
-            </div>
-
-            <div className="pt-3 border-t border-[#CFCDC5] flex justify-end">
-              <button
-                onClick={() => setViewingItem(null)}
-                className="px-4 py-2 rounded-xl bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] border border-[#CFCDC5] text-xs font-semibold"
+          {/* BARRA DE FILTRO E AÇÃO DE CRIAÇÃO */}
+          <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-5 shadow-2xl flex flex-col sm:flex-row items-center justify-between gap-4">
+            <div className="w-full sm:w-72">
+              <label className="text-[11px] font-mono font-bold text-[#77766F] block mb-1.5 uppercase">
+                Filtrar por Status
+              </label>
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value as any)}
+                className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-xs text-[#171717] focus:outline-none focus:border-purple-500 font-mono"
               >
-                Fechar
-              </button>
+                <option value="todos">Status: Todos ({industries.length})</option>
+                <option value="ativo">Ativas ({industries.filter((i) => i.status === 'ativo').length})</option>
+                <option value="inativo">Inativas ({industries.filter((i) => i.status === 'inativo').length})</option>
+              </select>
             </div>
+
+            {canEdit && (
+              <div className="self-end sm:self-center">
+                <button
+                  type="button"
+                  onClick={handleOpenCreate}
+                  className="px-4 py-2.5 rounded-xl bg-[#111114] hover:bg-black text-white font-bold text-xs flex items-center gap-2 cursor-pointer transition-all shadow-sm active:scale-95"
+                >
+                  <span className="material-symbols-outlined text-[16px]">add</span>
+                  <span>Nova Indústria</span>
+                </button>
+              </div>
+            )}
           </div>
-        </div>
-      )}
+
+          {/* TABELA COM COMPONENTE COMPARTILHADO DATATABLE */}
+          <section className="space-y-4">
+            <DataTable<IndustryItem>
+              data={filteredIndustries}
+              columns={columnsIndustrias}
+              keyExtractor={(ind) => ind.id}
+              loading={loading}
+              error={error}
+              searchPlaceholder="Buscar por código, nome ou CNPJ da indústria..."
+              searchFilter={(ind, query) => {
+                const term = query.toLowerCase();
+                return (
+                  ind.codigo.toLowerCase().includes(term) ||
+                  ind.nome.toLowerCase().includes(term) ||
+                  Boolean(ind.cnpj && ind.cnpj.toLowerCase().includes(term))
+                );
+              }}
+              defaultPageSize={10}
+              emptyMessage="Nenhuma indústria encontrada com os filtros aplicados."
+              headerActions={
+                <span className="text-xs font-mono font-bold text-[#77766F]">
+                  Total: {filteredIndustries.length} {filteredIndustries.length === 1 ? 'indústria' : 'indústrias'}
+                </span>
+              }
+            />
+          </section>
+
+          {/* MODAL VER DETALHES (PADRÃO VISUAL ARTCRAFT) */}
+          {viewingItem && (
+            <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+              <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-5">
+                <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-lg bg-purple-100 border border-purple-200 text-purple-700 flex items-center justify-center">
+                      <span className="material-symbols-outlined text-[18px]">factory</span>
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-bold text-[#171717] font-mono">
+                        Detalhes do Cadastro da Indústria
+                      </h3>
+                      <span className="text-[10px] text-[#77766F] font-mono">
+                        Registro formal no catálogo corporativo
+                      </span>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setViewingItem(null)}
+                    className="text-[#77766F] hover:text-[#171717] p-1 rounded-md cursor-pointer"
+                    aria-label="Fechar modal de detalhes"
+                  >
+                    <span className="material-symbols-outlined">close</span>
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs font-mono">
+                  <div className="p-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl space-y-1">
+                    <span className="text-[#5F5F5F] block text-[10px] uppercase font-bold">Código Interno</span>
+                    <span className="text-purple-700 font-bold text-sm block">{viewingItem.codigo}</span>
+                  </div>
+
+                  <div className="p-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl space-y-1">
+                    <span className="text-[#5F5F5F] block text-[10px] uppercase font-bold">Status Operacional</span>
+                    <div className="pt-0.5">
+                      <StatusBadge
+                        status={viewingItem.status === 'ativo' ? 'ativo' : 'inativo'}
+                        label={viewingItem.status.toUpperCase()}
+                        variant={viewingItem.status === 'ativo' ? 'ativo' : 'inativo'}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="sm:col-span-2 p-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl space-y-1">
+                    <span className="text-[#5F5F5F] block text-[10px] uppercase font-bold">Nome / Razão Social</span>
+                    <span className="text-[#171717] font-bold text-sm block">{viewingItem.nome}</span>
+                  </div>
+
+                  <div className="p-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl space-y-1">
+                    <span className="text-[#5F5F5F] block text-[10px] uppercase font-bold">CNPJ</span>
+                    <span className="text-[#171717] font-semibold">{viewingItem.cnpj || 'Não informado'}</span>
+                  </div>
+
+                  <div className="p-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl space-y-1">
+                    <span className="text-[#5F5F5F] block text-[10px] uppercase font-bold">Início da Operação (Comercial)</span>
+                    <span className="text-[#171717] font-semibold">
+                      {viewingItem.data_inicio_operacao ? viewingItem.data_inicio_operacao.slice(0, 10) : 'Não informado'}
+                    </span>
+                  </div>
+
+                  <div className="sm:col-span-2 p-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl space-y-1">
+                    <span className="text-[#5F5F5F] block text-[10px] uppercase font-bold">Observações / Anotações Gerais</span>
+                    <p className="text-[#171717] whitespace-pre-wrap leading-relaxed text-[11px]">
+                      {viewingItem.observacao || 'Nenhuma observação cadastrada para esta indústria.'}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="pt-3 border-t border-[#CFCDC5] flex items-center justify-between">
+                  <span className="text-[10px] text-[#77766F] font-mono">
+                    MK9 Date • Gestão de Indústrias
+                  </span>
+                  <div className="flex items-center gap-2">
+                    {canEdit && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const itemToEdit = viewingItem;
+                          setViewingItem(null);
+                          handleOpenEdit(itemToEdit);
+                        }}
+                        className="px-4 py-2 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <span className="material-symbols-outlined text-[15px]">edit</span>
+                        <span>Editar</span>
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setViewingItem(null)}
+                      className="px-4 py-2 rounded-xl bg-[#EAE8E2] hover:bg-[#DFDDD6] text-[#171717] border border-[#CFCDC5] text-xs font-semibold cursor-pointer"
+                    >
+                      Fechar
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -1799,342 +2562,120 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
             </div>
           )}
 
-          {/* CARDS RESUMO DA PRÉ-VISUALIZAÇÃO COM CLASSIFICAÇÃO COMERCIAL */}
+          {/* CARDS RESUMO PADRONIZADOS COM STATCARD */}
           <div className="grid grid-cols-1 sm:grid-cols-5 gap-4">
-            <div className="p-5 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5] shadow-xl">
-              <div className="flex items-center justify-between text-[#77766F] font-mono text-xs">
-                <span>PARES ANALISADOS</span>
-                <span className="material-symbols-outlined text-purple-400">compare_arrows</span>
-              </div>
-              <div className="text-3xl font-extrabold text-[#171717] font-mono mt-2">
-                {contratosPreviewData.totalParesAnalisados}
-              </div>
-            </div>
-
-            <div className="p-5 rounded-2xl bg-[#F7F6F2] border border-emerald-500/30 shadow-xl">
-              <div className="flex items-center justify-between text-emerald-400 font-mono text-xs font-bold">
-                <span>APTOS P/ FORMALIZAR</span>
-                <span className="material-symbols-outlined">verified</span>
-              </div>
-              <div className="text-3xl font-extrabold text-emerald-400 font-mono mt-2">
-                {contratosPreviewData.totalElegiveisAptos}
-              </div>
-            </div>
-
-            <div className="p-5 rounded-2xl bg-[#F7F6F2] border border-blue-500/30 shadow-xl">
-              <div className="flex items-center justify-between text-blue-400 font-mono text-xs font-bold">
-                <span>JÁ CONTRATADOS (ATIVOS)</span>
-                <span className="material-symbols-outlined">lock</span>
-              </div>
-              <div className="text-3xl font-extrabold text-blue-400 font-mono mt-2">
-                {contratosPreviewData.totalJaComContratoAtivo}
-              </div>
-            </div>
-
-            <div className="p-5 rounded-2xl bg-[#F7F6F2] border border-amber-500/30 shadow-xl">
-              <div className="flex items-center justify-between text-amber-400 font-mono text-xs font-bold">
-                <span>CONTRATOS SUSPENSOS</span>
-                <span className="material-symbols-outlined">pause_circle</span>
-              </div>
-              <div className="text-3xl font-extrabold text-amber-400 font-mono mt-2">
-                {contratosPreviewData.totalJaComContratoSuspenso}
-              </div>
-            </div>
-
-            <div className="p-5 rounded-2xl bg-[#F7F6F2] border border-rose-500/30 shadow-xl">
-              <div className="flex items-center justify-between text-rose-400 font-mono text-xs font-bold">
-                <span>INÍCIO NÃO INFORMADO</span>
-                <span className="material-symbols-outlined">warning</span>
-              </div>
-              <div className="text-3xl font-extrabold text-rose-400 font-mono mt-2">
-                {contratosPreviewData.totalInicioNaoInformado}
-              </div>
-            </div>
+            <StatCard
+              title="PARES ANALISADOS"
+              value={contratosPreviewData.totalParesAnalisados}
+              icon="compare_arrows"
+              variant="default"
+              description="Total de pares indústria/loja"
+            />
+            <StatCard
+              title="APTOS P/ FORMALIZAR"
+              value={contratosPreviewData.totalElegiveisAptos}
+              icon="verified"
+              variant="success"
+              description="Sem contrato e com dados OK"
+            />
+            <StatCard
+              title="JÁ CONTRATADOS (ATIVOS)"
+              value={contratosPreviewData.totalJaComContratoAtivo}
+              icon="lock"
+              variant="info"
+              description="Contrato ativo em vigência"
+            />
+            <StatCard
+              title="CONTRATOS SUSPENSOS"
+              value={contratosPreviewData.totalJaComContratoSuspenso}
+              icon="pause_circle"
+              variant="warning"
+              description="Exige revisão operacional"
+            />
+            <StatCard
+              title="INÍCIO NÃO INFORMADO"
+              value={contratosPreviewData.totalInicioNaoInformado}
+              icon="warning"
+              variant="danger"
+              description="Indústria sem início cadastrado"
+            />
           </div>
 
-          {/* TABELA 1: CONTRATOS PROJETADOS / ELEGÍVEIS */}
-          <section className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-6 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-bold text-[#171717] uppercase tracking-wider font-mono flex items-center gap-2">
-                <span className="material-symbols-outlined text-emerald-400">assignment_turned_in</span>
-                Projeção de Contratos Elegíveis ({contratosPreviewData.elegiveis.length})
-              </h3>
-              <span className="text-[11px] font-mono text-[#77766F]">
-                *Ref: {contratosRefDate}
+          {/* TABELA 1: CONTRATOS PROJETADOS / ELEGÍVEIS COM DATATABLE */}
+          <DataTable<ContratoItemElegivel>
+            title="Projeção de Contratos Elegíveis"
+            titleIcon="assignment_turned_in"
+            badgeCount={contratosPreviewData.elegiveis.length}
+            data={contratosPreviewData.elegiveis}
+            columns={contratosColumns}
+            keyExtractor={(c, idx) => `${c.industria_codigo}_${c.loja_codigo}_${idx}`}
+            loading={freqLoading || contratosLoading}
+            loadingMessage="Calculando projeções e auditando contratos..."
+            emptyTitle="Nenhum par elegível encontrado"
+            emptyMessage="Nenhum par (indústria, loja) com rotas ativas encontrado para os filtros selecionados."
+            searchPlaceholder="Buscar por indústria, loja, código..."
+            searchFilter={(c, query) =>
+              Boolean(
+                c.industriaNome.toLowerCase().includes(query) ||
+                c.industria_codigo.toLowerCase().includes(query) ||
+                c.lojaInfo.nome.toLowerCase().includes(query) ||
+                c.loja_codigo.toLowerCase().includes(query) ||
+                c.frequencia.toLowerCase().includes(query) ||
+                (c.projecao_periodo?.competencia && c.projecao_periodo.competencia.toLowerCase().includes(query))
+              )
+            }
+            defaultPageSize={10}
+            headerActions={
+              <span className="text-[11px] font-mono text-[#737373] bg-[#EAE8E2] px-2.5 py-1 rounded-md border border-[#CFCDC5]">
+                Ref: {contratosRefDate}
               </span>
-            </div>
+            }
+          />
 
-            {contratosPreviewData.elegiveis.length === 0 ? (
-              <div className="py-12 text-center text-[#77766F] text-xs font-mono">
-                Nenhum par (indústria, loja) com rotas ativas encontrado para os filtros selecionados.
+          {/* TABELA 2: ROTAS CONFLITANTES / NÃO ELEGÍVEIS */}
+          {contratosPreviewData.conflitos.length > 0 && (
+            <section className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-6 shadow-2xl space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-bold text-amber-900 uppercase tracking-wider font-mono flex items-center gap-2">
+                  <span className="material-symbols-outlined text-amber-600">report_problem</span>
+                  Conflitos Detectados nas Rotas ({contratosPreviewData.conflitos.length})
+                </h3>
+                <span className="text-[11px] font-mono font-bold text-amber-800 bg-amber-500/10 px-2.5 py-1 rounded-lg border border-amber-500/20">
+                  Bloqueados para Geração Contratual
+                </span>
               </div>
-            ) : (
+
               <div className="overflow-x-auto rounded-xl border border-[#CFCDC5]">
                 <table className="w-full text-left text-xs border-collapse">
                   <thead>
                     <tr className="bg-[#E3E1DA] border-b border-[#CFCDC5] text-[11px] font-bold text-[#171717] uppercase tracking-wider font-mono">
                       <th className="py-3 px-3">Indústria</th>
                       <th className="py-3 px-3">Loja / PDV</th>
-                      <th className="py-3 px-3">Frequência</th>
-                      <th className="py-3 px-3">Dias de Visita</th>
-                      <th className="py-3 px-3">Período Sugerido</th>
-                      <th className="py-3 px-3">Competência</th>
-                      <th className="py-3 px-3">Tipo de Ciclo</th>
-                      <th className="py-3 px-3">Início da Operação</th>
-                      <th className="py-3 px-3">Situação Contratual</th>
-                      {canEdit && <th className="py-3 px-3 text-center">Ações</th>}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-[#CFCDC5] text-[#171717] font-mono">
-                    {contratosPreviewData.elegiveis.map((c, idx) => {
-                      const isKing = c.industria_codigo === 'IND-013';
-                      const proj = c.projecao_periodo;
-
-                      return (
-                        <tr key={`${c.industria_codigo}_${c.loja_codigo}_${idx}`} className="hover:bg-[#EAE8E1] transition-colors">
-                          <td className="py-3 px-3">
-                            <span className="font-bold text-white block">{c.industriaNome}</span>
-                            <span className={`text-[10px] font-mono ${isKing ? 'text-cyan-400 font-bold' : 'text-purple-400'}`}>
-                              {c.industria_codigo} {isKing && '★ (KING)'}
-                            </span>
-                          </td>
-
-                          <td className="py-3 px-3">
-                            <span className="text-[#171717] block font-bold">{c.lojaInfo.nome}</span>
-                            <span className="text-[10px] text-[#77766F] block">
-                              {c.loja_codigo} {c.lojaInfo.cidade ? `• ${c.lojaInfo.cidade}/${c.lojaInfo.uf}` : ''}
-                            </span>
-                          </td>
-
-                          <td className="py-3 px-3">
-                            <span
-                              className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
-                                c.frequencia === 'SEMANAL'
-                                  ? 'bg-blue-500/10 text-blue-400 border-blue-500/30'
-                                  : c.frequencia === 'QUINZENAL'
-                                  ? 'bg-purple-500/10 text-purple-400 border-purple-500/30'
-                                  : 'bg-amber-500/10 text-amber-400 border-amber-500/30'
-                              }`}
-                            >
-                              {c.frequencia}
-                              {c.visitas_por_semana ? ` (${c.visitas_por_semana}x/sem)` : ''}
-                            </span>
-                          </td>
-
-                          <td className="py-3 px-3">
-                            <div className="flex gap-1">
-                              {['segunda', 'terca', 'quarta', 'quinta', 'sexta', 'sabado', 'domingo'].map((d, dIdx) => {
-                                const labels = ['S', 'T', 'Q', 'Q', 'S', 'S', 'D'];
-                                const active = Boolean(c[d as keyof typeof c]);
-                                return (
-                                  <span
-                                    key={d}
-                                    className={`w-4 h-4 rounded text-[9px] flex items-center justify-center font-bold ${
-                                      active ? 'bg-purple-500 text-white' : 'bg-[#EAE8E2] text-[#5F5F5F]'
-                                    }`}
-                                  >
-                                    {labels[dIdx]}
-                                  </span>
-                                );
-                              })}
-                            </div>
-                          </td>
-
-                          <td className="py-3 px-3">
-                            {proj ? (
-                              <div>
-                                <span className="text-white font-bold block">{proj.data_inicio}</span>
-                                <span className="text-[10px] text-[#77766F] block">até {proj.data_fim}</span>
-                              </div>
-                            ) : (
-                              <span className="text-rose-400 italic">Não calculado</span>
-                            )}
-                          </td>
-
-                          <td className="py-3 px-3">
-                            {proj ? (
-                              <span className="px-2 py-0.5 rounded bg-[#EAE8E2] border border-[#CFCDC5] text-amber-400 font-bold text-[11px]">
-                                {proj.competencia}
-                              </span>
-                            ) : (
-                              '—'
-                            )}
-                          </td>
-
-                          <td className="py-3 px-3">
-                            {proj ? (
-                              <span
-                                className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
-                                  proj.tipo_ciclo === 'ESPECIAL_KING_23_22'
-                                    ? 'bg-cyan-500/10 text-cyan-300 border-cyan-500/30'
-                                    : proj.tipo_ciclo === 'PRIMEIRA_VIGENCIA_PRO_RATA'
-                                    ? 'bg-amber-500/10 text-amber-300 border-amber-500/30'
-                                    : 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30'
-                                }`}
-                              >
-                                {proj.tipo_ciclo}
-                              </span>
-                            ) : (
-                              '—'
-                            )}
-                          </td>
-
-                          <td className="py-3 px-3">
-                            {c.dataCadastro ? (
-                              <span className="text-[#77766F] text-[11px]">{c.dataCadastro}</span>
-                            ) : (
-                              <span className="text-[10px] text-rose-400 font-bold flex items-center gap-1">
-                                <span className="material-symbols-outlined text-[12px]">warning</span>
-                                Indisponível
-                              </span>
-                            )}
-                          </td>
-
-                          {/* SITUAÇÃO CONTRATUAL / CLASSIFICAÇÃO (ETAPA H3.3) */}
-                          <td className="py-3 px-3">
-                            {c.classificacao === 'JA_POSSUI_ATIVO' && (
-                              <div>
-                                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-500/10 text-blue-400 border border-blue-500/30 flex items-center gap-1 w-max">
-                                  <span className="material-symbols-outlined text-[12px]">lock</span>
-                                  Contrato Ativo
-                                </span>
-                                <span className="text-[10px] text-[#77766F] block mt-0.5" title={c.motivoClassificacao}>
-                                  Desde {c.contratoAtivoExistente?.data_inicio_vigencia}
-                                </span>
-                              </div>
-                            )}
-
-                            {c.classificacao === 'JA_POSSUI_SUSPENSO' && (
-                              <div>
-                                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/10 text-amber-300 border border-amber-500/30 flex items-center gap-1 w-max">
-                                  <span className="material-symbols-outlined text-[12px]">pause_circle</span>
-                                  Suspenso
-                                </span>
-                                <span className="text-[10px] text-amber-400/80 block mt-0.5" title={c.motivoClassificacao}>
-                                  Revisar manual
-                                </span>
-                              </div>
-                            )}
-
-                            {c.classificacao === 'INICIO_NAO_INFORMADO' && (
-                              <div>
-                                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-500/10 text-rose-300 border border-rose-500/30 flex items-center gap-1 w-max">
-                                  <span className="material-symbols-outlined text-[12px]">block</span>
-                                  Início Ausente
-                                </span>
-                                <span className="text-[10px] text-rose-400/80 block mt-0.5" title={c.motivoClassificacao}>
-                                  Cadastrar indústria
-                                </span>
-                              </div>
-                            )}
-
-                            {c.classificacao === 'ERRO_CONSULTA' && (
-                              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/40 flex items-center gap-1 w-max" title={c.motivoClassificacao}>
-                                <span className="material-symbols-outlined text-[12px]">error</span>
-                                Erro Consulta
-                              </span>
-                            )}
-
-                            {c.classificacao === 'ELEGIVEL' && (
-                              <div>
-                                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 flex items-center gap-1 w-max">
-                                  <span className="material-symbols-outlined text-[12px]">check_circle</span>
-                                  Apto p/ Contrato
-                                </span>
-                                <span className="text-[10px] text-[#77766F] block mt-0.5">
-                                  Sem contrato ativo
-                                </span>
-                              </div>
-                            )}
-                          </td>
-
-                          {/* AÇÕES DE AUTORIZAÇÃO INDIVIDUAL (ETAPA H3.5) */}
-                          {canEdit && (
-                            <td className="py-3 px-3 text-center">
-                              {c.classificacao === 'ELEGIVEL' ? (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setReviewingContrato(c);
-                                    setRevisaoForm({
-                                      valor_por_visita: '',
-                                      tipo_vigencia: 'continua',
-                                      data_fim_vigencia: '',
-                                      observacao: ''
-                                    });
-                                    setRevisaoErrors({});
-                                    setSimulatedPayload(null);
-                                  }}
-                                  className="px-2.5 py-1.5 rounded-lg bg-[#222222] hover:bg-black text-white text-[11px] font-bold border border-[#171717] flex items-center gap-1.5 mx-auto transition-all cursor-pointer shadow-sm hover:shadow"
-                                  title="Revisar e autorizar contrato individualmente"
-                                >
-                                  <span className="material-symbols-outlined text-[14px] text-amber-400">rate_review</span>
-                                  <span>Revisar</span>
-                                </button>
-                              ) : (
-                                <span
-                                  className="text-[10px] text-[#77766F] italic flex items-center justify-center gap-1"
-                                  title={c.motivoClassificacao}
-                                >
-                                  <span className="material-symbols-outlined text-[12px] text-[#5F5F5F]">lock</span>
-                                  Bloqueado
-                                </span>
-                              )}
-                            </td>
-                          )}
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </section>
-
-          {/* TABELA 2: ROTAS CONFLITANTES / NÃO ELEGÍVEIS */}
-          {contratosPreviewData.conflitos.length > 0 && (
-            <section className="bg-[#F7F6F2] border border-amber-500/30 rounded-2xl p-6 shadow-2xl space-y-4">
-              <div className="flex items-center justify-between">
-                <h3 className="text-sm font-bold text-amber-400 uppercase tracking-wider font-mono flex items-center gap-2">
-                  <span className="material-symbols-outlined text-amber-400">report_problem</span>
-                  Conflitos Detectados nas Rotas ({contratosPreviewData.conflitos.length})
-                </h3>
-                <span className="text-[11px] font-mono text-amber-400/80">
-                  Bloqueados para Geração Contratual
-                </span>
-              </div>
-
-              <div className="overflow-x-auto rounded-xl border border-amber-500/20">
-                <table className="w-full text-left text-xs border-collapse">
-                  <thead>
-                    <tr className="bg-[#E3E1DA] border-b border-amber-500/20 text-[11px] font-bold text-amber-300 uppercase tracking-wider font-mono">
-                      <th className="py-3 px-3">Indústria</th>
-                      <th className="py-3 px-3">Loja / PDV</th>
-                      <th className="py-3 px-3">Total de Rotas</th>
+                      <th className="py-3 px-3 text-center">Total de Rotas</th>
                       <th className="py-3 px-3">Frequências Divergentes</th>
                       <th className="py-3 px-3">Motivo do Bloqueio</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-amber-500/10 text-[#171717] font-mono">
+                  <tbody className="divide-y divide-[#CFCDC5] text-[#171717] font-mono">
                     {contratosPreviewData.conflitos.map((conf, cIdx) => (
-                      <tr key={`conf_${conf.industria_codigo}_${conf.loja_codigo}_${cIdx}`} className="hover:bg-amber-500/5">
-                        <td className="py-3 px-3 font-bold text-white">
-                          {conf.industriaNome} ({conf.industria_codigo})
+                      <tr key={`conf_${conf.industria_codigo}_${conf.loja_codigo}_${cIdx}`} className="hover:bg-[#EAE8E2] transition-colors">
+                        <td className="py-3 px-3 font-bold text-[#171717]">
+                          {conf.industriaNome} <span className="text-purple-700 font-bold font-mono">({conf.industria_codigo})</span>
                         </td>
                         <td className="py-3 px-3 text-[#171717]">
-                          {conf.lojaInfo.nome} ({conf.loja_codigo})
+                          {conf.lojaInfo.nome} <span className="text-[#5F5F5F] font-mono text-[10px]">({conf.loja_codigo})</span>
                         </td>
-                        <td className="py-3 px-3 text-amber-400 font-bold">{conf.totalRotas}</td>
+                        <td className="py-3 px-3 text-amber-800 font-bold text-center">{conf.totalRotas}</td>
                         <td className="py-3 px-3">
-                          <div className="flex gap-1.5">
+                          <div className="flex gap-1.5 flex-wrap">
                             {conf.frequenciasEncontradas.map((f) => (
-                              <span key={f} className="px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/30 text-[10px] font-bold">
+                              <span key={f} className="px-2 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200 text-[10px] font-bold">
                                 {f}
                               </span>
                             ))}
                           </div>
                         </td>
-                        <td className="py-3 px-3 text-[#77766F] text-[11px]">
+                        <td className="py-3 px-3 text-[#5F5F5F] text-[11px]">
                           {conf.motivo}
                         </td>
                       </tr>
@@ -2569,18 +3110,20 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
               <div className="flex items-center gap-3">
                 <button
                   type="button"
+                  disabled={savingContrato}
                   onClick={() => {
                     setReviewingContrato(null);
                     setSimulatedPayload(null);
                   }}
-                  className="px-4 py-2 rounded-xl bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] border border-[#CFCDC5] text-xs font-semibold cursor-pointer"
+                  className="px-4 py-2 rounded-xl bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] border border-[#CFCDC5] text-xs font-semibold cursor-pointer disabled:opacity-50"
                 >
-                  Fechar
+                  Cancelar
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    // Validação estrita dos campos
+                  disabled={savingContrato}
+                  onClick={async () => {
+                    // Validação estrita dos campos do formulário
                     const errors: { valor?: string; data_fim?: string } = {};
 
                     const valorNum = parseFloat(revisaoForm.valor_por_visita);
@@ -2612,59 +3155,77 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
                     }
 
                     setRevisaoErrors({});
+                    setSavingContrato(true);
 
-                    // Testar validação com prepareContratoInsertData (função pura sem chamada SQL)
-                    const isKing = reviewingContrato.industria_codigo === 'IND-013';
-                    const prepared = contratosService.prepareContratoInsertData({
-                      industria_codigo: reviewingContrato.industria_codigo,
-                      loja_codigo: reviewingContrato.loja_codigo,
-                      frequencia: reviewingContrato.frequencia,
-                      visitas_por_semana: reviewingContrato.visitas_por_semana || undefined,
-                      segunda: reviewingContrato.segunda,
-                      terca: reviewingContrato.terca,
-                      quarta: reviewingContrato.quarta,
-                      quinta: reviewingContrato.quinta,
-                      sexta: reviewingContrato.sexta,
-                      sabado: reviewingContrato.sabado,
-                      domingo: reviewingContrato.domingo,
-                      data_inicio_vigencia: dataInicio,
-                      data_fim_vigencia: revisaoForm.tipo_vigencia === 'continua' ? null : revisaoForm.data_fim_vigencia,
-                      valor_por_visita: valorNum,
-                      observacao: revisaoForm.observacao.trim() || null,
-                      status: 'ativo'
-                    });
+                    try {
+                      // Construir o DTO formal para criação de contrato
+                      const payloadDTO: CreateContratoLojaDTO = {
+                        industria_codigo: reviewingContrato.industria_codigo,
+                        loja_codigo: reviewingContrato.loja_codigo,
+                        frequencia: reviewingContrato.frequencia,
+                        visitas_por_semana: reviewingContrato.visitas_por_semana || undefined,
+                        segunda: reviewingContrato.segunda,
+                        terca: reviewingContrato.terca,
+                        quarta: reviewingContrato.quarta,
+                        quinta: reviewingContrato.quinta,
+                        sexta: reviewingContrato.sexta,
+                        sabado: reviewingContrato.sabado,
+                        domingo: reviewingContrato.domingo,
+                        data_inicio_vigencia: dataInicio,
+                        data_fim_vigencia: revisaoForm.tipo_vigencia === 'continua' ? null : revisaoForm.data_fim_vigencia,
+                        valor_por_visita: valorNum,
+                        observacao: revisaoForm.observacao.trim() || null,
+                        status: 'ativo'
+                      };
 
-                    if (prepared.error || !prepared.data) {
+                      const { data: novoContrato, error: createErr, isMigrationPending } = await contratosService.createContrato(payloadDTO);
+
+                      if (createErr) {
+                        if (isMigrationPending) {
+                          onShowToast({
+                            title: 'Migração Pendente',
+                            message: 'A tabela de contratos ainda não está disponível no banco de dados.',
+                            type: 'error'
+                          });
+                        } else {
+                          // Tratar mensagens amigáveis para sobreposição e violação de regras
+                          const msg = createErr.message || 'Falha ao registrar o contrato no banco de dados.';
+                          onShowToast({
+                            title: 'Erro ao Formalizar Contrato',
+                            message: msg,
+                            type: 'error'
+                          });
+                        }
+                        return;
+                      }
+
                       onShowToast({
-                        title: 'Inconsistência no Contrato',
-                        message: prepared.error?.message || 'Falha ao validar dados contratuais.',
+                        title: 'Contrato Formalizado',
+                        message: `Contrato entre ${reviewingContrato.industriaNome} e ${reviewingContrato.lojaInfo?.nome || reviewingContrato.loja_codigo} criado com sucesso.`,
+                        type: 'success'
+                      });
+
+                      // Fechar modal e recarregar contratos para atualizar a grade e classificações
+                      setReviewingContrato(null);
+                      setSimulatedPayload(null);
+                      fetchContratos();
+                    } catch (err: any) {
+                      console.error('Erro ao salvar contrato:', err);
+                      onShowToast({
+                        title: 'Erro Inesperado',
+                        message: err.message || 'Ocorreu uma falha ao tentar salvar o contrato.',
                         type: 'error'
                       });
-                      setSimulatedPayload(null);
-                      return;
+                    } finally {
+                      setSavingContrato(false);
                     }
-
-                    // Exibir resumo do payload simulado sem gravar no banco
-                    setSimulatedPayload({
-                      databasePayload: prepared.data,
-                      metadata: {
-                        isKing,
-                        ciclo_apuracao: reviewingContrato.projecao_periodo,
-                        tipo_vigencia: revisaoForm.tipo_vigencia,
-                        aviso: 'Nenhum dado gravado no banco de dados (validação simulada aprovada).'
-                      }
-                    });
-
-                    onShowToast({
-                      title: 'Simulação Aprovada',
-                      message: 'Os dados do contrato foram validados com sucesso. Nenhuma gravação efetuada nesta etapa.',
-                      type: 'success'
-                    });
                   }}
-                  className="px-5 py-2 rounded-xl bg-[#222222] hover:bg-black text-white font-bold text-xs flex items-center gap-2 cursor-pointer shadow-sm hover:shadow"
+                  className="px-5 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs flex items-center gap-2 cursor-pointer shadow-md hover:shadow-lg disabled:opacity-50"
                 >
-                  <span className="material-symbols-outlined text-sm text-emerald-400">check_circle</span>
-                  <span>Validar e Simular Contrato</span>
+                  <span className={`material-symbols-outlined text-sm ${savingContrato ? 'animate-spin' : ''}`}>
+                    {savingContrato ? 'progress_activity' : 'verified'}
+                  </span>
+                  <span>{savingContrato ? 'Gravando Contrato...' : 'Autorizar e Gravar Contrato'}</span>
                 </button>
               </div>
             </div>

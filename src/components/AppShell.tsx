@@ -283,56 +283,101 @@ export const AppShell: React.FC<AppShellProps> = ({
     }
   };
 
+  // Estado de Colapso da Sidebar (Desktop: 260px expandido vs 72px recolhido)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('mk9_sidebar_collapsed') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const toggleSidebarCollapse = () => {
+    setSidebarCollapsed((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('mk9_sidebar_collapsed', String(next));
+      } catch {
+        // Ignora erro de localStorage
+      }
+      return next;
+    });
+  };
+
   const navItems = [
     {
-      group: 'OPERAÇÕES CENTRAIS',
+      group: 'Visão Geral',
       items: [
         { id: 'cockpit' as ScreenId, label: 'Cockpit', icon: 'speed', roles: ['admin', 'gestor', 'operador'] as UserRole[] },
-        { id: 'painel-operacional' as ScreenId, label: 'Painel Operacional', icon: 'monitoring', roles: ['admin', 'gestor', 'operador'] as UserRole[] },
-        { id: 'gestao-equipes' as ScreenId, label: 'Gestão de Equipes', icon: 'groups', roles: ['admin', 'gestor', 'operador'] as UserRole[] },
-        { id: 'supervisores' as ScreenId, label: 'Gestão de Supervisores', icon: 'supervisor_account', roles: ['admin', 'gestor', 'operador'] as UserRole[] }
+        { id: 'painel-operacional' as ScreenId, label: 'Painel Operacional', icon: 'monitoring', roles: ['admin', 'gestor', 'operador'] as UserRole[] }
       ]
     },
     {
-      group: 'CAMPO & ROTAS',
+      group: 'Operação & Visitas',
       items: [
-        { id: 'acompanhamento-visitas' as ScreenId, label: 'Acompanhamento de Visitas', icon: 'travel_explore', roles: ['admin', 'gestor', 'operador'] as UserRole[] },
-        { id: 'portal-promotor' as ScreenId, label: 'Portal do Promotor', icon: 'smartphone', roles: ['admin', 'gestor', 'operador', 'promotor'] as UserRole[] },
-        { id: 'presenca' as ScreenId, label: 'Controle de Presença', icon: 'how_to_reg', roles: ['admin', 'gestor', 'operador'] as UserRole[] },
+        { id: 'acompanhamento-visitas' as ScreenId, label: 'Acompanhamento', icon: 'travel_explore', roles: ['admin', 'gestor', 'operador'] as UserRole[] },
+        { id: 'presenca' as ScreenId, label: 'Controle de Presença', icon: 'how_to_reg', roles: ['admin', 'gestor', 'operador'] as UserRole[] }
+      ]
+    },
+    {
+      group: 'Roteiros & Frequências',
+      items: [
         { id: 'rotas-fixas' as ScreenId, label: 'Rotas Fixas', icon: 'alt_route', roles: ['admin', 'gestor', 'operador'] as UserRole[] }
       ]
     },
     {
-      group: 'CADASTROS',
+      group: 'Redes & Parceiros',
       items: [
-        { id: 'industrias' as ScreenId, label: 'Indústrias', icon: 'factory', roles: ['admin', 'gestor', 'operador'] as UserRole[] },
         { id: 'lojas' as ScreenId, label: 'Lojas / PDVs', icon: 'store', roles: ['admin', 'gestor', 'operador'] as UserRole[] },
-        { id: 'promotores' as ScreenId, label: 'Promotores', icon: 'badge', roles: ['admin', 'gestor', 'operador'] as UserRole[] },
-        { id: 'freelancers' as ScreenId, label: 'Freelancers', icon: 'engineering', roles: ['admin', 'gestor', 'operador'] as UserRole[] },
-        { id: 'importacao' as ScreenId, label: 'Importação de Planilhas', icon: 'upload_file', roles: ['admin', 'gestor'] as UserRole[] }
+        { id: 'industrias' as ScreenId, label: 'Indústrias & Contratos', icon: 'factory', roles: ['admin', 'gestor', 'operador'] as UserRole[] }
       ]
     },
     {
-      group: 'FINANCEIRO & AUDITORIA',
+      group: 'Pessoas & Equipes',
+      items: [
+        { id: 'promotores' as ScreenId, label: 'Promotores CLT', icon: 'badge', roles: ['admin', 'gestor', 'operador'] as UserRole[] },
+        { id: 'freelancers' as ScreenId, label: 'Freelancers', icon: 'engineering', roles: ['admin', 'gestor', 'operador'] as UserRole[] },
+        { id: 'gestao-equipes' as ScreenId, label: 'Gestão de Equipes', icon: 'groups', roles: ['admin', 'gestor', 'operador'] as UserRole[] },
+        { id: 'supervisores' as ScreenId, label: 'Supervisores', icon: 'supervisor_account', roles: ['admin', 'gestor', 'operador'] as UserRole[] }
+      ]
+    },
+    {
+      group: 'Financeiro & Auditoria',
       items: [
         { id: 'controle-diarias' as ScreenId, label: 'Controle de Diárias', icon: 'payments', roles: ['admin', 'gestor', 'operador'] as UserRole[] }
       ]
     },
     {
-      group: 'CONFIGURAÇÕES & SEGURANÇA',
+      group: 'Portais Dedicados',
       items: [
-        { id: 'meu-perfil' as ScreenId, label: 'Meu Perfil', icon: 'account_circle', roles: ['admin', 'gestor', 'operador', 'promotor', 'client_industry'] as UserRole[] },
-        { id: 'usuarios' as ScreenId, label: 'Perfis & Permissões', icon: 'admin_panel_settings', roles: ['admin'] as UserRole[] },
-        { id: 'design-system' as ScreenId, label: 'Design System & Identidade', icon: 'palette', roles: ['admin', 'gestor', 'operador'] as UserRole[] }
+        { id: 'portal-promotor' as ScreenId, label: 'Portal do Promotor', icon: 'smartphone', roles: ['admin', 'gestor', 'operador', 'promotor'] as UserRole[] },
+        { id: 'portal-industria' as ScreenId, label: 'Portal da Indústria', icon: 'domain', roles: ['admin', 'gestor', 'client_industry'] as UserRole[] }
       ]
     },
     {
-      group: 'PORTAL EXTERNO',
+      group: 'Configurações & Acessos',
       items: [
-        { id: 'portal-industria' as ScreenId, label: 'Portal da Indústria', icon: 'domain', roles: ['admin', 'gestor', 'client_industry'] as UserRole[] }
+        { id: 'usuarios' as ScreenId, label: 'Perfis & Permissões', icon: 'admin_panel_settings', roles: ['admin'] as UserRole[] },
+        { id: 'importacao' as ScreenId, label: 'Importação de Dados', icon: 'upload_file', roles: ['admin', 'gestor'] as UserRole[] },
+        { id: 'design-system' as ScreenId, label: 'Design System', icon: 'palette', roles: ['admin', 'gestor', 'operador'] as UserRole[] },
+        { id: 'meu-perfil' as ScreenId, label: 'Meu Perfil', icon: 'account_circle', roles: ['admin', 'gestor', 'operador', 'promotor', 'client_industry'] as UserRole[] }
       ]
     }
   ];
+
+  // Helper para Breadcrumbs
+  const getBreadcrumbs = (): { group: string; label: string } => {
+    for (const sec of navItems) {
+      for (const it of sec.items) {
+        if (it.id === currentScreen) {
+          return { group: sec.group, label: it.label };
+        }
+      }
+    }
+    return { group: 'Sistema', label: 'Início' };
+  };
+
+  const breadcrumbs = getBreadcrumbs();
 
   const getRoleBadge = (r: UserRole) => {
     switch (r) {
@@ -361,68 +406,106 @@ export const AppShell: React.FC<AppShellProps> = ({
         />
       )}
 
-      {/* SIDEBAR NAVIGATION - ArtCraft / GridCraft Clean Desktop Light Architecture */}
+      {/* SIDEBAR NAVIGATION - Modo Expandido (260px) vs Modo Compacto (72px) */}
       <aside
-        className={`fixed left-0 top-0 h-screen w-64 bg-[#F7F6F2] border-r border-[#CFCDC5] z-50 flex flex-col justify-between overflow-y-auto transition-transform duration-200 ${
-          mobileMenuOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
-        }`}
+        className={`fixed left-0 top-0 h-screen bg-[#F7F6F2] border-r border-[#CFCDC5] z-50 flex flex-col justify-between overflow-x-hidden overflow-y-auto transition-all duration-300 ease-in-out ${
+          sidebarCollapsed ? 'lg:w-[72px]' : 'lg:w-[260px]'
+        } ${mobileMenuOpen ? 'w-[260px] translate-x-0' : '-translate-x-full lg:translate-x-0'}`}
       >
         <div className="flex flex-col">
           {/* Brand Header */}
-          <div
-            onClick={() => onNavigate(role === 'promotor' ? 'portal-promotor' : 'cockpit')}
-            className="h-16 px-5 flex items-center gap-3 border-b border-[#CFCDC5] bg-[#F7F6F2] cursor-pointer group select-none"
-          >
-            <div className="flex items-center gap-2">
+          <div className="h-16 px-4 flex items-center justify-between border-b border-[#CFCDC5] bg-[#F7F6F2] select-none">
+            <div
+              onClick={() => onNavigate(role === 'promotor' ? 'portal-promotor' : 'cockpit')}
+              className="flex items-center gap-2 cursor-pointer group"
+              title="MK9 Date Trade Operations"
+            >
               <span className="text-xl font-extrabold tracking-tight text-[#171717] font-sans">
                 MK9
               </span>
-              <span className="text-xs font-bold text-[#286FF5] tracking-widest font-mono uppercase bg-[#EBF2FE] px-1.5 py-0.5 rounded border border-[#C3D9FD]">
-                DATE
-              </span>
+              {(!sidebarCollapsed || mobileMenuOpen) && (
+                <span className="text-xs font-bold text-[#286FF5] tracking-widest font-mono uppercase bg-[#EBF2FE] px-1.5 py-0.5 rounded border border-[#C3D9FD] animate-fadeIn">
+                  DATE
+                </span>
+              )}
             </div>
-            <span className="text-[10px] text-[#737373] font-mono tracking-tight ml-auto hidden sm:inline">
-              TRADE OPS
-            </span>
+
+            {/* Botão de Colapso Desktop */}
+            <button
+              onClick={toggleSidebarCollapse}
+              className="hidden lg:flex items-center justify-center w-7 h-7 rounded-lg text-[#737373] hover:text-[#171717] hover:bg-[#E4E2DB] transition-colors cursor-pointer"
+              title={sidebarCollapsed ? 'Expandir barra lateral' : 'Recolher barra lateral'}
+              aria-label={sidebarCollapsed ? 'Expandir barra lateral' : 'Recolher barra lateral'}
+            >
+              <span className="material-symbols-outlined text-[18px]">
+                {sidebarCollapsed ? 'chevron_right' : 'chevron_left'}
+              </span>
+            </button>
           </div>
 
           {/* Navigation Links */}
-          <div className="py-4 px-3 space-y-5">
+          <div className="py-4 px-2.5 space-y-4">
             {navItems.map((section) => {
               const visibleItems = section.items.filter((item) => !item.roles || hasPermission(item.roles));
               if (visibleItems.length === 0) return null;
 
               return (
-                <div key={section.group}>
-                  <div className="px-2 pb-1.5 text-[10px] font-bold text-[#737373] tracking-wider uppercase font-mono">
-                    {section.group}
-                  </div>
+                <div key={section.group} className="space-y-1">
+                  {/* Título do Grupo (visível somente quando expandido) */}
+                  {(!sidebarCollapsed || mobileMenuOpen) ? (
+                    <div className="px-2.5 pb-1 text-[10px] font-bold text-[#737373] tracking-wider uppercase font-mono truncate">
+                      {section.group}
+                    </div>
+                  ) : (
+                    <div className="mx-auto w-6 border-b border-[#CFCDC5]/50 my-1.5" />
+                  )}
+
                   <nav className="space-y-0.5">
                     {visibleItems.map((item) => {
                       const isActive = currentScreen === item.id;
+                      const isCompact = sidebarCollapsed && !mobileMenuOpen;
+
                       return (
-                        <button
-                          key={item.id}
-                          onClick={() => {
-                            onNavigate(item.id);
-                            setMobileMenuOpen(false);
-                          }}
-                          className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-colors cursor-pointer text-left ${
-                            isActive
-                              ? 'bg-[#111114] text-white font-semibold shadow-xs'
-                              : 'text-[#525252] hover:text-[#171717] hover:bg-[#E4E2DB]'
-                          }`}
-                        >
-                          <div className="flex items-center gap-2.5">
-                            <span className={`material-symbols-outlined text-[18px] ${isActive ? 'text-white' : 'text-[#737373]'}`}>
-                              {item.icon}
-                            </span>
-                            <span>{item.label}</span>
-                          </div>
-                          {isActive && (
-                            <span className="w-1.5 h-1.5 rounded-full bg-[#286FF5]" />
+                        <div key={item.id} className="relative group/nav">
+                          <button
+                            onClick={() => {
+                              onNavigate(item.id);
+                              setMobileMenuOpen(false);
+                            }}
+                            className={`w-full flex items-center ${
+                              isCompact ? 'justify-center px-0 py-2.5' : 'justify-between px-3 py-2'
+                            } rounded-lg text-xs font-medium transition-all cursor-pointer text-left ${
+                              isActive
+                                ? 'bg-[#111114] text-white font-semibold shadow-xs'
+                                : 'text-[#525252] hover:text-[#171717] hover:bg-[#E4E2DB]'
+                            }`}
+                          >
+                            <div className={`flex items-center ${isCompact ? 'justify-center' : 'gap-2.5'}`}>
+                              <span
+                                className={`material-symbols-outlined text-[20px] shrink-0 ${
+                                  isActive ? 'text-white' : 'text-[#737373]'
+                                }`}
+                              >
+                                {item.icon}
+                              </span>
+                              {(!sidebarCollapsed || mobileMenuOpen) && (
+                                <span className="truncate">{item.label}</span>
+                              )}
+                            </div>
+
+                            {(!sidebarCollapsed || mobileMenuOpen) && isActive && (
+                              <span className="w-1.5 h-1.5 rounded-full bg-[#286FF5] shrink-0" />
+                            )}
+                          </button>
+
+                          {/* Tooltip flutuante no modo compacto */}
+                          {isCompact && (
+                            <div className="absolute left-full top-1/2 -translate-y-1/2 ml-3 px-2.5 py-1.5 bg-[#111114] text-white text-xs rounded-lg shadow-xl whitespace-nowrap opacity-0 pointer-events-none group-hover/nav:opacity-100 group-hover/nav:pointer-events-auto transition-opacity duration-150 z-50 flex items-center gap-1.5 border border-[#CFCDC5]/30">
+                              <span>{item.label}</span>
+                              <span className="text-[10px] text-[#737373] font-mono">({section.group})</span>
+                            </div>
                           )}
-                        </button>
+                        </div>
                       );
                     })}
                   </nav>
@@ -433,30 +516,49 @@ export const AppShell: React.FC<AppShellProps> = ({
         </div>
 
         {/* Sidebar Footer */}
-        <div className="p-3 m-3 rounded-lg bg-[#E4E2DB] border border-[#CFCDC5] space-y-2">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <span className="flex h-2 w-2 rounded-full bg-[#16845B]" />
-              <span className="font-mono text-[11px] text-[#737373] font-medium">v2.5.0 GridCraft</span>
+        <div className="p-3 m-2 rounded-lg bg-[#E4E2DB] border border-[#CFCDC5] space-y-2">
+          {(!sidebarCollapsed || mobileMenuOpen) ? (
+            <>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="flex h-2 w-2 rounded-full bg-[#16845B]" />
+                  <span className="font-mono text-[11px] text-[#737373] font-medium">v2.6.0 GridCraft</span>
+                </div>
+                <button
+                  onClick={toggleSidebarCollapse}
+                  className="hidden lg:block text-[#737373] hover:text-[#171717] text-xs"
+                  title="Recolher barra lateral"
+                >
+                  <span className="material-symbols-outlined text-[16px]">menu_open</span>
+                </button>
+              </div>
+              <div className="pt-2 border-t border-[#CFCDC5]/60 flex justify-center">
+                <AuthorSignature variant="compact" />
+              </div>
+            </>
+          ) : (
+            <div className="flex flex-col items-center gap-2">
+              <span className="flex h-2 w-2 rounded-full bg-[#16845B]" title="Operação Ativa" />
+              <button
+                onClick={toggleSidebarCollapse}
+                className="text-[#737373] hover:text-[#171717] transition-colors p-1"
+                title="Expandir barra lateral"
+              >
+                <span className="material-symbols-outlined text-[18px]">vertical_split</span>
+              </button>
             </div>
-            <span
-              onClick={() => onNavigate('design-system')}
-              title="Design System & Tokens"
-              className="material-symbols-outlined text-[16px] text-[#737373] hover:text-[#171717] cursor-pointer transition-colors"
-            >
-              verified_user
-            </span>
-          </div>
-          <div className="pt-2 border-t border-[#CFCDC5]/60 flex justify-center">
-            <AuthorSignature variant="compact" />
-          </div>
+          )}
         </div>
       </aside>
 
-      {/* TOP HEADER - ArtCraft Clean Technical Toolbar */}
-      <header className="fixed top-0 left-0 lg:left-64 right-0 h-16 bg-[#F7F6F2] border-b border-[#CFCDC5] z-40 px-4 lg:px-6 flex items-center justify-between">
-        {/* Left: Mobile hamburger & Global Search */}
-        <div className="flex items-center gap-3 flex-1 max-w-xl">
+      {/* TOP HEADER - ArtCraft Clean Technical Toolbar com Breadcrumbs e Largura Adaptativa */}
+      <header
+        className={`fixed top-0 right-0 h-16 bg-[#F7F6F2] border-b border-[#CFCDC5] z-40 px-4 lg:px-6 flex items-center justify-between transition-all duration-300 ease-in-out ${
+          sidebarCollapsed ? 'lg:left-[72px]' : 'lg:left-[260px]'
+        } left-0`}
+      >
+        {/* Left: Mobile hamburger, Breadcrumbs & Global Search */}
+        <div className="flex items-center gap-4 flex-1 max-w-2xl">
           <button
             onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
             className="lg:hidden p-2 rounded-lg text-[#737373] hover:text-[#171717] hover:bg-[#E4E2DB] cursor-pointer"
@@ -464,6 +566,17 @@ export const AppShell: React.FC<AppShellProps> = ({
           >
             <span className="material-symbols-outlined text-[22px]">menu</span>
           </button>
+
+          {/* Breadcrumbs Contextuais */}
+          <div className="hidden sm:flex items-center gap-1.5 text-xs font-medium font-sans">
+            <span className="text-[#737373] hover:text-[#171717] transition-colors">
+              {breadcrumbs.group}
+            </span>
+            <span className="text-[#CFCDC5] font-mono">/</span>
+            <span className="font-bold text-[#171717] bg-[#EAE8E2] px-2 py-0.5 rounded-md border border-[#CFCDC5]/70">
+              {breadcrumbs.label}
+            </span>
+          </div>
 
           <div ref={searchContainerRef} className="relative w-full max-w-md">
             <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-[#737373] text-[18px]">
@@ -880,8 +993,12 @@ export const AppShell: React.FC<AppShellProps> = ({
         </div>
       </header>
 
-      {/* MAIN VIEWPORT */}
-      <main className="lg:pl-64 pt-16 flex-1 flex flex-col w-full min-h-[calc(100vh-4rem)] bg-[#EAE8E2]">
+      {/* MAIN VIEWPORT - Margem esquerda adaptativa sincronizada com a largura da barra lateral */}
+      <main
+        className={`pt-16 flex-1 flex flex-col w-full min-h-[calc(100vh-4rem)] bg-[#EAE8E2] transition-all duration-300 ease-in-out ${
+          sidebarCollapsed ? 'lg:pl-[72px]' : 'lg:pl-[260px]'
+        } pl-0`}
+      >
         {children}
       </main>
 

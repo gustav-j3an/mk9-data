@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../auth/AuthProvider';
 import { SearchableSelect, type SearchableSelectOption } from '../components/SearchableSelect';
+import { StatCard, StatusBadge } from '../components/ui';
 import { supabase } from '../lib/supabase';
 import type { RouteItem, ToastMessage } from '../types';
 
@@ -52,9 +53,10 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
   // Agrupamento & Ordenação
   const [groupBy, setGroupBy] = useState<GroupByOption>('none');
   const [sortBy, setSortBy] = useState<SortByOption>('promotor');
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
 
-  // Paginação simples
-  const [pageSize, setPageSize] = useState<number>(50);
+  // Paginação inteligente (25, 50, 100)
+  const [pageSize, setPageSize] = useState<number>(25);
   const [currentPage, setCurrentPage] = useState<number>(1);
 
   // Modais de Visualização, Edição e Criação
@@ -372,15 +374,43 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
     };
   }, [routes, filteredAndSortedRoutes, selectedPromotor, availablePromotores]);
 
-  // Agrupamento Opcional
-  const groupedRoutes = useMemo(() => {
+  // Paginação inteligente por rotas
+  const totalItems = filteredAndSortedRoutes.length;
+  const totalPages = Math.ceil(totalItems / pageSize) || 1;
+  const paginatedRoutes = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return filteredAndSortedRoutes.slice(start, start + pageSize);
+  }, [filteredAndSortedRoutes, currentPage, pageSize]);
+
+  // Contagem total de itens por grupo no universo filtrado completo (para exibir "X rotas" no cabeçalho)
+  const groupTotals = useMemo(() => {
+    if (groupBy === 'none') return {};
+    const counts: Record<string, number> = {};
+    filteredAndSortedRoutes.forEach((r) => {
+      let key = 'Outros';
+      if (groupBy === 'promotor') {
+        key = r.promotor?.nome ? `${r.promotor.nome} (${r.promotor_matricula})` : `Promotor ${r.promotor_matricula}`;
+      } else if (groupBy === 'industria') {
+        key = r.industria?.nome ? `${r.industria.nome} (${r.industria_codigo})` : `Indústria ${r.industria_codigo}`;
+      } else if (groupBy === 'loja') {
+        key = r.loja?.nome ? `${r.loja.nome} (${r.loja_codigo})` : `Loja ${r.loja_codigo}`;
+      } else if (groupBy === 'frequencia') {
+        key = `Frequência ${r.frequencia}`;
+      }
+      counts[key] = (counts[key] || 0) + 1;
+    });
+    return counts;
+  }, [filteredAndSortedRoutes, groupBy]);
+
+  // Agrupamento sobre a página ativa (preserva continuidade e paginação consistente)
+  const paginatedGroupedRoutes = useMemo(() => {
     if (groupBy === 'none') {
-      return { 'Todas as Rotas': filteredAndSortedRoutes };
+      return { 'Todas as Rotas': paginatedRoutes };
     }
 
     const groups: Record<string, RouteItem[]> = {};
 
-    filteredAndSortedRoutes.forEach((r) => {
+    paginatedRoutes.forEach((r) => {
       let groupKey = 'Outros';
 
       if (groupBy === 'promotor') {
@@ -398,15 +428,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
     });
 
     return groups;
-  }, [filteredAndSortedRoutes, groupBy]);
-
-  // Paginação nos dados filtrados
-  const totalItems = filteredAndSortedRoutes.length;
-  const totalPages = Math.ceil(totalItems / pageSize) || 1;
-  const paginatedRoutes = useMemo(() => {
-    const start = (currentPage - 1) * pageSize;
-    return filteredAndSortedRoutes.slice(start, start + pageSize);
-  }, [filteredAndSortedRoutes, currentPage, pageSize]);
+  }, [paginatedRoutes, groupBy]);
 
   // Salvar Edição
   const handleSaveEdit = async () => {
@@ -568,86 +590,91 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
       {/* CARDS DE RESUMO NO TOPO */}
       {metrics.isIndividual ? (
         <div className="space-y-3">
-          <div className="flex items-center justify-between text-xs font-mono text-[#77766F]">
-            <span className="flex items-center gap-1.5 text-amber-400 font-bold">
+          <div className="flex items-center justify-between text-xs font-mono text-[#77766F] bg-[#EAE8E2] px-4 py-2 rounded-xl border border-[#CFCDC5]">
+            <span className="flex items-center gap-1.5 text-amber-700 font-bold">
               <span className="material-symbols-outlined text-[16px]">person</span>
-              Indicadores Individuais: {metrics.promotorNome} ({selectedPromotor})
+              Indicadores Individuais do Promotor: {metrics.promotorNome} ({selectedPromotor})
             </span>
-            <span className="text-[11px] text-[#5F5F5F]">
-              *Visitas calculadas com base nos dias configurados na grade
+            <span className="text-[11px] text-[#5F5F5F] hidden sm:inline">
+              *Métricas calculadas conforme filtros ativos da grade
             </span>
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-amber-500/30 shadow-xl">
-              <div className="text-[11px] font-mono text-[#77766F] font-bold uppercase flex items-center gap-1.5">
-                <span className="material-symbols-outlined text-amber-400 text-[14px]">alt_route</span>
-                Rotas Cadastradas
-              </div>
-              <div className="text-2xl font-extrabold text-[#171717] font-mono mt-1">{metrics.totalRotas}</div>
-              <div className="text-[10px] text-[#5F5F5F] font-mono mt-0.5">
-                {metrics.semanais} semanais • {metrics.quinzenais} quinzenais
-              </div>
-            </div>
-
-            <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-emerald-500/30 shadow-xl">
-              <div className="text-[11px] font-mono text-emerald-400 font-bold uppercase flex items-center gap-1.5">
-                <span className="material-symbols-outlined text-emerald-400 text-[14px]">storefront</span>
-                Lojas / PDVs Distintos
-              </div>
-              <div className="text-2xl font-extrabold text-emerald-400 font-mono mt-1">{metrics.lojasUnicas}</div>
-              <div className="text-[10px] text-[#5F5F5F] font-mono mt-0.5">
-                Pontos de venda atendidos
-              </div>
-            </div>
-
-            <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-cyan-500/30 shadow-xl">
-              <div className="text-[11px] font-mono text-cyan-400 font-bold uppercase flex items-center gap-1.5">
-                <span className="material-symbols-outlined text-cyan-400 text-[14px]">event_repeat</span>
-                Visitas Semanais Previstas
-              </div>
-              <div className="text-2xl font-extrabold text-cyan-400 font-mono mt-1">{metrics.visitasSemanais}</div>
-              <div className="text-[10px] text-[#5F5F5F] font-mono mt-0.5">
-                Soma dos dias ativos (freq. semanal)
-              </div>
-            </div>
-
-            <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-purple-500/30 shadow-xl">
-              <div className="text-[11px] font-mono text-purple-400 font-bold uppercase flex items-center gap-1.5">
-                <span className="material-symbols-outlined text-purple-400 text-[14px]">date_range</span>
-                Visitas Quinzenais Previstas
-              </div>
-              <div className="text-2xl font-extrabold text-purple-400 font-mono mt-1">{metrics.visitasQuinzenais}</div>
-              <div className="text-[10px] text-[#5F5F5F] font-mono mt-0.5">
-                Soma dos dias ativos (freq. quinzenal)
-              </div>
-            </div>
+            <StatCard
+              title="ROTAS FILTRADAS"
+              value={metrics.totalRotas}
+              description={`${metrics.semanais} semanais • ${metrics.quinzenais} quinzenais`}
+              icon="alt_route"
+              variant="warning"
+            />
+            <StatCard
+              title="LOJAS / PDVS DISTINTOS"
+              value={metrics.lojasUnicas}
+              description="Pontos de venda atendidos"
+              icon="storefront"
+              variant="success"
+            />
+            <StatCard
+              title="VISITAS SEMANAIS PREVISTAS"
+              value={metrics.visitasSemanais}
+              description="Soma dos dias ativos (semanal)"
+              icon="event_repeat"
+              variant="info"
+            />
+            <StatCard
+              title="VISITAS QUINZENAIS PREVISTAS"
+              value={metrics.visitasQuinzenais}
+              description="Soma dos dias ativos (quinzenal)"
+              icon="date_range"
+              variant="default"
+            />
           </div>
         </div>
       ) : (
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
-          <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5] shadow-sm">
-            <div className="text-[11px] font-mono text-[#5F5F5F] font-bold uppercase">Total de Rotas</div>
-            <div className="text-2xl font-extrabold text-[#171717] font-mono mt-1">{metrics.totalRotas}</div>
+        <div className="space-y-2">
+          <div className="flex items-center justify-between text-xs font-mono text-[#5F5F5F] px-1">
+            <span>Visão Consolidada de Toda a Operação</span>
+            <span className="text-[11px] text-[#77766F] hidden sm:inline">
+              Total geral na base: {routes.length} rotas cadastradas
+            </span>
           </div>
-
-          <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5] shadow-sm">
-            <div className="text-[11px] font-mono text-[#087F9C] font-bold uppercase">Rotas Semanais</div>
-            <div className="text-2xl font-extrabold text-[#171717] font-mono mt-1">{metrics.semanais}</div>
-          </div>
-
-          <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5] shadow-sm">
-            <div className="text-[11px] font-mono text-[#7E22CE] font-bold uppercase">Rotas Quinzenais</div>
-            <div className="text-2xl font-extrabold text-[#171717] font-mono mt-1">{metrics.quinzenais}</div>
-          </div>
-
-          <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5] shadow-sm">
-            <div className="text-[11px] font-mono text-[#986000] font-bold uppercase">Promotores Ativos</div>
-            <div className="text-2xl font-extrabold text-[#171717] font-mono mt-1">{metrics.promotoresUnicos}</div>
-          </div>
-
-          <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5] shadow-sm col-span-2 sm:col-span-1">
-            <div className="text-[11px] font-mono text-[#16794F] font-bold uppercase">Lojas / PDVs Atendidos</div>
-            <div className="text-2xl font-extrabold text-[#171717] font-mono mt-1">{metrics.lojasUnicas}</div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+            <StatCard
+              title="TOTAL DE ROTAS"
+              value={metrics.totalRotas}
+              description="Cadastradas na base"
+              icon="alt_route"
+              variant="default"
+            />
+            <StatCard
+              title="ROTAS SEMANAIS"
+              value={metrics.semanais}
+              description="Frequência semanal"
+              icon="event_repeat"
+              variant="info"
+            />
+            <StatCard
+              title="ROTAS QUINZENAIS"
+              value={metrics.quinzenais}
+              description="Frequência quinzenal"
+              icon="date_range"
+              variant="warning"
+            />
+            <StatCard
+              title="PROMOTORES ATIVOS"
+              value={metrics.promotoresUnicos}
+              description="Com rotas vinculadas"
+              icon="badge"
+              variant="warning"
+            />
+            <StatCard
+              title="LOJAS / PDVS ATENDIDOS"
+              value={metrics.lojasUnicas}
+              description="Pontos de venda com escala"
+              icon="storefront"
+              variant="success"
+              className="col-span-2 sm:col-span-1"
+            />
           </div>
         </div>
       )}
@@ -667,9 +694,22 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
                 setSearchTerm(e.target.value);
                 setCurrentPage(1);
               }}
-              placeholder="Buscar código, rota, indústria, loja ou promotor..."
-              className="w-full h-9 pl-9 pr-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] placeholder:text-[#5F5F5F] focus:outline-none focus:border-amber-500"
+              placeholder="Buscar rota, indústria, loja ou promotor..."
+              className="w-full h-9 pl-9 pr-8 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] placeholder:text-[#5F5F5F] focus:outline-none focus:border-amber-600 focus:bg-[#F7F6F2] transition-colors"
             />
+            {searchTerm && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchTerm('');
+                  setCurrentPage(1);
+                }}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#77766F] hover:text-[#171717] cursor-pointer"
+                title="Limpar busca"
+              >
+                <span className="material-symbols-outlined text-[16px]">close</span>
+              </button>
+            )}
           </div>
 
           {/* Filtro Indústria */}
@@ -680,7 +720,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
                 setSelectedIndustria(e.target.value);
                 setCurrentPage(1);
               }}
-              className="w-full h-9 px-2 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-500"
+              className="w-full h-9 px-2 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-600 cursor-pointer"
             >
               <option value="TODAS">Indústria: Todas</option>
               {availableIndustrias.map(([code, name]) => (
@@ -697,7 +737,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
                 setSelectedLoja(e.target.value);
                 setCurrentPage(1);
               }}
-              className="w-full h-9 px-2 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-500"
+              className="w-full h-9 px-2 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-600 cursor-pointer"
             >
               <option value="TODAS">Loja: Todas</option>
               {availableLojas.map(([code, name]) => (
@@ -714,7 +754,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
                 setSelectedPromotor(e.target.value);
                 setCurrentPage(1);
               }}
-              className="w-full h-9 px-2 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-500"
+              className="w-full h-9 px-2 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-600 cursor-pointer"
             >
               <option value="TODOS">Promotor: Todos</option>
               {availablePromotores.map(([mat, name]) => (
@@ -731,7 +771,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
                 setSelectedUF(e.target.value);
                 setCurrentPage(1);
               }}
-              className="w-full h-9 px-2 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-500"
+              className="w-full h-9 px-2 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-600 cursor-pointer"
             >
               <option value="TODAS">UF: Todas</option>
               {availableUFs.map((uf) => (
@@ -750,7 +790,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
                 setSelectedFrequencia(e.target.value);
                 setCurrentPage(1);
               }}
-              className="w-full h-9 px-2 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-500"
+              className="w-full h-9 px-2 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-600 cursor-pointer"
             >
               <option value="TODAS">Frequência: Todas</option>
               <option value="SEMANAL">Semanal</option>
@@ -765,7 +805,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
                 setSelectedDay(e.target.value);
                 setCurrentPage(1);
               }}
-              className="w-full h-9 px-2 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-500"
+              className="w-full h-9 px-2 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-600 cursor-pointer"
             >
               <option value="TODOS">Dia: Qualquer dia</option>
               <option value="segunda">Segunda-feira</option>
@@ -781,8 +821,12 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
           <div className="lg:col-span-3">
             <select
               value={groupBy}
-              onChange={(e) => setGroupBy(e.target.value as GroupByOption)}
-              className="w-full h-9 px-2 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-amber-300 font-bold focus:outline-none focus:border-amber-500"
+              onChange={(e) => {
+                setGroupBy(e.target.value as GroupByOption);
+                setCollapsedGroups({});
+                setCurrentPage(1);
+              }}
+              className="w-full h-9 px-2 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] font-bold focus:outline-none focus:border-amber-600 cursor-pointer"
             >
               <option value="none">Agrupar por: Nenhum</option>
               <option value="promotor">Agrupar por Promotor</option>
@@ -795,8 +839,11 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
           <div className="lg:col-span-3">
             <select
               value={sortBy}
-              onChange={(e) => setSortBy(e.target.value as SortByOption)}
-              className="w-full h-9 px-2 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-500"
+              onChange={(e) => {
+                setSortBy(e.target.value as SortByOption);
+                setCurrentPage(1);
+              }}
+              className="w-full h-9 px-2 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-600 cursor-pointer"
             >
               <option value="promotor">Ordenar por: Promotor</option>
               <option value="industria">Ordenar por: Indústria</option>
@@ -864,184 +911,386 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
           </div>
         )}
 
-        {/* TABELA / GRADE COM STICKY HEADER E STICKY FIRST COLUMN */}
+        {/* TABELA / GRADE COM DESIGN COMPACTO E RESPONSIVO */}
         {!loading && !error && filteredAndSortedRoutes.length > 0 && (
           <div className="space-y-6">
-            {Object.entries(groupedRoutes).map(([groupTitle, routeList]) => (
-              <div key={groupTitle} className="space-y-2">
+            {/* BARRA SUPERIOR DE RESUMO DA PÁGINA E SELETOR DE ITENS POR PÁGINA */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs font-mono text-[#5F5F5F] px-1 pb-1 border-b border-[#EAE8E2]">
+              <div className="flex items-center gap-2">
+                <span>
+                  Exibindo <strong className="text-[#171717]">{paginatedRoutes.length}</strong> de <strong className="text-[#171717]">{totalItems}</strong> rotas
+                  {searchTerm && ` (filtrado por "${searchTerm}")`}
+                </span>
                 {groupBy !== 'none' && (
-                  <div className="px-3 py-1.5 rounded-lg bg-[#EAE8E2] border border-[#CFCDC5] text-xs font-bold font-mono text-amber-300 flex items-center gap-2">
-                    <span className="material-symbols-outlined text-base">folder_open</span>
-                    <span>{groupTitle} ({routeList.length})</span>
+                  <span className="text-amber-800 font-semibold bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">
+                    Agrupado por: {groupBy.toUpperCase()}
+                  </span>
+                )}
+              </div>
+
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-1.5">
+                  <span>Itens por pág:</span>
+                  <select
+                    value={pageSize}
+                    onChange={(e) => {
+                      setPageSize(Number(e.target.value));
+                      setCurrentPage(1);
+                    }}
+                    className="bg-[#EAE8E2] border border-[#CFCDC5] rounded px-2 py-1 text-xs text-[#171717] focus:outline-none focus:border-amber-600 cursor-pointer"
+                  >
+                    <option value={25}>25</option>
+                    <option value={50}>50</option>
+                    <option value={100}>100</option>
+                  </select>
+                </div>
+
+                {totalPages > 1 && (
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      disabled={currentPage <= 1}
+                      onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                      className="px-2 py-1 rounded bg-[#EAE8E2] border border-[#CFCDC5] text-[#171717] hover:bg-[#D5D3CB] disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer text-xs"
+                    >
+                      Anterior
+                    </button>
+                    <span>
+                      Pág. {currentPage} de {totalPages}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={currentPage >= totalPages}
+                      onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                      className="px-2 py-1 rounded bg-[#EAE8E2] border border-[#CFCDC5] text-[#171717] hover:bg-[#D5D3CB] disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer text-xs"
+                    >
+                      Próxima
+                    </button>
                   </div>
                 )}
+              </div>
+            </div>
 
-                <div className="overflow-x-auto max-h-[600px] overflow-y-auto rounded-xl border border-[#CFCDC5]">
-                  <table className="w-full text-left text-xs border-collapse font-mono">
-                    <thead className="sticky top-0 bg-[#E3E1DA] z-20 shadow-xs">
-                      <tr className="border-b border-[#CFCDC5] text-[11px] font-bold text-[#171717] uppercase tracking-wider">
-                        <th className="py-3 px-4 sticky left-0 bg-[#E3E1DA] z-30 min-w-[140px] border-r border-[#CFCDC5]">
-                          Rota / Code
-                        </th>
-                        <th className="py-3 px-4 min-w-[160px]">Indústria</th>
-                        <th className="py-3 px-4 min-w-[180px]">Loja / PDV</th>
-                        <th className="py-3 px-4 min-w-[60px]">UF</th>
-                        <th className="py-3 px-4 min-w-[180px]">Promotor</th>
-                        <th className="py-3 px-4 min-w-[110px]">Frequência</th>
-                        {/* GRADE SEMANAL DE SEGUNDA A DOMINGO */}
-                        <th className="py-3 px-2 text-center w-12 bg-[#DCD9D0]">SEG</th>
-                        <th className="py-3 px-2 text-center w-12 bg-[#DCD9D0]">TER</th>
-                        <th className="py-3 px-2 text-center w-12 bg-[#DCD9D0]">QUA</th>
-                        <th className="py-3 px-2 text-center w-12 bg-[#DCD9D0]">QUI</th>
-                        <th className="py-3 px-2 text-center w-12 bg-[#DCD9D0]">SEX</th>
-                        <th className="py-3 px-2 text-center w-12 bg-[#F5EED9] text-[#986000]">SÁB</th>
-                        <th className="py-3 px-2 text-center w-12 bg-[#FCE8E8] text-[#C62828]">DOM</th>
-                        <th className="py-3 px-4 text-right min-w-[90px]">Ações</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-[#CFCDC5] text-[#222222]">
-                      {routeList.map((r) => {
-                        const hasNoDays =
-                          !r.segunda && !r.terca && !r.quarta && !r.quinta && !r.sexta && !r.sabado && !r.domingo;
-                        const missingRel = !r.industria || !r.loja || !r.promotor;
-                        const ufVal = r.uf || r.loja?.uf || '-';
+            {Object.entries(paginatedGroupedRoutes).map(([groupTitle, routeList]) => {
+              const isCollapsed = Boolean(collapsedGroups[groupTitle]);
+              const totalInGroup = groupTotals[groupTitle] ?? routeList.length;
 
-                        return (
-                          <tr
-                            key={r.id}
-                            className={`hover:bg-[#EAE8E1] transition-colors ${
-                              hasNoDays ? 'bg-rose-950/20 border-l-4 border-l-rose-500' : ''
-                            } ${missingRel ? 'bg-amber-950/10' : ''}`}
-                          >
-                            {/* COLUNA FIXA DA ROTA */}
-                            <td className="py-3 px-4 sticky left-0 bg-[#F7F6F2] z-10 font-bold border-r border-[#CFCDC5]">
-                              <div className="text-amber-400 flex items-center gap-1">
-                                {r.codigo_rota}
-                                {hasNoDays && (
-                                  <span className="material-symbols-outlined text-rose-400 text-xs" title="Nenhum dia marcado!">
-                                    warning
-                                  </span>
-                                )}
-                                {missingRel && (
-                                  <span className="material-symbols-outlined text-amber-400 text-xs" title="Registro relacionado ausente no cadastro!">
-                                    link_off
-                                  </span>
-                                )}
-                              </div>
-                            </td>
+              return (
+                <div key={groupTitle} className="space-y-2">
+                  {/* CABEÇALHO DO GRUPO (EXPANSÍVEL / RECOLHÍVEL COM CONTRASTE ESCURO) */}
+                  {groupBy !== 'none' && (
+                    <div
+                      onClick={() =>
+                        setCollapsedGroups((prev) => ({
+                          ...prev,
+                          [groupTitle]: !prev[groupTitle]
+                        }))
+                      }
+                      className="px-3.5 py-2 rounded-xl bg-[#EAE8E2] hover:bg-[#E2DFD7] border border-[#CFCDC5] text-xs font-bold font-mono text-[#171717] flex items-center justify-between cursor-pointer transition-colors shadow-xs"
+                      title={isCollapsed ? 'Clique para expandir o grupo' : 'Clique para recolher o grupo'}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="material-symbols-outlined text-[18px] text-amber-700">
+                          {isCollapsed ? 'folder' : 'folder_open'}
+                        </span>
+                        <span className="tracking-tight uppercase">
+                          {groupTitle} — <span className="text-amber-800 font-extrabold">{totalInGroup} {totalInGroup === 1 ? 'ROTA' : 'ROTAS'}</span>
+                        </span>
+                        {routeList.length < totalInGroup && (
+                          <span className="text-[11px] font-normal text-[#5F5F5F]">
+                            ({routeList.length} nesta página)
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1 text-[#5F5F5F]">
+                        <span className="text-[11px] font-sans font-normal hidden sm:inline">
+                          {isCollapsed ? 'Expandir' : 'Recolher'}
+                        </span>
+                        <span className="material-symbols-outlined text-[18px]">
+                          {isCollapsed ? 'expand_more' : 'expand_less'}
+                        </span>
+                      </div>
+                    </div>
+                  )}
 
-                            {/* Indústria */}
-                            <td className="py-3 px-4">
-                              <div className="font-bold text-[#171717] truncate max-w-[150px]" title={r.industria?.nome || r.industria_codigo}>
-                                {r.industria?.nome || <span className="text-amber-400 italic">{r.industria_codigo} (Não achado)</span>}
-                              </div>
-                              <div className="text-[10px] text-[#5F5F5F]">{r.industria_codigo}</div>
-                            </td>
+                  {!isCollapsed && (
+                    <>
+                      {/* VISUALIZAÇÃO EM GRADE DESKTOP (A PARTIR DE MD: 768PX) */}
+                      <div className="hidden md:block overflow-x-auto rounded-xl border border-[#CFCDC5]">
+                        <table className="w-full text-left text-xs border-collapse font-sans table-fixed">
+                          <thead className="bg-[#E3E1DA]">
+                            <tr className="border-b border-[#CFCDC5] text-[11px] font-bold text-[#171717] uppercase tracking-wider font-mono">
+                              <th className="py-2.5 px-3 w-[20%]">Indústria</th>
+                              <th className="py-2.5 px-3 w-[24%]">Loja / PDV</th>
+                              <th className="py-2.5 px-2 w-[4%] text-center">UF</th>
+                              <th className="py-2.5 px-3 w-[22%]">Promotor</th>
+                              <th className="py-2.5 px-2 w-[9%] text-center">Frequência</th>
+                              {/* GRADE SEMANAL DE SEGUNDA A DOMINGO */}
+                              <th className="py-2 px-1 text-center w-[2.7%] bg-[#DCD9D0]">SEG</th>
+                              <th className="py-2 px-1 text-center w-[2.7%] bg-[#DCD9D0]">TER</th>
+                              <th className="py-2 px-1 text-center w-[2.7%] bg-[#DCD9D0]">QUA</th>
+                              <th className="py-2 px-1 text-center w-[2.7%] bg-[#DCD9D0]">QUI</th>
+                              <th className="py-2 px-1 text-center w-[2.7%] bg-[#DCD9D0]">SEX</th>
+                              <th className="py-2 px-1 text-center w-[2.7%] bg-[#F5EED9] text-[#986000]">SÁB</th>
+                              <th className="py-2 px-1 text-center w-[2.7%] bg-[#FCE8E8] text-[#C62828]">DOM</th>
+                              <th className="py-2.5 px-2 text-right w-[6%]">Ações</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-[#CFCDC5] bg-[#F7F6F2]">
+                            {routeList.map((r) => {
+                              const hasNoDays =
+                                !r.segunda && !r.terca && !r.quarta && !r.quinta && !r.sexta && !r.sabado && !r.domingo;
+                              const missingRel = !r.industria || !r.loja || !r.promotor;
+                              const ufVal = r.uf || r.loja?.uf || '-';
 
-                            {/* Loja */}
-                            <td className="py-3 px-4">
-                              <div className="font-bold text-[#171717] truncate max-w-[170px]" title={r.loja?.nome || r.loja_codigo}>
-                                {r.loja?.nome || <span className="text-amber-400 italic">{r.loja_codigo} (Não achado)</span>}
-                              </div>
-                              <div className="text-[10px] text-[#5F5F5F]">{r.loja_codigo}</div>
-                            </td>
-
-                            {/* UF */}
-                            <td className="py-3 px-4 font-bold text-[#222222]">{ufVal}</td>
-
-                            {/* Promotor */}
-                            <td className="py-3 px-4">
-                              <div className="font-bold text-[#171717] truncate max-w-[170px]" title={r.promotor?.nome || r.promotor_matricula}>
-                                {r.promotor?.nome || <span className="text-[#986000] italic">{r.promotor_matricula} (Não achado)</span>}
-                              </div>
-                              <div className="text-[10px] text-[#5F5F5F]">Mat: {r.promotor_matricula}</div>
-                            </td>
-
-                            {/* Frequência */}
-                            <td className="py-3 px-4">
-                              <span
-                                className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
-                                  r.frequencia === 'SEMANAL'
-                                    ? 'bg-cyan-50 text-[#087F9C] border-cyan-200'
-                                    : 'bg-purple-50 text-[#7E22CE] border-purple-200'
-                                }`}
-                              >
-                                {r.frequencia}
-                              </span>
-                            </td>
-
-                            {/* GRADE SEMANAL DE 7 DIAS */}
-                            {[
-                              { dayKey: 'segunda', label: 'SEG' },
-                              { dayKey: 'terca', label: 'TER' },
-                              { dayKey: 'quarta', label: 'QUA' },
-                              { dayKey: 'quinta', label: 'QUI' },
-                              { dayKey: 'sexta', label: 'SEX' },
-                              { dayKey: 'sabado', label: 'SÁB' },
-                              { dayKey: 'domingo', label: 'DOM' }
-                            ].map((day) => {
-                              const marked = Boolean(r[day.dayKey as keyof RouteItem]);
                               return (
-                                <td key={day.dayKey} className="py-3 px-2 text-center border-l border-[#CFCDC5]">
-                                  {marked ? (
-                                    <div className="w-6 h-6 rounded-md bg-emerald-100 border border-emerald-300 text-[#16794F] flex items-center justify-center mx-auto font-bold">
-                                      <span className="material-symbols-outlined text-sm font-black">check</span>
+                                <tr
+                                  key={r.id}
+                                  className={`hover:bg-[#EAE8E2] transition-colors ${
+                                    hasNoDays ? 'bg-rose-500/10 border-l-4 border-l-rose-500' : ''
+                                  } ${missingRel ? 'bg-amber-500/10' : ''}`}
+                                >
+                                  {/* Indústria (com truncamento e código secundário) */}
+                                  <td className="py-2 px-3">
+                                    <div
+                                      className="font-bold text-[#171717] truncate"
+                                      title={`${r.industria?.nome || r.industria_codigo} (${r.industria_codigo})`}
+                                    >
+                                      {r.industria?.nome || (
+                                        <span className="text-amber-700 italic">{r.industria_codigo}</span>
+                                      )}
                                     </div>
-                                  ) : (
-                                    <span className="text-[#AAA79E] font-bold">—</span>
-                                  )}
-                                </td>
+                                    <span className="text-[10px] text-[#5F5F5F] font-mono block">
+                                      {r.industria_codigo}
+                                    </span>
+                                  </td>
+
+                                  {/* Loja / PDV (com truncamento e código secundário) */}
+                                  <td className="py-2 px-3">
+                                    <div
+                                      className="font-bold text-[#171717] truncate"
+                                      title={`${r.loja?.nome || r.loja_codigo} (${r.loja_codigo})`}
+                                    >
+                                      {r.loja?.nome || (
+                                        <span className="text-amber-700 italic">{r.loja_codigo}</span>
+                                      )}
+                                    </div>
+                                    <span className="text-[10px] text-[#5F5F5F] font-mono block">
+                                      {r.loja_codigo}
+                                    </span>
+                                  </td>
+
+                                  {/* UF */}
+                                  <td className="py-2 px-2 font-mono font-bold text-[#171717] text-center">
+                                    {ufVal}
+                                  </td>
+
+                                  {/* Promotor */}
+                                  <td className="py-2 px-3">
+                                    <div
+                                      className="font-bold text-[#171717] truncate"
+                                      title={`${r.promotor?.nome || r.promotor_matricula} (${r.promotor_matricula})`}
+                                    >
+                                      {r.promotor?.nome || (
+                                        <span className="text-[#986000] italic">{r.promotor_matricula}</span>
+                                      )}
+                                    </div>
+                                    <span className="text-[10px] text-[#5F5F5F] font-mono block">
+                                      Mat: {r.promotor_matricula}
+                                    </span>
+                                  </td>
+
+                                  {/* Frequência com StatusBadge */}
+                                  <td className="py-2 px-2 text-center">
+                                    <StatusBadge
+                                      status={r.frequencia}
+                                      variant={r.frequencia === 'SEMANAL' ? 'semanal' : 'quinzenal'}
+                                      className="text-[10px] px-1.5 py-0.5 uppercase font-mono font-bold"
+                                    />
+                                  </td>
+
+                                  {/* GRADE SEMANAL DE 7 DIAS */}
+                                  {[
+                                    { dayKey: 'segunda', label: 'SEG' },
+                                    { dayKey: 'terca', label: 'TER' },
+                                    { dayKey: 'quarta', label: 'QUA' },
+                                    { dayKey: 'quinta', label: 'QUI' },
+                                    { dayKey: 'sexta', label: 'SEX' },
+                                    { dayKey: 'sabado', label: 'SÁB' },
+                                    { dayKey: 'domingo', label: 'DOM' }
+                                  ].map((day) => {
+                                    const marked = Boolean(r[day.dayKey as keyof RouteItem]);
+                                    return (
+                                      <td key={day.dayKey} className="py-2 px-1 text-center border-l border-[#CFCDC5]">
+                                        {marked ? (
+                                          <div
+                                            className="w-5 h-5 rounded bg-emerald-100 border border-emerald-300 text-[#16794F] flex items-center justify-center mx-auto"
+                                            title={`Visita agendada na ${day.label}`}
+                                          >
+                                            <span className="material-symbols-outlined text-[14px] font-black">
+                                              check
+                                            </span>
+                                          </div>
+                                        ) : (
+                                          <span className="text-[#AAA79E] font-bold text-xs">—</span>
+                                        )}
+                                      </td>
+                                    );
+                                  })}
+
+                                  {/* Ações */}
+                                  <td className="py-2 px-2 text-right">
+                                    <div className="flex items-center justify-end gap-1">
+                                      <button
+                                        type="button"
+                                        onClick={() => setViewingRoute(r)}
+                                        className="p-1 rounded-md bg-[#EAE8E2] hover:bg-[#D5D3CB] text-[#171717] border border-[#CFCDC5] cursor-pointer transition-colors"
+                                        title="Ver Ficha Completa da Rota"
+                                        aria-label="Ver detalhes da rota"
+                                      >
+                                        <span className="material-symbols-outlined text-[15px]">visibility</span>
+                                      </button>
+
+                                      {canEdit && (
+                                        <button
+                                          type="button"
+                                          onClick={() => setEditingRoute({ ...r })}
+                                          className="p-1 rounded-md bg-amber-500/10 hover:bg-amber-500/20 text-amber-800 border border-amber-500/30 cursor-pointer transition-colors"
+                                          title="Editar Escala"
+                                          aria-label="Editar escala da rota"
+                                        >
+                                          <span className="material-symbols-outlined text-[15px]">edit</span>
+                                        </button>
+                                      )}
+                                    </div>
+                                  </td>
+                                </tr>
                               );
                             })}
+                          </tbody>
+                        </table>
+                      </div>
 
-                            {/* Ações */}
-                            <td className="py-3 px-4 text-right space-x-1.5">
-                              <button
-                                onClick={() => setViewingRoute(r)}
-                                className="p-1.5 rounded-lg bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] hover:text-white border border-[#CFCDC5] cursor-pointer"
-                                title="Ver Detalhes Operacionais"
-                              >
-                                <span className="material-symbols-outlined text-[16px]">visibility</span>
-                              </button>
+                      {/* VISUALIZAÇÃO ADAPTATIVA MOBILE/TABLET COMPACTA (< 768PX) */}
+                      <div className="md:hidden space-y-3">
+                        {routeList.map((r) => {
+                          const ufVal = r.uf || r.loja?.uf || '-';
+                          const hasNoDays =
+                            !r.segunda && !r.terca && !r.quarta && !r.quinta && !r.sexta && !r.sabado && !r.domingo;
 
-                              {canEdit && (
-                                <button
-                                  onClick={() => setEditingRoute({ ...r })}
-                                  className="p-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 cursor-pointer"
-                                  title="Editar Escala"
-                                >
-                                  <span className="material-symbols-outlined text-[16px]">edit</span>
-                                </button>
-                              )}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
+                          return (
+                            <div
+                              key={r.id}
+                              className={`p-3.5 rounded-xl border border-[#CFCDC5] bg-[#F7F6F2] shadow-xs space-y-3 ${
+                                hasNoDays ? 'border-l-4 border-l-rose-500' : ''
+                              }`}
+                            >
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="space-y-0.5">
+                                  <div className="font-bold text-[#171717] text-sm leading-tight">
+                                    {r.loja?.nome || r.loja_codigo}
+                                  </div>
+                                  <div className="text-xs text-[#5F5F5F] font-mono">
+                                    {r.industria?.nome || r.industria_codigo} • UF: {ufVal}
+                                  </div>
+                                </div>
+                                <StatusBadge
+                                  status={r.frequencia}
+                                  variant={r.frequencia === 'SEMANAL' ? 'semanal' : 'quinzenal'}
+                                  className="text-[10px] px-2 py-0.5 font-mono"
+                                />
+                              </div>
+
+                              <div className="text-xs text-[#171717] font-mono flex items-center justify-between border-t border-[#EAE8E2] pt-2">
+                                <div className="flex items-center gap-1.5 truncate">
+                                  <span className="material-symbols-outlined text-[16px] text-amber-700">person</span>
+                                  <span className="truncate">{r.promotor?.nome || r.promotor_matricula}</span>
+                                </div>
+                                <div className="flex items-center gap-1 shrink-0">
+                                  <button
+                                    type="button"
+                                    onClick={() => setViewingRoute(r)}
+                                    className="p-1 rounded bg-[#EAE8E2] border border-[#CFCDC5] text-[#171717] cursor-pointer"
+                                    title="Ver Detalhes"
+                                  >
+                                    <span className="material-symbols-outlined text-[16px]">visibility</span>
+                                  </button>
+                                  {canEdit && (
+                                    <button
+                                      type="button"
+                                      onClick={() => setEditingRoute({ ...r })}
+                                      className="p-1 rounded bg-amber-500/10 border border-amber-500/30 text-amber-800 cursor-pointer"
+                                      title="Editar"
+                                    >
+                                      <span className="material-symbols-outlined text-[16px]">edit</span>
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* GRADE DIÁRIA COMPACTA EM CHIPS */}
+                              <div className="grid grid-cols-7 gap-1 font-mono text-[10px] text-center pt-1 border-t border-[#EAE8E2]">
+                                {[
+                                  { dayKey: 'segunda', label: 'SEG' },
+                                  { dayKey: 'terca', label: 'TER' },
+                                  { dayKey: 'quarta', label: 'QUA' },
+                                  { dayKey: 'quinta', label: 'QUI' },
+                                  { dayKey: 'sexta', label: 'SEX' },
+                                  { dayKey: 'sabado', label: 'SÁB' },
+                                  { dayKey: 'domingo', label: 'DOM' }
+                                ].map((day) => {
+                                  const marked = Boolean(r[day.dayKey as keyof RouteItem]);
+                                  return (
+                                    <div
+                                      key={day.dayKey}
+                                      className={`py-1 rounded flex flex-col items-center justify-center ${
+                                        marked
+                                          ? 'bg-emerald-100 border border-emerald-300 text-[#16794F] font-bold'
+                                          : 'bg-[#EAE8E2] text-[#AAA79E]'
+                                      }`}
+                                    >
+                                      <span className="text-[9px]">{day.label}</span>
+                                      <span className="material-symbols-outlined text-[12px] leading-none mt-0.5">
+                                        {marked ? 'check' : 'remove'}
+                                      </span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </>
+                  )}
                 </div>
-              </div>
-            ))}
+              );
+            })}
 
-            {/* CONTROLES DE PAGINAÇÃO */}
-            {groupBy === 'none' && totalPages > 1 && (
-              <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-4 border-t border-[#CFCDC5] font-mono text-xs text-[#77766F]">
+            {/* CONTROLES DE PAGINAÇÃO NO RODAPÉ */}
+            {totalPages > 1 && (
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-4 border-t border-[#CFCDC5] font-mono text-xs text-[#5F5F5F]">
                 <div>
-                  Exibindo página <strong className="text-[#171717]">{currentPage}</strong> de <strong className="text-[#171717]">{totalPages}</strong> ({totalItems} rotas no total)
+                  Mostrando página <strong className="text-[#171717]">{currentPage}</strong> de <strong className="text-[#171717]">{totalPages}</strong> ({totalItems} rotas no total)
                 </div>
 
                 <div className="flex items-center gap-2">
                   <button
-                    disabled={currentPage === 1}
+                    type="button"
+                    disabled={currentPage <= 1}
                     onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                    className="px-3 py-1.5 rounded-lg bg-[#EAE8E2] border border-[#CFCDC5] text-[#171717] hover:text-white disabled:opacity-40 cursor-pointer"
+                    className="px-3 py-1.5 rounded-lg bg-[#EAE8E2] border border-[#CFCDC5] text-[#171717] hover:bg-[#D5D3CB] disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                   >
                     Anterior
                   </button>
+                  <span className="px-2">
+                    {currentPage} / {totalPages}
+                  </span>
                   <button
+                    type="button"
                     disabled={currentPage >= totalPages}
                     onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                    className="px-3 py-1.5 rounded-lg bg-[#EAE8E2] border border-[#CFCDC5] text-[#171717] hover:text-white disabled:opacity-40 cursor-pointer"
+                    className="px-3 py-1.5 rounded-lg bg-[#EAE8E2] border border-[#CFCDC5] text-[#171717] hover:bg-[#D5D3CB] disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                   >
                     Próxima
                   </button>
@@ -1058,44 +1307,57 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
           <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl max-w-xl w-full p-6 shadow-2xl space-y-6">
             <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-4">
               <div className="flex items-center gap-2">
-                <span className="material-symbols-outlined text-amber-400 text-xl">alt_route</span>
-                <h3 className="text-base font-bold text-[#171717] font-mono">
-                  Ficha Operacional da Rota {viewingRoute.codigo_rota}
-                </h3>
+                <span className="material-symbols-outlined text-amber-700 text-xl">alt_route</span>
+                <div>
+                  <h3 className="text-base font-bold text-[#171717] font-mono">
+                    Ficha Operacional da Rota
+                  </h3>
+                  <span className="text-xs font-mono text-[#5F5F5F]">Código Interno: {viewingRoute.codigo_rota}</span>
+                </div>
               </div>
-              <button onClick={() => setViewingRoute(null)} className="text-[#77766F] hover:text-white">
+              <button
+                type="button"
+                onClick={() => setViewingRoute(null)}
+                className="text-[#77766F] hover:text-[#171717] cursor-pointer"
+              >
                 <span className="material-symbols-outlined">close</span>
               </button>
             </div>
 
             <div className="grid grid-cols-2 gap-4 text-xs font-mono">
               <div className="p-3 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] space-y-1">
-                <span className="text-[#5F5F5F] block text-[10px]">INDÚSTRIA</span>
-                <span className="text-white font-bold block">{viewingRoute.industria?.nome || viewingRoute.industria_codigo}</span>
-                <span className="text-amber-400 block text-[10px]">{viewingRoute.industria_codigo}</span>
+                <span className="text-[#5F5F5F] block text-[10px] font-bold uppercase">INDÚSTRIA</span>
+                <span className="text-[#171717] font-bold block">{viewingRoute.industria?.nome || viewingRoute.industria_codigo}</span>
+                <span className="text-amber-800 block text-[10px]">Código: {viewingRoute.industria_codigo}</span>
               </div>
 
               <div className="p-3 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] space-y-1">
-                <span className="text-[#5F5F5F] block text-[10px]">LOJA / PDV</span>
-                <span className="text-white font-bold block">{viewingRoute.loja?.nome || viewingRoute.loja_codigo}</span>
-                <span className="text-cyan-400 block text-[10px]">Código: {viewingRoute.loja_codigo} • UF: {viewingRoute.uf || viewingRoute.loja?.uf || '-'}</span>
+                <span className="text-[#5F5F5F] block text-[10px] font-bold uppercase">LOJA / PDV</span>
+                <span className="text-[#171717] font-bold block">{viewingRoute.loja?.nome || viewingRoute.loja_codigo}</span>
+                <span className="text-cyan-800 block text-[10px]">Código: {viewingRoute.loja_codigo} • UF: {viewingRoute.uf || viewingRoute.loja?.uf || '-'}</span>
               </div>
 
               <div className="p-3 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] space-y-1">
-                <span className="text-[#5F5F5F] block text-[10px]">PROMOTOR RESPONSÁVEL</span>
-                <span className="text-white font-bold block">{viewingRoute.promotor?.nome || viewingRoute.promotor_matricula}</span>
-                <span className="text-purple-400 block text-[10px]">Matrícula: {viewingRoute.promotor_matricula}</span>
+                <span className="text-[#5F5F5F] block text-[10px] font-bold uppercase">PROMOTOR RESPONSÁVEL</span>
+                <span className="text-[#171717] font-bold block">{viewingRoute.promotor?.nome || viewingRoute.promotor_matricula}</span>
+                <span className="text-purple-800 block text-[10px]">Matrícula: {viewingRoute.promotor_matricula}</span>
               </div>
 
               <div className="p-3 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] space-y-1">
-                <span className="text-[#5F5F5F] block text-[10px]">FREQUÊNCIA DE VISITA</span>
-                <span className="text-emerald-400 font-bold block uppercase">{viewingRoute.frequencia}</span>
+                <span className="text-[#5F5F5F] block text-[10px] font-bold uppercase">FREQUÊNCIA DE VISITA</span>
+                <div className="pt-0.5">
+                  <StatusBadge
+                    status={viewingRoute.frequencia}
+                    variant={viewingRoute.frequencia === 'SEMANAL' ? 'semanal' : 'quinzenal'}
+                    className="text-xs px-2 py-0.5 uppercase font-mono font-bold"
+                  />
+                </div>
               </div>
             </div>
 
             {/* Escala semanal em 7 blocos */}
             <div className="space-y-2 font-mono">
-              <span className="text-xs font-bold text-[#77766F] uppercase tracking-wider block">
+              <span className="text-xs font-bold text-[#171717] uppercase tracking-wider block">
                 Escala Semanal de Visitas:
               </span>
               <div className="grid grid-cols-7 gap-1.5 text-center">
@@ -1114,8 +1376,8 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
                       key={day.key}
                       className={`p-2.5 rounded-xl border flex flex-col items-center justify-center space-y-1 ${
                         marked
-                          ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300 font-bold'
-                          : 'bg-[#EAE8E2] border-[#CFCDC5] text-slate-600'
+                          ? 'bg-emerald-100 border-emerald-300 text-[#16794F] font-bold'
+                          : 'bg-[#EAE8E2] border-[#CFCDC5] text-[#AAA79E]'
                       }`}
                     >
                       <span className="text-[10px]">{day.label}</span>
@@ -1137,8 +1399,9 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
 
             <div className="pt-3 border-t border-[#CFCDC5] flex justify-end">
               <button
+                type="button"
                 onClick={() => setViewingRoute(null)}
-                className="px-5 py-2 rounded-xl bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] border border-[#CFCDC5] text-xs font-semibold cursor-pointer"
+                className="px-5 py-2 rounded-xl bg-[#EAE8E2] hover:bg-[#D5D3CB] text-[#171717] border border-[#CFCDC5] text-xs font-semibold cursor-pointer transition-colors"
               >
                 Fechar
               </button>
@@ -1153,12 +1416,19 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
           <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-6">
             <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-4">
               <div className="flex items-center gap-2">
-                <span className="material-symbols-outlined text-amber-400 text-xl">edit</span>
-                <h3 className="text-base font-bold text-[#171717] font-mono">
-                  Editar Escala da Rota {editingRoute.codigo_rota}
-                </h3>
+                <span className="material-symbols-outlined text-amber-700 text-xl">edit</span>
+                <div>
+                  <h3 className="text-base font-bold text-[#171717] font-mono">
+                    Editar Escala da Rota
+                  </h3>
+                  <span className="text-xs font-mono text-[#5F5F5F]">Código: {editingRoute.codigo_rota}</span>
+                </div>
               </div>
-              <button onClick={() => setEditingRoute(null)} className="text-[#77766F] hover:text-white">
+              <button
+                type="button"
+                onClick={() => setEditingRoute(null)}
+                className="text-[#77766F] hover:text-[#171717] cursor-pointer"
+              >
                 <span className="material-symbols-outlined">close</span>
               </button>
             </div>
@@ -1167,17 +1437,17 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
               <div className="p-3 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] text-[#171717] space-y-1">
                 <div><span className="text-[#5F5F5F]">Indústria:</span> <strong className="text-[#171717]">{editingRoute.industria?.nome || editingRoute.industria_codigo}</strong></div>
                 <div><span className="text-[#5F5F5F]">Loja:</span> <strong className="text-[#171717]">{editingRoute.loja?.nome || editingRoute.loja_codigo}</strong></div>
-                <div><span className="text-[#5F5F5F]">Promotor:</span> <strong className="text-cyan-300">{editingRoute.promotor?.nome || editingRoute.promotor_matricula}</strong></div>
+                <div><span className="text-[#5F5F5F]">Promotor:</span> <strong className="text-amber-800">{editingRoute.promotor?.nome || editingRoute.promotor_matricula}</strong></div>
               </div>
 
               <div>
-                <label className="text-[#171717] block mb-1">FREQUÊNCIA DE VISITA</label>
+                <label className="text-[#171717] block mb-1 font-bold">FREQUÊNCIA DE VISITA</label>
                 <select
                   value={editingRoute.frequencia}
                   onChange={(e) =>
                     setEditingRoute({ ...editingRoute, frequencia: e.target.value as any })
                   }
-                  className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-500"
+                  className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-600 cursor-pointer"
                 >
                   <option value="SEMANAL">SEMANAL</option>
                   <option value="QUINZENAL">QUINZENAL</option>
@@ -1205,8 +1475,8 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
                         key={day.key}
                         className={`p-2.5 rounded-xl border flex items-center gap-2 cursor-pointer transition-colors ${
                           checked
-                            ? 'bg-amber-500/20 border-amber-500/50 text-amber-300 font-bold'
-                            : 'bg-[#EAE8E2] border-[#CFCDC5] text-[#77766F] hover:text-slate-200'
+                            ? 'bg-amber-500/20 border-amber-500/50 text-amber-900 font-bold'
+                            : 'bg-[#EAE8E2] border-[#CFCDC5] text-[#5F5F5F] hover:text-[#171717]'
                         }`}
                       >
                         <input
@@ -1215,7 +1485,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
                           onChange={(e) =>
                             setEditingRoute({ ...editingRoute, [day.key]: e.target.checked })
                           }
-                          className="rounded border-[#CFCDC5] text-amber-500 focus:ring-amber-400 w-4 h-4"
+                          className="rounded border-[#CFCDC5] text-amber-600 focus:ring-amber-500 w-4 h-4 cursor-pointer"
                         />
                         <span>{day.label}</span>
                       </label>
@@ -1225,12 +1495,12 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
               </div>
 
               <div>
-                <label className="text-[#171717] block mb-1">OBSERVAÇÕES DA ESCALA</label>
+                <label className="text-[#171717] block mb-1 font-bold">OBSERVAÇÕES DA ESCALA</label>
                 <textarea
                   value={editingRoute.observacao || ''}
                   onChange={(e) => setEditingRoute({ ...editingRoute, observacao: e.target.value })}
                   placeholder="Observações da rota..."
-                  className="w-full p-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-500 h-20 resize-none"
+                  className="w-full p-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-600 h-20 resize-none"
                 />
               </div>
             </div>
@@ -1239,7 +1509,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
               <button
                 type="button"
                 onClick={() => setEditingRoute(null)}
-                className="px-5 py-2 rounded-xl bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] border border-[#CFCDC5] text-xs font-semibold cursor-pointer"
+                className="px-5 py-2 rounded-xl bg-[#EAE8E2] hover:bg-[#D5D3CB] text-[#171717] border border-[#CFCDC5] text-xs font-semibold cursor-pointer transition-colors"
               >
                 Cancelar
               </button>
@@ -1247,7 +1517,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
                 type="button"
                 onClick={handleSaveEdit}
                 disabled={saving}
-                className="px-5 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                className="px-5 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs flex items-center gap-2 cursor-pointer disabled:opacity-50 transition-colors shadow-xs"
               >
                 {saving ? (
                   <span>Salvando no Supabase...</span>
@@ -1272,28 +1542,32 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
           >
             <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-3">
               <h3 className="text-sm font-bold text-[#171717] font-mono flex items-center gap-2">
-                <span className="material-symbols-outlined text-amber-400">add</span>
+                <span className="material-symbols-outlined text-amber-700">add</span>
                 Cadastrar Nova Rota Fixa
               </h3>
-              <button type="button" onClick={() => setShowCreateModal(false)} className="text-[#77766F] hover:text-white">
+              <button
+                type="button"
+                onClick={() => setShowCreateModal(false)}
+                className="text-[#77766F] hover:text-[#171717] cursor-pointer"
+              >
                 <span className="material-symbols-outlined">close</span>
               </button>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs font-mono">
               <div className="sm:col-span-2">
-                <label className="text-[#171717] block mb-1">CÓDIGO DA ROTA (OPCIONAL)</label>
+                <label className="text-[#171717] block mb-1 font-bold">CÓDIGO DA ROTA (OPCIONAL)</label>
                 <input
                   type="text"
                   value={newRouteForm.codigo_rota}
                   onChange={(e) => setNewRouteForm({ ...newRouteForm, codigo_rota: e.target.value })}
                   placeholder="Ex: ROT-PRM-001 (Gerado automaticamente se vazio)"
-                  className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-500"
+                  className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-600"
                 />
               </div>
 
               <div>
-                <label htmlFor="new-route-industry" className="text-[#171717] block mb-1">INDÚSTRIA (*)</label>
+                <label htmlFor="new-route-industry" className="text-[#171717] block mb-1 font-bold">INDÚSTRIA (*)</label>
                 <SearchableSelect
                   id="new-route-industry"
                   required
@@ -1305,7 +1579,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
               </div>
 
               <div>
-                <label htmlFor="new-route-store" className="text-[#171717] block mb-1">LOJA / PDV (*)</label>
+                <label htmlFor="new-route-store" className="text-[#171717] block mb-1 font-bold">LOJA / PDV (*)</label>
                 <SearchableSelect
                   id="new-route-store"
                   required
@@ -1324,7 +1598,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
               </div>
 
               <div>
-                <label htmlFor="new-route-promoter" className="text-[#171717] block mb-1">PROMOTOR (*)</label>
+                <label htmlFor="new-route-promoter" className="text-[#171717] block mb-1 font-bold">PROMOTOR (*)</label>
                 <SearchableSelect
                   id="new-route-promoter"
                   required
@@ -1336,11 +1610,11 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
               </div>
 
               <div>
-                <label className="text-[#171717] block mb-1">FREQUÊNCIA (*)</label>
+                <label className="text-[#171717] block mb-1 font-bold">FREQUÊNCIA (*)</label>
                 <select
                   value={newRouteForm.frequencia}
                   onChange={(e) => setNewRouteForm({ ...newRouteForm, frequencia: e.target.value as any })}
-                  className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-500"
+                  className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-600 cursor-pointer"
                 >
                   <option value="SEMANAL">SEMANAL</option>
                   <option value="QUINZENAL">QUINZENAL</option>
@@ -1363,15 +1637,17 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
                     return (
                       <label
                         key={day.key}
-                        className={`p-2.5 rounded-xl border flex items-center gap-2 cursor-pointer ${
-                          checked ? 'bg-amber-500/20 border-amber-500/50 text-amber-300 font-bold' : 'bg-[#EAE8E2] border-[#CFCDC5] text-[#77766F]'
+                        className={`p-2.5 rounded-xl border flex items-center gap-2 cursor-pointer transition-colors ${
+                          checked
+                            ? 'bg-amber-500/20 border-amber-500/50 text-amber-900 font-bold'
+                            : 'bg-[#EAE8E2] border-[#CFCDC5] text-[#5F5F5F] hover:text-[#171717]'
                         }`}
                       >
                         <input
                           type="checkbox"
                           checked={checked}
                           onChange={(e) => setNewRouteForm({ ...newRouteForm, [day.key]: e.target.checked })}
-                          className="rounded border-[#CFCDC5] text-amber-500 focus:ring-amber-400 w-4 h-4"
+                          className="rounded border-[#CFCDC5] text-amber-600 focus:ring-amber-500 w-4 h-4 cursor-pointer"
                         />
                         <span>{day.label}</span>
                       </label>
@@ -1385,14 +1661,14 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
               <button
                 type="button"
                 onClick={() => setShowCreateModal(false)}
-                className="px-4 py-2 rounded-xl bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] border border-[#CFCDC5] text-xs font-semibold cursor-pointer"
+                className="px-4 py-2 rounded-xl bg-[#EAE8E2] hover:bg-[#D5D3CB] text-[#171717] border border-[#CFCDC5] text-xs font-semibold cursor-pointer transition-colors"
               >
                 Cancelar
               </button>
               <button
                 type="submit"
                 disabled={saving}
-                className="px-5 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                className="px-5 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs flex items-center gap-2 cursor-pointer disabled:opacity-50 transition-colors shadow-xs"
               >
                 {saving ? (
                   <span>Cadastrando...</span>

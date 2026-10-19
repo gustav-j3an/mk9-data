@@ -253,6 +253,11 @@ export interface Visit {
   industria_codigo: string;
   data_visita: string;
   started_at?: string | null;
+  gps_accuracy_meters?: number | null;
+  checkout_latitude?: number | null;
+  checkout_longitude?: number | null;
+  checkout_accuracy_meters?: number | null;
+  work_schedule_id?: string | null;
   completed_at?: string | null;
   latitude?: number | null;
   longitude?: number | null;

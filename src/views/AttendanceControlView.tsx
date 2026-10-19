@@ -1,7 +1,11 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { ScreenId, ToastMessage, AttendanceItem, RouteItem, Visit } from '../types';
-import { supabase } from '../lib/supabase';
-import { getLocalDateString } from '../utils/routePlanner';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { ScreenId, ToastMessage } from '../types';
+import { fetchAttendance, saveAttendance, fetchAttendanceAudit, attendanceErrorMessage, type AttendanceAuditEntry } from '../lib/attendanceService';
+import { AttendanceJourneyPanel } from '../components/AttendanceJourneyPanel';
+import type { Promoter } from '../utils/attendanceEngine';
+import { LABELS, filterRoster, exportRows, zoned, type PresenceItem, type OverrideStatus } from '../utils/attendanceEngine';
+import * as XLSX from 'xlsx';
+
 
 interface AttendanceControlViewProps {
   onNavigate: (screen: ScreenId) => void;
@@ -13,10 +17,10 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
   onShowToast
 }) => {
   // Data Operacional Inicializada dinamicamente com a data local (sem desvios UTC)
-  const [dateVal, setDateVal] = useState<string>(() => getLocalDateString(new Date()));
+  const [dateVal, setDateVal] = useState<string>(() => zoned(new Date().toISOString()).date);
 
   // Dados reais carregados do Supabase
-  const [items, setItems] = useState<AttendanceItem[]>([]);
+  const [items, setItems] = useState<PresenceItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -24,259 +28,115 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
   const [search, setSearch] = useState('');
   const [supervisorFilter, setSupervisorFilter] = useState('');
   const [squadFilter, setSquadFilter] = useState('');
-  const [quickFilter, setQuickFilter] = useState<'all' | 'presente' | 'falta' | 'atestado' | 'sem_registro'>('all');
-  const [simulateEmpty, setSimulateEmpty] = useState(false);
+  const [quickFilter, setQuickFilter] = useState<'all' | 'presente' | 'falta' | 'atestado' | 'atestado_pendente' | 'sem_registro'>('all');
+  const [promoters, setPromoters] = useState<Promoter[]>([]);
+  const [audit, setAudit] = useState<{ name:string; rows:AttendanceAuditEntry[] } | null>(null);
+  const [includeOffSchedule, setIncludeOffSchedule] = useState(false);
+  const [canEdit, setCanEdit] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [warnings, setWarnings] = useState<string[]>([]);
+  const [syncedAt, setSyncedAt] = useState<string | null>(null);
+  const [timezone, setTimezone] = useState('America/Sao_Paulo');
+  const requestId = useRef(0);
+  const dialogRef = useRef<HTMLDivElement>(null);
 
   // Modal para Ajuste Manual de Presença / Justificativa
-  const [selectedItem, setSelectedItem] = useState<AttendanceItem | null>(null);
+  const [selectedItem, setSelectedItem] = useState<PresenceItem | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
-  const [newStatus, setNewStatus] = useState<'presente' | 'falta' | 'atestado' | 'sem_registro'>('presente');
+  const [newStatus, setNewStatus] = useState<OverrideStatus>('presente');
   const [justification, setJustification] = useState('');
   const [medicalDays, setMedicalDays] = useState(2);
 
-  /**
-   * Determina o dia da semana ('segunda', 'terca', etc.) com base na data operacional (YYYY-MM-DD local)
-   */
-  const getDayKeyFromDateStr = (dateStr: string): 'domingo' | 'segunda' | 'terca' | 'quarta' | 'quinta' | 'sexta' | 'sabado' => {
-    const parts = dateStr.split('-');
-    if (parts.length === 3) {
-      const year = parseInt(parts[0], 10);
-      const month = parseInt(parts[1], 10) - 1;
-      const day = parseInt(parts[2], 10);
-      const d = new Date(year, month, day);
-      const dayKeys: Array<'domingo' | 'segunda' | 'terca' | 'quarta' | 'quinta' | 'sexta' | 'sabado'> = [
-        'domingo', 'segunda', 'terca', 'quarta', 'quinta', 'sexta', 'sabado'
-      ];
-      return dayKeys[d.getDay()] || 'segunda';
-    }
-    return 'segunda';
-  };
+  useEffect(() => {
+    if (!modalOpen) return;
+    const previous = document.activeElement as HTMLElement | null;
+    const focusable = () => Array.from(dialogRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), textarea, select') || []);
+    focusable()[0]?.focus();
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !saving) setModalOpen(false);
+      if (event.key !== 'Tab') return;
+      const elements = focusable();
+      const first = elements[0];
+      const last = elements.at(-1);
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+    };
+    document.addEventListener('keydown', handleKey);
+    return () => { document.removeEventListener('keydown', handleKey); previous?.focus(); };
+  }, [modalOpen, saving]);
 
-  /**
-   * Carrega promotores, rotas ativas e visitas do dia no Supabase
-   */
   const fetchAttendanceData = useCallback(async () => {
-    if (!supabase) {
-      setError('Cliente Supabase não inicializado.');
-      setLoading(false);
-      return;
-    }
-
+    const request = ++requestId.current;
     setLoading(true);
     setError(null);
-
+    setItems([]);
+    setCanEdit(false);
+    setWarnings([]);
+    setSyncedAt(null);
     try {
-      // 1. Consultar promotores ativos com equipe associada
-      // 2. Consultar rotas cadastradas (conforme o esquema real: não possui coluna 'status')
-      // 3. Consultar visitas registradas na data operacional selecionada (data_visita = dateVal)
-      const [promotoresRes, rotasRes, visitsRes] = await Promise.all([
-        supabase
-          .from('promotores')
-          .select('id, matricula, nome, cidade, uf, telefone, equipe, supervisor, status')
-          .eq('status', 'ativo')
-          .not('equipe', 'is', null),
-        supabase
-          .from('rotas')
-          .select('id, promotor_matricula, domingo, segunda, terca, quarta, quinta, sexta, sabado'),
-        supabase
-          .from('visits')
-          .select('id, promotor_matricula, loja_codigo, status, data_visita, started_at, completed_at, motivo_nao_realizada')
-          .eq('data_visita', dateVal)
-      ]);
-
-      if (promotoresRes.error) throw new Error(`Erro ao buscar promotores: ${promotoresRes.error.message}`);
-      if (visitsRes.error) throw new Error(`Erro ao buscar visitas do dia: ${visitsRes.error.message}`);
-
-      // Se houver erro específico de rotas, registrar aviso sem impedir o carregamento dos promotores
-      let rawRotas: RouteItem[] = [];
-      if (rotasRes.error) {
-        console.warn('Aviso: Não foi possível obter escala detalhada de rotas:', rotasRes.error.message);
-      } else {
-        rawRotas = (rotasRes.data as unknown as RouteItem[]) || [];
-      }
-
-      const rawPromotores = promotoresRes.data || [];
-      const rawVisits = (visitsRes.data as unknown as Visit[]) || [];
-
-      // Determinar o dia da semana para checagem da escala na data selecionada
-      const targetDayKey = getDayKeyFromDateStr(dateVal);
-
-      // Indexar promotores que possuem rotas cadastradas para este dia da semana
-      const scheduledMatriculas = new Set<string>();
-      rawRotas.forEach((r) => {
-        if (r.promotor_matricula && Boolean(r[targetDayKey as keyof RouteItem])) {
-          scheduledMatriculas.add(r.promotor_matricula);
-        }
-      });
-
-      // Indexar visitas do dia por matrícula do promotor
-      const visitsByPromoter = new Map<string, Visit[]>();
-      rawVisits.forEach((v) => {
-        const list = visitsByPromoter.get(v.promotor_matricula) || [];
-        list.push(v);
-        visitsByPromoter.set(v.promotor_matricula, list);
-      });
-
-      // Se há rotas configuradas no sistema, escalados são aqueles com rota no dia.
-      // Se ainda não há rotas cadastradas para o dia (ex: início de implantação),
-      // consideramos elegíveis todos os promotores alocados em equipes ativas.
-      const hasAnyRouteForDay = scheduledMatriculas.size > 0;
-
-      const attendanceList: AttendanceItem[] = rawPromotores
-        .filter((p) => {
-          // Filtrar promotores cuja equipe não é vazia nem 'Nenhum'
-          const eq = p.equipe ? p.equipe.trim().toLowerCase() : '';
-          if (!eq || eq === 'nenhum') return false;
-
-          // Se há rotas cadastradas para o dia, respeitar estritamente a escala da rota
-          if (hasAnyRouteForDay) {
-            return scheduledMatriculas.has(p.matricula);
-          }
-          // Caso contrário, todos os promotores com equipe alocada compõem a escala base
-          return true;
-        })
-        .map((p) => {
-          const promVisits = visitsByPromoter.get(p.matricula) || [];
-
-          // Regra de Classificação de Presença:
-          // 1. 'presente': Se possui ao menos uma visita concluída ou em andamento
-          // 2. 'falta': Se todas as visitas do dia foram registradas como 'nao_realizada'
-          // 3. 'sem_registro': Se não há telemetria ou as visitas continuam pendentes/sem check-in
-          const hasCompleted = promVisits.some((v) => v.status === 'concluida');
-          const hasInProgress = promVisits.some((v) => v.status === 'em_andamento');
-          const allNotDone = promVisits.length > 0 && promVisits.every((v) => v.status === 'nao_realizada');
-
-          let status: 'presente' | 'falta' | 'atestado' | 'sem_registro' = 'sem_registro';
-          let telemetryDetail = 'Aguardando primeiro check-in no aplicativo';
-          let telemetryTime = '--:--';
-
-          if (hasCompleted || hasInProgress) {
-            status = 'presente';
-            const firstActive = promVisits.find((v) => v.started_at);
-            if (firstActive && firstActive.started_at) {
-              const dt = new Date(firstActive.started_at);
-              telemetryTime = `${String(dt.getHours()).padStart(2, '0')}:${String(dt.getMinutes()).padStart(2, '0')}`;
-              telemetryDetail = hasCompleted ? 'Atendimento concluído em loja' : 'Check-in ativo em atendimento';
-            } else {
-              telemetryTime = 'Confirmado';
-              telemetryDetail = 'Visita registrada em campo';
-            }
-          } else if (allNotDone) {
-            status = 'falta';
-            const reason = promVisits[0]?.motivo_nao_realizada || 'Visita não realizada';
-            telemetryDetail = `Atendimento não realizado: ${reason}`;
-          }
-
-          // Iniciais do nome
-          const nameParts = (p.nome || '').trim().split(' ').filter(Boolean);
-          const initials = nameParts.length > 1
-            ? (nameParts[0][0] + nameParts[nameParts.length - 1][0]).toUpperCase()
-            : (nameParts[0] ? nameParts[0].slice(0, 2).toUpperCase() : 'PR');
-
-          return {
-            id: p.id,
-            promoterId: p.id,
-            name: p.nome,
-            initials,
-            matricula: p.matricula,
-            type: 'CLT',
-            squad: p.equipe || 'Sem Equipe',
-            supervisor: p.supervisor || 'Não atribuído',
-            city: p.cidade || 'Não informada',
-            state: p.uf || 'UF',
-            phone: p.telefone || undefined,
-            status,
-            telemetryTime,
-            telemetryDetail
-          };
-        });
-
-      setItems(attendanceList);
-    } catch (err: any) {
-      console.error('Erro ao carregar dados de presença:', err);
-      setError(err?.message || 'Falha ao buscar registros operacionais no Supabase.');
-      setItems([]);
+      const result = await fetchAttendance(dateVal);
+      if (request !== requestId.current) return;
+      setItems(result.items);
+      setPromoters(result.promoters);
+      setWarnings(result.warnings);
+      setCanEdit(result.canEdit);
+      setTimezone(result.timezone);
+      setSyncedAt(result.fetchedAt);
+    } catch (err: unknown) {
+      if (request !== requestId.current) return;
+      setError(attendanceErrorMessage(err));
     } finally {
-      setLoading(false);
+      if (request === requestId.current) setLoading(false);
     }
   }, [dateVal]);
 
-  // Carregar dados sempre que a data operacional selecionada mudar
   useEffect(() => {
-    fetchAttendanceData();
+    setModalOpen(false);
+    void fetchAttendanceData();
+    const timer = window.setInterval(() => {
+      if (dialogRef.current || document.querySelector('[data-attendance-journey][open]')) return;
+      void fetchAttendanceData();
+    }, 60000);
+    return () => { ++requestId.current; window.clearInterval(timer); };
   }, [fetchAttendanceData]);
 
-  const openStatusModal = (item: AttendanceItem) => {
+  const openStatusModal = (item: PresenceItem) => {
+    if (!canEdit || loading || saving) return;
     setSelectedItem(item);
-    setNewStatus(item.status);
+    setNewStatus(item.operationalStatus.startsWith('atestado_') ? item.operationalStatus as OverrideStatus : item.status === 'falta' ? 'falta' : item.status === 'presente' ? 'presente' : 'sem_registro');
     setJustification('');
-    setMedicalDays(item.medicalDays || 2);
+    setMedicalDays(item.medicalDays || 1);
     setModalOpen(true);
   };
 
-  const handleSaveStatus = (e: React.FormEvent) => {
+  const handleSaveStatus = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedItem) return;
-
-    // Atualização local do item (anotação/ajuste operacional de supervisão)
-    setItems((prev) =>
-      prev.map((it) => {
-        if (it.id === selectedItem.id) {
-          return {
-            ...it,
-            status: newStatus,
-            telemetryDetail:
-              newStatus === 'presente'
-                ? 'Check-in manual aprovado pelo supervisor'
-                : newStatus === 'falta'
-                ? `Falta registrada: ${justification || 'Sem justificativa'}`
-                : newStatus === 'atestado'
-                ? `Atestado médico anexado (${medicalDays} dias)`
-                : 'Aguardando validação de ponto',
-            isJustified: newStatus === 'falta' ? !!justification : undefined,
-            medicalNoteAttached: newStatus === 'atestado'
-          };
-        }
-        return it;
-      })
-    );
-
-    setModalOpen(false);
-    onShowToast({
-      title: 'Presença Atualizada',
-      message: `Status de ${selectedItem.name} ajustado para ${newStatus.toUpperCase()}.`,
-      type: 'success'
-    });
+    if (!selectedItem || !canEdit || saving) return;
+    setSaving(true);
+    try {
+      await saveAttendance({ matricula: selectedItem.matricula, date: dateVal, status: newStatus, justification, medicalDays });
+      setModalOpen(false);
+      onShowToast({ title: 'Ajuste registrado', message: 'Alteração persistida com trilha de auditoria.', type: 'success' });
+      await fetchAttendanceData();
+    } catch (err: unknown) {
+      onShowToast({ title: 'Ajuste n\u00e3o salvo', message: attendanceErrorMessage(err), type: 'error' });
+    } finally { setSaving(false); }
   };
 
-  const filteredItems = useMemo(() => {
-    if (simulateEmpty) return [];
-
-    return items.filter((item) => {
-      const matchesSearch =
-        item.name.toLowerCase().includes(search.toLowerCase()) ||
-        item.matricula.toLowerCase().includes(search.toLowerCase()) ||
-        item.city.toLowerCase().includes(search.toLowerCase());
-
-      const matchesSupervisor =
-        !supervisorFilter || item.supervisor.toLowerCase().includes(supervisorFilter.toLowerCase());
-
-      const matchesSquad =
-        !squadFilter || item.squad.toLowerCase().includes(squadFilter.toLowerCase());
-
-      const matchesQuick =
-        quickFilter === 'all' ||
-        (quickFilter === 'presente' && item.status === 'presente') ||
-        (quickFilter === 'falta' && item.status === 'falta') ||
-        (quickFilter === 'atestado' && item.status === 'atestado') ||
-        (quickFilter === 'sem_registro' && item.status === 'sem_registro');
-
-      return matchesSearch && matchesSupervisor && matchesSquad && matchesQuick;
-    });
-  }, [items, search, supervisorFilter, squadFilter, quickFilter, simulateEmpty]);
+  const filteredItems = useMemo(() => filterRoster(items, {
+    search, supervisor: supervisorFilter, squad: squadFilter, quick: quickFilter, offSchedule: includeOffSchedule
+  }), [items, search, supervisorFilter, squadFilter, quickFilter, includeOffSchedule]);
+  const metrics = filteredItems.filter(item => item.eligible);
+  const handleExport = () => {
+    try {
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(exportRows(filteredItems, dateVal)), 'Presença');
+      XLSX.writeFile(wb, `MK9_Presenca_${dateVal}.xlsx`);
+    } catch { onShowToast({ title: 'Exportação não concluída', message: 'Não foi possível gerar a planilha.', type: 'error' }); }
+  };
 
   return (
-    <div className="w-full px-4 lg:px-8 py-6 max-w-[1720px] mx-auto space-y-6">
+    <div aria-busy={loading} className="w-full px-4 lg:px-8 py-6 max-w-[1720px] mx-auto space-y-6">
       {/* Top Header HUD */}
       <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
         <div className="space-y-1">
@@ -286,22 +146,23 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
             </h1>
             <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[#F7F6F2] border border-[#CFCDC5] text-[#171717] font-mono text-[11px]">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-              Sincronizado há 1 min
+              {loading ? 'Consultando…' : syncedAt ? `Consultado às ${zoned(syncedAt, timezone).time} (${timezone})` : 'Não sincronizado'}
             </span>
-            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full bg-purple-600/20 text-purple-300 border border-purple-500/30 font-mono text-[11px] font-bold uppercase">
-              {items.length} promotores escalados
+            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full bg-purple-600/20 text-purple-800 border border-purple-500/30 font-mono text-[11px] font-bold uppercase">
+              {loading ? 'Consultando elegibilidade' : error ? 'Dados indisponíveis' : `${metrics.length} promotores elegíveis nos filtros`}
             </span>
           </div>
           <p className="text-xs sm:text-sm text-[#77766F]">
-            Acompanhe a presença diária das equipes de trade marketing em tempo real com validação geofence e telemetria de campo.
+            Acompanhe a programação e os registros originais de presença das equipes.
           </p>
         </div>
 
         {/* Action Buttons */}
         <div className="flex items-center gap-3 shrink-0">
           <button
-            onClick={() => onShowToast({ title: 'Exportar Excel', message: 'Planilha de presenças diárias exportada.', type: 'info' })}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-[#F7F6F2] hover:bg-[#E4E2DB] text-cyan-300 border border-[#CFCDC5] text-xs font-semibold shadow-sm transition-all"
+            onClick={handleExport}
+            disabled={loading || !!error || filteredItems.length === 0}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-[#F7F6F2] hover:bg-[#E4E2DB] text-cyan-800 border border-[#CFCDC5] text-xs font-semibold shadow-sm transition-all"
           >
             <span className="material-symbols-outlined text-[18px]">download</span>
             <span>Exportar Excel</span>
@@ -316,18 +177,21 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
         </div>
       </div>
 
+      {warnings.map(message => <div key={message} role="status" className="rounded-xl border border-amber-400 bg-amber-50 p-3 text-xs text-amber-950">{message}</div>)}
+      {canEdit && <AttendanceJourneyPanel promoters={promoters} onSaved={()=>void fetchAttendanceData()} />}
+      {audit && <div role="dialog" aria-modal="true" aria-label="Histórico de ajustes" className="fixed inset-0 z-50 bg-black/70 p-4 flex items-center justify-center"><div className="bg-[#F7F6F2] text-[#171717] p-5 rounded-xl max-w-2xl w-full max-h-[80vh] overflow-auto"><h2 className="font-bold">Histórico de ajustes — {audit.name}</h2><button className="my-3 border rounded px-3 py-2" onClick={()=>setAudit(null)}>Fechar histórico</button>{audit.rows.length===0?<p>Nenhum ajuste manual nesta data.</p>:audit.rows.map(row=><article key={row.id} className="border-t py-3 text-sm"><p>{row.changed_by_name} • {zoned(row.changed_at,timezone).date} {zoned(row.changed_at,timezone).time}</p><p>Anterior: {row.previous_value?.override_status || 'Sem ajuste'} → Novo: {row.new_value?.override_status}</p><p>Justificativa: {row.justification}</p></article>)}</div></div>}
       {/* Metric KPI Tiles */}
       {(() => {
-        const total = items.length;
-        const presentes = items.filter((i) => i.status === 'presente').length;
-        const faltas = items.filter((i) => i.status === 'falta').length;
-        const atestados = items.filter((i) => i.status === 'atestado').length;
-        const semRegistro = items.filter((i) => i.status === 'sem_registro').length;
+        const total = metrics.length;
+        const presentes = metrics.filter((i) => i.status === 'presente').length;
+        const faltas = metrics.filter((i) => i.status === 'falta').length;
+        const atestados = metrics.filter((i) => i.status === 'atestado').length;
+        const semRegistro = metrics.filter((i) => i.status === 'sem_registro').length;
 
-        const pPct = total > 0 ? ((presentes / total) * 100).toFixed(1) : '0';
-        const fPct = total > 0 ? ((faltas / total) * 100).toFixed(1) : '0';
-        const aPct = total > 0 ? ((atestados / total) * 100).toFixed(1) : '0';
-        const sPct = total > 0 ? ((semRegistro / total) * 100).toFixed(1) : '0';
+        const pPct = !loading && !error && total > 0 ? ((presentes / total) * 100).toFixed(1) : '0';
+        const fPct = !loading && !error && total > 0 ? ((faltas / total) * 100).toFixed(1) : '0';
+        const aPct = !loading && !error && total > 0 ? ((atestados / total) * 100).toFixed(1) : '0';
+        const sPct = !loading && !error && total > 0 ? ((semRegistro / total) * 100).toFixed(1) : '0';
 
         return (
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
@@ -338,17 +202,17 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                 <div className="space-y-1">
                   <span className="text-[11px] font-bold text-[#77766F] uppercase tracking-wider font-mono">Presentes</span>
                   <div className="flex items-baseline gap-2">
-                    <span className="text-3xl font-extrabold text-[#171717] font-mono">{presentes}</span>
-                    <span className="font-mono text-xs text-emerald-400 font-semibold">({pPct}%)</span>
+                    <span className="text-3xl font-extrabold text-[#171717] font-mono">{loading || error ? '\u2014' : presentes}</span>
+                    <span className="font-mono text-xs text-emerald-800 font-semibold">({total > 0 && !loading && !error ? pPct + '%' : '\u2014'})</span>
                   </div>
                 </div>
-                <div className="p-2 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                <div className="p-2 rounded-lg bg-emerald-500/10 text-emerald-800 border border-emerald-500/20">
                   <span className="material-symbols-outlined text-2xl">check_circle</span>
                 </div>
               </div>
               <div className="mt-3 pt-2 border-t border-[#CFCDC5] flex items-center justify-between text-xs text-[#77766F] font-mono">
-                <span>{presentes} confirmados</span>
-                <span className="text-emerald-400 font-semibold">0% vs ontem</span>
+                <span>{loading || error ? 'Dados indisponíveis' : `${presentes} confirmados`}</span>
+                <span className="text-emerald-700 font-semibold">Inclui atrasos</span>
               </div>
             </div>
 
@@ -359,17 +223,17 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                 <div className="space-y-1">
                   <span className="text-[11px] font-bold text-[#77766F] uppercase tracking-wider font-mono">Faltas</span>
                   <div className="flex items-baseline gap-2">
-                    <span className="text-3xl font-extrabold text-[#171717] font-mono">{faltas}</span>
-                    <span className="font-mono text-xs text-rose-400 font-semibold">({fPct}%)</span>
+                    <span className="text-3xl font-extrabold text-[#171717] font-mono">{loading || error ? '\u2014' : faltas}</span>
+                    <span className="font-mono text-xs text-rose-800 font-semibold">({total > 0 && !loading && !error ? fPct + '%' : '\u2014'})</span>
                   </div>
                 </div>
-                <div className="p-2 rounded-lg bg-rose-500/10 text-rose-400 border border-rose-500/20">
+                <div className="p-2 rounded-lg bg-rose-500/10 text-rose-800 border border-rose-500/20">
                   <span className="material-symbols-outlined text-2xl">cancel</span>
                 </div>
               </div>
               <div className="mt-3 pt-2 border-t border-[#CFCDC5] flex items-center justify-between text-xs text-[#77766F] font-mono">
-                <span>{faltas} registradas</span>
-                <span className="text-rose-400 font-semibold">0% vs média</span>
+                <span>{loading || error ? 'Dados indisponíveis' : `${faltas} registradas`}</span>
+                <span className="text-rose-700 font-semibold">Confirmadas</span>
               </div>
             </div>
 
@@ -380,17 +244,17 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                 <div className="space-y-1">
                   <span className="text-[11px] font-bold text-[#77766F] uppercase tracking-wider font-mono">Atestados</span>
                   <div className="flex items-baseline gap-2">
-                    <span className="text-3xl font-extrabold text-[#171717] font-mono">{atestados}</span>
-                    <span className="font-mono text-xs text-cyan-300 font-semibold">({aPct}%)</span>
+                    <span className="text-3xl font-extrabold text-[#171717] font-mono">{loading || error ? '\u2014' : atestados}</span>
+                    <span className="font-mono text-xs text-cyan-800 font-semibold">({total > 0 && !loading && !error ? aPct + '%' : '\u2014'})</span>
                   </div>
                 </div>
-                <div className="p-2 rounded-lg bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
+                <div className="p-2 rounded-lg bg-cyan-500/10 text-cyan-800 border border-cyan-500/20">
                   <span className="material-symbols-outlined text-2xl">clinical_notes</span>
                 </div>
               </div>
               <div className="mt-3 pt-2 border-t border-[#CFCDC5] flex items-center justify-between text-xs text-[#77766F] font-mono">
-                <span>{atestados} anexados</span>
-                <span className="text-[#171717] font-medium">Sem variação</span>
+                <span>{loading || error ? 'Dados indisponíveis' : `${atestados} pendentes ou aprovados`}</span>
+                <span className="text-[#171717] font-medium">Conforme análise</span>
               </div>
             </div>
 
@@ -401,8 +265,8 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                 <div className="space-y-1">
                   <span className="text-[11px] font-bold text-[#77766F] uppercase tracking-wider font-mono">Sem Registro</span>
                   <div className="flex items-baseline gap-2">
-                    <span className="text-3xl font-extrabold text-[#171717] font-mono">{semRegistro}</span>
-                    <span className="font-mono text-xs text-[#77766F]">({sPct}%)</span>
+                    <span className="text-3xl font-extrabold text-[#171717] font-mono">{loading || error ? '\u2014' : semRegistro}</span>
+                    <span className="font-mono text-xs text-[#77766F]">({total > 0 && !loading && !error ? sPct + '%' : '\u2014'})</span>
                   </div>
                 </div>
                 <div className="p-2 rounded-lg bg-slate-800 text-[#77766F] border border-[#CFCDC5]">
@@ -411,7 +275,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
               </div>
               <div className="mt-3 pt-2 border-t border-[#CFCDC5] flex items-center justify-between text-xs text-[#77766F] font-mono">
                 <span>Pendente de registro</span>
-                <span className="text-purple-400 font-semibold">Sem dados</span>
+                <span className="text-purple-800 font-semibold">Sem falta confirmada</span>
               </div>
             </div>
           </div>
@@ -423,12 +287,15 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-12 gap-3 items-center">
           {/* Date Selector */}
           <div className="lg:col-span-3 flex items-center bg-[#EAE8E2] border border-[#CFCDC5] px-3 py-2 rounded-lg text-[#171717]">
-            <span className="material-symbols-outlined text-cyan-400 mr-2 text-[18px]">calendar_month</span>
+            <span className="material-symbols-outlined text-cyan-800 mr-2 text-[18px]">calendar_month</span>
             <div className="flex flex-col min-w-0 flex-1">
               <span className="text-[9px] uppercase font-mono font-bold text-[#77766F]">Data Operacional</span>
               <input
                 type="date"
                 value={dateVal}
+                disabled={saving}
+                aria-label="Data operacional"
+                onInput={(e) => setDateVal(e.currentTarget.value)}
                 onChange={(e) => setDateVal(e.target.value)}
                 className="bg-transparent font-semibold text-xs text-[#171717] focus:outline-none cursor-pointer"
               />
@@ -441,6 +308,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
             <div className="flex flex-col min-w-0 flex-1">
               <span className="text-[9px] uppercase font-mono font-bold text-[#77766F]">Supervisor</span>
               <select
+                aria-label="Filtrar por supervisor"
                 value={supervisorFilter}
                 onChange={(e) => setSupervisorFilter(e.target.value)}
                 className="bg-transparent text-xs text-[#171717] focus:outline-none cursor-pointer"
@@ -459,6 +327,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
             <div className="flex flex-col min-w-0 flex-1">
               <span className="text-[9px] uppercase font-mono font-bold text-[#77766F]">Equipe Regional</span>
               <select
+                aria-label="Filtrar por equipe"
                 value={squadFilter}
                 onChange={(e) => setSquadFilter(e.target.value)}
                 className="bg-transparent text-xs text-[#171717] focus:outline-none cursor-pointer"
@@ -476,6 +345,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
             <span className="material-symbols-outlined text-[#77766F] mr-2 text-[18px]">search</span>
             <input
               type="text"
+              aria-label="Buscar promotor, matrícula ou cidade"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Buscar promotor, matrícula..."
@@ -503,7 +373,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                   : 'bg-[#EAE8E2] text-[#222222] hover:bg-[#E4E2DB] border border-[#CFCDC5]'
               }`}
             >
-              Todos ({items.length})
+              Todos ({filteredItems.length})
             </button>
             <button
               onClick={() => setQuickFilter('falta')}
@@ -513,7 +383,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                   : 'bg-[#EAE8E2] text-rose-700 hover:bg-rose-50 border border-[#CFCDC5]'
               }`}
             >
-              Somente Faltas ({items.filter((i) => i.status === 'falta').length})
+              Somente Faltas ({metrics.filter((i) => i.status === 'falta').length})
             </button>
             <button
               onClick={() => setQuickFilter('atestado')}
@@ -523,7 +393,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                   : 'bg-[#EAE8E2] text-[#087F9C] hover:bg-cyan-50 border border-[#CFCDC5]'
               }`}
             >
-              Atestados Pendentes ({items.filter((i) => i.status === 'atestado').length})
+              Atestados ({metrics.filter((i) => i.status === 'atestado').length})
             </button>
             <button
               onClick={() => setQuickFilter('sem_registro')}
@@ -533,19 +403,15 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                   : 'bg-[#EAE8E2] text-[#5F5F5F] hover:bg-[#E4E2DB] border border-[#CFCDC5]'
               }`}
             >
-              Sem Registro ({items.filter((i) => i.status === 'sem_registro').length})
+              Sem Registro ({metrics.filter((i) => i.status === 'sem_registro').length})
             </button>
+            <button onClick={()=>setQuickFilter('atestado_pendente')} aria-pressed={quickFilter==='atestado_pendente'} className="px-3 py-1 rounded-full text-xs font-semibold border border-cyan-700 text-cyan-900">Atestados pendentes</button>
           </div>
 
-          <button
-            onClick={() => setSimulateEmpty(!simulateEmpty)}
-            className="text-cyan-400 hover:text-cyan-300 font-mono text-xs flex items-center gap-1 transition-colors"
-          >
-            <span className="material-symbols-outlined text-sm">
-              {simulateEmpty ? 'check_circle' : 'filter_alt_off'}
-            </span>
-            <span>{simulateEmpty ? 'Restaurar Lista Normal' : 'Simular busca sem resultados'}</span>
-          </button>
+          <label className="text-xs text-[#5F5F5F] flex items-center gap-2">
+            <input type="checkbox" checked={includeOffSchedule} onChange={e => setIncludeOffSchedule(e.target.checked)} />
+            Incluir folgas e sem expediente (fora dos indicadores)
+          </label>
         </div>
       </div>
 
@@ -555,7 +421,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
           <div className="max-w-md mx-auto space-y-3 flex flex-col items-center">
             <span className="material-symbols-outlined text-4xl text-purple-600 animate-spin">sync</span>
             <h3 className="text-sm font-bold text-[#171717]">Carregando escala e registros de presença...</h3>
-            <p className="text-xs text-[#77766F]">Consultando dados de promotores, rotas e visitas no Supabase.</p>
+            <p className="text-xs text-[#77766F]">Consultando jornadas, folgas e registros de presença.</p>
           </div>
         </div>
       ) : error ? (
@@ -575,11 +441,11 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
       ) : filteredItems.length === 0 ? (
         <div className="rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] p-10 text-center shadow-xl">
           <div className="max-w-md mx-auto space-y-4 flex flex-col items-center">
-            <div className="w-16 h-16 rounded-full bg-[#EAE8E2] border border-[#CFCDC5] flex items-center justify-center text-purple-400">
+            <div className="w-16 h-16 rounded-full bg-[#EAE8E2] border border-[#CFCDC5] flex items-center justify-center text-purple-800">
               <span className="material-symbols-outlined text-4xl">person_search</span>
             </div>
             <div className="space-y-1">
-              <h3 className="text-base font-bold text-[#171717]">Não há dados de presença cadastrados ainda.</h3>
+              <h3 className="text-base font-bold text-[#171717]">{items.length ? 'Nenhum promotor corresponde aos filtros.' : 'Nenhum promotor disponível nesta data.'}</h3>
               <p className="text-xs text-[#77766F]">
                 Nenhum registro de presença ou telemetria operacional foi cadastrado ou encontrado com os filtros aplicados.
               </p>
@@ -591,7 +457,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                   setSupervisorFilter('');
                   setSquadFilter('');
                   setQuickFilter('all');
-                  setSimulateEmpty(false);
+                  setIncludeOffSchedule(false);
                 }}
                 className="flex items-center gap-2 px-4 py-2 rounded-xl bg-[#222222] hover:bg-black text-white font-bold text-xs shadow-xs transition-all"
               >
@@ -612,7 +478,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                   <th className="py-3 px-4 font-semibold">Supervisor</th>
                   <th className="py-3 px-4 font-semibold">Praça / UF</th>
                   <th className="py-3 px-4 font-semibold">Status de Presença</th>
-                  <th className="py-3 px-4 font-semibold">Última Telemetria</th>
+                  <th className="py-3 px-4 font-semibold">Jornada / primeiro check-in</th>
                   <th className="py-3 px-4 text-right font-semibold">Ações</th>
                 </tr>
               </thead>
@@ -624,25 +490,25 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                         <div
                           className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs shrink-0 ${
                             item.status === 'presente'
-                              ? 'bg-purple-600/30 text-purple-300 border border-purple-500/40'
+                              ? 'bg-purple-600/30 text-purple-800 border border-purple-500/40'
                               : item.status === 'falta'
-                              ? 'bg-rose-600/30 text-rose-300 border border-rose-500/40'
+                              ? 'bg-rose-600/30 text-rose-800 border border-rose-500/40'
                               : item.status === 'atestado'
-                              ? 'bg-cyan-600/30 text-cyan-300 border border-cyan-500/40'
+                              ? 'bg-cyan-600/30 text-cyan-800 border border-cyan-500/40'
                               : 'bg-slate-800 text-[#77766F] border border-[#CFCDC5]'
                           }`}
                         >
                           {item.initials}
                         </div>
                         <div>
-                          <div className="font-bold text-[#171717] group-hover:text-purple-300 transition-colors">
+                          <div className="font-bold text-[#171717] group-hover:text-purple-800 transition-colors">
                             {item.name}
                           </div>
                           <div className="font-mono text-[11px] text-[#77766F] flex items-center gap-1">
-                            <span>{item.matricula}</span> •{' '}
-                            <span className={item.type === 'CLT' ? 'text-emerald-400' : 'text-cyan-400'}>
+                            <span>{item.matricula}</span>{item.type && <> •{' '}
+                            <span className={item.type === 'CLT' ? 'text-emerald-800' : 'text-cyan-800'}>
                               {item.type}
-                            </span>
+                            </span></>}
                           </div>
                         </div>
                       </div>
@@ -671,10 +537,13 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                           }`}
                         >
                           <span className="w-1.5 h-1.5 rounded-full bg-current" />
-                          {item.status.toUpperCase()}
+                          {LABELS[item.operationalStatus]}
                         </span>
+                        {item.medicalStatus && <span className="text-xs text-cyan-800">Atestado {item.medicalStatus}</span>}
                         <button
                           onClick={() => openStatusModal(item)}
+                          disabled={!canEdit || saving}
+                          aria-label={`Ajustar presença de ${item.name}`}
                           className="p-1 rounded bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#5F5F5F] hover:text-[#171717] border border-[#CFCDC5]"
                           title="Alterar status rápido"
                         >
@@ -684,23 +553,18 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                     </td>
                     <td className="py-3.5 px-4">
                       <div className="font-mono text-xs text-[#171717] font-semibold">{item.telemetryTime}</div>
+                      <div className="text-[11px] text-[#5F5F5F]">{item.scheduleDetail}</div>
                       <div className="text-[11px] text-[#77766F]">{item.telemetryDetail}</div>
                     </td>
                     <td className="py-3.5 px-4 text-right">
                       <div className="flex items-center justify-end gap-1">
-                        <button
-                          onClick={() => onShowToast({ title: 'Espelho de Ponto', message: `Histórico biométrico de ${item.name}.`, type: 'info' })}
-                          className="p-1.5 rounded-lg text-[#77766F] hover:text-cyan-400 hover:bg-[#EAE8E2]"
-                          title="Espelho de Ponto"
-                        >
-                          <span className="material-symbols-outlined text-base">history</span>
-                        </button>
+                        {canEdit && <button aria-label={`Histórico de ${item.name}`} className="p-2 text-[#171717]" onClick={async()=>{try{setAudit({name:item.name,rows:await fetchAttendanceAudit(item.matricula,dateVal)});}catch(err:unknown){onShowToast({title:'Histórico indisponível',message:attendanceErrorMessage(err),type:'error'});}}}>Histórico</button>}
                         {item.phone && (
                           <a
                             href={`https://wa.me/${item.phone.replace(/\D/g, '')}`}
                             target="_blank"
                             rel="noreferrer"
-                            className="p-1.5 rounded-lg text-[#77766F] hover:text-emerald-400 hover:bg-[#EAE8E2]"
+                            className="p-1.5 rounded-lg text-[#77766F] hover:text-emerald-800 hover:bg-[#EAE8E2]"
                             title="Conversar no WhatsApp"
                           >
                             <span className="material-symbols-outlined text-base">chat</span>
@@ -745,11 +609,11 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
 
       {/* Modal Alterar Status de Presença */}
       {modalOpen && selectedItem && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
-          <div className="relative w-full max-w-md bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl shadow-2xl p-6 overflow-hidden">
+        <div role="dialog" aria-modal="true" aria-label="Ajustar presença" className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+          <div ref={dialogRef} className="relative w-full max-w-md max-h-[90vh] overflow-y-auto bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl shadow-2xl p-6">
             <div className="flex items-center justify-between pb-4 border-b border-[#CFCDC5]">
               <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-lg bg-purple-600/20 text-purple-400 border border-purple-500/30 flex items-center justify-center font-bold">
+                <div className="w-9 h-9 rounded-lg bg-purple-600/20 text-purple-800 border border-purple-500/30 flex items-center justify-center font-bold">
                   {selectedItem.initials}
                 </div>
                 <div>
@@ -771,7 +635,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                     onClick={() => setNewStatus('presente')}
                     className={`p-2.5 rounded-lg border text-left font-bold transition-all ${
                       newStatus === 'presente'
-                        ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500'
+                        ? 'bg-emerald-500/20 text-emerald-800 border-emerald-500'
                         : 'bg-[#E4E2DB] text-[#77766F] border-[#CFCDC5]'
                     }`}
                   >
@@ -782,7 +646,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                     onClick={() => setNewStatus('falta')}
                     className={`p-2.5 rounded-lg border text-left font-bold transition-all ${
                       newStatus === 'falta'
-                        ? 'bg-rose-500/20 text-rose-400 border-rose-500'
+                        ? 'bg-rose-500/20 text-rose-800 border-rose-500'
                         : 'bg-[#E4E2DB] text-[#77766F] border-[#CFCDC5]'
                     }`}
                   >
@@ -790,21 +654,21 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                   </button>
                   <button
                     type="button"
-                    onClick={() => setNewStatus('atestado')}
+                    onClick={() => setNewStatus('atestado_pendente')}
                     className={`p-2.5 rounded-lg border text-left font-bold transition-all ${
-                      newStatus === 'atestado'
-                        ? 'bg-cyan-500/20 text-cyan-400 border-cyan-500'
+                      newStatus.startsWith('atestado_')
+                        ? 'bg-cyan-500/20 text-cyan-800 border-cyan-500'
                         : 'bg-[#E4E2DB] text-[#77766F] border-[#CFCDC5]'
                     }`}
                   >
-                    🏥 ATESTADO
+                    🏥 ATESTADO PENDENTE
                   </button>
                   <button
                     type="button"
                     onClick={() => setNewStatus('sem_registro')}
                     className={`p-2.5 rounded-lg border text-left font-bold transition-all ${
                       newStatus === 'sem_registro'
-                        ? 'bg-purple-500/20 text-purple-400 border-purple-500'
+                        ? 'bg-purple-500/20 text-purple-800 border-purple-500'
                         : 'bg-[#E4E2DB] text-[#77766F] border-[#CFCDC5]'
                     }`}
                   >
@@ -813,9 +677,11 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                 </div>
               </div>
 
-              {newStatus === 'atestado' && (
+              <label className="flex items-center gap-2"><input type="checkbox" checked={newStatus === 'atestado_aprovado'} disabled={!newStatus.startsWith('atestado_')} onChange={e => setNewStatus(e.target.checked ? 'atestado_aprovado' : 'atestado_pendente')} />Atestado aprovado após análise</label>
+              <p className="text-[#5F5F5F]">O ajuste não altera o check-in original. Dias informados não criam afastamento em outras datas.</p>
+              {newStatus.startsWith('atestado_') && (
                 <div className="space-y-1 bg-[#E4E2DB] p-3 rounded-lg border border-[#CFCDC5]">
-                  <label className="font-bold text-cyan-300">Dias de Afastamento (CID Médico)</label>
+                  <label className="font-bold text-cyan-800">Dias informados no atestado</label>
                   <input
                     type="number"
                     min={1}
@@ -830,6 +696,9 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
               <div className="space-y-1">
                 <label className="font-bold text-[#171717]">Justificativa Operacional / Observações</label>
                 <textarea
+                  required
+                  minLength={5}
+                  aria-label="Justificativa obrigatória"
                   rows={2}
                   value={justification}
                   onChange={(e) => setJustification(e.target.value)}
@@ -848,9 +717,10 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                 </button>
                 <button
                   type="submit"
+                  disabled={saving || !canEdit}
                   className="px-5 py-2 rounded-lg bg-[#222222] hover:bg-black text-white font-bold shadow-xs"
                 >
-                  Salvar Presença
+                  {saving ? 'Salvando…' : 'Salvar ajuste auditado'}
                 </button>
               </div>
             </form>

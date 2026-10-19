@@ -11,6 +11,7 @@ import {
 } from '../utils/routePlanner';
 import { buildGoogleMapsDirectionsUrl } from '../utils/googleMaps';
 import { CHECKLIST_QUANTITY_KEYS } from '../utils/visitExecution';
+import { StatCard, StatusBadge, DataTable, Column } from '../components/ui';
 
 interface OperationalDashboardViewProps {
   onNavigate: (screen: ScreenId) => void;
@@ -52,17 +53,55 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
   const [filterAgendaStatus, setFilterAgendaStatus] = useState<string>('all'); // 'all' | 'em_andamento' | 'pendente' | 'nao_realizada' | 'concluida'
   const [filterAlertPriority, setFilterAlertPriority] = useState<string>('active'); // 'active' | 'all' | 'critico' | 'atencao' | 'pendente' | 'resolvido'
 
+  // Sub-abas de organização compacta
+  const [centralTab, setCentralTab] = useState<'alertas' | 'pendencias' | 'visitas_hoje' | 'promotores'>('alertas');
+  const [ocorrenciasTab, setOcorrenciasTab] = useState<'rupturas' | 'incidentes' | 'validades' | 'checklist'>('rupturas');
+
+  // Buscas inteligentes nas sub-abas da Central
+  const [searchAlerts, setSearchAlerts] = useState('');
+  const [searchPendencias, setSearchPendencias] = useState('');
+  const [searchAgenda, setSearchAgenda] = useState('');
+  const [searchPromotores, setSearchPromotores] = useState('');
+  const [searchRupturas, setSearchRupturas] = useState('');
+  const [searchValidades, setSearchValidades] = useState('');
+
   const [tableSearch, setTableSearch] = useState('');
   const [tableStatus, setTableStatus] = useState<string>('all');
   const [selectedVisit, setSelectedVisit] = useState<Visit | null>(null);
 
-  // Estado para Central de Pendências Operacionais (Etapa 7.2)
+  // Estado para Central de Pendências Operacionais
   const [pendenciaStatusFilter, setPendenciaStatusFilter] = useState<string>('pendente'); // 'pendente' | 'em_andamento' | 'nao_realizada' | 'concluida' | 'todas'
   const [selectedPendingItem, setSelectedPendingItem] = useState<OperationalVisitItem | null>(null);
 
   // Estado para URLs Assinadas de Fotos de Ruptura (visitId -> signedUrl)
   const [rupturePhotosSigned, setRupturePhotosSigned] = useState<Record<string, string>>({});
   const [resolvingId, setResolvingId] = useState<string | null>(null);
+
+  // Estados Onda 4.4B: Confirmação de Resolução e Modal Detalhado de Ocorrência
+  const [occurrenceToResolve, setOccurrenceToResolve] = useState<{
+    id: string;
+    titulo: string;
+    lojaNome: string;
+    descricao?: string;
+  } | null>(null);
+
+  const [selectedOccurrenceDetail, setSelectedOccurrenceDetail] = useState<{
+    id: string;
+    tipo: string;
+    titulo: string;
+    descricao: string;
+    resolvido: boolean;
+    data: string;
+    lojaNome: string;
+    lojaCodigo?: string;
+    lojaEndereco?: string;
+    industriaNome: string;
+    industriaCodigo?: string;
+    promotorNome: string;
+    promotorMatricula?: string;
+    photoSignedUrl?: string;
+    visitObj?: Visit | null;
+  } | null>(null);
 
   // Métrica de última atualização
   const [lastUpdate, setLastUpdate] = useState('—');
@@ -218,6 +257,17 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
         })
       );
 
+      // Atualizar selectedOccurrenceDetail se estiver aberto com esta ocorrência
+      setSelectedOccurrenceDetail((prev) => {
+        if (prev && prev.id === occurrenceId) {
+          return { ...prev, resolvido: true };
+        }
+        return prev;
+      });
+
+      // Fechar modal de confirmação
+      setOccurrenceToResolve(null);
+
       onShowToast({
         type: 'success',
         title: 'Ruptura Resolvida',
@@ -233,6 +283,16 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
     } finally {
       setResolvingId(null);
     }
+  };
+
+  // Função de normalização segura para busca diacrítico-insensível
+  const normalizeSafe = (str: string | null | undefined): string => {
+    if (!str) return '';
+    return str
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .trim();
   };
 
   // 1. GERAR DATAS DO PERÍODO SELECIONADO (Hoje, 7 dias, Este mês)
@@ -269,7 +329,8 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
       datesInPeriod.push({ dateStr, dayKey });
     }
   }
-  // 1.5. CÁLCULO UNIFICADO DA CENTRAL DE PENDÊNCIAS OPERACIONAIS (Etapa 7.2)
+
+  // 1.5. CÁLCULO UNIFICADO DA CENTRAL DE PENDÊNCIAS OPERACIONAIS
   const todayStr = useMemo(() => getLocalDateString(new Date()), []);
 
   const periodDaysRange = useMemo(() => {
@@ -382,7 +443,18 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
   }, [allOperationalVisits]);
 
   const pendenciasFiltradas = useMemo(() => {
+    const term = normalizeSafe(searchPendencias);
+
     return allOperationalVisits.filter((item) => {
+      const matchSearch =
+        !term ||
+        normalizeSafe(item.promotorNome).includes(term) ||
+        normalizeSafe(item.promotorMatricula).includes(term) ||
+        normalizeSafe(item.lojaNome).includes(term) ||
+        normalizeSafe(item.lojaCodigo).includes(term) ||
+        normalizeSafe(item.industriaNome).includes(term) ||
+        normalizeSafe(item.industriaCodigo).includes(term);
+
       const matchInd = filterIndustria === 'all' || item.industriaCodigo === filterIndustria;
       const matchProm = filterPromotor === 'all' || item.promotorMatricula === filterPromotor;
       const matchLoja = filterLoja === 'all' || item.lojaCodigo === filterLoja;
@@ -392,12 +464,11 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
         matchStatus = item.status === pendenciaStatusFilter;
       }
 
-      return matchInd && matchProm && matchLoja && matchStatus;
+      return matchSearch && matchInd && matchProm && matchLoja && matchStatus;
     });
-  }, [allOperationalVisits, filterIndustria, filterPromotor, filterLoja, pendenciaStatusFilter]);
+  }, [allOperationalVisits, searchPendencias, filterIndustria, filterPromotor, filterLoja, pendenciaStatusFilter]);
 
   // 2. EXPANDIR OCORRÊNCIAS DE PLANEJAMENTO REAL POR DATA E ROTA
-  // Chave de desduplicação única: `promotor_matricula|loja_codigo|industria_codigo|dataStr`
   const plannedMap = new Map<string, {
     routeId: string;
     promotorMatricula: string;
@@ -409,7 +480,6 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
 
   routes.forEach((r) => {
     datesInPeriod.forEach(({ dateStr, dayKey }) => {
-      // Verificar se o dia da semana está marcado na rota (segunda, terca, etc.)
       const isDayActive = Boolean(r[dayKey as keyof RouteItem]);
       if (isDayActive) {
         const uniqueKey = `${r.promotor_matricula}|${r.loja_codigo}|${r.industria_codigo}|${dateStr}`;
@@ -437,12 +507,12 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
   const naoRealizadasCount = visits.filter((v) => v.status === 'nao_realizada').length;
   const pendentesCount = Math.max(0, rotasPlanejadasCount - concluidasCount - naoRealizadasCount - iniciadasCount);
 
-  // Taxa de Execução Real (Visitas Concluídas / Ocorrências Planejadas no Período)
+  // Taxa de Execução Real
   const taxaExecucao = rotasPlanejadasCount > 0
     ? Math.round((concluidasCount / rotasPlanejadasCount) * 100)
     : (totalVisitas > 0 ? Math.round((concluidasCount / totalVisitas) * 100) : 0);
 
-  // 4. Mapeamento de Lojas Sem Atendimento (Não Realizadas, Em Andamento ou Pendentes)
+  // 4. Mapeamento de Lojas Sem Atendimento
   const visitsMapByRouteKey = new Map<string, Visit>();
   visits.forEach((v) => {
     const k = `${v.promotor_matricula}|${v.loja_codigo}|${v.industria_codigo}`;
@@ -479,7 +549,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
     };
   }).filter((item) => item.status !== 'concluida');
 
-  // 4.5. ETAPA 4.5 — AGENDA OPERACIONAL DO DIA (Partindo de TODAS as rotas planejadas do dia)
+  // 4.5. AGENDA OPERACIONAL DO DIA
   interface AgendaItem {
     key: string;
     routeId: string;
@@ -515,7 +585,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
     let completedAt: string | null = null;
     let motivoNaoRealizada: string | null = null;
     let duracaoFormatada: string | null = null;
-    let priorityOrder = 2; // Default pendente
+    let priorityOrder = 2;
 
     if (v) {
       status = v.status;
@@ -531,7 +601,6 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
         priorityOrder = 4;
       }
 
-      // Calcular Duração para Visitas Concluídas
       if (startedAt && completedAt) {
         const sTime = new Date(startedAt).getTime();
         const cTime = new Date(completedAt).getTime();
@@ -570,17 +639,27 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
   });
 
   const agendaFiltrada = agendaDoDia.filter((item) => {
+    const term = normalizeSafe(searchAgenda);
+
+    const matchSearch =
+      !term ||
+      normalizeSafe(item.promotorNome).includes(term) ||
+      normalizeSafe(item.promotorMatricula).includes(term) ||
+      normalizeSafe(item.lojaNome).includes(term) ||
+      normalizeSafe(item.lojaCodigo).includes(term) ||
+      normalizeSafe(item.industriaNome).includes(term) ||
+      normalizeSafe(item.industriaCodigo).includes(term);
+
     const matchInd = filterIndustria === 'all' || item.industriaCodigo === filterIndustria;
     const matchProm = filterPromotor === 'all' || item.promotorMatricula === filterPromotor;
     const matchLoja = filterLoja === 'all' || item.lojaCodigo === filterLoja;
     const matchStatus = filterAgendaStatus === 'all' || item.status === filterAgendaStatus;
 
-    return matchInd && matchProm && matchLoja && matchStatus;
+    return matchSearch && matchInd && matchProm && matchLoja && matchStatus;
   }).sort((a, b) => {
     if (a.priorityOrder !== b.priorityOrder) {
       return a.priorityOrder - b.priorityOrder;
     }
-    // Dentro do mesmo grupo, ordenar por horário de início (mais recente primeiro se houver)
     if (a.startedAt && b.startedAt) {
       return new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime();
     }
@@ -589,7 +668,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
     return a.lojaNome.localeCompare(b.lojaNome);
   });
 
-  // 5. CONSOLIDAÇÃO DE RUPTURAS OPERACIONAIS (public.visit_occurrences onde tipo = 'ruptura')
+  // 5. CONSOLIDAÇÃO DE RUPTURAS OPERACIONAIS
   interface RupturaItem {
     id: string;
     visitId: string;
@@ -604,6 +683,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
     descricao: string;
     resolvido: boolean;
     photoSignedUrl?: string;
+    visitObj?: Visit | null;
   }
 
   const todasRupturas: RupturaItem[] = [];
@@ -625,14 +705,14 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
             promotorNome: v.promotor?.nome || v.promotor_matricula,
             descricao: occ.descricao,
             resolvido: Boolean(occ.resolvido),
-            photoSignedUrl: rupturePhotosSigned[v.id]
+            photoSignedUrl: rupturePhotosSigned[v.id],
+            visitObj: v
           });
         }
       });
     }
   });
 
-  // Rupturas considerando os filtros de contexto selecionados (Indústria, Promotor, Loja)
   const rupturasFiltradasContexto = todasRupturas.filter((r) => {
     const matchInd = filterIndustria === 'all' || r.industriaCodigo === filterIndustria;
     const matchProm = filterPromotor === 'all' || r.promotorMatricula === filterPromotor;
@@ -644,13 +724,22 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
   const rupturasAbertasCount = todasRupturas.filter((r) => !r.resolvido).length;
   const rupturasResolvidasCount = todasRupturas.filter((r) => r.resolvido).length;
 
-  // Contadores alinhados ao filtro operacional selecionado
   const totalRupturasFiltradasContexto = rupturasFiltradasContexto.length;
   const rupturasAbertasFiltradasCount = rupturasFiltradasContexto.filter((r) => !r.resolvido).length;
   const rupturasResolvidasFiltradasCount = rupturasFiltradasContexto.filter((r) => r.resolvido).length;
 
-  // Filtrar rupturas conforme controles da interface
   const rupturasFiltradas = rupturasFiltradasContexto.filter((r) => {
+    const term = normalizeSafe(searchRupturas);
+    const matchSearch =
+      !term ||
+      normalizeSafe(r.promotorNome).includes(term) ||
+      normalizeSafe(r.promotorMatricula).includes(term) ||
+      normalizeSafe(r.lojaNome).includes(term) ||
+      normalizeSafe(r.lojaCodigo).includes(term) ||
+      normalizeSafe(r.industriaNome).includes(term) ||
+      normalizeSafe(r.industriaCodigo).includes(term) ||
+      normalizeSafe(r.descricao).includes(term);
+
     const matchStatus =
       filterRupturaStatus === 'all'
         ? true
@@ -658,10 +747,10 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
         ? !r.resolvido
         : r.resolvido;
 
-    return matchStatus;
+    return matchSearch && matchStatus;
   }).sort((a, b) => new Date(b.createdAt || b.dataVisita).getTime() - new Date(a.createdAt || a.dataVisita).getTime());
 
-  // 6. CONSOLIDAÇÃO DE VALIDADES E VENCIMENTOS (public.visit_product_validity)
+  // 6. CONSOLIDAÇÃO DE VALIDADES E VENCIMENTOS
   interface ValidadeItem {
     id: string;
     visitId: string;
@@ -679,6 +768,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
     diffDays: number;
     categoria: 'vencidos' | 'ate3' | 'ate7' | 'ate30' | 'normal';
     priority: number;
+    visitObj?: Visit | null;
   }
 
   const todasValidades: ValidadeItem[] = [];
@@ -727,7 +817,8 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
           promotorNome: v.promotor?.nome || v.promotor_matricula,
           diffDays,
           categoria,
-          priority
+          priority,
+          visitObj: v
         });
       });
     }
@@ -740,12 +831,25 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
   const validadeCountNormal = todasValidades.filter((v) => v.categoria === 'normal').length;
 
   const validadesFiltradas = todasValidades.filter((v) => {
+    const term = normalizeSafe(searchValidades);
+    const matchSearch =
+      !term ||
+      normalizeSafe(v.produtoNome).includes(term) ||
+      normalizeSafe(v.promotorNome).includes(term) ||
+      normalizeSafe(v.promotorMatricula).includes(term) ||
+      normalizeSafe(v.lojaNome).includes(term) ||
+      normalizeSafe(v.lojaCodigo).includes(term) ||
+      normalizeSafe(v.industriaNome).includes(term) ||
+      normalizeSafe(v.industriaCodigo).includes(term) ||
+      normalizeSafe(v.lote).includes(term) ||
+      normalizeSafe(v.observacao).includes(term);
+
     const matchInd = filterIndustria === 'all' || v.industriaCodigo === filterIndustria;
     const matchProm = filterPromotor === 'all' || v.promotorMatricula === filterPromotor;
     const matchLoja = filterLoja === 'all' || v.lojaCodigo === filterLoja;
     const matchCat = filterValidadeStatus === 'all' || v.categoria === filterValidadeStatus;
 
-    return matchInd && matchProm && matchLoja && matchCat;
+    return matchSearch && matchInd && matchProm && matchLoja && matchCat;
   }).sort((a, b) => {
     if (a.priority !== b.priority) return a.priority - b.priority;
     return a.diffDays - b.diffDays;
@@ -773,6 +877,8 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
     tipo: string;
     descricao: string;
     dataHora?: string;
+    resolvido?: boolean;
+    visitObj?: Visit | null;
   }> = [];
 
   visits.forEach((v) => {
@@ -806,7 +912,9 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
           industria: v.industria?.nome || v.industria_codigo,
           tipo: occ.tipo,
           descricao: occ.descricao,
-          dataHora: occ.created_at
+          dataHora: occ.created_at,
+          resolvido: Boolean(occ.resolvido),
+          visitObj: v
         });
       });
     }
@@ -814,7 +922,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
 
   const checklistPerc = totalChecklistItems > 0 ? Math.round((totalChecklistChecked / totalChecklistItems) * 100) : 0;
 
-  // 5.5. ETAPA 5 — CENTRAL DE ALERTAS OPERACIONAIS (Unificação dos alertas em memória)
+  // 5.5. CENTRAL DE ALERTAS OPERACIONAIS
   const allCentralAlerts = useMemo<AlertItem[]>(() => {
     const alerts: AlertItem[] = [];
 
@@ -1055,52 +1163,52 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
       }
     });
 
-    // 5. Aderência por Promotor (🔴 CRÍTICO / 🟡 PENDENTE) — Ativo apenas em OPERACAO_OFICIAL
+    // 5. Aderência por Promotor (Operação Oficial)
     if (systemSettings.mode === 'OPERACAO_OFICIAL' && systemSettings.status === 'loaded') {
       promotoresList.forEach((p) => {
-      const pPlanned = totalPlannedItems.filter((pi) => pi.promotorMatricula === p.matricula);
-      if (pPlanned.length > 0) {
-        const pConcluidas = visits.filter(
-          (v) => v.promotor_matricula === p.matricula && v.status === 'concluida' && v.completed_at != null
-        ).length;
-        const pTaxa = Math.round((pConcluidas / pPlanned.length) * 100);
+        const pPlanned = totalPlannedItems.filter((pi) => pi.promotorMatricula === p.matricula);
+        if (pPlanned.length > 0) {
+          const pConcluidas = visits.filter(
+            (v) => v.promotor_matricula === p.matricula && v.status === 'concluida' && v.completed_at != null
+          ).length;
+          const pTaxa = Math.round((pConcluidas / pPlanned.length) * 100);
 
-        if (pTaxa < 50) {
-          alerts.push({
-            id: `alert-aderencia-critica-${p.matricula}`,
-            prioridade: 'critico',
-            tipo: 'aderencia',
-            data: getLocalStr(now),
-            loja: 'Todas as Lojas do Promotor',
-            industria: 'Geral',
-            promotor: p.nome || p.matricula,
-            promotorMatricula: p.matricula,
-            titulo: 'Baixa Aderência (< 50%)',
-            descricao: `Promotor ${p.nome} apresenta apenas ${pTaxa}% de aderência (${pConcluidas} de ${pPlanned.length} rotas concluídas no período).`,
-            origem: 'Telemetria de Promotores',
-            statusVisual: `🔴 ${pTaxa}% Aderência`,
-            createdAtTimestamp: Date.now()
-          });
-        } else if (pTaxa <= 80) {
-          alerts.push({
-            id: `alert-aderencia-pendente-${p.matricula}`,
-            prioridade: 'pendente',
-            tipo: 'aderencia',
-            data: getLocalStr(now),
-            loja: 'Todas as Lojas do Promotor',
-            industria: 'Geral',
-            promotor: p.nome || p.matricula,
-            promotorMatricula: p.matricula,
-            titulo: 'Aderência Moderada (50%–80%)',
-            descricao: `Promotor ${p.nome} apresenta ${pTaxa}% de aderência (${pConcluidas} de ${pPlanned.length} rotas concluídas no período).`,
-            origem: 'Telemetria de Promotores',
-            statusVisual: `🟡 ${pTaxa}% Aderência`,
-            createdAtTimestamp: Date.now()
-          });
+          if (pTaxa < 50) {
+            alerts.push({
+              id: `alert-aderencia-critica-${p.matricula}`,
+              prioridade: 'critico',
+              tipo: 'aderencia',
+              data: getLocalStr(now),
+              loja: 'Todas as Lojas do Promotor',
+              industria: 'Geral',
+              promotor: p.nome || p.matricula,
+              promotorMatricula: p.matricula,
+              titulo: 'Baixa Aderência (< 50%)',
+              descricao: `Promotor ${p.nome} apresenta apenas ${pTaxa}% de aderência (${pConcluidas} de ${pPlanned.length} rotas concluídas no período).`,
+              origem: 'Telemetria de Promotores',
+              statusVisual: `🔴 ${pTaxa}% Aderência`,
+              createdAtTimestamp: Date.now()
+            });
+          } else if (pTaxa <= 80) {
+            alerts.push({
+              id: `alert-aderencia-pendente-${p.matricula}`,
+              prioridade: 'pendente',
+              tipo: 'aderencia',
+              data: getLocalStr(now),
+              loja: 'Todas as Lojas do Promotor',
+              industria: 'Geral',
+              promotor: p.nome || p.matricula,
+              promotorMatricula: p.matricula,
+              titulo: 'Aderência Moderada (50%–80%)',
+              descricao: `Promotor ${p.nome} apresenta ${pTaxa}% de aderência (${pConcluidas} de ${pPlanned.length} rotas concluídas no período).`,
+              origem: 'Telemetria de Promotores',
+              statusVisual: `🟡 ${pTaxa}% Aderência`,
+              createdAtTimestamp: Date.now()
+            });
+          }
         }
-      }
-    });
-  }
+      });
+    }
 
     const priorityWeight: Record<string, number> = {
       critico: 1,
@@ -1119,7 +1227,22 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
 
   // Filtragem dos Alertas da Central
   const centralAlertsFiltrados = useMemo(() => {
+    const term = normalizeSafe(searchAlerts);
+
     return allCentralAlerts.filter((item) => {
+      const matchSearch =
+        !term ||
+        normalizeSafe(item.promotor).includes(term) ||
+        normalizeSafe(item.promotorMatricula).includes(term) ||
+        normalizeSafe(item.loja).includes(term) ||
+        normalizeSafe(item.lojaCodigo).includes(term) ||
+        normalizeSafe(item.industria).includes(term) ||
+        normalizeSafe(item.industriaCodigo).includes(term) ||
+        normalizeSafe(item.titulo).includes(term) ||
+        normalizeSafe(item.descricao).includes(term) ||
+        normalizeSafe(item.tipo).includes(term) ||
+        normalizeSafe(item.id).includes(term);
+
       const matchInd = filterIndustria === 'all' || item.industriaCodigo === filterIndustria;
       const matchProm = filterPromotor === 'all' || item.promotorMatricula === filterPromotor;
       const matchLoja = filterLoja === 'all' || item.lojaCodigo === filterLoja;
@@ -1131,11 +1254,22 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
         matchPriority = item.prioridade === filterAlertPriority;
       }
 
-      return matchInd && matchProm && matchLoja && matchPriority;
+      return matchSearch && matchInd && matchProm && matchLoja && matchPriority;
     });
-  }, [allCentralAlerts, filterIndustria, filterPromotor, filterLoja, filterAlertPriority]);
+  }, [allCentralAlerts, searchAlerts, filterIndustria, filterPromotor, filterLoja, filterAlertPriority]);
 
-  // Contadores reais de alertas da Central
+  const promotoresPendingSummaryFiltrados = useMemo(() => {
+    const term = normalizeSafe(searchPromotores);
+    if (!term) return promotoresPendingSummary;
+
+    return promotoresPendingSummary.filter((p) => {
+      return (
+        normalizeSafe(p.nome).includes(term) ||
+        normalizeSafe(p.matricula).includes(term)
+      );
+    });
+  }, [promotoresPendingSummary, searchPromotores]);
+
   const alertCounts = useMemo(() => {
     const criticos = allCentralAlerts.filter((a) => a.prioridade === 'critico').length;
     const atencao = allCentralAlerts.filter((a) => a.prioridade === 'atencao').length;
@@ -1146,7 +1280,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
     return { criticos, atencao, pendentes, resolvidos, totalAtivos, totalGeral: allCentralAlerts.length };
   }, [allCentralAlerts]);
 
-  // 6. Agregação de Visitas por Promotor (Ordenado por Maior Pendência / Menor Aderência)
+  // 6. Agregação de Visitas por Promotor
   const rankingPromotores = promotoresList.map((p) => {
     const pPlannedItems = totalPlannedItems.filter((pi) => pi.promotorMatricula === p.matricula);
     const pPlannedCount = pPlannedItems.length;
@@ -1192,12 +1326,11 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
     };
   }).sort((a, b) => b.concluidas - a.concluidas).slice(0, 8);
 
-  // 8. Promotores Críticos (Aderência < 50% e pelo menos 1 rota planejada no período)
   const promotoresCriticos = useMemo(() => {
     return rankingPromotores.filter((p) => p.planejadas > 0 && p.taxa < 50);
   }, [rankingPromotores]);
 
-  // 9. Lojas Críticas (Consolidação objetiva de Rupturas Abertas + Validade Vencida/Próxima + Visitas Pendentes/Não Realizadas)
+  // 9. Lojas Críticas
   const lojasCriticas = useMemo(() => {
     const storeMap = new Map<string, {
       codigo: string;
@@ -1265,7 +1398,6 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
       .sort((a, b) => b.totalProblemas - a.totalProblemas);
   }, [todasRupturas, todasValidades, lojasSemAtendimento]);
 
-  // Lista unificada de todas as Lojas presentes nas rotas e visitas para o filtro operacional
   const todasLojasOperacionais = useMemo(() => {
     const map = new Map<string, string>();
     routes.forEach((r) => {
@@ -1283,176 +1415,156 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
       .sort((a, b) => a.nome.localeCompare(b.nome));
   }, [routes, visits]);
 
-  // Lista única de Lojas com rupturas para referência
-  const lojasComRuptura = Array.from(new Set(todasRupturas.map((r) => r.lojaCodigo)))
-    .map((code) => {
-      const r = todasRupturas.find((item) => item.lojaCodigo === code);
-      return { codigo: code, nome: r?.lojaNome || code };
+  const filteredVisits = useMemo(() => {
+    const term = normalizeSafe(tableSearch);
+
+    return visits.filter((v) => {
+      const matchSearch =
+        !term ||
+        normalizeSafe(v.promotor?.nome).includes(term) ||
+        normalizeSafe(v.promotor_matricula).includes(term) ||
+        normalizeSafe(v.loja?.nome).includes(term) ||
+        normalizeSafe(v.loja_codigo).includes(term) ||
+        normalizeSafe(v.industria?.nome).includes(term) ||
+        normalizeSafe(v.industria_codigo).includes(term) ||
+        normalizeSafe(v.id).includes(term);
+
+      const matchStatus = tableStatus === 'all' || v.status === tableStatus;
+      const matchInd = filterIndustria === 'all' || v.industria_codigo === filterIndustria;
+      const matchProm = filterPromotor === 'all' || v.promotor_matricula === filterPromotor;
+      const matchLoja = filterLoja === 'all' || v.loja_codigo === filterLoja;
+
+      return matchSearch && matchStatus && matchInd && matchProm && matchLoja;
     });
-
-  // Filtragem da tabela de visitas
-  const filteredVisits = visits.filter((v) => {
-    const term = tableSearch.toLowerCase().trim();
-    const matchesSearch =
-      !term ||
-      (v.promotor?.nome || '').toLowerCase().includes(term) ||
-      (v.loja?.nome || '').toLowerCase().includes(term) ||
-      (v.industria?.nome || '').toLowerCase().includes(term) ||
-      (v.loja_codigo || '').toLowerCase().includes(term);
-
-    const matchesStatus =
-      tableStatus === 'all' || v.status === tableStatus;
-    const matchesInd = filterIndustria === 'all' || v.industria_codigo === filterIndustria;
-    const matchesProm = filterPromotor === 'all' || v.promotor_matricula === filterPromotor;
-    const matchesLoja = filterLoja === 'all' || v.loja_codigo === filterLoja;
-
-    return matchesSearch && matchesStatus && matchesInd && matchesProm && matchesLoja;
-  });
+  }, [visits, tableSearch, tableStatus, filterIndustria, filterPromotor, filterLoja]);
 
   return (
-    <div className="w-full px-4 lg:px-8 py-6 max-w-[1720px] mx-auto space-y-6 font-sans">
-      {/* HEADER OPERACIONAL */}
-      <section className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6 bg-[#F7F6F2] border border-[#CFCDC5] p-5 sm:p-6 rounded-2xl shadow-xl relative overflow-hidden">
-        <div className="absolute -right-16 -top-16 w-80 h-80 rounded-full bg-gradient-to-br from-purple-600/15 via-cyan-500/10 to-transparent blur-3xl pointer-events-none" />
+    <div className="w-full px-4 lg:px-8 py-5 max-w-[1720px] mx-auto space-y-5 font-sans text-[#171717]">
+      {/* 1. CABEÇALHO OPERACIONAL COMPACTO E TELEMETRIA */}
+      <header className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 bg-[#F7F6F2] border border-[#CFCDC5] p-4 sm:p-5 rounded-2xl shadow-xs relative overflow-hidden">
         <div className="flex flex-col space-y-1.5 z-10">
-          <div className="flex items-center gap-2">
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-slate-800 border border-[#CFCDC5] text-[#77766F] font-mono text-[11px] font-bold">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-300 font-mono text-[11px] font-bold">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
               TELEMETRIA OPERACIONAL REALTIME
+            </span>
+            <span className="text-xs text-[#737373] font-mono hidden sm:inline">• MK9 Date</span>
+            <span className="text-xs text-[#737373] font-mono hidden md:inline">
+              | Período: <strong className="text-[#171717]">{periodFilter === 'today' ? 'Hoje' : periodFilter === 'week' ? 'Últimos 7 dias' : 'Este mês'}</strong>
             </span>
           </div>
           <h1 className="text-2xl sm:text-3xl font-extrabold text-[#171717] tracking-tight">
-            Painel Operacional de Trade Marketing
+            Painel Operacional
           </h1>
-          <p className="text-xs sm:text-sm text-[#77766F] max-w-3xl">
-            Indicadores gerenciais consolidados em tempo real a partir da execução do Portal do Promotor.
+          <p className="text-xs sm:text-sm text-[#737373]">
+            Acompanhamento centralizado em tempo real de rotas, visitas, rupturas e inconformidades em campo.
           </p>
         </div>
 
-        {/* Action Bar & Filtro de Período */}
-        <div className="flex flex-wrap items-center gap-3 z-10 font-mono text-xs">
-          <div className="flex items-center bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl p-1">
+        {/* Controles de Período Rápido e Sincronização */}
+        <div className="flex flex-wrap items-center gap-2.5 z-10 font-mono text-xs">
+          <div className="flex items-center bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl p-1" role="group" aria-label="Filtro de período">
             <button
               onClick={() => setPeriodFilter('today')}
-              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${periodFilter === 'today' ? 'bg-[#222222] text-white shadow-md' : 'text-[#77766F] hover:text-white'}`}
+              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
+                periodFilter === 'today'
+                  ? 'bg-[#222222] text-white shadow-xs'
+                  : 'text-[#5F5F5F] hover:text-[#171717] hover:bg-[#E4E2DB]'
+              }`}
             >
               Hoje
             </button>
             <button
               onClick={() => setPeriodFilter('week')}
-              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${periodFilter === 'week' ? 'bg-[#222222] text-white shadow-md' : 'text-[#77766F] hover:text-white'}`}
+              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
+                periodFilter === 'week'
+                  ? 'bg-[#222222] text-white shadow-xs'
+                  : 'text-[#5F5F5F] hover:text-[#171717] hover:bg-[#E4E2DB]'
+              }`}
             >
-              Últimos 7 dias
+              7 dias
             </button>
             <button
               onClick={() => setPeriodFilter('month')}
-              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${periodFilter === 'month' ? 'bg-[#222222] text-white shadow-md' : 'text-[#77766F] hover:text-white'}`}
+              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
+                periodFilter === 'month'
+                  ? 'bg-[#222222] text-white shadow-xs'
+                  : 'text-[#5F5F5F] hover:text-[#171717] hover:bg-[#E4E2DB]'
+              }`}
             >
-              Este Mês
+              Mês
             </button>
           </div>
 
           <button
             onClick={fetchOperationalData}
             disabled={loading}
-            className="flex items-center gap-2 bg-[#222222] hover:bg-black text-white font-bold px-4 py-2 rounded-xl shadow-xs transition-all active:scale-95 shadow-md cursor-pointer disabled:opacity-50"
+            className="flex items-center gap-1.5 bg-[#222222] hover:bg-black text-white font-bold px-3.5 py-2 rounded-xl shadow-xs transition-all active:scale-95 cursor-pointer disabled:opacity-50"
+            title="Sincronizar telemetria com Supabase"
           >
-            <span className={`material-symbols-outlined text-[18px] ${loading ? 'animate-spin' : ''}`}>
+            <span className={`material-symbols-outlined text-[16px] ${loading ? 'animate-spin' : ''}`}>
               refresh
             </span>
             <span>Atualizar</span>
           </button>
 
-          <div className="px-3 py-2 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#77766F]">
-            Sincronizado: <strong className="text-[#171717]">{lastUpdate}</strong>
+          <div className="px-3 py-2 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#737373] text-[11px] whitespace-nowrap">
+            Sinc: <strong className="text-[#171717]">{lastUpdate}</strong>
           </div>
         </div>
-      </section>
+      </header>
 
-      {/* BANNER DE IDENTIFICAÇÃO DO MODO OPERACIONAL */}
+      {/* 1.1 BANNER DE MODO OPERACIONAL (COMPACTO E ACESSÍVEL) */}
       {systemSettings.status === 'loading' ? (
-        <section className="bg-[#F7F6F2] border border-[#CFCDC5]/60 rounded-2xl p-4 flex items-center justify-between gap-4 font-mono text-xs text-[#77766F] shadow-md">
-          <div className="flex items-center gap-3">
-            <span className="material-symbols-outlined text-[#77766F] text-xl animate-spin">sync</span>
-            <span>Carregando configurações operacionais e diretrizes de SLA...</span>
-          </div>
-        </section>
-      ) : systemSettings.status !== 'loaded' || systemSettings.mode === 'DESCONHECIDO' ? (
-        <section className="bg-rose-950/30 border border-rose-500/40 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 font-mono text-xs text-rose-200 shadow-md">
-          <div className="flex items-center gap-3">
-            <span className="material-symbols-outlined text-rose-400 text-xl">shield_locked</span>
-            <div>
-              <strong className="text-[#171717] block font-sans text-sm">CONFIGURAÇÃO OPERACIONAL INDISPONÍVEL</strong>
-              <span>Não foi possível confirmar o modo do sistema. Operando em modo seguro restritivo (SLA desativado).</span>
-            </div>
-          </div>
-          <span className="px-2.5 py-1 rounded bg-rose-500/20 text-rose-300 font-bold border border-rose-500/30 self-start sm:self-auto">
-            Fallback Seguro
-          </span>
-        </section>
+        <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-xl p-3 flex items-center gap-3 font-mono text-xs text-[#737373]">
+          <span className="material-symbols-outlined text-purple-600 animate-spin text-sm">sync</span>
+          <span>Carregando diretrizes operacionais de SLA...</span>
+        </div>
       ) : systemSettings.mode === 'IMPLANTACAO' ? (
-        <section className="bg-amber-950/25 border border-amber-500/40 rounded-2xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 font-mono text-xs shadow-md">
-          <div className="flex items-start md:items-center gap-3">
-            <span className="material-symbols-outlined text-amber-400 text-2xl mt-0.5 md:mt-0">handshake</span>
+        <div className="bg-[#FFF8E6] border border-[#FCE19B] rounded-xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 font-mono text-xs shadow-2xs">
+          <div className="flex items-center gap-2.5">
+            <span className="material-symbols-outlined text-[#D98A00] text-xl">info</span>
             <div>
-              <div className="flex items-center gap-2">
-                <span className="font-bold text-amber-300 uppercase tracking-wider text-[11px] bg-amber-500/20 px-2 py-0.5 rounded border border-amber-500/30">
-                  FASE DE IMPLANTAÇÃO
-                </span>
-                <span className="text-[#77766F] text-[11px]">• SLA Não Ativo</span>
-              </div>
-              <p className="text-[#171717] text-xs mt-1 font-sans">
-                O sistema está operando em período de calibração e treinamento. Visitas reais registradas são auditadas com evidências, enquanto rotas planejadas sem atendimento <strong>não constituem atrasos operacionais oficiais</strong>.
-              </p>
+              <span className="font-bold text-[#945B00] bg-[#FEF0C7] px-2 py-0.5 rounded border border-[#FCE19B] text-[10px] mr-2">
+                FASE DE IMPLANTAÇÃO
+              </span>
+              <span className="text-[#171717] font-sans text-xs">
+                Período de calibração ativa. Rotas sem visita registrada <strong>não geram penalidades formais de SLA</strong>.
+              </span>
             </div>
           </div>
-          <div className="flex items-center gap-2 self-start md:self-auto shrink-0">
-            <span className="text-[10px] text-amber-400/80 bg-[#E4E2DB] border border-amber-500/30 px-3 py-1.5 rounded-xl font-bold">
-              Telemetria Operacional Pré-SLA
-            </span>
-          </div>
-        </section>
+          <StatusBadge status="neutro" label="Telemetria Pré-SLA" className="self-start sm:self-auto shrink-0" />
+        </div>
       ) : (
-        <section className="bg-emerald-950/25 border border-emerald-500/40 rounded-2xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 font-mono text-xs shadow-md">
-          <div className="flex items-start md:items-center gap-3">
-            <span className="material-symbols-outlined text-emerald-400 text-2xl mt-0.5 md:mt-0">verified</span>
+        <div className="bg-[#E8F5EE] border border-[#B9E5D0] rounded-xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 font-mono text-xs shadow-2xs">
+          <div className="flex items-center gap-2.5">
+            <span className="material-symbols-outlined text-[#16845B] text-xl">verified</span>
             <div>
-              <div className="flex items-center gap-2">
-                <span className="font-bold text-emerald-300 uppercase tracking-wider text-[11px] bg-emerald-500/20 px-2 py-0.5 rounded border border-emerald-500/30">
-                  OPERAÇÃO OFICIAL ATIVA
-                </span>
-                {systemSettings.officialStartDate && (
-                  <span className="text-[#171717] text-[11px]">
-                    • Início Oficial: <strong>{systemSettings.officialStartDate}</strong>
-                  </span>
-                )}
-              </div>
-              <p className="text-[#171717] text-xs mt-1 font-sans">
-                SLA de atendimento em vigor. Todas as rotas planejadas a partir da data de início oficial geram cálculo de conformidade, pendências e telemetria de desempenho em tempo real.
-              </p>
+              <span className="font-bold text-[#16845B] bg-[#D1FADF] px-2 py-0.5 rounded border border-[#A6F4C5] text-[10px] mr-2">
+                OPERAÇÃO OFICIAL ATIVA
+              </span>
+              <span className="text-[#171717] font-sans text-xs">
+                SLA em vigor integral. Conformidade e aderência de rotas monitoradas oficialmente em tempo real.
+              </span>
             </div>
           </div>
-          <div className="flex items-center gap-2 self-start md:self-auto shrink-0">
-            <span className="text-[10px] text-emerald-400 bg-[#E4E2DB] border border-emerald-500/30 px-3 py-1.5 rounded-xl font-bold">
-              SLA Operacional em Produção
-            </span>
-          </div>
-        </section>
+          <StatusBadge status="conforme" label="SLA Ativo" className="self-start sm:self-auto shrink-0" />
+        </div>
       )}
 
-      {/* BARRA DE FILTROS GLOBAIS OPERACIONAIS */}
-      <section className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-4 shadow-md font-mono text-xs flex flex-wrap items-center gap-4">
-        <span className="text-[#77766F] font-bold uppercase text-[11px] flex items-center gap-1">
-          <span className="material-symbols-outlined text-purple-400 text-[16px]">filter_alt</span>
-          Filtros Operacionais:
+      {/* 1.2 FILTROS GLOBAIS OPERACIONAIS */}
+      <section className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-xl p-3 shadow-xs font-mono text-xs flex flex-wrap items-center gap-3">
+        <span className="text-[#737373] font-bold uppercase text-[10px] flex items-center gap-1">
+          <span className="material-symbols-outlined text-purple-600 text-[15px]">filter_alt</span>
+          Filtros:
         </span>
 
-        <div className="flex items-center gap-2">
-          <label className="text-[#5F5F5F] text-[10px] uppercase">Indústria:</label>
+        <div className="flex items-center gap-1.5">
+          <label className="text-[#737373] text-[10px] uppercase">Indústria:</label>
           <select
             value={filterIndustria}
             onChange={(e) => setFilterIndustria(e.target.value)}
-            className="h-8 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-lg text-[#171717] focus:outline-none focus:border-purple-500"
+            className="h-7.5 px-2.5 bg-[#EAE8E2] border border-[#CFCDC5] rounded-lg text-[#171717] focus:outline-none focus:border-purple-600 text-xs"
           >
             <option value="all">Todas ({industriasList.length})</option>
             {industriasList.map((ind) => (
@@ -1463,12 +1575,12 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
           </select>
         </div>
 
-        <div className="flex items-center gap-2">
-          <label className="text-[#5F5F5F] text-[10px] uppercase">Promotor:</label>
+        <div className="flex items-center gap-1.5">
+          <label className="text-[#737373] text-[10px] uppercase">Promotor:</label>
           <select
             value={filterPromotor}
             onChange={(e) => setFilterPromotor(e.target.value)}
-            className="h-8 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-lg text-[#171717] focus:outline-none focus:border-purple-500"
+            className="h-7.5 px-2.5 bg-[#EAE8E2] border border-[#CFCDC5] rounded-lg text-[#171717] focus:outline-none focus:border-purple-600 text-xs"
           >
             <option value="all">Todos ({promotoresList.length})</option>
             {promotoresList.map((p) => (
@@ -1479,14 +1591,14 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
           </select>
         </div>
 
-        <div className="flex items-center gap-2">
-          <label className="text-[#5F5F5F] text-[10px] uppercase">Loja / PDV:</label>
+        <div className="flex items-center gap-1.5">
+          <label className="text-[#737373] text-[10px] uppercase">Loja / PDV:</label>
           <select
             value={filterLoja}
             onChange={(e) => setFilterLoja(e.target.value)}
-            className="h-8 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-lg text-[#171717] focus:outline-none focus:border-purple-500 max-w-[200px]"
+            className="h-7.5 px-2.5 bg-[#EAE8E2] border border-[#CFCDC5] rounded-lg text-[#171717] focus:outline-none focus:border-purple-600 text-xs max-w-[190px]"
           >
-            <option value="all">Todas as Lojas ({todasLojasOperacionais.length})</option>
+            <option value="all">Todas ({todasLojasOperacionais.length})</option>
             {todasLojasOperacionais.map((l) => (
               <option key={l.codigo} value={l.codigo}>
                 {l.nome}
@@ -1495,12 +1607,12 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
           </select>
         </div>
 
-        <div className="flex items-center gap-2">
-          <label className="text-[#5F5F5F] text-[10px] uppercase">Situação Validade:</label>
+        <div className="flex items-center gap-1.5">
+          <label className="text-[#737373] text-[10px] uppercase">Validade:</label>
           <select
             value={filterValidadeStatus}
             onChange={(e) => setFilterValidadeStatus(e.target.value)}
-            className="h-8 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-lg text-[#171717] focus:outline-none focus:border-purple-500 font-bold"
+            className="h-7.5 px-2 bg-[#EAE8E2] border border-[#CFCDC5] rounded-lg text-[#171717] focus:outline-none focus:border-purple-600 text-xs font-semibold"
           >
             <option value="all">Todas ({todasValidades.length})</option>
             <option value="vencidos">🔴 Vencidos ({validadeCountVencidos})</option>
@@ -1511,12 +1623,12 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
           </select>
         </div>
 
-        <div className="flex items-center gap-2">
-          <label className="text-[#5F5F5F] text-[10px] uppercase">Status Agenda:</label>
+        <div className="flex items-center gap-1.5">
+          <label className="text-[#737373] text-[10px] uppercase">Agenda:</label>
           <select
             value={filterAgendaStatus}
             onChange={(e) => setFilterAgendaStatus(e.target.value)}
-            className="h-8 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-lg text-[#171717] focus:outline-none focus:border-purple-500 font-bold"
+            className="h-7.5 px-2 bg-[#EAE8E2] border border-[#CFCDC5] rounded-lg text-[#171717] focus:outline-none focus:border-purple-600 text-xs font-semibold"
           >
             <option value="all">Status: Todos</option>
             <option value="em_andamento">🔵 Em andamento</option>
@@ -1535,1898 +1647,2000 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
               setFilterValidadeStatus('all');
               setFilterAgendaStatus('all');
             }}
-            className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-[#171717] text-[10px] font-bold transition-all cursor-pointer"
+            className="px-2.5 py-1 rounded bg-[#E4E2DB] hover:bg-[#CFCDC5] text-[#171717] text-[10px] font-bold transition-all cursor-pointer border border-[#CFCDC5]"
           >
             Limpar Filtros
           </button>
         )}
       </section>
 
-      {/* ERRO SUPABASE */}
       {error && (
-        <div className="p-4 bg-rose-500/10 border border-rose-500/30 rounded-xl text-xs font-mono text-rose-300 flex items-center justify-between">
+        <div className="p-3.5 bg-[#FDF2F2] border border-[#F8C8C8] rounded-xl text-xs font-mono text-[#D93636] flex items-center justify-between shadow-2xs">
           <div className="flex items-center gap-2">
-            <span className="material-symbols-outlined text-rose-400">warning</span>
+            <span className="material-symbols-outlined text-[#D93636] text-base">warning</span>
             <span>{error}</span>
           </div>
-          <button onClick={fetchOperationalData} className="px-3 py-1 bg-rose-600 text-white font-bold rounded text-[11px]">
+          <button onClick={fetchOperationalData} className="px-3 py-1 bg-[#D93636] text-white font-bold rounded-lg text-[11px] cursor-pointer hover:bg-red-700 transition-colors">
             Tentar Novamente
           </button>
         </div>
       )}
 
-      {/* SEÇÃO 1: EXECUÇÃO REAL EM CAMPO (EVIDÊNCIAS E ATENDIMENTOS REAIS) */}
-      <div className="space-y-2 font-mono">
-        <div className="flex items-center justify-between">
-          <span className="text-xs font-bold text-[#171717] uppercase tracking-wider flex items-center gap-1.5">
-            <span className="material-symbols-outlined text-emerald-400 text-sm">fact_check</span>
-            Execução Real em Campo (Atendimentos Efetivos)
-          </span>
-          <span className="text-[10px] text-[#77766F]">
-            Baseado exclusivamente nos registros auditados no sistema
-          </span>
-        </div>
-
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-emerald-500/30 shadow-lg">
-            <span className="text-[10px] text-emerald-400 block font-bold uppercase">Concluídas</span>
-            <span className="text-2xl font-extrabold text-emerald-400 mt-1 block">{concluidasCount}</span>
-            <span className="text-[10px] text-[#77766F] block mt-0.5">Check-outs finalizados</span>
-          </div>
-
-          <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-amber-500/30 shadow-lg">
-            <span className="text-[10px] text-amber-400 block font-bold uppercase">Em Andamento</span>
-            <span className="text-2xl font-extrabold text-amber-400 mt-1 block">{iniciadasCount}</span>
-            <span className="text-[10px] text-[#77766F] block mt-0.5">Promotores em loja agora</span>
-          </div>
-
-          <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-rose-500/30 shadow-lg">
-            <span className="text-[10px] text-rose-400 block font-bold uppercase">Não Realizadas</span>
-            <span className="text-2xl font-extrabold text-rose-400 mt-1 block">{naoRealizadasCount}</span>
-            <span className="text-[10px] text-[#77766F] block mt-0.5">Justificativas registradas</span>
-          </div>
-
-          <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-cyan-500/30 shadow-lg">
-            <span className="text-[10px] text-cyan-400 block font-bold uppercase">Fotos & Evidências</span>
-            <span className="text-2xl font-extrabold text-cyan-200 mt-1 block">{totalFotos}</span>
-            <span className="text-[10px] text-[#77766F] block mt-0.5">Fotos armazenadas</span>
-          </div>
-        </div>
-      </div>
-
-      {/* SEÇÃO 2: PLANEJAMENTO CADASTRADO & SLA */}
-      <div className="space-y-2 font-mono">
-        <div className="flex items-center justify-between">
-          <span className="text-xs font-bold text-[#171717] uppercase tracking-wider flex items-center gap-1.5">
-            <span className="material-symbols-outlined text-purple-400 text-sm">calendar_month</span>
-            Planejamento Cadastrado & Indicadores de SLA
-          </span>
-          <span className="text-[10px] text-[#77766F]">
-            {systemSettings.mode === 'OPERACAO_OFICIAL' && systemSettings.status === 'loaded'
-              ? 'Métricas oficiais vigentes'
-              : 'Fase de implantação — Sem penalidade de SLA'}
-          </span>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5] shadow-lg">
-            <span className="text-[10px] text-[#77766F] block font-bold uppercase">Planejamento no Período</span>
-            <span className="text-2xl font-extrabold text-[#171717] mt-1 block">{rotasPlanejadasCount}</span>
-            <span className="text-[10px] text-[#5F5F5F] block mt-0.5">Ocorrências de rota programadas</span>
-          </div>
-
-          <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-cyan-500/30 shadow-lg">
-            <span className="text-[10px] text-cyan-400 block font-bold uppercase">
-              {systemSettings.mode === 'OPERACAO_OFICIAL' && systemSettings.status === 'loaded'
-                ? 'Pendências Operacionais'
-                : 'Agendas Previstas (SLA n/a)'}
+      {/* ========================================================= */}
+      {/* 2. FAIXA MODERNA DE INDICADORES PRINCIPAIS (STATCARD)    */}
+      {/* ========================================================= */}
+      <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 font-mono">
+        {/* Card 1: Visitas de Hoje */}
+        <StatCard
+          title="Visitas de Hoje"
+          value={agendaDoDia.filter(a => a.status === 'concluida').length}
+          description="visitas concluídas hoje"
+          icon="calendar_today"
+          variant="info"
+          onClick={() => setCentralTab('visitas_hoje')}
+          badge={
+            <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-100 text-cyan-900 border border-cyan-300 font-bold">
+              {plannedItemsToday.length} plan.
             </span>
-            <span className="text-2xl font-extrabold text-cyan-300 mt-1 block">{pendentesCount}</span>
-            <span className="text-[10px] text-[#77766F] block mt-0.5">
-              {systemSettings.mode === 'OPERACAO_OFICIAL' && systemSettings.status === 'loaded'
-                ? 'Rotas aguardando execução oficial'
-                : 'Rotas cadastradas sem visita registrada'}
-            </span>
-          </div>
+          }
+          subtitle={
+            <div className="flex items-center justify-between text-[11px]">
+              <span>🔵 {agendaDoDia.filter(a => a.status === 'em_andamento').length} andam.</span>
+              <span>🟡 {agendaDoDia.filter(a => a.status === 'pendente').length} pend.</span>
+              <span>🔴 {agendaDoDia.filter(a => a.status === 'nao_realizada').length} n/r</span>
+            </div>
+          }
+        />
 
-          <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-purple-500/40 shadow-lg">
-            <span className="text-[10px] text-purple-300 block font-bold uppercase">% Aderência Operacional</span>
-            {systemSettings.status === 'loading' ? (
-              <span className="text-sm font-bold text-[#77766F] mt-2 block">Carregando configuração...</span>
-            ) : systemSettings.mode !== 'OPERACAO_OFICIAL' || systemSettings.status !== 'loaded' ? (
-              <div className="mt-1">
-                <span className="text-xs font-bold text-amber-300 block leading-tight">Fase de implantação — SLA não ativo</span>
-                <span className="text-[9px] text-[#77766F] block mt-0.5">Indicador oficial desativado</span>
-              </div>
-            ) : (
-              <span className="text-2xl font-extrabold text-purple-300 mt-1 block">{taxaExecucao}%</span>
-            )}
-            <span className="text-[10px] text-purple-400/70 block mt-0.5">Conformidade com o planejado</span>
-          </div>
-        </div>
-      </div>
+        {/* Card 2: Pendências Críticas */}
+        <StatCard
+          title="Pendências Críticas"
+          value={pendenciasKpis.pendentesAtrasadas}
+          description="atrasadas (fora do prazo)"
+          icon="pending_actions"
+          variant={pendenciasKpis.pendentesAtrasadas > 0 ? 'danger' : 'warning'}
+          onClick={() => setCentralTab('pendencias')}
+          badge={
+            <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold border ${
+              pendenciasKpis.pendentesAtrasadas > 0
+                ? 'bg-rose-100 text-rose-900 border-rose-300'
+                : 'bg-amber-100 text-amber-900 border-amber-300'
+            }`}>
+              {pendenciasKpis.pendentesTotal} no período
+            </span>
+          }
+          subtitle={
+            <div className="flex items-center justify-between text-[11px]">
+              <span>{pendenciasKpis.pendentesHoje} hoje</span>
+              <span className="text-amber-800 font-bold">{pendenciasKpis.naoRealizadas} não realizadas</span>
+            </div>
+          }
+        />
+
+        {/* Card 3: Rupturas Abertas */}
+        <StatCard
+          title="Rupturas Abertas"
+          value={rupturasAbertasFiltradasCount}
+          description="na gôndola (abertas)"
+          icon="report_problem"
+          variant={rupturasAbertasFiltradasCount > 0 ? 'danger' : 'success'}
+          onClick={() => {
+            setOcorrenciasTab('rupturas');
+            setFilterRupturaStatus('abertas');
+          }}
+          badge={
+            <span className="text-[10px] px-2 py-0.5 rounded-full bg-rose-100 text-rose-900 border-rose-300 font-bold">
+              {totalRupturasCount} total
+            </span>
+          }
+          subtitle={
+            <div className="flex items-center justify-between text-[11px]">
+              <span className="text-[#16845B] font-bold">🟢 {rupturasResolvidasFiltradasCount} resolvidas</span>
+              <span>{totalRupturasFiltradasContexto} no filtro</span>
+            </div>
+          }
+        />
+
+        {/* Card 4: Vencimentos Críticos */}
+        <StatCard
+          title="Vencimentos Críticos"
+          value={validadeCountVencidos + validadeCountAte3}
+          description="itens em risco imediato"
+          icon="inventory_2"
+          variant={validadeCountVencidos + validadeCountAte3 > 0 ? 'danger' : 'success'}
+          onClick={() => {
+            setOcorrenciasTab('validades');
+            setFilterValidadeStatus('vencidos');
+          }}
+          badge={
+            <span className="text-[10px] px-2 py-0.5 rounded-full bg-purple-100 text-purple-900 border border-purple-300 font-bold">
+              {todasValidades.length} monitorados
+            </span>
+          }
+          subtitle={
+            <div className="flex items-center justify-between text-[11px]">
+              <span className="text-[#D93636] font-bold">🔴 {validadeCountVencidos} vencidos</span>
+              <span className="text-[#D98A00] font-bold">🚨 {validadeCountAte3} até 3d</span>
+            </div>
+          }
+        />
+      </section>
 
       {/* ========================================================= */}
-      {/* ETAPA 7.2 — CENTRAL DE PENDÊNCIAS OPERACIONAIS             */}
+      {/* 3. CENTRAL DE ATENÇÃO OPERACIONAL (ABAS INTEGRADAS)       */}
       {/* ========================================================= */}
-      <section className="bg-[#F7F6F2] border border-cyan-500/40 rounded-2xl p-6 shadow-2xl space-y-6 font-mono">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#CFCDC5] pb-4">
-          <div className="space-y-1">
-            <h2 className="text-lg font-bold text-[#171717] uppercase tracking-wider flex items-center gap-2">
-              <span className="material-symbols-outlined text-cyan-400 text-2xl animate-pulse">pending_actions</span>
-              🔔 Central de Pendências & Agendas
-            </h2>
-            <p className="text-xs text-[#77766F]">
-              {systemSettings.mode === 'OPERACAO_OFICIAL' && systemSettings.status === 'loaded'
-                ? 'Acompanhamento unificado das visitas planejadas em aberto, atrasadas e pendentes de execução oficial.'
-                : 'Acompanhamento de agendas programadas no período de implantação. Rotas sem visita realizada não constituem atrasos punitivos de SLA.'}
+      <section className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-4 sm:p-5 shadow-sm space-y-4 font-mono">
+        {/* Cabeçalho da Central + Abas de Navegação */}
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-[#CFCDC5] pb-3">
+          <div className="space-y-0.5">
+            <div className="flex items-center gap-2">
+              <span className="material-symbols-outlined text-purple-600 text-xl">tune</span>
+              <h2 className="text-base font-black text-[#171717] tracking-tight">
+                Central de Atenção Operacional
+              </h2>
+            </div>
+            <p className="text-xs text-[#77766F] font-sans">
+              Visão consolidada para ação gerencial rápida: alertas de inconformidade, pendências de agenda e visitas do dia.
             </p>
           </div>
 
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-[#171717] font-bold bg-[#EAE8E2] border border-[#CFCDC5] px-3 py-1.5 rounded-xl">
-              Previstas Hoje: <strong className="text-cyan-400">{pendenciasKpis.pendentesHoje}</strong>
-            </span>
-            <span className="text-xs text-[#171717] font-bold bg-[#EAE8E2] border border-[#CFCDC5] px-3 py-1.5 rounded-xl">
-              Total Previsto: <strong className="text-amber-400">{pendenciasKpis.pendentesTotal}</strong>
-            </span>
+          {/* Abas Rápidas da Central */}
+          <div className="flex items-center gap-1.5 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl p-1 text-xs self-start lg:self-auto overflow-x-auto max-w-full">
+            <button
+              onClick={() => setCentralTab('alertas')}
+              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
+                centralTab === 'alertas'
+                  ? 'bg-[#222222] text-white shadow-xs'
+                  : 'text-[#5F5F5F] hover:text-[#171717] hover:bg-[#E4E2DB]'
+              }`}
+            >
+              <span className="material-symbols-outlined text-sm">notifications_active</span>
+              Alertas Ativos ({alertCounts.totalAtivos})
+            </button>
+
+            <button
+              onClick={() => setCentralTab('pendencias')}
+              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
+                centralTab === 'pendencias'
+                  ? 'bg-[#222222] text-white shadow-xs'
+                  : 'text-[#5F5F5F] hover:text-[#171717] hover:bg-[#E4E2DB]'
+              }`}
+            >
+              <span className="material-symbols-outlined text-sm">pending_actions</span>
+              Pendências & Agendas ({pendenciasKpis.pendentesTotal})
+            </button>
+
+            <button
+              onClick={() => setCentralTab('visitas_hoje')}
+              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
+                centralTab === 'visitas_hoje'
+                  ? 'bg-[#222222] text-white shadow-xs'
+                  : 'text-[#5F5F5F] hover:text-[#171717] hover:bg-[#E4E2DB]'
+              }`}
+            >
+              <span className="material-symbols-outlined text-sm">calendar_today</span>
+              Visitas de Hoje ({plannedItemsToday.length})
+            </button>
+
+            <button
+              onClick={() => setCentralTab('promotores')}
+              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
+                centralTab === 'promotores'
+                  ? 'bg-[#222222] text-white shadow-xs'
+                  : 'text-[#5F5F5F] hover:text-[#171717] hover:bg-[#E4E2DB]'
+              }`}
+            >
+              <span className="material-symbols-outlined text-sm">leaderboard</span>
+              Resumo por Promotor ({promotoresPendingSummary.length})
+            </button>
           </div>
         </div>
 
-        {/* CARDS DE KPIS DE PENDÊNCIAS */}
-        <div className="grid grid-cols-2 sm:grid-cols-6 gap-3 text-xs">
-          <div
-            onClick={() => setPendenciaStatusFilter('pendente')}
-            className={`p-4 rounded-xl border transition-all cursor-pointer ${
-              pendenciaStatusFilter === 'pendente'
-                ? 'bg-cyan-950/60 border-cyan-500 shadow-lg scale-[1.02]'
-                : 'bg-[#EAE8E2] border-cyan-500/30 hover:border-cyan-500/60'
-            }`}
-          >
-            <span className="text-[10px] text-cyan-400 block font-bold uppercase">
-              {systemSettings.mode === 'OPERACAO_OFICIAL' && systemSettings.status === 'loaded'
-                ? '🔴 Pendentes Hoje'
-                : '🗓️ Previstas Hoje'}
-            </span>
-            <span className="text-2xl font-extrabold text-cyan-300 mt-1 block">{pendenciasKpis.pendentesHoje}</span>
-            <span className="text-[10px] text-cyan-400/80 block mt-1">
-              {systemSettings.mode === 'OPERACAO_OFICIAL' && systemSettings.status === 'loaded'
-                ? 'Requer Ação'
-                : 'Agenda do Dia'}
-            </span>
-          </div>
+        {/* CONTEÚDO DA ABA 1: ALERTAS OPERACIONAIS */}
+        {centralTab === 'alertas' && (() => {
+          const alertColumns: Column<AlertItem>[] = [
+            {
+              key: 'prioridade',
+              header: 'PRIORIDADE',
+              sortable: true,
+              className: 'w-[120px] text-center whitespace-nowrap',
+              accessor: (item) => item.prioridade,
+              render: (item) => {
+                if (item.prioridade === 'critico') return <StatusBadge status="critico" label="CRÍTICO" />;
+                if (item.prioridade === 'atencao') return <StatusBadge status="atencao" label="ATENÇÃO" />;
+                if (item.prioridade === 'pendente') return <StatusBadge status="pendente" label="PENDENTE" />;
+                return <StatusBadge status="concluida" label="RESOLVIDO" />;
+              }
+            },
+            {
+              key: 'tipo',
+              header: 'TIPO',
+              sortable: true,
+              className: 'w-[100px] whitespace-nowrap text-[11px] font-bold uppercase text-[#5F5F5F]',
+              accessor: (item) => item.tipo
+            },
+            {
+              key: 'data',
+              header: 'DATA',
+              sortable: true,
+              className: 'w-[100px] whitespace-nowrap text-[#77766F]',
+              accessor: (item) => item.data,
+              render: (item) => new Date(item.data + 'T00:00:00').toLocaleDateString('pt-BR')
+            },
+            {
+              key: 'promotor',
+              header: 'PROMOTOR',
+              sortable: true,
+              className: 'min-w-[150px]',
+              accessor: (item) => item.promotor,
+              render: (item) => (
+                <div>
+                  <div className="font-semibold text-[#171717]">{item.promotor}</div>
+                  {item.promotorMatricula && (
+                    <div className="text-[10px] text-[#737373] font-mono">Mat: {item.promotorMatricula}</div>
+                  )}
+                </div>
+              )
+            },
+            {
+              key: 'loja',
+              header: 'LOJA / PDV',
+              sortable: true,
+              className: 'min-w-[170px]',
+              accessor: (item) => item.loja,
+              render: (item) => (
+                <div>
+                  <div className="font-semibold text-[#171717]">{item.loja}</div>
+                  {item.lojaCodigo && (
+                    <div className="text-[10px] text-[#737373] font-mono">Cód: {item.lojaCodigo}</div>
+                  )}
+                </div>
+              )
+            },
+            {
+              key: 'industria',
+              header: 'INDÚSTRIA',
+              sortable: true,
+              className: 'min-w-[130px]',
+              accessor: (item) => item.industria,
+              render: (item) => (
+                <span className="font-bold text-[#7E22CE]">{item.industria}</span>
+              )
+            },
+            {
+              key: 'descricao',
+              header: 'DESCRIÇÃO DA OCORRÊNCIA',
+              className: 'min-w-[240px] max-w-sm',
+              render: (item) => (
+                <div>
+                  <div className="font-bold text-[#171717]">{item.titulo}</div>
+                  <div className="text-[11px] text-[#77766F] truncate" title={item.descricao}>{item.descricao}</div>
+                </div>
+              )
+            },
+            {
+              key: 'situacao',
+              header: 'SITUAÇÃO',
+              className: 'w-[130px] text-center whitespace-nowrap text-[11px] font-bold',
+              render: (item) => item.statusVisual
+            },
+            {
+              key: 'acoes',
+              header: 'AÇÕES',
+              className: 'w-[110px] text-right whitespace-nowrap',
+              render: (item) => (
+                <div className="flex items-center justify-end gap-1.5">
+                  {item.occurrenceId && item.prioridade !== 'resolvido' && canResolve && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setOccurrenceToResolve({
+                          id: item.occurrenceId!,
+                          titulo: item.titulo,
+                          lojaNome: item.loja,
+                          descricao: item.descricao
+                        });
+                      }}
+                      disabled={resolvingId === item.occurrenceId}
+                      className="px-2.5 py-1 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-[10px] cursor-pointer shadow-xs transition-colors"
+                      title="Marcar ruptura como resolvida"
+                    >
+                      {resolvingId === item.occurrenceId ? '...' : 'Resolver'}
+                    </button>
+                  )}
+                  {item.occurrenceId && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedOccurrenceDetail({
+                          id: item.occurrenceId!,
+                          tipo: item.tipo,
+                          titulo: item.titulo,
+                          descricao: item.descricao,
+                          resolvido: item.prioridade === 'resolvido',
+                          data: item.data,
+                          lojaNome: item.loja,
+                          lojaCodigo: item.lojaCodigo,
+                          lojaEndereco: item.visitObj?.loja?.endereco,
+                          industriaNome: item.industria,
+                          industriaCodigo: item.industriaCodigo,
+                          promotorNome: item.promotor,
+                          promotorMatricula: item.promotorMatricula,
+                          photoSignedUrl: item.visitObj?.id ? rupturePhotosSigned[item.visitObj.id] : undefined,
+                          visitObj: item.visitObj
+                        });
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] font-bold text-[10px] border border-[#CFCDC5] cursor-pointer transition-colors"
+                      title="Ver ficha detalhada da ocorrência"
+                    >
+                      Detalhes
+                    </button>
+                  )}
+                  {item.visitObj && !item.occurrenceId && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedVisit(item.visitObj!);
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] font-bold text-[10px] border border-[#CFCDC5] cursor-pointer transition-colors"
+                      title="Ver ficha da visita"
+                    >
+                      Visita
+                    </button>
+                  )}
+                </div>
+              )
+            }
+          ];
 
-          <div
-            onClick={() => setPendenciaStatusFilter('pendente')}
-            className={`p-4 rounded-xl border transition-all cursor-pointer ${
-              pendenciaStatusFilter === 'pendente'
-                ? 'bg-amber-950/60 border-amber-500 shadow-lg scale-[1.02]'
-                : 'bg-[#EAE8E2] border-amber-500/30 hover:border-amber-500/60'
-            }`}
-          >
-            <span className="text-[10px] text-amber-400 block font-bold uppercase">
-              {systemSettings.mode === 'OPERACAO_OFICIAL' && systemSettings.status === 'loaded'
-                ? '🚨 Atrasadas'
-                : '📅 Não Executadas (Pré-SLA)'}
-            </span>
-            <span className="text-2xl font-extrabold text-amber-300 mt-1 block">{pendenciasKpis.pendentesAtrasadas}</span>
-            <span className="text-[10px] text-amber-400/80 block mt-1">
-              {systemSettings.mode === 'OPERACAO_OFICIAL' && systemSettings.status === 'loaded'
-                ? 'Dias Anteriores'
-                : 'Sem registro de visita'}
-            </span>
-          </div>
+          return (
+            <div className="space-y-3">
+              {/* Filtros de Prioridade dos Alertas */}
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                <div className="flex flex-wrap items-center gap-1.5 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl p-1">
+                  <button
+                    onClick={() => setFilterAlertPriority('active')}
+                    className={`px-2.5 py-1 rounded-lg font-bold transition-all cursor-pointer ${
+                      filterAlertPriority === 'active' ? 'bg-[#222222] text-white' : 'text-[#5F5F5F] hover:text-[#171717]'
+                    }`}
+                  >
+                    Ativos ({alertCounts.totalAtivos})
+                  </button>
+                  <button
+                    onClick={() => setFilterAlertPriority('critico')}
+                    className={`px-2.5 py-1 rounded-lg font-bold transition-all cursor-pointer ${
+                      filterAlertPriority === 'critico' ? 'bg-rose-700 text-white' : 'text-rose-700 hover:bg-rose-100'
+                    }`}
+                  >
+                    🔴 Críticos ({alertCounts.criticos})
+                  </button>
+                  <button
+                    onClick={() => setFilterAlertPriority('atencao')}
+                    className={`px-2.5 py-1 rounded-lg font-bold transition-all cursor-pointer ${
+                      filterAlertPriority === 'atencao' ? 'bg-amber-700 text-white' : 'text-amber-800 hover:bg-amber-100'
+                    }`}
+                  >
+                    🟠 Atenção ({alertCounts.atencao})
+                  </button>
+                  <button
+                    onClick={() => setFilterAlertPriority('pendente')}
+                    className={`px-2.5 py-1 rounded-lg font-bold transition-all cursor-pointer ${
+                      filterAlertPriority === 'pendente' ? 'bg-yellow-700 text-white' : 'text-yellow-800 hover:bg-yellow-100'
+                    }`}
+                  >
+                    🟡 Pendentes ({alertCounts.pendentes})
+                  </button>
+                  <button
+                    onClick={() => setFilterAlertPriority('resolvido')}
+                    className={`px-2.5 py-1 rounded-lg font-bold transition-all cursor-pointer ${
+                      filterAlertPriority === 'resolvido' ? 'bg-emerald-700 text-white' : 'text-emerald-800 hover:bg-emerald-100'
+                    }`}
+                  >
+                    🟢 Resolvidos ({alertCounts.resolvidos})
+                  </button>
+                  <button
+                    onClick={() => setFilterAlertPriority('all')}
+                    className={`px-2.5 py-1 rounded-lg font-bold transition-all cursor-pointer ${
+                      filterAlertPriority === 'all' ? 'bg-[#222222] text-white' : 'text-[#5F5F5F] hover:text-[#171717]'
+                    }`}
+                  >
+                    Todos ({alertCounts.totalGeral})
+                  </button>
+                </div>
 
-          <div
-            onClick={() => setPendenciaStatusFilter('em_andamento')}
-            className={`p-4 rounded-xl border transition-all cursor-pointer ${
-              pendenciaStatusFilter === 'em_andamento'
-                ? 'bg-blue-950/60 border-blue-500 shadow-lg scale-[1.02]'
-                : 'bg-[#EAE8E2] border-blue-500/30 hover:border-blue-500/60'
-            }`}
-          >
-            <span className="text-[10px] text-blue-400 block font-bold uppercase">🔵 Em Andamento</span>
-            <span className="text-2xl font-extrabold text-blue-300 mt-1 block">{pendenciasKpis.emAndamento}</span>
-            <span className="text-[10px] text-blue-400/80 block mt-1">Em Campo</span>
-          </div>
-
-          <div
-            onClick={() => setPendenciaStatusFilter('nao_realizada')}
-            className={`p-4 rounded-xl border transition-all cursor-pointer ${
-              pendenciaStatusFilter === 'nao_realizada'
-                ? 'bg-orange-950/60 border-orange-500 shadow-lg scale-[1.02]'
-                : 'bg-[#EAE8E2] border-orange-500/30 hover:border-orange-500/60'
-            }`}
-          >
-            <span className="text-[10px] text-orange-400 block font-bold uppercase">🟠 Não Realizadas</span>
-            <span className="text-2xl font-extrabold text-orange-300 mt-1 block">{pendenciasKpis.naoRealizadas}</span>
-            <span className="text-[10px] text-orange-400/80 block mt-1">Com Justificativa</span>
-          </div>
-
-          <div
-            onClick={() => setPendenciaStatusFilter('concluida')}
-            className={`p-4 rounded-xl border transition-all cursor-pointer ${
-              pendenciaStatusFilter === 'concluida'
-                ? 'bg-emerald-950/60 border-emerald-500 shadow-lg scale-[1.02]'
-                : 'bg-[#EAE8E2] border-emerald-500/30 hover:border-emerald-500/60'
-            }`}
-          >
-            <span className="text-[10px] text-emerald-400 block font-bold uppercase">🟢 Concluídas</span>
-            <span className="text-2xl font-extrabold text-emerald-300 mt-1 block">{pendenciasKpis.concluidas}</span>
-            <span className="text-[10px] text-emerald-400/80 block mt-1">Finalizadas</span>
-          </div>
-
-          <div
-            onClick={() => setPendenciaStatusFilter('todas')}
-            className={`p-4 rounded-xl border transition-all cursor-pointer ${
-              pendenciaStatusFilter === 'todas'
-                ? 'bg-cyan-950/60 border-cyan-500 shadow-lg scale-[1.02]'
-                : 'bg-[#EAE8E2] border-cyan-500/30 hover:border-cyan-500/60'
-            }`}
-          >
-            <span className="text-[10px] text-cyan-300 block font-bold uppercase">📊 Aderência</span>
-            {systemSettings.status === 'loading' ? (
-              <span className="text-sm font-bold text-[#77766F] mt-2 block">Carregando...</span>
-            ) : systemSettings.mode !== 'OPERACAO_OFICIAL' || systemSettings.status !== 'loaded' ? (
-              <div className="mt-1">
-                <span className="text-xs font-bold text-amber-300 block leading-tight">Fase de implantação — SLA não ativo</span>
-                <span className="text-[9px] text-[#77766F] block mt-0.5">Indicador oficial desativado</span>
+                <div className="relative">
+                  <span className="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-[#737373] pointer-events-none">
+                    search
+                  </span>
+                  <input
+                    type="text"
+                    value={searchAlerts}
+                    onChange={(e) => setSearchAlerts(e.target.value)}
+                    placeholder="Buscar alertas por promotor, loja, indústria..."
+                    className="h-8 pl-8 pr-3 bg-white border border-[#CFCDC5] rounded-xl text-xs text-[#171717] focus:outline-none focus:border-purple-600 w-[240px] sm:w-[280px]"
+                    aria-label="Buscar alertas operacionais"
+                  />
+                  {searchAlerts && (
+                    <button
+                      onClick={() => setSearchAlerts('')}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-[#737373] hover:text-[#171717] p-0.5 cursor-pointer"
+                      title="Limpar busca"
+                    >
+                      <span className="material-symbols-outlined text-xs">close</span>
+                    </button>
+                  )}
+                </div>
               </div>
-            ) : (
-              <span className="text-2xl font-extrabold text-cyan-200 mt-1 block">{pendenciasKpis.aderencia}%</span>
-            )}
-            <span className="text-[10px] text-cyan-400/80 block mt-1">Taxa Geral</span>
+
+              <DataTable<AlertItem>
+                data={centralAlertsFiltrados}
+                columns={alertColumns}
+                keyExtractor={(item) => item.id}
+                title="Alertas Operacionais Ativos"
+                titleIcon="notifications_active"
+                badgeCount={centralAlertsFiltrados.length}
+                defaultPageSize={10}
+                pageSizeOptions={[10, 25, 50]}
+                emptyTitle="Nenhum alerta operacional para este filtro"
+                emptyMessage="A operação está em plena conformidade com as diretrizes vigentes."
+              />
+            </div>
+          );
+        })()}
+
+        {/* CONTEÚDO DA ABA 2: PENDÊNCIAS & AGENDAS */}
+        {centralTab === 'pendencias' && (() => {
+          const pendenciaColumns: Column<OperationalVisitItem>[] = [
+            {
+              key: 'data',
+              header: 'DATA PREVISTA',
+              sortable: true,
+              className: 'w-[120px] whitespace-nowrap',
+              accessor: (item) => item.dataStr,
+              render: (item) => (
+                <div>
+                  <div className="font-bold text-[#171717]">{item.dataStr}</div>
+                  <div className="text-[10px] text-[#77766F]">{item.dayOfWeekLabel}</div>
+                </div>
+              )
+            },
+            {
+              key: 'promotor',
+              header: 'PROMOTOR',
+              sortable: true,
+              className: 'min-w-[150px]',
+              accessor: (item) => item.promotorNome,
+              render: (item) => (
+                <div>
+                  <div className="font-semibold text-[#171717]">{item.promotorNome}</div>
+                  <div className="text-[10px] text-[#737373] font-mono">Mat: {item.promotorMatricula}</div>
+                </div>
+              )
+            },
+            {
+              key: 'loja',
+              header: 'LOJA / PDV',
+              sortable: true,
+              className: 'min-w-[170px]',
+              accessor: (item) => item.lojaNome,
+              render: (item) => (
+                <div>
+                  <div className="font-semibold text-[#171717]">{item.lojaNome}</div>
+                  {item.lojaCidade && (
+                    <div className="text-[10px] text-[#77766F]">{item.lojaCidade} - {item.lojaUf}</div>
+                  )}
+                </div>
+              )
+            },
+            {
+              key: 'industria',
+              header: 'INDÚSTRIA',
+              sortable: true,
+              className: 'min-w-[130px]',
+              accessor: (item) => item.industriaNome,
+              render: (item) => (
+                <span className="text-[#7E22CE] font-bold">{item.industriaNome}</span>
+              )
+            },
+            {
+              key: 'frequencia',
+              header: 'FREQUÊNCIA',
+              className: 'w-[110px] text-[#77766F] whitespace-nowrap',
+              render: (item) => item.frequencia
+            },
+            {
+              key: 'situacao',
+              header: 'SITUAÇÃO',
+              sortable: true,
+              className: 'w-[140px] text-center whitespace-nowrap',
+              accessor: (item) => item.status,
+              render: (item) => {
+                if (item.isPastOverdue) {
+                  return <StatusBadge status="critico" label="🚨 ATRASADA" />;
+                }
+                if (item.status === 'em_andamento') {
+                  return <StatusBadge status="em_andamento" label="EM ANDAMENTO" />;
+                }
+                if (item.status === 'nao_realizada') {
+                  return <StatusBadge status="falta" label="NÃO REALIZADA" />;
+                }
+                if (item.status === 'concluida') {
+                  return <StatusBadge status="concluida" label="CONCLUÍDA" />;
+                }
+                return <StatusBadge status="pendente" label="PENDENTE" />;
+              }
+            },
+            {
+              key: 'acoes',
+              header: 'AÇÕES',
+              className: 'w-[90px] text-right whitespace-nowrap',
+              render: (item) => (
+                <button
+                  onClick={() => setSelectedPendingItem(item)}
+                  className="px-2.5 py-1.5 rounded-xl bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] border border-[#CFCDC5] font-bold text-xs transition-all active:scale-95 cursor-pointer shadow-2xs"
+                  title="Ver detalhes da pendência"
+                >
+                  Detalhes
+                </button>
+              )
+            }
+          ];
+
+          return (
+            <div className="space-y-3">
+              {/* Filtros da Tabela de Pendências */}
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                <div className="flex flex-wrap items-center gap-1.5 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl p-1">
+                  <button
+                    onClick={() => setPendenciaStatusFilter('pendente')}
+                    className={`px-3 py-1 rounded-lg font-bold transition-all cursor-pointer ${
+                      pendenciaStatusFilter === 'pendente' ? 'bg-rose-700 text-white' : 'text-[#5F5F5F] hover:text-[#171717]'
+                    }`}
+                  >
+                    🔴 Pendentes ({pendenciasKpis.pendentesTotal})
+                  </button>
+                  <button
+                    onClick={() => setPendenciaStatusFilter('em_andamento')}
+                    className={`px-3 py-1 rounded-lg font-bold transition-all cursor-pointer ${
+                      pendenciaStatusFilter === 'em_andamento' ? 'bg-blue-700 text-white' : 'text-[#5F5F5F] hover:text-[#171717]'
+                    }`}
+                  >
+                    🔵 Em Andamento ({pendenciasKpis.emAndamento})
+                  </button>
+                  <button
+                    onClick={() => setPendenciaStatusFilter('nao_realizada')}
+                    className={`px-3 py-1 rounded-lg font-bold transition-all cursor-pointer ${
+                      pendenciaStatusFilter === 'nao_realizada' ? 'bg-orange-700 text-white' : 'text-[#5F5F5F] hover:text-[#171717]'
+                    }`}
+                  >
+                    🟠 Não Realizadas ({pendenciasKpis.naoRealizadas})
+                  </button>
+                  <button
+                    onClick={() => setPendenciaStatusFilter('concluida')}
+                    className={`px-3 py-1 rounded-lg font-bold transition-all cursor-pointer ${
+                      pendenciaStatusFilter === 'concluida' ? 'bg-emerald-700 text-white' : 'text-[#5F5F5F] hover:text-[#171717]'
+                    }`}
+                  >
+                    🟢 Concluídas ({pendenciasKpis.concluidas})
+                  </button>
+                  <button
+                    onClick={() => setPendenciaStatusFilter('todas')}
+                    className={`px-3 py-1 rounded-lg font-bold transition-all cursor-pointer ${
+                      pendenciaStatusFilter === 'todas' ? 'bg-[#222222] text-white' : 'text-[#5F5F5F] hover:text-[#171717]'
+                    }`}
+                  >
+                    Todas ({pendenciasKpis.totalPlanejadas})
+                  </button>
+                </div>
+
+                <div className="relative">
+                  <span className="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-[#737373] pointer-events-none">
+                    search
+                  </span>
+                  <input
+                    type="text"
+                    value={searchPendencias}
+                    onChange={(e) => setSearchPendencias(e.target.value)}
+                    placeholder="Buscar por promotor, loja, indústria..."
+                    className="h-8 pl-8 pr-3 bg-white border border-[#CFCDC5] rounded-xl text-xs text-[#171717] focus:outline-none focus:border-purple-600 w-[240px] sm:w-[280px]"
+                    aria-label="Buscar pendências de rotas"
+                  />
+                  {searchPendencias && (
+                    <button
+                      onClick={() => setSearchPendencias('')}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-[#737373] hover:text-[#171717] p-0.5 cursor-pointer"
+                      title="Limpar busca"
+                    >
+                      <span className="material-symbols-outlined text-xs">close</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <DataTable<OperationalVisitItem>
+                data={pendenciasFiltradas}
+                columns={pendenciaColumns}
+                keyExtractor={(item) => item.key}
+                title="Pendências e Agendas de Rotas"
+                titleIcon="pending_actions"
+                badgeCount={pendenciasFiltradas.length}
+                defaultPageSize={10}
+                pageSizeOptions={[10, 25, 50]}
+                emptyTitle="Nenhuma pendência encontrada nesta visualização"
+                emptyMessage="Todas as visitas do filtro selecionado estão em conformidade com o cronograma."
+              />
+            </div>
+          );
+        })()}
+
+        {/* CONTEÚDO DA ABA 3: VISITAS DE HOJE */}
+        {centralTab === 'visitas_hoje' && (() => {
+          const agendaColumns: Column<typeof agendaFiltrada[0]>[] = [
+            {
+              key: 'status',
+              header: 'STATUS',
+              sortable: true,
+              className: 'w-[130px] text-center whitespace-nowrap',
+              accessor: (item) => item.status,
+              render: (item) => {
+                if (item.status === 'concluida') return <StatusBadge status="concluida" label="CONCLUÍDA" />;
+                if (item.status === 'em_andamento') return <StatusBadge status="em_andamento" label="EM ANDAMENTO" />;
+                if (item.status === 'nao_realizada') return <StatusBadge status="falta" label="NÃO REALIZADA" />;
+                return <StatusBadge status="pendente" label="PENDENTE" />;
+              }
+            },
+            {
+              key: 'promotor',
+              header: 'PROMOTOR',
+              sortable: true,
+              className: 'min-w-[150px]',
+              accessor: (item) => item.promotorNome,
+              render: (item) => (
+                <div>
+                  <div className="font-semibold text-[#171717]">{item.promotorNome}</div>
+                  <div className="text-[10px] text-[#737373] font-mono">Mat: {item.promotorMatricula}</div>
+                </div>
+              )
+            },
+            {
+              key: 'loja',
+              header: 'LOJA / PDV',
+              sortable: true,
+              className: 'min-w-[170px]',
+              accessor: (item) => item.lojaNome,
+              render: (item) => (
+                <div>
+                  <div className="font-semibold text-[#171717]">{item.lojaNome}</div>
+                  <div className="text-[10px] text-[#737373] font-mono">Cód: {item.lojaCodigo}</div>
+                </div>
+              )
+            },
+            {
+              key: 'industria',
+              header: 'INDÚSTRIA',
+              sortable: true,
+              className: 'min-w-[130px]',
+              accessor: (item) => item.industriaNome,
+              render: (item) => (
+                <span className="font-bold text-[#7E22CE]">{item.industriaNome}</span>
+              )
+            },
+            {
+              key: 'inicio',
+              header: 'INÍCIO',
+              className: 'w-[90px] text-[#77766F] whitespace-nowrap',
+              render: (item) => item.startedAt ? new Date(item.startedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—'
+            },
+            {
+              key: 'conclusao',
+              header: 'CONCLUSÃO',
+              className: 'w-[90px] text-[#77766F] whitespace-nowrap',
+              render: (item) => item.completedAt ? new Date(item.completedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—'
+            },
+            {
+              key: 'duracao',
+              header: 'DURAÇÃO',
+              className: 'w-[90px] text-center font-bold text-emerald-700 whitespace-nowrap',
+              render: (item) => item.duracaoFormatada || '—'
+            },
+            {
+              key: 'acoes',
+              header: 'AÇÕES',
+              className: 'w-[80px] text-right whitespace-nowrap',
+              render: (item) => item.visitObj ? (
+                <button
+                  onClick={() => setSelectedVisit(item.visitObj!)}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] border border-[#CFCDC5] font-bold text-xs transition-all active:scale-95 cursor-pointer shadow-2xs"
+                  title="Ver Ficha da Visita"
+                >
+                  <span className="material-symbols-outlined text-[15px]">visibility</span>
+                  <span className="hidden sm:inline">Ficha</span>
+                </button>
+              ) : (
+                <span className="text-[10px] text-[#77766F] italic">Aguardando</span>
+              )
+            }
+          ];
+
+          return (
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                <span className="text-[#77766F]">
+                  Agenda operacional de hoje ({new Date().toLocaleDateString('pt-BR')}) • <strong>{plannedItemsToday.length}</strong> roteirizada(s)
+                </span>
+
+                <div className="relative">
+                  <span className="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-[#737373] pointer-events-none">
+                    search
+                  </span>
+                  <input
+                    type="text"
+                    value={searchAgenda}
+                    onChange={(e) => setSearchAgenda(e.target.value)}
+                    placeholder="Buscar agenda por promotor, loja, indústria..."
+                    className="h-8 pl-8 pr-3 bg-white border border-[#CFCDC5] rounded-xl text-xs text-[#171717] focus:outline-none focus:border-purple-600 w-[240px] sm:w-[280px]"
+                    aria-label="Buscar visitas do dia"
+                  />
+                  {searchAgenda && (
+                    <button
+                      onClick={() => setSearchAgenda('')}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-[#737373] hover:text-[#171717] p-0.5 cursor-pointer"
+                      title="Limpar busca"
+                    >
+                      <span className="material-symbols-outlined text-xs">close</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <DataTable<typeof agendaFiltrada[0]>
+                data={agendaFiltrada}
+                columns={agendaColumns}
+                keyExtractor={(item) => item.key}
+                title="Agenda Operacional de Hoje"
+                titleIcon="calendar_today"
+                badgeCount={agendaFiltrada.length}
+                defaultPageSize={10}
+                pageSizeOptions={[10, 25, 50]}
+                emptyTitle="Nenhuma visita planejada para hoje no filtro atual"
+                emptyMessage="Todas as rotas de hoje foram concluídas ou não há registros no filtro selecionado."
+              />
+            </div>
+          );
+        })()}
+
+        {/* CONTEÚDO DA ABA 4: RESUMO POR PROMOTOR */}
+        {centralTab === 'promotores' && (() => {
+          const promotorColumns: Column<typeof promotoresPendingSummaryFiltrados[0]>[] = [
+            {
+              key: 'promotor',
+              header: 'PROMOTOR',
+              sortable: true,
+              className: 'min-w-[180px]',
+              accessor: (p) => p.nome,
+              render: (p) => (
+                <div className="flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-[#77766F] text-sm">person</span>
+                  <div>
+                    <span className="font-bold text-[#171717]">{p.nome}</span>
+                    <span className="text-[10px] text-[#737373] font-mono block">Mat: {p.matricula}</span>
+                  </div>
+                </div>
+              )
+            },
+            {
+              key: 'planejadas',
+              header: 'PLANEJADAS',
+              sortable: true,
+              className: 'w-[100px] text-center font-semibold text-[#171717]',
+              accessor: (p) => p.totalPlanned
+            },
+            {
+              key: 'pendentes',
+              header: 'PENDENTES',
+              sortable: true,
+              className: 'w-[100px] text-center font-bold',
+              accessor: (p) => p.pendentes,
+              render: (p) => (
+                <span className={p.pendentes > 0 ? 'text-rose-700 font-black' : 'text-[#77766F]'}>
+                  {p.pendentes}
+                </span>
+              )
+            },
+            {
+              key: 'emAndamento',
+              header: 'EM ANDAMENTO',
+              sortable: true,
+              className: 'w-[110px] text-center text-blue-700 font-semibold',
+              accessor: (p) => p.emAndamento
+            },
+            {
+              key: 'naoRealizadas',
+              header: 'NÃO REALIZADAS',
+              sortable: true,
+              className: 'w-[120px] text-center text-orange-700 font-semibold',
+              accessor: (p) => p.naoRealizadas
+            },
+            {
+              key: 'concluidas',
+              header: 'CONCLUÍDAS',
+              sortable: true,
+              className: 'w-[100px] text-center text-emerald-700 font-bold',
+              accessor: (p) => p.concluidas
+            },
+            {
+              key: 'aderencia',
+              header: 'ADERÊNCIA',
+              sortable: true,
+              className: 'w-[110px] text-right font-bold',
+              accessor: (p) => p.aderencia,
+              render: (p) => {
+                if (systemSettings.mode !== 'OPERACAO_OFICIAL' || systemSettings.status !== 'loaded') {
+                  return <StatusBadge status="neutro" label="Pré-SLA" />;
+                }
+                const badgeStatus = p.aderencia < 50 ? 'critico' : p.aderencia < 80 ? 'atencao' : 'conforme';
+                return <StatusBadge status={badgeStatus} label={`${p.aderencia}%`} />;
+              }
+            },
+            {
+              key: 'acoes',
+              header: 'FILTRAR',
+              className: 'w-[80px] text-right whitespace-nowrap',
+              render: (p) => (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setFilterPromotor(p.matricula);
+                  }}
+                  className="px-2.5 py-1 rounded-lg bg-[#EAE8E2] hover:bg-[#222222] hover:text-white text-[#171717] border border-[#CFCDC5] font-bold text-[10px] transition-all cursor-pointer"
+                  title={`Filtrar apenas o promotor ${p.nome}`}
+                >
+                  Filtrar
+                </button>
+              )
+            }
+          ];
+
+          return (
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                <span className="text-[#77766F]">
+                  Resumo de rotas e execução por promotor ({promotoresPendingSummary.length} promotores com agendas)
+                </span>
+
+                <div className="relative">
+                  <span className="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-[#737373] pointer-events-none">
+                    search
+                  </span>
+                  <input
+                    type="text"
+                    value={searchPromotores}
+                    onChange={(e) => setSearchPromotores(e.target.value)}
+                    placeholder="Buscar por nome ou matrícula..."
+                    className="h-8 pl-8 pr-3 bg-white border border-[#CFCDC5] rounded-xl text-xs text-[#171717] focus:outline-none focus:border-purple-600 w-[240px] sm:w-[280px]"
+                    aria-label="Buscar resumo de promotores"
+                  />
+                  {searchPromotores && (
+                    <button
+                      onClick={() => setSearchPromotores('')}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-[#737373] hover:text-[#171717] p-0.5 cursor-pointer"
+                      title="Limpar busca"
+                    >
+                      <span className="material-symbols-outlined text-xs">close</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <DataTable<typeof promotoresPendingSummaryFiltrados[0]>
+                data={promotoresPendingSummaryFiltrados}
+                columns={promotorColumns}
+                keyExtractor={(p) => p.matricula}
+                title="Resumo Operacional por Promotor"
+                titleIcon="leaderboard"
+                badgeCount={promotoresPendingSummaryFiltrados.length}
+                defaultPageSize={10}
+                pageSizeOptions={[10, 25, 50]}
+                onRowClick={(p) => setFilterPromotor(p.matricula)}
+                emptyTitle="Nenhum promotor encontrado"
+                emptyMessage="Nenhum promotor com rotas planejadas foi encontrado no filtro selecionado."
+              />
+            </div>
+          );
+        })()}
+      </section>
+
+      {/* ========================================================= */}
+      {/* 4. OCORRÊNCIAS & QUALIDADE EM CAMPO (BLOCO CONSOLIDADO)    */}
+      {/* ========================================================= */}
+      <section className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-4 sm:p-5 shadow-sm space-y-4 font-mono">
+        {/* Cabeçalho do Bloco de Ocorrências e Abas */}
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-[#CFCDC5] pb-3">
+          <div className="space-y-0.5">
+            <div className="flex items-center gap-2">
+              <span className="material-symbols-outlined text-rose-600 text-xl">fact_check</span>
+              <h2 className="text-base font-black text-[#171717] tracking-tight">
+                Ocorrências &amp; Qualidade da Execução
+              </h2>
+            </div>
+            <p className="text-xs text-[#77766F] font-sans">
+              Consolidação técnica de rupturas na gôndola, vencimento de produtos, incidentes gerais e validação de checklist.
+            </p>
+          </div>
+
+          {/* Abas de Ocorrências */}
+          <div className="flex items-center gap-1.5 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl p-1 text-xs self-start lg:self-auto overflow-x-auto max-w-full">
+            <button
+              onClick={() => setOcorrenciasTab('rupturas')}
+              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
+                ocorrenciasTab === 'rupturas'
+                  ? 'bg-[#222222] text-white shadow-xs'
+                  : 'text-[#5F5F5F] hover:text-[#171717] hover:bg-[#E4E2DB]'
+              }`}
+            >
+              <span className="material-symbols-outlined text-sm">report_problem</span>
+              Rupturas ({totalRupturasCount})
+            </button>
+
+            <button
+              onClick={() => setOcorrenciasTab('validades')}
+              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
+                ocorrenciasTab === 'validades'
+                  ? 'bg-[#222222] text-white shadow-xs'
+                  : 'text-[#5F5F5F] hover:text-[#171717] hover:bg-[#E4E2DB]'
+              }`}
+            >
+              <span className="material-symbols-outlined text-sm">inventory_2</span>
+              Validades ({todasValidades.length})
+            </button>
+
+            <button
+              onClick={() => setOcorrenciasTab('incidentes')}
+              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
+                ocorrenciasTab === 'incidentes'
+                  ? 'bg-[#222222] text-white shadow-xs'
+                  : 'text-[#5F5F5F] hover:text-[#171717] hover:bg-[#E4E2DB]'
+              }`}
+            >
+              <span className="material-symbols-outlined text-sm">warning</span>
+              Incidentes Gerais ({totalOcorrencias})
+            </button>
+
+            <button
+              onClick={() => setOcorrenciasTab('checklist')}
+              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
+                ocorrenciasTab === 'checklist'
+                  ? 'bg-[#222222] text-white shadow-xs'
+                  : 'text-[#5F5F5F] hover:text-[#171717] hover:bg-[#E4E2DB]'
+              }`}
+            >
+              <span className="material-symbols-outlined text-sm">checklist</span>
+              Checklist em Campo ({checklistPerc}%)
+            </button>
           </div>
         </div>
 
-        {/* VISÃO POR PROMOTOR (RANKING DE PENDÊNCIAS) */}
-        <div className="bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl p-4 space-y-3">
-          <h3 className="text-xs font-bold text-[#171717] uppercase tracking-wider flex items-center justify-between">
-            <span className="flex items-center gap-2">
-              <span className="material-symbols-outlined text-cyan-400 text-sm">leaderboard</span>
-              {systemSettings.mode === 'OPERACAO_OFICIAL' && systemSettings.status === 'loaded'
-                ? 'Resumo por Promotor — Ranking de Pendências Operacionais'
-                : 'Resumo por Promotor — Agendas Programadas e Execução em Campo'}
-            </span>
-            <span className="text-[10px] text-[#77766F] font-normal">
-              {systemSettings.mode === 'OPERACAO_OFICIAL' && systemSettings.status === 'loaded'
-                ? 'Ordenado por promotores com mais pendências'
-                : 'Fase de Implantação — Sem penalidade de SLA'}
-            </span>
-          </h3>
+        {/* SUB-ABA: RUPTURAS OPERACIONAIS */}
+        {ocorrenciasTab === 'rupturas' && (() => {
+          const rupturaColumns: Column<typeof rupturasFiltradas[0]>[] = [
+            {
+              key: 'data',
+              header: 'DATA',
+              sortable: true,
+              className: 'w-[100px] whitespace-nowrap text-[#77766F]',
+              accessor: (r) => r.createdAt || r.dataVisita,
+              render: (r) => new Date(r.createdAt || r.dataVisita).toLocaleDateString('pt-BR')
+            },
+            {
+              key: 'loja',
+              header: 'LOJA / PDV',
+              sortable: true,
+              className: 'min-w-[170px]',
+              accessor: (r) => r.lojaNome,
+              render: (r) => (
+                <div>
+                  <div className="font-semibold text-[#171717]">{r.lojaNome}</div>
+                  <div className="text-[10px] text-[#737373] font-mono">Cód: {r.lojaCodigo}</div>
+                </div>
+              )
+            },
+            {
+              key: 'industria',
+              header: 'INDÚSTRIA',
+              sortable: true,
+              className: 'min-w-[130px]',
+              accessor: (r) => r.industriaNome,
+              render: (r) => (
+                <span className="font-bold text-[#7E22CE]">{r.industriaNome}</span>
+              )
+            },
+            {
+              key: 'promotor',
+              header: 'PROMOTOR',
+              sortable: true,
+              className: 'min-w-[150px]',
+              accessor: (r) => r.promotorNome,
+              render: (r) => (
+                <div>
+                  <div className="font-semibold text-[#171717]">{r.promotorNome}</div>
+                  {r.promotorMatricula && (
+                    <div className="text-[10px] text-[#737373] font-mono">Mat: {r.promotorMatricula}</div>
+                  )}
+                </div>
+              )
+            },
+            {
+              key: 'descricao',
+              header: 'DESCRIÇÃO DA FALTA',
+              className: 'min-w-[200px] max-w-xs leading-relaxed text-[#171717]',
+              render: (r) => r.descricao
+            },
+            {
+              key: 'foto',
+              header: 'FOTO',
+              className: 'w-[90px] text-center whitespace-nowrap',
+              render: (r) => r.photoSignedUrl ? (
+                <a
+                  href={r.photoSignedUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-cyan-50 hover:bg-cyan-100 text-cyan-800 font-bold text-[10px] border border-cyan-300"
+                >
+                  <span className="material-symbols-outlined text-[13px]">photo_camera</span>
+                  Ver Foto
+                </a>
+              ) : (
+                <span className="text-[10px] text-[#77766F] italic">Sem foto</span>
+              )
+            },
+            {
+              key: 'status',
+              header: 'STATUS',
+              sortable: true,
+              className: 'w-[110px] text-center whitespace-nowrap',
+              accessor: (r) => r.resolvido ? 'resolvida' : 'aberta',
+              render: (r) => r.resolvido ? (
+                <StatusBadge status="concluida" label="RESOLVIDA" />
+              ) : (
+                <StatusBadge status="critico" label="ABERTA" />
+              )
+            },
+            {
+              key: 'acoes',
+              header: 'AÇÕES',
+              className: 'w-[120px] text-right whitespace-nowrap',
+              render: (r) => (
+                <div className="flex items-center justify-end gap-1.5">
+                  {!r.resolvido ? (
+                    canResolve ? (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setOccurrenceToResolve({
+                            id: r.id,
+                            titulo: 'Ruptura na Gôndola',
+                            lojaNome: r.lojaNome,
+                            descricao: r.descricao
+                          });
+                        }}
+                        disabled={resolvingId === r.id}
+                        className="px-2.5 py-1 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-[10px] cursor-pointer shadow-xs transition-colors"
+                        title="Marcar ruptura como resolvida"
+                      >
+                        {resolvingId === r.id ? 'Salvando...' : 'Resolver'}
+                      </button>
+                    ) : (
+                      <span className="text-[10px] text-[#77766F] italic">Apenas Gestor</span>
+                    )
+                  ) : (
+                    <span className="text-[10px] text-emerald-700 font-bold">✓ Concluído</span>
+                  )}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSelectedOccurrenceDetail({
+                        id: r.id,
+                        tipo: 'ruptura',
+                        titulo: 'Ruptura Operacional',
+                        descricao: r.descricao,
+                        resolvido: r.resolvido,
+                        data: r.createdAt || r.dataVisita,
+                        lojaNome: r.lojaNome,
+                        lojaCodigo: r.lojaCodigo,
+                        lojaEndereco: r.visitObj?.loja?.endereco,
+                        industriaNome: r.industriaNome,
+                        industriaCodigo: r.industriaCodigo,
+                        promotorNome: r.promotorNome,
+                        promotorMatricula: r.promotorMatricula,
+                        photoSignedUrl: r.photoSignedUrl,
+                        visitObj: r.visitObj
+                      });
+                    }}
+                    className="px-2 py-1 rounded-lg bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] font-bold text-[10px] border border-[#CFCDC5] cursor-pointer transition-colors"
+                    title="Ver ficha detalhada da ruptura"
+                  >
+                    Detalhes
+                  </button>
+                </div>
+              )
+            }
+          ];
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead>
-                <tr className="border-b border-[#CFCDC5] text-[#77766F] text-[10px] uppercase font-mono">
-                  <th className="py-2 px-3">Promotor</th>
-                  <th className="py-2 px-3 text-center">Planejadas</th>
-                  <th className="py-2 px-3 text-center">
-                    {systemSettings.mode === 'OPERACAO_OFICIAL' && systemSettings.status === 'loaded'
-                      ? 'Pendentes'
-                      : 'Previstas (Sem Visita)'}
-                  </th>
-                  <th className="py-2 px-3 text-center">Em Andamento</th>
+          return (
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-1.5 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl p-1 text-xs">
+                  <button
+                    onClick={() => setFilterRupturaStatus('abertas')}
+                    className={`px-3 py-1 rounded-lg font-bold transition-all cursor-pointer ${
+                      filterRupturaStatus === 'abertas' ? 'bg-rose-700 text-white' : 'text-rose-700 hover:bg-rose-100'
+                    }`}
+                  >
+                    🔴 Abertas ({rupturasAbertasFiltradasCount})
+                  </button>
+                  <button
+                    onClick={() => setFilterRupturaStatus('resolvidas')}
+                    className={`px-3 py-1 rounded-lg font-bold transition-all cursor-pointer ${
+                      filterRupturaStatus === 'resolvidas' ? 'bg-emerald-700 text-white' : 'text-emerald-700 hover:bg-emerald-100'
+                    }`}
+                  >
+                    🟢 Resolvidas ({rupturasResolvidasFiltradasCount})
+                  </button>
+                  <button
+                    onClick={() => setFilterRupturaStatus('all')}
+                    className={`px-3 py-1 rounded-lg font-bold transition-all cursor-pointer ${
+                      filterRupturaStatus === 'all' ? 'bg-[#222222] text-white' : 'text-[#5F5F5F] hover:text-[#171717]'
+                    }`}
+                  >
+                    Todas no Filtro ({totalRupturasFiltradasContexto})
+                  </button>
+                </div>
+
+                <div className="relative">
+                  <span className="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-[#737373] pointer-events-none">
+                    search
+                  </span>
+                  <input
+                    type="text"
+                    value={searchRupturas}
+                    onChange={(e) => setSearchRupturas(e.target.value)}
+                    placeholder="Buscar rupturas por promotor, loja, produto..."
+                    className="h-8 pl-8 pr-3 bg-white border border-[#CFCDC5] rounded-xl text-xs text-[#171717] focus:outline-none focus:border-purple-600 w-[240px] sm:w-[280px]"
+                    aria-label="Buscar ocorrências de ruptura"
+                  />
+                  {searchRupturas && (
+                    <button
+                      onClick={() => setSearchRupturas('')}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-[#737373] hover:text-[#171717] p-0.5 cursor-pointer"
+                      title="Limpar busca"
+                    >
+                      <span className="material-symbols-outlined text-xs">close</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <DataTable<typeof rupturasFiltradas[0]>
+                data={rupturasFiltradas}
+                columns={rupturaColumns}
+                keyExtractor={(r) => r.id}
+                title="Rupturas Operacionais Registradas"
+                titleIcon="report_problem"
+                badgeCount={rupturasFiltradas.length}
+                defaultPageSize={10}
+                pageSizeOptions={[10, 25, 50]}
+                onRowClick={(r) => {
+                  setSelectedOccurrenceDetail({
+                    id: r.id,
+                    tipo: 'ruptura',
+                    titulo: 'Ruptura Operacional',
+                    descricao: r.descricao,
+                    resolvido: r.resolvido,
+                    data: r.createdAt || r.dataVisita,
+                    lojaNome: r.lojaNome,
+                    lojaCodigo: r.lojaCodigo,
+                    lojaEndereco: r.visitObj?.loja?.endereco,
+                    industriaNome: r.industriaNome,
+                    industriaCodigo: r.industriaCodigo,
+                    promotorNome: r.promotorNome,
+                    promotorMatricula: r.promotorMatricula,
+                    photoSignedUrl: r.photoSignedUrl,
+                    visitObj: r.visitObj
+                  });
+                }}
+                emptyTitle="Nenhuma ruptura encontrada nesta visualização"
+                emptyMessage="Todas as ocorrências registradas estão tratadas ou fora dos filtros aplicados."
+              />
+            </div>
+          );
+        })()}
+
+        {/* SUB-ABA: VALIDADES E VENCIMENTOS */}
+        {ocorrenciasTab === 'validades' && (() => {
+          const validadeColumns: Column<typeof validadesFiltradas[0]>[] = [
+            {
+              key: 'validade',
+              header: 'VALIDADE',
+              sortable: true,
+              className: 'w-[120px] whitespace-nowrap',
+              accessor: (val) => val.dataVencimento,
+              render: (val) => {
+                const [vYear, vMonth, vDay] = val.dataVencimento.split('-').map(Number);
+                const vencDate = new Date(vYear, vMonth - 1, vDay);
+                return (
+                  <div>
+                    <span className="font-bold text-[#171717]">{new Date(vencDate).toLocaleDateString('pt-BR')}</span>
+                    <span className="text-[10px] text-[#77766F] block font-normal">
+                      {val.diffDays < 0 ? `${Math.abs(val.diffDays)}d atrás` : `em ${val.diffDays}d`}
+                    </span>
+                  </div>
+                );
+              }
+            },
+            {
+              key: 'produto',
+              header: 'PRODUTO',
+              sortable: true,
+              className: 'min-w-[170px]',
+              accessor: (val) => val.produtoNome,
+              render: (val) => (
+                <div>
+                  <div className="font-semibold text-[#171717]">{val.produtoNome}</div>
+                  {val.observacao && <span className="text-[10px] text-[#77766F] block font-normal">{val.observacao}</span>}
+                </div>
+              )
+            },
+            {
+              key: 'quantidade',
+              header: 'QTD.',
+              sortable: true,
+              className: 'w-[70px] text-right font-black text-[#171717]',
+              accessor: (val) => val.quantidade
+            },
+            {
+              key: 'loja',
+              header: 'LOJA / PDV',
+              sortable: true,
+              className: 'min-w-[160px]',
+              accessor: (val) => val.lojaNome,
+              render: (val) => (
+                <div>
+                  <div className="font-semibold text-[#171717]">{val.lojaNome}</div>
+                  <div className="text-[10px] text-[#737373] font-mono">Cód: {val.lojaCodigo}</div>
+                </div>
+              )
+            },
+            {
+              key: 'industria',
+              header: 'INDÚSTRIA',
+              sortable: true,
+              className: 'min-w-[130px]',
+              accessor: (val) => val.industriaNome,
+              render: (val) => (
+                <span className="font-bold text-[#7E22CE]">{val.industriaNome}</span>
+              )
+            },
+            {
+              key: 'promotor',
+              header: 'PROMOTOR',
+              sortable: true,
+              className: 'min-w-[140px]',
+              accessor: (val) => val.promotorNome,
+              render: (val) => (
+                <div>
+                  <div className="text-[#171717]">{val.promotorNome}</div>
+                  <div className="text-[10px] text-[#737373] font-mono">Mat: {val.promotorMatricula}</div>
+                </div>
+              )
+            },
+            {
+              key: 'lote',
+              header: 'LOTE',
+              className: 'w-[90px] text-[#77766F] text-xs',
+              render: (val) => val.lote || '—'
+            },
+            {
+              key: 'situacao',
+              header: 'SITUAÇÃO',
+              sortable: true,
+              className: 'w-[120px] text-center whitespace-nowrap',
+              accessor: (val) => val.categoria,
+              render: (val) => {
+                if (val.categoria === 'vencidos') return <StatusBadge status="critico" label="🔴 Vencido" />;
+                if (val.categoria === 'ate3') return <StatusBadge status="critico" label="🚨 Até 3 dias" />;
+                if (val.categoria === 'ate7') return <StatusBadge status="atencao" label="🟠 4–7 dias" />;
+                if (val.categoria === 'ate30') return <StatusBadge status="pendente" label="🟡 8–30 dias" />;
+                return <StatusBadge status="conforme" label="🟢 Normal" />;
+              }
+            },
+            {
+              key: 'acoes',
+              header: 'AÇÕES',
+              className: 'w-[90px] text-right whitespace-nowrap',
+              render: (val) => val.visitObj ? (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelectedVisit(val.visitObj!);
+                  }}
+                  className="px-2.5 py-1 rounded-lg bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] font-bold text-[10px] border border-[#CFCDC5] cursor-pointer transition-colors"
+                  title="Ver ficha da visita com este registro de validade"
+                >
+                  Visita
+                </button>
+              ) : (
+                <span className="text-[10px] text-[#77766F] italic">—</span>
+              )
+            }
+          ];
+
+          return (
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs">
+                <div
+                  onClick={() => setFilterValidadeStatus(filterValidadeStatus === 'vencidos' ? 'all' : 'vencidos')}
+                  className={`p-2.5 rounded-xl border transition-all cursor-pointer ${
+                    filterValidadeStatus === 'vencidos' ? 'bg-rose-100 border-rose-400' : 'bg-white border-[#CFCDC5] hover:bg-[#F7F6F2]'
+                  }`}
+                >
+                  <span className="text-[10px] text-rose-700 block font-bold uppercase">🔴 Vencidos</span>
+                  <span className="text-xl font-black text-rose-800 mt-0.5 block">{validadeCountVencidos}</span>
+                  <span className="text-[10px] text-[#77766F]">Ação imediata</span>
+                </div>
+
+                <div
+                  onClick={() => setFilterValidadeStatus(filterValidadeStatus === 'ate3' ? 'all' : 'ate3')}
+                  className={`p-2.5 rounded-xl border transition-all cursor-pointer ${
+                    filterValidadeStatus === 'ate3' ? 'bg-rose-50 border-rose-400' : 'bg-white border-[#CFCDC5] hover:bg-[#F7F6F2]'
+                  }`}
+                >
+                  <span className="text-[10px] text-rose-600 block font-bold uppercase">🚨 Até 3 dias</span>
+                  <span className="text-xl font-black text-rose-700 mt-0.5 block">{validadeCountAte3}</span>
+                  <span className="text-[10px] text-[#77766F]">Urgência crítica</span>
+                </div>
+
+                <div
+                  onClick={() => setFilterValidadeStatus(filterValidadeStatus === 'ate7' ? 'all' : 'ate7')}
+                  className={`p-2.5 rounded-xl border transition-all cursor-pointer ${
+                    filterValidadeStatus === 'ate7' ? 'bg-amber-100 border-amber-400' : 'bg-white border-[#CFCDC5] hover:bg-[#F7F6F2]'
+                  }`}
+                >
+                  <span className="text-[10px] text-amber-700 block font-bold uppercase">🟠 4–7 dias</span>
+                  <span className="text-xl font-black text-amber-800 mt-0.5 block">{validadeCountAte7}</span>
+                  <span className="text-[10px] text-[#77766F]">Atenção semanal</span>
+                </div>
+
+                <div
+                  onClick={() => setFilterValidadeStatus(filterValidadeStatus === 'ate30' ? 'all' : 'ate30')}
+                  className={`p-2.5 rounded-xl border transition-all cursor-pointer ${
+                    filterValidadeStatus === 'ate30' ? 'bg-yellow-100 border-yellow-400' : 'bg-white border-[#CFCDC5] hover:bg-[#F7F6F2]'
+                  }`}
+                >
+                  <span className="text-[10px] text-yellow-700 block font-bold uppercase">🟡 8–30 dias</span>
+                  <span className="text-xl font-black text-yellow-800 mt-0.5 block">{validadeCountAte30}</span>
+                  <span className="text-[10px] text-[#77766F]">Prevenção</span>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                <span className="text-[11px] text-[#77766F]">
+                  Exibindo <strong>{validadesFiltradas.length}</strong> registro(s) de produto sob monitoramento
+                </span>
+
+                <div className="relative">
+                  <span className="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-[#737373] pointer-events-none">
+                    search
+                  </span>
+                  <input
+                    type="text"
+                    value={searchValidades}
+                    onChange={(e) => setSearchValidades(e.target.value)}
+                    placeholder="Buscar produto, loja, promotor, lote..."
+                    className="h-8 pl-8 pr-3 bg-white border border-[#CFCDC5] rounded-xl text-xs text-[#171717] focus:outline-none focus:border-purple-600 w-[240px] sm:w-[280px]"
+                    aria-label="Buscar produtos por validade"
+                  />
+                  {searchValidades && (
+                    <button
+                      onClick={() => setSearchValidades('')}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-[#737373] hover:text-[#171717] p-0.5 cursor-pointer"
+                      title="Limpar busca"
+                    >
+                      <span className="material-symbols-outlined text-xs">close</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <DataTable<typeof validadesFiltradas[0]>
+                data={validadesFiltradas}
+                columns={validadeColumns}
+                keyExtractor={(val) => val.id}
+                title="Monitoramento de Validades e Vencimentos"
+                titleIcon="inventory_2"
+                badgeCount={validadesFiltradas.length}
+                defaultPageSize={10}
+                pageSizeOptions={[10, 25, 50]}
+                onRowClick={(val) => {
+                  if (val.visitObj) {
+                    setSelectedVisit(val.visitObj);
+                  }
+                }}
+                emptyTitle="Nenhum produto com problema de validade no filtro selecionado"
+                emptyMessage="Todos os produtos monitorados estão dentro do prazo normal ou fora dos filtros aplicados."
+              />
+            </div>
+          );
+        })()}
+
+        {/* SUB-ABA: INCIDENTES GERAIS */}
+        {ocorrenciasTab === 'incidentes' && (
+          <div className="space-y-3">
+            {/* Cards de distribuição por tipo de ocorrência — com cores de alto contraste e SEM fundos pretos */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs">
+              <div className="p-3 rounded-xl bg-rose-50 border border-rose-300">
+                <span className="text-[10px] text-rose-800 block font-bold uppercase">Rupturas</span>
+                <span className="text-xl font-black text-rose-900 mt-0.5 block">{ocorrenciasPorTipo.ruptura}</span>
+                <span className="text-[10px] text-rose-700">Falta na gôndola</span>
+              </div>
+
+              <div className="p-3 rounded-xl bg-amber-50 border border-amber-300">
+                <span className="text-[10px] text-amber-800 block font-bold uppercase">Preço Divergente</span>
+                <span className="text-xl font-black text-amber-900 mt-0.5 block">{ocorrenciasPorTipo.preco_divergente}</span>
+                <span className="text-[10px] text-amber-700">Inconformidade</span>
+              </div>
+
+              <div className="p-3 rounded-xl bg-cyan-50 border border-cyan-300">
+                <span className="text-[10px] text-cyan-800 block font-bold uppercase">Falta Espaço</span>
+                <span className="text-xl font-black text-cyan-900 mt-0.5 block">{ocorrenciasPorTipo.falta_espaco}</span>
+                <span className="text-[10px] text-cyan-700">Ponto de venda</span>
+              </div>
+
+              {/* Card "Outros" Corrigido: Fundo claro neutro e texto legível */}
+              <div className="p-3 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5]">
+                <span className="text-[10px] text-[#5F5F5F] block font-bold uppercase">Outros Incidentes</span>
+                <span className="text-xl font-black text-[#171717] mt-0.5 block">{ocorrenciasPorTipo.outro}</span>
+                <span className="text-[10px] text-[#77766F]">Diversos em campo</span>
+              </div>
+            </div>
+
+            {/* Lista resumida das ocorrências */}
+            {listaOcorrenciasCriticas.length > 0 && (
+              <div className="space-y-2 pt-2 border-t border-[#CFCDC5]">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-[#171717] uppercase tracking-wider block">
+                    Últimos Registros Detalhados ({listaOcorrenciasCriticas.length}):
+                  </span>
+                  <span className="text-[11px] text-[#77766F]">
+                    Clique em um card para ver a ficha completa
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 text-xs">
+                  {listaOcorrenciasCriticas.slice(0, 6).map((occ) => (
+                    <div
+                      key={occ.id}
+                      onClick={() => {
+                        setSelectedOccurrenceDetail({
+                          id: occ.id,
+                          tipo: occ.tipo,
+                          titulo: `Incidente: ${occ.tipo.replace('_', ' ').toUpperCase()}`,
+                          descricao: occ.descricao,
+                          resolvido: Boolean(occ.resolvido),
+                          data: occ.dataHora || occ.visitObj?.data_visita || '—',
+                          lojaNome: occ.loja,
+                          lojaCodigo: occ.visitObj?.loja_codigo,
+                          lojaEndereco: occ.visitObj?.loja?.endereco,
+                          industriaNome: occ.industria,
+                          industriaCodigo: occ.visitObj?.industria_codigo,
+                          promotorNome: occ.promotor,
+                          promotorMatricula: occ.visitObj?.promotor_matricula,
+                          photoSignedUrl: occ.visitObj?.id ? rupturePhotosSigned[occ.visitObj.id] : undefined,
+                          visitObj: occ.visitObj
+                        });
+                      }}
+                      className="p-3 rounded-xl bg-white border border-[#CFCDC5] hover:border-purple-400 hover:shadow-xs space-y-1.5 transition-all cursor-pointer group"
+                    >
+                      <div className="flex justify-between items-center text-[10px]">
+                        <span className={`px-1.5 py-0.5 rounded font-bold uppercase border ${
+                          occ.tipo === 'ruptura'
+                            ? 'bg-rose-50 text-rose-800 border-rose-200'
+                            : occ.tipo === 'preco_divergente'
+                            ? 'bg-amber-50 text-amber-800 border-amber-200'
+                            : occ.tipo === 'falta_espaco'
+                            ? 'bg-cyan-50 text-cyan-800 border-cyan-200'
+                            : 'bg-[#EAE8E2] text-[#5F5F5F] border-[#CFCDC5]'
+                        }`}>
+                          {occ.tipo.replace('_', ' ')}
+                        </span>
+                        {occ.dataHora && (
+                          <span className="text-[#77766F]">
+                            {new Date(occ.dataHora).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                        )}
+                      </div>
+                      <div className="font-bold text-[#171717] group-hover:text-purple-700 transition-colors truncate">
+                        {occ.loja}
+                      </div>
+                      <div className="text-[11px] text-[#77766F] truncate">
+                        <span className="text-[#7E22CE] font-bold">{occ.industria}</span> • {occ.promotor}
+                      </div>
+                      <p className="text-[11px] text-[#171717] leading-tight line-clamp-2">{occ.descricao}</p>
+                      <div className="pt-1 flex items-center justify-between text-[10px] text-purple-700 font-bold border-t border-[#CFCDC5]/40">
+                        <span>Ver Ficha Completa</span>
+                        <span className="material-symbols-outlined text-xs">arrow_forward</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* SUB-ABA: VALIDACAO DE CHECKLIST */}
+        {ocorrenciasTab === 'checklist' && (
+          <div className="space-y-3">
+            <div className="p-4 rounded-xl bg-white border border-[#CFCDC5] space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-xs font-bold text-[#171717] uppercase tracking-wider">
+                    Conformidade Geral de Checklist
+                  </h3>
+                  <p className="text-[11px] text-[#77766F]">
+                    Percentual de checagem dos itens operacionais obrigatórios nas visitas auditadas.
+                  </p>
+                </div>
+                <span className="px-3 py-1 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-300 font-black text-sm">
+                  {checklistPerc}% Conclusão
+                </span>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2.5 text-center">
+                <div className="p-2.5 rounded-xl bg-[#F7F6F2] border border-[#CFCDC5]">
+                  <span className="text-[10px] text-[#77766F] block font-bold uppercase">Total Itens</span>
+                  <span className="text-lg font-black text-[#171717]">{totalChecklistItems}</span>
+                </div>
+                <div className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-300">
+                  <span className="text-[10px] text-emerald-800 block font-bold uppercase">Concluídos</span>
+                  <span className="text-lg font-black text-emerald-900">{totalChecklistChecked}</span>
+                </div>
+                <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-300">
+                  <span className="text-[10px] text-amber-800 block font-bold uppercase">Pendentes</span>
+                  <span className="text-lg font-black text-amber-900">{totalChecklistItems - totalChecklistChecked}</span>
+                </div>
+              </div>
+
+              <div className="w-full bg-[#EAE8E2] h-2.5 rounded-full overflow-hidden p-0.5 border border-[#CFCDC5]">
+                <div
+                  className="bg-emerald-600 h-1.5 rounded-full transition-all duration-500"
+                  style={{ width: `${checklistPerc}%` }}
+                />
+              </div>
+            </div>
+          </div>
+        )}
+      </section>
+
+      {/* ========================================================= */}
+      {/* 5. LOJAS CRÍTICAS (RISCOS POR PDV)                        */}
+      {/* ========================================================= */}
+      <section className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-4 sm:p-5 shadow-sm space-y-3 font-mono">
+        <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-2.5">
+          <div className="flex items-center gap-2">
+            <span className="material-symbols-outlined text-rose-600 text-lg">storefront</span>
+            <h3 className="text-sm font-black text-[#171717] tracking-tight">
+              Lojas Críticas &amp; Riscos por PDV ({lojasCriticas.length})
+            </h3>
+          </div>
+          <span className="text-[10px] text-[#77766F]">Consolidação de rupturas, vencimentos e visitas pendentes</span>
+        </div>
+
+        {lojasCriticas.length === 0 ? (
+          <p className="text-emerald-700 font-bold text-center py-4 text-xs">
+            Nenhuma loja com problemas operacionais críticos identificados no período!
+          </p>
+        ) : (
+          <div className="overflow-x-auto max-h-[260px] overflow-y-auto rounded-xl border border-[#CFCDC5] bg-white">
+            <table className="w-full text-left text-xs border-collapse">
+              <thead className="sticky top-0 bg-[#EAE8E2] border-b border-[#CFCDC5] text-[10px] text-[#77766F] uppercase font-bold tracking-wider">
+                <tr>
+                  <th className="py-2 px-3">Loja / PDV</th>
+                  <th className="py-2 px-3 text-center">Rupturas</th>
+                  <th className="py-2 px-3 text-center">Validades</th>
                   <th className="py-2 px-3 text-center">Não Realizadas</th>
-                  <th className="py-2 px-3 text-center">Concluídas</th>
+                  <th className="py-2 px-3 text-center">Pendentes</th>
+                  <th className="py-2 px-3 text-right">Total Eventos</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#CFCDC5]/60 text-[#171717]">
+                {lojasCriticas.slice(0, 10).map((s) => (
+                  <tr key={s.codigo} className="hover:bg-[#F7F6F2] transition-colors">
+                    <td className="py-1.5 px-3 font-semibold text-[#171717]">
+                      {s.nome}
+                      <span className="text-[10px] text-[#77766F] block font-normal">Cód: {s.codigo}</span>
+                    </td>
+                    <td className="py-1.5 px-3 text-center font-bold text-rose-700">
+                      {s.rupturasAbertas > 0 ? `🔴 ${s.rupturasAbertas}` : '—'}
+                    </td>
+                    <td className="py-1.5 px-3 text-center font-bold text-amber-700">
+                      {s.produtosVencidos > 0 ? `⏰ ${s.produtosVencidos}` : '—'}
+                    </td>
+                    <td className="py-1.5 px-3 text-center font-bold text-orange-700">
+                      {s.visitasNaoRealizadas > 0 ? `⛔ ${s.visitasNaoRealizadas}` : '—'}
+                    </td>
+                    <td className="py-1.5 px-3 text-center font-bold text-yellow-700">
+                      {s.visitasPendentes > 0 ? `🟡 ${s.visitasPendentes}` : '—'}
+                    </td>
+                    <td className="py-1.5 px-3 text-right font-black text-purple-700">
+                      <span className="px-2 py-0.5 rounded bg-purple-50 border border-purple-200">
+                        {s.totalProblemas} evento(s)
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      {/* ========================================================= */}
+      {/* 6. PERFORMANCE DA OPERAÇÃO (PROMOTORES & INDÚSTRIAS)       */}
+      {/* ========================================================= */}
+      <section className="grid grid-cols-1 lg:grid-cols-3 gap-4 font-mono text-xs">
+        {/* Desempenho dos Promotores */}
+        <div className="lg:col-span-2 p-4 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5] shadow-sm space-y-3">
+          <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-2">
+            <h3 className="text-xs font-black text-[#171717] uppercase tracking-wider flex items-center gap-1.5">
+              <span className="material-symbols-outlined text-purple-600 text-sm">badge</span>
+              Desempenho dos Promotores
+            </h3>
+            <span className="text-[10px] text-[#77766F]">Ordenado por pendências</span>
+          </div>
+
+          <div className="overflow-x-auto max-h-[280px] overflow-y-auto rounded-xl border border-[#CFCDC5] bg-white">
+            <table className="w-full text-left border-collapse">
+              <thead className="sticky top-0 bg-[#EAE8E2] border-b border-[#CFCDC5] text-[10px] text-[#77766F] uppercase font-bold">
+                <tr>
+                  <th className="py-2 px-3">Promotor</th>
+                  <th className="py-2 px-2 text-center">Plan.</th>
+                  <th className="py-2 px-2 text-center">Conc.</th>
+                  <th className="py-2 px-2 text-center">Andam.</th>
+                  <th className="py-2 px-2 text-center">N.Real.</th>
+                  <th className="py-2 px-2 text-center">Pend.</th>
                   <th className="py-2 px-3 text-right">Aderência</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-[#CFCDC5]/50 text-[#171717]">
-                {promotoresPendingSummary.length === 0 ? (
+              <tbody className="divide-y divide-[#CFCDC5]/60 text-[#171717]">
+                {rankingPromotores.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="py-4 text-center text-[#5F5F5F]">
-                      Nenhum promotor encontrado com rotas no período.
+                    <td colSpan={7} className="py-4 text-center text-[#77766F]">
+                      Nenhum promotor com rota no período.
                     </td>
                   </tr>
                 ) : (
-                  promotoresPendingSummary.map((p) => (
-                    <tr
-                      key={p.matricula}
-                      onClick={() => setFilterPromotor(p.matricula)}
-                      className="hover:bg-[#E4E2DB]/60 cursor-pointer transition-colors"
-                    >
-                      <td className="py-2.5 px-3 font-bold text-[#171717] flex items-center gap-2">
-                        <span className="material-symbols-outlined text-[#77766F] text-base">person</span>
-                        {p.nome}
-                      </td>
-                      <td className="py-2.5 px-3 text-center font-mono">{p.totalPlanned}</td>
-                      <td className="py-2.5 px-3 text-center font-mono font-bold">
-                        <span className={p.pendentes > 0 ? 'text-rose-400 bg-rose-500/10 px-2 py-0.5 rounded border border-rose-500/30' : 'text-[#77766F]'}>
-                          {p.pendentes}
-                        </span>
-                      </td>
-                      <td className="py-2.5 px-3 text-center font-mono text-blue-400">{p.emAndamento}</td>
-                      <td className="py-2.5 px-3 text-center font-mono text-orange-400">{p.naoRealizadas}</td>
-                      <td className="py-2.5 px-3 text-center font-mono text-emerald-400 font-bold">{p.concluidas}</td>
-                      <td className="py-2.5 px-3 text-right font-mono font-bold">
-                        {systemSettings.mode !== 'OPERACAO_OFICIAL' || systemSettings.status !== 'loaded' ? (
-                          <span className="text-[10px] text-[#5F5F5F] font-normal">SLA n/a</span>
-                        ) : (
-                          <span className={p.aderencia < 50 ? 'text-rose-400' : p.aderencia < 80 ? 'text-amber-400' : 'text-emerald-400'}>
-                            {p.aderencia}%
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        {/* FILTROS E LISTA DE PENDÊNCIAS */}
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs pt-2 border-t border-[#CFCDC5]">
-          <div className="flex flex-wrap items-center gap-1.5 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl p-1">
-            <button
-              onClick={() => setPendenciaStatusFilter('pendente')}
-              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
-                pendenciaStatusFilter === 'pendente' ? 'bg-rose-600 text-white shadow-md' : 'text-[#77766F] hover:text-white'
-              }`}
-            >
-              🔴 Pendentes ({pendenciasKpis.pendentesTotal})
-            </button>
-            <button
-              onClick={() => setPendenciaStatusFilter('em_andamento')}
-              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
-                pendenciaStatusFilter === 'em_andamento' ? 'bg-blue-600 text-white shadow-md' : 'text-[#77766F] hover:text-white'
-              }`}
-            >
-              🔵 Em Andamento ({pendenciasKpis.emAndamento})
-            </button>
-            <button
-              onClick={() => setPendenciaStatusFilter('nao_realizada')}
-              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
-                pendenciaStatusFilter === 'nao_realizada' ? 'bg-orange-600 text-white shadow-md' : 'text-[#77766F] hover:text-white'
-              }`}
-            >
-              🟠 Não Realizadas ({pendenciasKpis.naoRealizadas})
-            </button>
-            <button
-              onClick={() => setPendenciaStatusFilter('concluida')}
-              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
-                pendenciaStatusFilter === 'concluida' ? 'bg-emerald-600 text-white shadow-md' : 'text-[#77766F] hover:text-white'
-              }`}
-            >
-              🟢 Concluídas ({pendenciasKpis.concluidas})
-            </button>
-            <button
-              onClick={() => setPendenciaStatusFilter('todas')}
-              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
-                pendenciaStatusFilter === 'todas' ? 'bg-slate-700 text-white shadow-md' : 'text-[#77766F] hover:text-white'
-              }`}
-            >
-              Todas ({pendenciasKpis.totalPlanejadas})
-            </button>
-          </div>
-
-          <span className="text-[11px] text-[#77766F]">
-            Exibindo <strong>{pendenciasFiltradas.length}</strong> registro(s)
-          </span>
-        </div>
-
-        {/* TABELA / CARDS DA CENTRAL DE PENDÊNCIAS */}
-        {pendenciasFiltradas.length === 0 ? (
-          <div className="py-10 text-center space-y-2 bg-[#EAE8E2]/50 rounded-xl border border-[#CFCDC5]">
-            <span className="material-symbols-outlined text-emerald-400 text-3xl">check_circle</span>
-            <p className="text-xs text-[#171717] font-bold">Nenhuma pendência encontrada nesta visualização.</p>
-            <p className="text-[11px] text-[#5F5F5F]">Todas as visitas do filtro selecionado estão em conformidade.</p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto rounded-xl border border-[#CFCDC5]">
-            <table className="w-full text-left text-xs">
-              <thead>
-                <tr className="bg-[#EAE8E2] border-b border-[#CFCDC5] text-[#77766F] text-[10px] uppercase font-mono">
-                  <th className="py-3 px-4">Data Prevista</th>
-                  <th className="py-3 px-4">Promotor</th>
-                  <th className="py-3 px-4">Loja / PDV</th>
-                  <th className="py-3 px-4">Indústria</th>
-                  <th className="py-3 px-4">Frequência</th>
-                  <th className="py-3 px-4">Situação</th>
-                  <th className="py-3 px-4 text-right">Ação</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#CFCDC5] text-[#171717] font-mono">
-                {pendenciasFiltradas.map((item) => {
-                  let badge = { label: '🔴 PENDENTE', style: 'bg-rose-500/10 text-rose-400 border-rose-500/30' };
-                  if (item.isPastOverdue) {
-                    badge = { label: '🚨 ATRASADA', style: 'bg-rose-950 text-rose-400 border-rose-500 font-bold animate-pulse' };
-                  } else if (item.status === 'em_andamento') {
-                    badge = { label: '🔵 EM ANDAMENTO', style: 'bg-blue-500/10 text-blue-400 border-blue-500/30' };
-                  } else if (item.status === 'nao_realizada') {
-                    badge = { label: '🟠 NÃO REALIZADA', style: 'bg-orange-500/10 text-orange-400 border-orange-500/30' };
-                  } else if (item.status === 'concluida') {
-                    badge = { label: '🟢 CONCLUÍDA', style: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' };
-                  } else if (item.status === 'planejada') {
-                    badge = { label: '⚪ PLANEJADA', style: 'bg-slate-700/50 text-slate-300 border-slate-600' };
-                  }
-
-                  return (
-                    <tr key={item.key} className="hover:bg-[#EAE8E1] transition-colors">
-                      <td className="py-3 px-4">
-                        <div className="font-bold text-[#171717]">{item.dataStr}</div>
-                        <div className="text-[10px] text-[#77766F]">{item.dayOfWeekLabel}</div>
-                      </td>
-                      <td className="py-3 px-4 font-bold text-cyan-400">{item.promotorNome}</td>
-                      <td className="py-3 px-4">
-                        <div className="font-bold text-[#171717]">{item.lojaNome}</div>
-                        {item.lojaCidade && (
-                          <div className="text-[10px] text-[#77766F]">{item.lojaCidade} - {item.lojaUf}</div>
-                        )}
-                      </td>
-                      <td className="py-3 px-4 text-[#7E22CE] font-bold">{item.industriaNome}</td>
-                      <td className="py-3 px-4 text-[#77766F]">{item.frequencia}</td>
-                      <td className="py-3 px-4">
-                        <span className={`px-2 py-0.5 rounded text-[10px] border ${badge.style}`}>
-                          {badge.label}
-                        </span>
-                      </td>
-                      <td className="py-3 px-4 text-right">
-                        <button
-                          onClick={() => setSelectedPendingItem(item)}
-                          className="px-3 py-1.5 rounded-lg bg-[#EAE8E2] hover:bg-[#E4E2DB] text-cyan-400 border border-cyan-500/30 font-bold text-[11px] transition-all cursor-pointer"
-                        >
-                          Ver Detalhes
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-
-      {/* MODAL DETALHES DA PENDÊNCIA OPERACIONAL */}
-      {selectedPendingItem && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5 font-mono">
-            <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-3">
-              <h3 className="text-sm font-bold text-[#171717] flex items-center gap-2">
-                <span className="material-symbols-outlined text-cyan-400">pending_actions</span>
-                VISITA PENDENTE — DETALHES
-              </h3>
-              <button onClick={() => setSelectedPendingItem(null)} className="text-[#77766F] hover:text-white">
-                <span className="material-symbols-outlined">close</span>
-              </button>
-            </div>
-
-            <div className="space-y-3 text-xs">
-              <div>
-                <span className="text-[#5F5F5F] block">PROMOTOR:</span>
-                <span className="text-cyan-400 font-bold text-sm">{selectedPendingItem.promotorNome}</span>
-                <span className="text-[10px] text-[#5F5F5F] block">Matrícula: {selectedPendingItem.promotorMatricula}</span>
-              </div>
-              <div>
-                <span className="text-[#5F5F5F] block">LOJA / PDV:</span>
-                <span className="text-[#171717] font-bold">{selectedPendingItem.lojaNome}</span>
-                {selectedPendingItem.lojaCidade && (
-                  <span className="text-[10px] text-[#77766F] block">{selectedPendingItem.lojaCidade} - {selectedPendingItem.lojaUf}</span>
-                )}
-              </div>
-              <div>
-                <span className="text-[#5F5F5F] block">INDÚSTRIA:</span>
-                <span className="text-[#7E22CE] font-bold">{selectedPendingItem.industriaNome}</span>
-              </div>
-              <div>
-                <span className="text-[#5F5F5F] block">DATA PREVISTA / DIA:</span>
-                <span className="text-[#171717] font-bold">{selectedPendingItem.dataStr} ({selectedPendingItem.dayOfWeekLabel})</span>
-              </div>
-              <div>
-                <span className="text-[#5F5F5F] block">FREQUÊNCIA:</span>
-                <span className="text-[#171717]">{selectedPendingItem.frequencia}</span>
-              </div>
-              <div>
-                <span className="text-[#5F5F5F] block">SITUAÇÃO ATUAL:</span>
-                <span className={`font-bold uppercase ${
-                  selectedPendingItem.status === 'concluida' ? 'text-emerald-400' :
-                  selectedPendingItem.status === 'em_andamento' ? 'text-blue-400' :
-                  selectedPendingItem.status === 'nao_realizada' ? 'text-orange-400' : 'text-rose-400'
-                }`}>
-                  {selectedPendingItem.isPastOverdue ? '🚨 Pendente (Atrasada)' : selectedPendingItem.status}
-                </span>
-              </div>
-              {selectedPendingItem.motivoNaoRealizada && (
-                <div>
-                  <span className="text-[#5F5F5F] block">MOTIVO NÃO REALIZADA:</span>
-                  <span className="text-orange-300">{selectedPendingItem.motivoNaoRealizada}</span>
-                </div>
-              )}
-            </div>
-
-            <div className="pt-3 border-t border-[#CFCDC5] flex flex-wrap items-center justify-end gap-2">
-              <button
-                onClick={() => setSelectedPendingItem(null)}
-                className="px-4 py-2 rounded-xl bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] border border-[#CFCDC5] text-xs font-semibold"
-              >
-                Fechar
-              </button>
-              {(() => {
-                const pendingDirectionsUrl = buildGoogleMapsDirectionsUrl({
-                  name: selectedPendingItem.lojaNome || (selectedPendingItem.lojaCodigo ? `Loja ${selectedPendingItem.lojaCodigo}` : null),
-                  city: selectedPendingItem.lojaCidade,
-                  uf: selectedPendingItem.lojaUf
-                });
-
-                if (pendingDirectionsUrl) {
-                  return (
-                    <a
-                      href={pendingDirectionsUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs flex items-center gap-1.5 shadow"
-                    >
-                      <span className="material-symbols-outlined text-sm">directions</span>
-                      Rota Google Maps
-                    </a>
-                  );
-                }
-                return null;
-              })()}
-              <button
-                onClick={() => {
-                  setSelectedPendingItem(null);
-                  setFilterPromotor(selectedPendingItem.promotorMatricula);
-                  setFilterLoja(selectedPendingItem.lojaCodigo);
-                }}
-                className="px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs flex items-center gap-1.5"
-              >
-                <span className="material-symbols-outlined text-sm">filter_alt</span>
-                Filtrar nesta Central
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================= */}
-      {/* ETAPA 5 — CENTRAL DE ALERTAS OPERACIONAIS                 */}
-      {/* ========================================================= */}
-      <section className="bg-[#F7F6F2] border border-purple-500/40 rounded-2xl p-6 shadow-2xl space-y-6 font-mono">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#CFCDC5] pb-4">
-          <div className="space-y-1">
-            <h2 className="text-lg font-bold text-[#171717] uppercase tracking-wider flex items-center gap-2">
-              <span className="material-symbols-outlined text-purple-400 text-2xl animate-pulse">notifications_active</span>
-              🚨 Central de Alertas Operacionais
-            </h2>
-            <p className="text-xs text-[#77766F]">
-              Consolidação em tempo real de situações que exigem ação preventiva ou corretiva do gestor.
-            </p>
-          </div>
-
-          <span className="text-xs text-[#77766F] font-bold bg-[#EAE8E2] border border-[#CFCDC5] px-3 py-1.5 rounded-xl">
-            Alertas Ativos: <strong className="text-purple-300">{alertCounts.totalAtivos}</strong>
-          </span>
-        </div>
-
-        {/* CARDS DE RESUMO DA CENTRAL */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-          <div
-            onClick={() => setFilterAlertPriority(filterAlertPriority === 'critico' ? 'active' : 'critico')}
-            className={`p-4 rounded-xl border transition-all cursor-pointer ${
-              filterAlertPriority === 'critico'
-                ? 'bg-rose-950/60 border-rose-500 shadow-lg scale-[1.02]'
-                : 'bg-[#EAE8E2] border-rose-500/30 hover:border-rose-500/60'
-            }`}
-          >
-            <span className="text-[10px] text-rose-400 block font-bold uppercase">🔴 Críticos</span>
-            <span className="text-2xl font-extrabold text-rose-300 mt-1 block">{alertCounts.criticos}</span>
-            <span className="text-[10px] text-rose-400/80 block mt-1">Ação Imediata</span>
-          </div>
-
-          <div
-            onClick={() => setFilterAlertPriority(filterAlertPriority === 'atencao' ? 'active' : 'atencao')}
-            className={`p-4 rounded-xl border transition-all cursor-pointer ${
-              filterAlertPriority === 'atencao'
-                ? 'bg-amber-950/60 border-amber-500 shadow-lg scale-[1.02]'
-                : 'bg-[#EAE8E2] border-amber-500/30 hover:border-amber-500/60'
-            }`}
-          >
-            <span className="text-[10px] text-amber-400 block font-bold uppercase">🟠 Atenção</span>
-            <span className="text-2xl font-extrabold text-amber-300 mt-1 block">{alertCounts.atencao}</span>
-            <span className="text-[10px] text-amber-400/80 block mt-1">Acompanhamento</span>
-          </div>
-
-          <div
-            onClick={() => setFilterAlertPriority(filterAlertPriority === 'pendente' ? 'active' : 'pendente')}
-            className={`p-4 rounded-xl border transition-all cursor-pointer ${
-              filterAlertPriority === 'pendente'
-                ? 'bg-yellow-950/60 border-yellow-500 shadow-lg scale-[1.02]'
-                : 'bg-[#EAE8E2] border-yellow-500/30 hover:border-yellow-500/60'
-            }`}
-          >
-            <span className="text-[10px] text-yellow-400 block font-bold uppercase">🟡 Pendentes</span>
-            <span className="text-2xl font-extrabold text-yellow-300 mt-1 block">{alertCounts.pendentes}</span>
-            <span className="text-[10px] text-yellow-400/80 block mt-1">Execução Pendente</span>
-          </div>
-
-          <div
-            onClick={() => setFilterAlertPriority(filterAlertPriority === 'active' ? 'all' : 'active')}
-            className={`p-4 rounded-xl border transition-all cursor-pointer ${
-              filterAlertPriority === 'active'
-                ? 'bg-purple-950/60 border-purple-500 shadow-lg scale-[1.02]'
-                : 'bg-[#EAE8E2] border-purple-500/30 hover:border-purple-500/60'
-            }`}
-          >
-            <span className="text-[10px] text-purple-300 block font-bold uppercase">Total Ativos</span>
-            <span className="text-2xl font-extrabold text-purple-200 mt-1 block">{alertCounts.totalAtivos}</span>
-            <span className="text-[10px] text-purple-400/80 block mt-1">Exige Ação</span>
-          </div>
-        </div>
-
-        {/* FILTROS ESPECÍFICOS DA CENTRAL */}
-        <div className="flex items-center justify-between flex-wrap gap-3 text-xs">
-          <div className="flex flex-wrap items-center gap-2 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl p-1">
-            <button
-              onClick={() => setFilterAlertPriority('active')}
-              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
-                filterAlertPriority === 'active' ? 'bg-[#222222] text-white shadow-md' : 'text-[#77766F] hover:text-white'
-              }`}
-            >
-              Ativos ({alertCounts.totalAtivos})
-            </button>
-            <button
-              onClick={() => setFilterAlertPriority('critico')}
-              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
-                filterAlertPriority === 'critico' ? 'bg-rose-600 text-white shadow-md' : 'text-[#77766F] hover:text-white'
-              }`}
-            >
-              🔴 Críticos ({alertCounts.criticos})
-            </button>
-            <button
-              onClick={() => setFilterAlertPriority('atencao')}
-              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
-                filterAlertPriority === 'atencao' ? 'bg-amber-600 text-white shadow-md' : 'text-[#77766F] hover:text-white'
-              }`}
-            >
-              🟠 Atenção ({alertCounts.atencao})
-            </button>
-            <button
-              onClick={() => setFilterAlertPriority('pendente')}
-              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
-                filterAlertPriority === 'pendente' ? 'bg-yellow-600 text-white shadow-md' : 'text-[#77766F] hover:text-white'
-              }`}
-            >
-              🟡 Pendentes ({alertCounts.pendentes})
-            </button>
-            <button
-              onClick={() => setFilterAlertPriority('resolvido')}
-              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
-                filterAlertPriority === 'resolvido' ? 'bg-emerald-600 text-white shadow-md' : 'text-[#77766F] hover:text-white'
-              }`}
-            >
-              🟢 Resolvidos ({alertCounts.resolvidos})
-            </button>
-            <button
-              onClick={() => setFilterAlertPriority('all')}
-              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
-                filterAlertPriority === 'all' ? 'bg-slate-700 text-white shadow-md' : 'text-[#77766F] hover:text-white'
-              }`}
-            >
-              Todos ({alertCounts.totalGeral})
-            </button>
-          </div>
-
-          <span className="text-[11px] text-[#77766F]">
-            Exibindo <strong>{centralAlertsFiltrados.length}</strong> alerta(s)
-          </span>
-        </div>
-
-        {/* LISTA DE ALERTAS (MOBILE CARDS / DESKTOP TABLE) */}
-        {centralAlertsFiltrados.length === 0 ? (
-          <div className="py-12 text-center space-y-2 bg-[#EAE8E2]/50 rounded-xl border border-[#CFCDC5]">
-            <span className="material-symbols-outlined text-emerald-400 text-3xl">verified_user</span>
-            <p className="text-xs text-[#171717] font-bold">Nenhum alerta operacional encontrado nesta visualização.</p>
-            <p className="text-[11px] text-[#5F5F5F] max-w-md mx-auto">
-              Operação em conformidade ou nenhuma ocorrência correspondente aos filtros selecionados.
-            </p>
-          </div>
-        ) : (
-          <>
-            {/* CARDS MOBILE (sm:hidden) */}
-            <div className="grid grid-cols-1 gap-3 sm:hidden">
-              {centralAlertsFiltrados.map((item) => {
-                let prioBadge = { label: '🔴 CRÍTICO', color: 'bg-rose-50 text-rose-800 border-rose-300 font-bold' };
-                if (item.prioridade === 'atencao') {
-                  prioBadge = { label: '🟠 ATENÇÃO', color: 'bg-amber-50 text-amber-900 border-amber-300 font-bold' };
-                } else if (item.prioridade === 'pendente') {
-                  prioBadge = { label: '🟡 PENDENTE', color: 'bg-yellow-50 text-yellow-900 border-yellow-300 font-bold' };
-                } else if (item.prioridade === 'resolvido') {
-                  prioBadge = { label: '🟢 RESOLVIDO', color: 'bg-emerald-50 text-emerald-800 border-emerald-300 font-bold' };
-                }
-
-                return (
-                  <div
-                    key={item.id}
-                    className="p-4 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] space-y-3"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${prioBadge.color}`}>
-                        {prioBadge.label}
-                      </span>
-                      <span className="text-[10px] text-[#77766F] font-bold uppercase px-2 py-0.5 rounded bg-slate-800 border border-[#CFCDC5]">
-                        {item.tipo}
-                      </span>
-                    </div>
-
-                    <div>
-                      <div className="font-extrabold text-[#171717] text-sm flex items-center gap-1.5">
-                        {item.titulo}
-                      </div>
-                      <p className="text-xs text-[#171717] mt-1 leading-relaxed">{item.descricao}</p>
-                    </div>
-
-                    <div className="text-[11px] text-[#77766F] space-y-1 font-mono pt-2 border-t border-[#CFCDC5]">
-                      <div><strong>Loja:</strong> <span className="text-white">{item.loja}</span></div>
-                      <div><strong>Indústria:</strong> <span className="text-[#7E22CE] font-bold">{item.industria}</span></div>
-                      <div><strong>Promotor:</strong> <span className="text-[#171717]">{item.promotor}</span></div>
-                      <div><strong>Data:</strong> <span className="text-[#171717]">{new Date(item.data + 'T00:00:00').toLocaleDateString('pt-BR')}</span></div>
-                    </div>
-
-                    <div className="flex items-center justify-between pt-2 border-t border-[#CFCDC5]">
-                      <span className="text-[10px] text-[#5F5F5F] italic">Origem: {item.origem}</span>
-
-                      <div className="flex items-center gap-2">
-                        {item.occurrenceId && item.prioridade !== 'resolvido' && (
-                          canResolve ? (
-                            <button
-                              onClick={() => handleResolveRupture(item.occurrenceId!)}
-                              disabled={resolvingId === item.occurrenceId}
-                              className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[11px] cursor-pointer"
-                            >
-                              Resolver
-                            </button>
-                          ) : null
-                        )}
-
-                        {item.visitObj && (
-                          <button
-                            onClick={() => setSelectedVisit(item.visitObj!)}
-                            className="px-3 py-1.5 rounded-lg bg-cyan-600/30 hover:bg-cyan-600/50 text-cyan-300 border border-cyan-500/40 font-bold text-[11px] cursor-pointer"
-                          >
-                            Ver visita
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* TABELA DESKTOP & TABLET (hidden sm:block) */}
-            <div className="hidden sm:block overflow-x-auto rounded-xl border border-[#CFCDC5]">
-              <table className="w-full text-left text-xs border-collapse align-middle">
-                <colgroup>
-                  <col className="w-[110px]" />
-                  <col className="w-[90px]" />
-                  <col className="w-[95px]" />
-                  <col className="w-[170px]" />
-                  <col className="w-[170px]" />
-                  <col className="w-[130px]" />
-                  <col className="min-w-[280px]" />
-                  <col className="w-[110px]" />
-                  <col className="w-[125px]" />
-                </colgroup>
-                <thead>
-                  <tr className="bg-[#E3E1DA] border-b border-[#CFCDC5] text-[11px] font-bold text-[#171717] uppercase tracking-wider">
-                    <th className="py-3 px-3 text-center">Prioridade</th>
-                    <th className="py-3 px-3">Tipo</th>
-                    <th className="py-3 px-3">Data</th>
-                    <th className="py-3 px-3">Promotor</th>
-                    <th className="py-3 px-3">Loja</th>
-                    <th className="py-3 px-3">Indústria</th>
-                    <th className="py-3 px-4">Alerta / Descrição</th>
-                    <th className="py-3 px-3 text-center">Situação</th>
-                    <th className="py-3 px-3 text-right">Ação</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[#CFCDC5] text-[#171717]">
-                  {centralAlertsFiltrados.map((item) => {
-                    let prioBadge = { label: '🔴 CRÍTICO', color: 'bg-rose-50 text-rose-800 border-rose-300 font-bold' };
-                    if (item.prioridade === 'atencao') {
-                      prioBadge = { label: '🟠 ATENÇÃO', color: 'bg-amber-50 text-amber-900 border-amber-300 font-bold' };
-                    } else if (item.prioridade === 'pendente') {
-                      prioBadge = { label: '🟡 PENDENTE', color: 'bg-yellow-50 text-yellow-900 border-yellow-300 font-bold' };
-                    } else if (item.prioridade === 'resolvido') {
-                      prioBadge = { label: '🟢 RESOLVIDO', color: 'bg-emerald-50 text-emerald-800 border-emerald-300 font-bold' };
-                    }
+                  rankingPromotores.map((p) => {
+                    let badgeColor = 'bg-emerald-50 text-emerald-800 border-emerald-300';
+                    if (p.taxa < 50) badgeColor = 'bg-rose-50 text-rose-800 border-rose-300';
+                    else if (p.taxa <= 80) badgeColor = 'bg-yellow-50 text-yellow-900 border-yellow-300';
 
                     return (
-                      <tr key={item.id} className="hover:bg-[#EAE8E1] transition-colors">
-                        <td className="py-3 px-3 text-center whitespace-nowrap">
-                          <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold border uppercase ${prioBadge.color}`}>
-                            {prioBadge.label}
-                          </span>
+                      <tr key={p.matricula} className="hover:bg-[#F7F6F2] transition-colors">
+                        <td className="py-1.5 px-3 font-semibold text-[#171717]">
+                          {p.nome}
                         </td>
-
-                        <td className="py-3 px-3 font-bold text-[#171717] uppercase text-[11px] whitespace-nowrap">
-                          {item.tipo}
-                        </td>
-
-                        <td className="py-3 px-3 text-[#77766F] font-bold whitespace-nowrap">
-                          {new Date(item.data + 'T00:00:00').toLocaleDateString('pt-BR')}
-                        </td>
-
-                        <td className="py-3 px-3">
-                          <div className="font-bold text-[#171717] text-[12px] leading-snug whitespace-normal break-words">{item.promotor}</div>
-                        </td>
-
-                        <td className="py-3 px-3">
-                          <div className="font-bold text-[#171717] text-[12px] leading-snug whitespace-normal break-words" title={item.loja}>{item.loja}</div>
-                        </td>
-
-                        <td className="py-3 px-3">
-                          <div className="font-bold text-[#7E22CE] text-[12px] leading-snug whitespace-normal break-words">{item.industria}</div>
-                        </td>
-
-                        <td className="py-3 px-4">
-                          <div className="font-extrabold text-[#171717] text-[12px] leading-snug">{item.titulo}</div>
-                          <div className="text-[11px] text-[#77766F] leading-relaxed mt-1 line-clamp-2" title={item.descricao}>{item.descricao}</div>
-                        </td>
-
-                        <td className="py-3 px-3 text-center font-bold text-[11px] whitespace-nowrap">
-                          {item.statusVisual}
-                        </td>
-
-                        <td className="py-3 px-3 text-right whitespace-nowrap">
-                          <div className="flex items-center justify-end gap-2">
-                            {item.occurrenceId && item.prioridade !== 'resolvido' && (
-                              canResolve ? (
-                                <button
-                                  onClick={() => handleResolveRupture(item.occurrenceId!)}
-                                  disabled={resolvingId === item.occurrenceId}
-                                  className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[10px] cursor-pointer shadow transition-all active:scale-95 disabled:opacity-50"
-                                >
-                                  Resolver
-                                </button>
-                              ) : null
-                            )}
-
-                            {item.visitObj ? (
-                              <button
-                                onClick={() => setSelectedVisit(item.visitObj!)}
-                                className="px-2.5 py-1 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 font-bold text-[10px] border border-cyan-500/40 cursor-pointer transition-all active:scale-95"
-                              >
-                                Ver visita
-                              </button>
-                            ) : (
-                              <span className="text-[10px] text-[#5F5F5F] italic">—</span>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </>
-        )}
-      </section>
-
-      {/* ========================================================= */}
-      {/* ETAPA 4.5 — AGENDA OPERACIONAL DO DIA                     */}
-      {/* ========================================================= */}
-      <section className="bg-[#F7F6F2] border border-cyan-500/40 rounded-2xl p-6 shadow-2xl space-y-6 font-mono">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#CFCDC5] pb-4">
-          <div className="space-y-1">
-            <h2 className="text-lg font-bold text-[#171717] uppercase tracking-wider flex items-center gap-2">
-              <span className="material-symbols-outlined text-cyan-400 text-2xl">calendar_today</span>
-              📅 Visitas de Hoje
-            </h2>
-            <p className="text-xs text-[#77766F]">
-              Agenda operacional de atendimento planejada para hoje ({new Date().toLocaleDateString('pt-BR')}) com status e tempo real de execução.
-            </p>
-          </div>
-
-          <div className="flex items-center gap-2 text-xs">
-            <span className="px-3 py-1 rounded-lg bg-[#EAE8E2] border border-[#CFCDC5] text-[#171717] font-bold">
-              Total Planejado: <strong className="text-[#171717]">{plannedItemsToday.length}</strong>
-            </span>
-          </div>
-        </div>
-
-        {/* AGENDA DESKTOP & TABLET / CARDS MOBILE */}
-        {agendaFiltrada.length === 0 ? (
-          <div className="py-12 text-center space-y-2 bg-[#EAE8E2]/50 rounded-xl border border-[#CFCDC5]">
-            <span className="material-symbols-outlined text-cyan-400 text-3xl">event_busy</span>
-            <p className="text-xs text-[#171717] font-bold">Nenhuma visita de hoje encontrada nesta visualização.</p>
-            <p className="text-[11px] text-[#5F5F5F] max-w-md mx-auto">
-              Não foram encontradas rotas planejadas ou visitas correspondentes aos filtros selecionados.
-            </p>
-          </div>
-        ) : (
-          <>
-            {/* CARDS RESPONSIVOS PARA MOBILE (sm:hidden) */}
-            <div className="grid grid-cols-1 gap-3 sm:hidden">
-              {agendaFiltrada.map((item) => {
-                let badge = { label: '🟡 Pendente', color: 'bg-yellow-50 text-yellow-900 border-yellow-300 font-bold' };
-                if (item.status === 'em_andamento') {
-                  badge = { label: '🔵 Em andamento', color: 'bg-cyan-50 text-cyan-900 border-cyan-300 font-bold' };
-                } else if (item.status === 'nao_realizada') {
-                  badge = { label: '🔴 Não realizada', color: 'bg-rose-50 text-rose-800 border-rose-300 font-bold' };
-                } else if (item.status === 'concluida') {
-                  badge = { label: '🟢 Concluída', color: 'bg-emerald-50 text-emerald-800 border-emerald-300 font-bold' };
-                }
-
-                return (
-                  <div
-                    key={item.key}
-                    onClick={() => item.visitObj && setSelectedVisit(item.visitObj)}
-                    className={`p-4 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] space-y-2.5 ${
-                      item.visitObj ? 'cursor-pointer hover:border-cyan-500/50' : ''
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className={`px-2.5 py-0.5 rounded text-[10px] font-bold border ${badge.color}`}>
-                        {badge.label}
-                      </span>
-                      <span className="text-[10px] text-[#5F5F5F]">{item.dataStr}</span>
-                    </div>
-
-                    <div>
-                      <div className="font-bold text-[#171717] text-sm">{item.lojaNome}</div>
-                      <div className="text-[11px] text-[#7E22CE] font-bold">Ind: {item.industriaNome}</div>
-                      <div className="text-[11px] text-[#77766F]">Promotor: {item.promotorNome}</div>
-                    </div>
-
-                    <div className="pt-2 border-t border-[#CFCDC5]/60 flex items-center justify-between text-[11px] text-[#77766F] font-mono">
-                      <div>Início: <strong className="text-[#171717]">{item.startedAt ? new Date(item.startedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—'}</strong></div>
-                      <div>Fim: <strong className="text-[#171717]">{item.completedAt ? new Date(item.completedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—'}</strong></div>
-                      {item.duracaoFormatada && (
-                        <div className="text-emerald-400 font-bold">Dur: {item.duracaoFormatada}</div>
-                      )}
-                    </div>
-
-                    {item.motivoNaoRealizada && (
-                      <div className="p-2 rounded bg-rose-500/10 border border-rose-500/30 text-[10px] text-rose-300">
-                        <strong>Motivo:</strong> {item.motivoNaoRealizada}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* TABELA ESTRUTURADA PARA TABLET & DESKTOP (hidden sm:block) */}
-            <div className="hidden sm:block overflow-x-auto rounded-xl border border-[#CFCDC5]">
-              <table className="w-full text-left text-xs border-collapse">
-                <thead>
-                  <tr className="bg-[#E3E1DA] border-b border-[#CFCDC5] text-[11px] font-bold text-[#171717] uppercase tracking-wider">
-                    <th className="py-3.5 px-4 text-center">Status</th>
-                    <th className="py-3.5 px-4">Promotor</th>
-                    <th className="py-3.5 px-4">Loja / PDV</th>
-                    <th className="py-3.5 px-4">Indústria</th>
-                    <th className="py-3.5 px-4">Data</th>
-                    <th className="py-3.5 px-4">Início</th>
-                    <th className="py-3.5 px-4">Conclusão</th>
-                    <th className="py-3.5 px-4 text-center">Duração</th>
-                    <th className="py-3.5 px-4 text-right">Detalhe</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[#CFCDC5] text-[#171717]">
-                  {agendaFiltrada.map((item) => {
-                    let badge = { label: '🟡 Pendente', color: 'bg-yellow-50 text-yellow-900 border-yellow-300 font-bold' };
-                    if (item.status === 'em_andamento') {
-                      badge = { label: '🔵 Em andamento', color: 'bg-cyan-50 text-cyan-900 border-cyan-300 font-bold' };
-                    } else if (item.status === 'nao_realizada') {
-                      badge = { label: '🔴 Não realizada', color: 'bg-rose-50 text-rose-800 border-rose-300 font-bold' };
-                    } else if (item.status === 'concluida') {
-                      badge = { label: '🟢 Concluída', color: 'bg-emerald-50 text-emerald-800 border-emerald-300 font-bold' };
-                    }
-
-                    return (
-                      <tr key={item.key} className="hover:bg-[#EAE8E1] transition-colors">
-                        <td className="py-3.5 px-4 text-center whitespace-nowrap">
-                          <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold border uppercase ${badge.color}`}>
-                            {badge.label}
-                          </span>
-                        </td>
-
-                        <td className="py-3.5 px-4">
-                          <div className="font-bold text-[#171717]">{item.promotorNome}</div>
-                          <div className="text-[10px] text-[#5F5F5F] font-normal">Mat: {item.promotorMatricula}</div>
-                        </td>
-
-                        <td className="py-3.5 px-4">
-                          <div className="font-bold text-[#171717]">{item.lojaNome}</div>
-                          <div className="text-[10px] text-[#5F5F5F] font-normal">Cód: {item.lojaCodigo}</div>
-                        </td>
-
-                        <td className="py-3.5 px-4 font-bold text-[#7E22CE]">
-                          {item.industriaNome}
-                        </td>
-
-                        <td className="py-3.5 px-4 text-[#77766F] font-bold whitespace-nowrap">
-                          {new Date(item.dataStr + 'T00:00:00').toLocaleDateString('pt-BR')}
-                        </td>
-
-                        <td className="py-3.5 px-4 text-[#171717] font-mono whitespace-nowrap">
-                          {item.startedAt ? new Date(item.startedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—'}
-                        </td>
-
-                        <td className="py-3.5 px-4 text-[#171717] font-mono whitespace-nowrap">
-                          {item.completedAt ? new Date(item.completedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—'}
-                        </td>
-
-                        <td className="py-3.5 px-4 text-center font-mono font-bold text-emerald-400 whitespace-nowrap">
-                          {item.duracaoFormatada || '—'}
-                        </td>
-
-                        <td className="py-3.5 px-4 text-right whitespace-nowrap">
-                          {item.visitObj ? (
-                            <button
-                              onClick={() => setSelectedVisit(item.visitObj!)}
-                              className="p-1.5 rounded-lg bg-[#EAE8E2] hover:bg-[#E4E2DB] text-cyan-300 border border-[#CFCDC5] cursor-pointer"
-                              title="Ver Detalhes da Visita"
-                            >
-                              <span className="material-symbols-outlined text-[16px]">visibility</span>
-                            </button>
+                        <td className="py-1.5 px-2 text-center">{p.planejadas}</td>
+                        <td className="py-1.5 px-2 text-center font-bold text-emerald-700">{p.concluidas}</td>
+                        <td className="py-1.5 px-2 text-center text-blue-700">{p.emAndamento}</td>
+                        <td className="py-1.5 px-2 text-center text-rose-700">{p.naoRealizadas}</td>
+                        <td className="py-1.5 px-2 text-center text-amber-700 font-bold">{p.pendentes}</td>
+                        <td className="py-1.5 px-3 text-right font-bold">
+                          {systemSettings.mode !== 'OPERACAO_OFICIAL' || systemSettings.status !== 'loaded' ? (
+                            <span className="text-[10px] text-[#77766F] font-normal">Pré-SLA</span>
                           ) : (
-                            <span className="text-[10px] text-[#5F5F5F] italic">Pendente</span>
+                            <span className={`px-2 py-0.5 rounded border text-[10px] ${badgeColor}`}>
+                              {p.taxa}%
+                            </span>
                           )}
                         </td>
                       </tr>
                     );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </>
-        )}
-      </section>
-
-      {/* ========================================================= */}
-      {/* ETAPA 3 — PAINEL OPERACIONAL DE RUPTURAS                  */}
-      {/* ========================================================= */}
-      <section className="bg-[#F7F6F2] border border-rose-500/40 rounded-2xl p-6 shadow-2xl space-y-6 font-mono">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#CFCDC5] pb-4">
-          <div className="space-y-1">
-            <h2 className="text-lg font-bold text-[#171717] uppercase tracking-wider flex items-center gap-2">
-              <span className="material-symbols-outlined text-rose-500 text-2xl animate-pulse">report_problem</span>
-              🚨 Rupturas Operacionais
-            </h2>
-            <p className="text-xs text-[#77766F]">
-              Ocorrências de falta de produto na gôndola registradas pelos promotores em tempo real.
-            </p>
-          </div>
-
-          {/* METRICAS DE RUPTURA CONSOLIDADA */}
-          <div className="flex items-center gap-3 text-xs">
-            <div className="px-3.5 py-2 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] text-center">
-              <span className="text-[10px] text-[#77766F] block font-bold uppercase">Total Geral</span>
-              <span className="text-base font-extrabold text-[#171717]">{totalRupturasCount} Rupturas</span>
-            </div>
-
-            <div className="px-3.5 py-2 rounded-xl bg-[#FDF2F2] border border-rose-500/40 text-center">
-              <span className="text-[10px] text-rose-400 block font-bold uppercase">
-                {filterIndustria !== 'all' || filterPromotor !== 'all' || filterLoja !== 'all' ? 'Abertas (Filtradas)' : 'Abertas'}
-              </span>
-              <span className="text-base font-extrabold text-rose-300">{rupturasAbertasFiltradasCount} 🔴 Abertas</span>
-            </div>
-
-            <div className="px-3.5 py-2 rounded-xl bg-emerald-950/40 border border-emerald-500/40 text-center">
-              <span className="text-[10px] text-emerald-400 block font-bold uppercase">
-                {filterIndustria !== 'all' || filterPromotor !== 'all' || filterLoja !== 'all' ? 'Resolvidas (Filtradas)' : 'Resolvidas'}
-              </span>
-              <span className="text-base font-extrabold text-emerald-300">{rupturasResolvidasFiltradasCount} 🟢 Resolvidas</span>
-            </div>
-          </div>
-        </div>
-
-        {/* FILTRO DE STATUS DA TABELA DE RUPTURAS */}
-        <div className="flex items-center justify-between flex-wrap gap-3 text-xs">
-          <div className="flex items-center gap-2 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl p-1">
-            <button
-              onClick={() => setFilterRupturaStatus('abertas')}
-              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
-                filterRupturaStatus === 'abertas' ? 'bg-rose-600 text-white shadow-md' : 'text-[#77766F] hover:text-white'
-              }`}
-            >
-              🔴 Abertas ({rupturasAbertasFiltradasCount})
-            </button>
-            <button
-              onClick={() => setFilterRupturaStatus('resolvidas')}
-              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
-                filterRupturaStatus === 'resolvidas' ? 'bg-emerald-600 text-white shadow-md' : 'text-[#77766F] hover:text-white'
-              }`}
-            >
-              🟢 Resolvidas ({rupturasResolvidasFiltradasCount})
-            </button>
-            <button
-              onClick={() => setFilterRupturaStatus('all')}
-              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
-                filterRupturaStatus === 'all' ? 'bg-[#222222] text-white shadow-md' : 'text-[#77766F] hover:text-white'
-              }`}
-            >
-              Todas no Filtro ({totalRupturasFiltradasContexto})
-            </button>
-          </div>
-
-          <span className="text-[11px] text-[#77766F]">
-            Exibindo <strong>{rupturasFiltradas.length}</strong> de <strong>{totalRupturasCount}</strong> ocorrência(s)
-          </span>
-        </div>
-
-        {/* TABELA DE RUPTURAS */}
-        {rupturasFiltradas.length === 0 ? (
-          <div className="py-12 text-center space-y-2 bg-[#EAE8E2]/50 rounded-xl border border-[#CFCDC5]">
-            <span className="material-symbols-outlined text-emerald-400 text-3xl">check_circle</span>
-            <p className="text-xs text-[#171717] font-bold">Nenhuma ruptura encontrada nesta visualização.</p>
-            <p className="text-[11px] text-[#5F5F5F] max-w-md mx-auto">
-              Todas as ocorrências registradas estao tratadas ou não correspondem aos filtros selecionados.
-            </p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto rounded-xl border border-[#CFCDC5]">
-            <table className="w-full text-left text-xs border-collapse">
-              <thead>
-                <tr className="bg-[#E3E1DA] border-b border-[#CFCDC5] text-[11px] font-bold text-[#171717] uppercase tracking-wider">
-                  <th className="py-3 px-4">Data</th>
-                  <th className="py-3 px-4">Loja</th>
-                  <th className="py-3 px-4">Indústria</th>
-                  <th className="py-3 px-4">Promotor</th>
-                  <th className="py-3 px-4">Descrição</th>
-                  <th className="py-3 px-4 text-center">Foto</th>
-                  <th className="py-3 px-4 text-center">Status</th>
-                  <th className="py-3 px-4 text-right">Ação</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#CFCDC5] text-[#171717]">
-                {rupturasFiltradas.map((r) => (
-                  <tr key={r.id} className="hover:bg-[#EAE8E1] transition-colors">
-                    <td className="py-3 px-4 text-[#77766F] font-bold whitespace-nowrap">
-                      {new Date(r.createdAt || r.dataVisita).toLocaleDateString('pt-BR')}
-                      <span className="text-[10px] text-[#5F5F5F] block font-normal">
-                        {r.createdAt ? new Date(r.createdAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : ''}
-                      </span>
-                    </td>
-
-                    <td className="py-3 px-4 font-bold text-[#171717]">
-                      {r.lojaNome}
-                      <span className="text-[10px] text-[#5F5F5F] block font-normal">Cód: {r.lojaCodigo}</span>
-                    </td>
-
-                    <td className="py-3 px-4 font-bold text-[#7E22CE]">
-                      {r.industriaNome}
-                    </td>
-
-                    <td className="py-3 px-4 text-[#171717]">
-                      {r.promotorNome}
-                      <span className="text-[10px] text-[#5F5F5F] block font-normal">Mat: {r.promotorMatricula}</span>
-                    </td>
-
-                    <td className="py-3 px-4 text-slate-200 max-w-xs leading-relaxed">
-                      {r.descricao}
-                    </td>
-
-                    <td className="py-3 px-4 text-center whitespace-nowrap">
-                      {r.photoSignedUrl ? (
-                        <a
-                          href={r.photoSignedUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 font-bold text-[10px] border border-cyan-500/40 transition-colors"
-                        >
-                          <span className="material-symbols-outlined text-[14px]">photo_camera</span>
-                          Ver Foto
-                        </a>
-                      ) : (
-                        <span className="px-2 py-0.5 rounded bg-slate-800 text-[#5F5F5F] text-[10px]">
-                          Sem foto
-                        </span>
-                      )}
-                    </td>
-
-                    <td className="py-3 px-4 text-center whitespace-nowrap">
-                      {r.resolvido ? (
-                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-300 font-bold text-[10px] border border-emerald-500/40">
-                          🟢 Resolvida
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-rose-500/20 text-rose-300 font-bold text-[10px] border border-rose-500/40 animate-pulse">
-                          🔴 Aberta
-                        </span>
-                      )}
-                    </td>
-
-                    <td className="py-3 px-4 text-right whitespace-nowrap">
-                      {!r.resolvido ? (
-                        canResolve ? (
-                          <button
-                            onClick={() => handleResolveRupture(r.id)}
-                            disabled={resolvingId === r.id}
-                            className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[11px] shadow transition-all active:scale-95 cursor-pointer disabled:opacity-50"
-                          >
-                            {resolvingId === r.id ? 'Salvando...' : 'Marcar como resolvida'}
-                          </button>
-                        ) : (
-                          <span className="text-[10px] text-[#5F5F5F] italic" title="Apenas ADM/GESTOR podem marcar como resolvida">
-                            Apenas Gestor
-                          </span>
-                        )
-                      ) : (
-                        <span className="text-[10px] text-emerald-400/80 font-mono">✓ Concluído</span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
+                  })
+                )}
               </tbody>
             </table>
           </div>
-        )}
-      </section>
-
-      {/* ========================================================= */}
-      {/* ETAPA 4 — CONTROLE DE VALIDADE E VENCIMENTO DE PRODUTOS   */}
-      {/* ========================================================= */}
-      <section className="bg-[#F7F6F2] border border-amber-500/40 rounded-2xl p-6 shadow-2xl space-y-6 font-mono">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#CFCDC5] pb-4">
-          <div className="space-y-1">
-            <h2 className="text-lg font-bold text-[#171717] uppercase tracking-wider flex items-center gap-2">
-              <span className="material-symbols-outlined text-amber-500 text-2xl">inventory_2</span>
-              ⏰ Validade / Vencimentos
-            </h2>
-            <p className="text-xs text-[#77766F]">
-              Produtos cadastrados pelos promotores agrupados por urgência e proximidade da data de vencimento.
-            </p>
-          </div>
-
-          <div className="text-xs text-[#77766F]">
-            Total Monitorado: <strong className="text-[#171717] font-bold">{todasValidades.length} produto(s)</strong>
-          </div>
         </div>
 
-        {/* CARDS DE MONITORAMENTO DE VALIDADE */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-          <div
-            onClick={() => setFilterValidadeStatus(filterValidadeStatus === 'vencidos' ? 'all' : 'vencidos')}
-            className={`p-4 rounded-xl border transition-all cursor-pointer ${
-              filterValidadeStatus === 'vencidos'
-                ? 'bg-rose-950/60 border-rose-500 shadow-lg scale-[1.02]'
-                : 'bg-[#EAE8E2] border-rose-500/30 hover:border-rose-500/60'
-            }`}
-          >
-            <span className="text-[10px] text-rose-400 block font-bold uppercase">🔴 Vencidos</span>
-            <span className="text-2xl font-extrabold text-rose-300 mt-1 block">{validadeCountVencidos}</span>
-            <span className="text-[10px] text-rose-400/80 block mt-1">Ação imediata necessária</span>
+        {/* Cobertura por Indústria */}
+        <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5] shadow-sm space-y-3">
+          <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-2">
+            <h3 className="text-xs font-black text-[#171717] uppercase tracking-wider flex items-center gap-1.5">
+              <span className="material-symbols-outlined text-purple-600 text-sm">factory</span>
+              Cobertura por Indústria
+            </h3>
+            <span className="text-[10px] text-[#7E22CE] font-bold">Top Indústrias</span>
           </div>
 
-          <div
-            onClick={() => setFilterValidadeStatus(filterValidadeStatus === 'ate3' ? 'all' : 'ate3')}
-            className={`p-4 rounded-xl border transition-all cursor-pointer ${
-              filterValidadeStatus === 'ate3'
-                ? 'bg-[#FDF2F2] border-rose-400 shadow-lg scale-[1.02]'
-                : 'bg-[#EAE8E2] border-rose-400/30 hover:border-rose-400/60'
-            }`}
-          >
-            <span className="text-[10px] text-rose-300 block font-bold uppercase">🚨 Vence em até 3 dias</span>
-            <span className="text-2xl font-extrabold text-rose-200 mt-1 block">{validadeCountAte3}</span>
-            <span className="text-[10px] text-rose-300/80 block mt-1">Urgência crítica</span>
-          </div>
-
-          <div
-            onClick={() => setFilterValidadeStatus(filterValidadeStatus === 'ate7' ? 'all' : 'ate7')}
-            className={`p-4 rounded-xl border transition-all cursor-pointer ${
-              filterValidadeStatus === 'ate7'
-                ? 'bg-[#FFF8E6] border-amber-500 shadow-lg scale-[1.02]'
-                : 'bg-[#EAE8E2] border-amber-500/30 hover:border-amber-500/60'
-            }`}
-          >
-            <span className="text-[10px] text-amber-400 block font-bold uppercase">🟠 Vence em 4–7 dias</span>
-            <span className="text-2xl font-extrabold text-amber-300 mt-1 block">{validadeCountAte7}</span>
-            <span className="text-[10px] text-amber-400/80 block mt-1">Atenção semanal</span>
-          </div>
-
-          <div
-            onClick={() => setFilterValidadeStatus(filterValidadeStatus === 'ate30' ? 'all' : 'ate30')}
-            className={`p-4 rounded-xl border transition-all cursor-pointer ${
-              filterValidadeStatus === 'ate30'
-                ? 'bg-yellow-950/40 border-yellow-500 shadow-lg scale-[1.02]'
-                : 'bg-[#EAE8E2] border-yellow-500/30 hover:border-yellow-500/60'
-            }`}
-          >
-            <span className="text-[10px] text-yellow-400 block font-bold uppercase">🟡 Vence em 8–30 dias</span>
-            <span className="text-2xl font-extrabold text-yellow-300 mt-1 block">{validadeCountAte30}</span>
-            <span className="text-[10px] text-yellow-400/80 block mt-1">Planejamento preventivo</span>
-          </div>
-        </div>
-
-        {/* TABELA DE VALIDADES E VENCIMENTOS */}
-        {validadesFiltradas.length === 0 ? (
-          <div className="py-12 text-center space-y-2 bg-[#EAE8E2]/50 rounded-xl border border-[#CFCDC5]">
-            <span className="material-symbols-outlined text-emerald-400 text-3xl">verified</span>
-            <p className="text-xs text-[#171717] font-bold">Nenhum registro de validade nesta visualização.</p>
-            <p className="text-[11px] text-[#5F5F5F] max-w-md mx-auto">
-              Não foram encontrados produtos com problemas de vencimento para os filtros selecionados.
-            </p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto rounded-xl border border-[#CFCDC5]">
-            <table className="w-full text-left text-xs border-collapse">
-              <thead>
-                <tr className="bg-[#E3E1DA] border-b border-[#CFCDC5] text-[11px] font-bold text-[#171717] uppercase tracking-wider">
-                  <th className="py-3 px-4">Validade</th>
-                  <th className="py-3 px-4">Produto</th>
-                  <th className="py-3 px-4 text-right">Qtd.</th>
-                  <th className="py-3 px-4">Loja</th>
-                  <th className="py-3 px-4">Indústria</th>
-                  <th className="py-3 px-4">Promotor</th>
-                  <th className="py-3 px-4">Lote</th>
-                  <th className="py-3 px-4 text-right">Situação</th>
+          <div className="overflow-x-auto max-h-[280px] overflow-y-auto rounded-xl border border-[#CFCDC5] bg-white">
+            <table className="w-full text-left border-collapse">
+              <thead className="sticky top-0 bg-[#EAE8E2] border-b border-[#CFCDC5] text-[10px] text-[#77766F] uppercase font-bold">
+                <tr>
+                  <th className="py-2 px-2">Indústria</th>
+                  <th className="py-2 px-2 text-center">Plan.</th>
+                  <th className="py-2 px-2 text-center">Conc.</th>
+                  <th className="py-2 px-2 text-right">Ocorr.</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-[#CFCDC5] text-[#171717]">
-                {validadesFiltradas.map((val) => {
-                  const [vYear, vMonth, vDay] = val.dataVencimento.split('-').map(Number);
-                  const vencDate = new Date(vYear, vMonth - 1, vDay);
-
-                  let badge = { label: '🟢 Normal', color: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' };
-                  if (val.categoria === 'vencidos') {
-                    badge = { label: '🔴 Vencido', color: 'bg-rose-500/20 text-rose-300 border-rose-500/40 animate-pulse' };
-                  } else if (val.categoria === 'ate3') {
-                    badge = { label: '🚨 Até 3 dias', color: 'bg-rose-500/20 text-rose-300 border-rose-500/40' };
-                  } else if (val.categoria === 'ate7') {
-                    badge = { label: '🟠 4–7 dias', color: 'bg-amber-500/20 text-amber-300 border-amber-500/40' };
-                  } else if (val.categoria === 'ate30') {
-                    badge = { label: '🟡 8–30 dias', color: 'bg-yellow-500/20 text-yellow-300 border-yellow-500/40' };
-                  }
-
-                  return (
-                    <tr key={val.id} className="hover:bg-[#EAE8E1] transition-colors">
-                      <td className="py-3 px-4 font-bold text-white whitespace-nowrap">
-                        {new Date(vencDate).toLocaleDateString('pt-BR')}
-                        <span className="text-[10px] text-[#5F5F5F] block font-normal">
-                          {val.diffDays < 0 ? `${Math.abs(val.diffDays)} dia(s) atrás` : `em ${val.diffDays} dia(s)`}
-                        </span>
-                      </td>
-
-                      <td className="py-3 px-4 font-bold text-[#171717]">
-                        {val.produtoNome}
-                        {val.observacao && <span className="text-[10px] text-[#77766F] block font-normal">{val.observacao}</span>}
-                      </td>
-
-                      <td className="py-3 px-4 text-right font-bold text-amber-300">
-                        {val.quantidade}
-                      </td>
-
-                      <td className="py-3 px-4 text-[#171717] font-bold">
-                        {val.lojaNome}
-                        <span className="text-[10px] text-[#5F5F5F] block font-normal">Cód: {val.lojaCodigo}</span>
-                      </td>
-
-                      <td className="py-3 px-4 font-bold text-[#7E22CE]">
-                        {val.industriaNome}
-                      </td>
-
-                      <td className="py-3 px-4 text-[#171717]">
-                        {val.promotorNome}
-                        <span className="text-[10px] text-[#5F5F5F] block font-normal">Mat: {val.promotorMatricula}</span>
-                      </td>
-
-                      <td className="py-3 px-4 text-[#77766F] font-mono">
-                        {val.lote || '—'}
-                      </td>
-
-                      <td className="py-3 px-4 text-right whitespace-nowrap">
-                        <span className={`px-2.5 py-1 rounded text-[10px] font-bold border ${badge.color}`}>
-                          {badge.label}
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-
-      {/* SEÇÃO 2: CHECKLIST & DISTRIBUIÇÃO DE OCORRÊNCIAS */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Desempenho de Checklist */}
-        <div className="p-6 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5] shadow-xl space-y-4 font-mono">
-          <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-3">
-            <h3 className="text-sm font-bold text-[#171717] uppercase tracking-wider flex items-center gap-2">
-              <span className="material-symbols-outlined text-amber-400">fact_check</span>
-              Validação de Checklist em Campo
-            </h3>
-            <span className="px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-xs font-bold border border-amber-500/30">
-              {checklistPerc}% Conclusão
-            </span>
-          </div>
-
-          <div className="grid grid-cols-3 gap-3 text-center">
-            <div className="p-3 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5]">
-              <span className="text-[10px] text-[#77766F] block font-bold">TOTAL ITENS</span>
-              <span className="text-xl font-extrabold text-[#171717]">{totalChecklistItems}</span>
-            </div>
-            <div className="p-3 rounded-xl bg-[#EAE8E2] border border-emerald-500/30">
-              <span className="text-[10px] text-emerald-400 block font-bold">CONCLUÍDOS</span>
-              <span className="text-xl font-extrabold text-emerald-400">{totalChecklistChecked}</span>
-            </div>
-            <div className="p-3 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5]">
-              <span className="text-[10px] text-[#77766F] block font-bold">PENDENTES</span>
-              <span className="text-xl font-extrabold text-[#171717]">{totalChecklistItems - totalChecklistChecked}</span>
-            </div>
-          </div>
-
-          <div className="w-full bg-[#E4E2DB] h-3 rounded-full overflow-hidden p-0.5 border border-[#CFCDC5]">
-            <div
-              className="bg-gradient-to-r from-amber-500 to-emerald-400 h-2 rounded-full transition-all duration-500"
-              style={{ width: `${checklistPerc}%` }}
-            />
-          </div>
-        </div>
-
-        {/* Distribuição por Tipo de Ocorrência */}
-        <div className="p-6 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5] shadow-xl space-y-4 font-mono">
-          <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-3">
-            <h3 className="text-sm font-bold text-[#171717] uppercase tracking-wider flex items-center gap-2">
-              <span className="material-symbols-outlined text-rose-400">report_problem</span>
-              Incidentes &amp; Rupturas ({totalOcorrencias})
-            </h3>
-            <span className="text-xs text-rose-300 font-bold">Total Registrado</span>
-          </div>
-
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-            <div className="p-3 rounded-xl bg-rose-950/20 border border-rose-500/30">
-              <span className="text-[10px] text-rose-400 block font-bold uppercase">Rupturas</span>
-              <span className="text-xl font-extrabold text-rose-300">{ocorrenciasPorTipo.ruptura}</span>
-            </div>
-
-            <div className="p-3 rounded-xl bg-amber-950/20 border border-amber-500/30">
-              <span className="text-[10px] text-amber-400 block font-bold uppercase">Preço Div.</span>
-              <span className="text-xl font-extrabold text-amber-300">{ocorrenciasPorTipo.preco_divergente}</span>
-            </div>
-
-            <div className="p-3 rounded-xl bg-cyan-950/20 border border-cyan-500/30">
-              <span className="text-[10px] text-cyan-400 block font-bold uppercase">Falta Espaço</span>
-              <span className="text-xl font-extrabold text-cyan-300">{ocorrenciasPorTipo.falta_espaco}</span>
-            </div>
-
-            <div className="p-3 rounded-xl bg-slate-900 border border-[#CFCDC5]">
-              <span className="text-[10px] text-[#77766F] block font-bold uppercase">Outros</span>
-              <span className="text-xl font-extrabold text-[#171717]">{ocorrenciasPorTipo.outro}</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* ========================================================= */}
-      {/* BLOCO 4 — PROBLEMAS OPERACIONAIS & LOJAS CRÍTICAS         */}
-      {/* ========================================================= */}
-      <section className="space-y-6">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#CFCDC5] pb-3">
-          <h2 className="text-lg font-bold text-[#171717] uppercase tracking-wider font-mono flex items-center gap-2">
-            <span className="material-symbols-outlined text-rose-500 text-2xl">grid_view</span>
-            ⚠️ Problemas Operacionais &amp; Lojas Críticas
-          </h2>
-          <span className="text-xs font-mono text-[#77766F]">
-            Lojas com pendências de atendimento, rupturas ou produtos em risco de vencimento
-          </span>
-        </div>
-
-        {/* LOJAS CRÍTICAS */}
-        <div className="p-6 rounded-2xl bg-[#F7F6F2] border border-rose-500/30 shadow-xl space-y-4 font-mono text-xs">
-          <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-3">
-            <h3 className="text-sm font-bold text-[#171717] uppercase tracking-wider flex items-center gap-2">
-              <span className="material-symbols-outlined text-rose-400">storefront</span>
-              Lojas Críticas ({lojasCriticas.length})
-            </h3>
-            <span className="text-[10px] text-rose-300 font-bold">Consolidação de Riscos por PDV</span>
-          </div>
-
-          {lojasCriticas.length === 0 ? (
-            <p className="text-emerald-400 font-bold italic text-center py-6">
-              Nenhuma loja com problemas operacionais críticos identificados no momento!
-            </p>
-          ) : (
-            <div className="overflow-x-auto max-h-[320px] overflow-y-auto">
-              <table className="w-full text-left border-collapse">
-                <thead className="sticky top-0 bg-[#F7F6F2] border-b border-[#CFCDC5] text-[10px] text-[#77766F] uppercase">
+              <tbody className="divide-y divide-[#CFCDC5]/60 text-[#171717]">
+                {rankingIndustrias.length === 0 ? (
                   <tr>
-                    <th className="py-2.5 px-3">Loja / PDV</th>
-                    <th className="py-2.5 px-3 text-center">Rupturas</th>
-                    <th className="py-2.5 px-3 text-center">Validades em Risco</th>
-                    <th className="py-2.5 px-3 text-center">Não Realizadas</th>
-                    <th className="py-2.5 px-3 text-center">Pendentes</th>
-                    <th className="py-2.5 px-3 text-right">Total Ocorrências</th>
+                    <td colSpan={4} className="py-4 text-center text-[#77766F]">
+                      Nenhuma indústria no período.
+                    </td>
                   </tr>
-                </thead>
-                <tbody className="divide-y divide-[#CFCDC5] text-[#171717]">
-                  {lojasCriticas.slice(0, 15).map((s) => (
-                    <tr key={s.codigo} className="hover:bg-[#EAE8E1] transition-colors">
-                      <td className="py-2.5 px-3 font-bold text-[#171717]">
-                        {s.nome}
-                        <span className="text-[10px] text-[#5F5F5F] block font-normal">Cód: {s.codigo}</span>
-                      </td>
-                      <td className="py-2.5 px-3 text-center font-bold text-rose-400">
-                        {s.rupturasAbertas > 0 ? `🔴 ${s.rupturasAbertas}` : '—'}
-                      </td>
-                      <td className="py-2.5 px-3 text-center font-bold text-amber-300">
-                        {s.produtosVencidos > 0 ? `⏰ ${s.produtosVencidos}` : '—'}
-                      </td>
-                      <td className="py-2.5 px-3 text-center font-bold text-rose-300">
-                        {s.visitasNaoRealizadas > 0 ? `⛔ ${s.visitasNaoRealizadas}` : '—'}
-                      </td>
-                      <td className="py-2.5 px-3 text-center font-bold text-yellow-400">
-                        {s.visitasPendentes > 0 ? `🟡 ${s.visitasPendentes}` : '—'}
-                      </td>
-                      <td className="py-2.5 px-3 text-right font-extrabold text-purple-300">
-                        <span className="px-2 py-0.5 rounded bg-purple-500/20 border border-purple-500/30">
-                          {s.totalProblemas} evento(s)
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+                ) : (
+                  rankingIndustrias.map((ind) => {
+                    const perc = ind.planejadas > 0 ? Math.round((ind.concluidas / ind.planejadas) * 100) : 0;
+                    return (
+                      <tr key={ind.codigo} className="hover:bg-[#F7F6F2] transition-colors">
+                        <td className="py-1.5 px-2 font-bold text-[#7E22CE]">
+                          {ind.nome}
+                        </td>
+                        <td className="py-1.5 px-2 text-center">{ind.planejadas}</td>
+                        <td className="py-1.5 px-2 text-center font-bold text-emerald-700">
+                          {ind.concluidas} <span className="text-[9px] text-[#77766F]">({perc}%)</span>
+                        </td>
+                        <td className="py-1.5 px-2 text-right font-bold text-rose-700">
+                          {ind.ocorrencias}
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       </section>
 
       {/* ========================================================= */}
-      {/* BLOCO 5 — PERFORMANCE DA OPERAÇÃO                         */}
+      {/* 7. VISITAS REGISTRADAS EM CAMPO                           */}
       {/* ========================================================= */}
-      <section className="space-y-6">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#CFCDC5] pb-3">
-          <h2 className="text-lg font-bold text-[#171717] uppercase tracking-wider font-mono flex items-center gap-2">
-            <span className="material-symbols-outlined text-purple-400 text-2xl">leaderboard</span>
-            📊 Performance da Operação
-          </h2>
-          <span className="text-xs font-mono text-[#77766F]">
-            Desempenho por equipe de promotores e marcas/indústrias
-          </span>
-        </div>
-
-        {/* PROMOTORES CRÍTICOS (Aderência < 50%) — Visível apenas na Operação Oficial */}
-        {systemSettings.mode === 'OPERACAO_OFICIAL' && systemSettings.status === 'loaded' && promotoresCriticos.length > 0 && (
-          <div className="p-4 rounded-2xl bg-rose-950/20 border border-rose-500/30 font-mono text-xs space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="text-rose-400 font-extrabold uppercase flex items-center gap-1.5 text-xs">
-                <span className="material-symbols-outlined text-rose-400 text-base">warning</span>
-                Promotores Críticos (&lt; 50% Aderência) ({promotoresCriticos.length})
+      {/* ========================================================= */}
+      {/* 7. VISITAS REGISTRADAS EM CAMPO (DATATABLE MODERNO)       */}
+      {/* ========================================================= */}
+      {(() => {
+        const visitColumns: Column<Visit>[] = [
+          {
+            key: 'data',
+            header: 'DATA',
+            sortable: true,
+            className: 'w-[110px] whitespace-nowrap',
+            accessor: (v) => v.data_visita,
+            render: (v) => (
+              <div>
+                <span className="font-bold text-[#171717]">
+                  {new Date(v.data_visita + 'T00:00:00').toLocaleDateString('pt-BR')}
+                </span>
+                <span className="text-[10px] text-[#737373] block font-mono">
+                  {v.id.substring(0, 8)}
+                </span>
+              </div>
+            )
+          },
+          {
+            key: 'promotor',
+            header: 'PROMOTOR',
+            sortable: true,
+            className: 'min-w-[170px]',
+            accessor: (v) => v.promotor?.nome || v.promotor_matricula,
+            render: (v) => (
+              <div>
+                <div className="font-bold text-[#171717]">{v.promotor?.nome || v.promotor_matricula}</div>
+                <div className="text-[10px] text-[#737373] font-mono">Mat: {v.promotor_matricula}</div>
+              </div>
+            )
+          },
+          {
+            key: 'loja',
+            header: 'LOJA / PDV',
+            sortable: true,
+            className: 'min-w-[180px]',
+            accessor: (v) => v.loja?.nome || v.loja_codigo,
+            render: (v) => (
+              <div>
+                <div className="font-semibold text-[#171717]">{v.loja?.nome || v.loja_codigo}</div>
+                <div className="text-[10px] text-[#737373] font-mono">
+                  {v.loja?.cidade ? `${v.loja.cidade}${v.loja.uf ? ` - ${v.loja.uf}` : ''}` : `Cód: ${v.loja_codigo}`}
+                </div>
+              </div>
+            )
+          },
+          {
+            key: 'industria',
+            header: 'INDÚSTRIA',
+            sortable: true,
+            className: 'min-w-[140px]',
+            accessor: (v) => v.industria?.nome || v.industria_codigo,
+            render: (v) => (
+              <span className="font-bold text-[#7E22CE]">
+                {v.industria?.nome || v.industria_codigo}
               </span>
-              <span className="text-[10px] text-rose-300">Exige atenção gerencial</span>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-              {promotoresCriticos.slice(0, 8).map((p) => (
-                <div key={p.matricula} className="p-3 rounded-xl bg-[#EAE8E2] border border-rose-500/30 space-y-1">
-                  <div className="font-extrabold text-[#171717] truncate">{p.nome}</div>
-                  <div className="text-[10px] text-[#77766F]">Mat: {p.matricula} • {p.cidade || '—'}</div>
-                  <div className="flex items-center justify-between pt-1 border-t border-[#CFCDC5] text-[11px]">
-                    <span className="text-[#77766F]">Rotas: <strong className="text-[#171717]">{p.concluidas}/{p.planejadas}</strong></span>
-                    <span className="px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 font-bold border border-rose-500/40">
-                      {p.taxa}%
-                    </span>
+            )
+          },
+          {
+            key: 'horarios',
+            header: 'HORÁRIO',
+            sortable: true,
+            className: 'w-[140px] whitespace-nowrap text-[11px]',
+            accessor: (v) => v.started_at || '',
+            render: (v) => (
+              <div className="space-y-0.5 text-[#737373] font-mono">
+                <div>Início: <strong className="text-[#171717]">{v.started_at ? new Date(v.started_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—'}</strong></div>
+                <div>Fim: <strong className="text-[#171717]">{v.completed_at ? new Date(v.completed_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—'}</strong></div>
+              </div>
+            )
+          },
+          {
+            key: 'status',
+            header: 'SITUAÇÃO',
+            sortable: true,
+            className: 'w-[130px] text-center whitespace-nowrap',
+            accessor: (v) => v.status,
+            render: (v) => {
+              if (v.status === 'concluida') return <StatusBadge status="concluida" label="CONCLUÍDA" />;
+              if (v.status === 'em_andamento') return <StatusBadge status="em_andamento" label="EM ANDAMENTO" />;
+              if (v.status === 'nao_realizada') return <StatusBadge status="falta" label="NÃO REALIZADA" />;
+              return <StatusBadge status="pendente" label={v.status ? v.status.toUpperCase() : 'PENDENTE'} />;
+            }
+          },
+          {
+            key: 'evidencias',
+            header: 'CHECKLIST / FOTOS',
+            className: 'w-[130px] whitespace-nowrap text-[11px]',
+            render: (v) => {
+              const checklistOk = v.checklist_items?.filter((c) => c.checked).length || 0;
+              const photosCount = v.photos?.length || 0;
+              return (
+                <div className="font-mono text-[#737373] space-y-0.5">
+                  <div className="flex items-center gap-1">
+                    <span className="material-symbols-outlined text-[14px] text-emerald-600">check_circle</span>
+                    <span>{checklistOk} item(ns)</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="material-symbols-outlined text-[14px] text-cyan-600">photo_camera</span>
+                    <span>{photosCount} foto(s)</span>
                   </div>
                 </div>
-              ))}
-            </div>
-          </div>
-        )}
+              );
+            }
+          },
+          {
+            key: 'acoes',
+            header: 'AÇÕES',
+            className: 'w-[80px] text-right whitespace-nowrap',
+            render: (v) => (
+              <button
+                onClick={() => setSelectedVisit(v)}
+                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] border border-[#CFCDC5] font-bold text-xs transition-all active:scale-95 cursor-pointer shadow-2xs"
+                title="Ver Ficha Completa da Visita"
+                aria-label={`Ver detalhes da visita ${v.id.substring(0, 8)}`}
+              >
+                <span className="material-symbols-outlined text-[15px]">visibility</span>
+                <span className="hidden sm:inline">Ficha</span>
+              </button>
+            )
+          }
+        ];
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 font-mono text-xs">
-          {/* TABELA RANKING DE PROMOTORES */}
-          <div className="lg:col-span-2 p-6 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5] shadow-xl space-y-4">
-            <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-3">
-              <h3 className="text-sm font-bold text-[#171717] uppercase tracking-wider flex items-center gap-2">
-                <span className="material-symbols-outlined text-amber-400">badge</span>
-                Desempenho dos Promotores
-              </h3>
-              <span className="text-[10px] text-[#77766F]">Ordenado por pendências</span>
-            </div>
-
-            {rankingPromotores.length === 0 ? (
-              <p className="text-[#5F5F5F] italic text-center py-6">Nenhum promotor com rota no período.</p>
-            ) : (
-              <div className="overflow-x-auto max-h-[360px] overflow-y-auto">
-                <table className="w-full text-left border-collapse">
-                  <thead className="sticky top-0 bg-[#F7F6F2] border-b border-[#CFCDC5] text-[10px] text-[#77766F] uppercase">
-                    <tr>
-                      <th className="py-2.5 px-3">Promotor</th>
-                      <th className="py-2.5 px-2 text-center">Plan.</th>
-                      <th className="py-2.5 px-2 text-center">Conc.</th>
-                      <th className="py-2.5 px-2 text-center">Andam.</th>
-                      <th className="py-2.5 px-2 text-center">N.Real.</th>
-                      <th className="py-2.5 px-2 text-center">Pend.</th>
-                      <th className="py-2.5 px-3 text-right">Aderência</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-[#CFCDC5]">
-                    {rankingPromotores.map((p) => {
-                      let badgeColor = 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40';
-                      if (p.taxa < 50) {
-                        badgeColor = 'bg-rose-500/20 text-rose-300 border-rose-500/40';
-                      } else if (p.taxa <= 80) {
-                        badgeColor = 'bg-yellow-500/20 text-yellow-300 border-yellow-500/40';
-                      }
-
-                      return (
-                        <tr key={p.matricula} className="hover:bg-[#EAE8E2]/50 transition-colors">
-                          <td className="py-2.5 px-3 font-bold text-[#171717]">
-                            {p.nome}
-                            <span className="text-[10px] text-[#5F5F5F] block font-normal">Mat: {p.matricula}</span>
-                          </td>
-                          <td className="py-2.5 px-2 text-center text-[#171717] font-bold">{p.planejadas}</td>
-                          <td className="py-2.5 px-2 text-center font-bold text-emerald-400">{p.concluidas}</td>
-                          <td className="py-2.5 px-2 text-center text-cyan-300">{p.emAndamento}</td>
-                          <td className="py-2.5 px-2 text-center text-rose-400 font-bold">{p.naoRealizadas}</td>
-                          <td className="py-2.5 px-2 text-center text-amber-300 font-bold">{p.pendentes}</td>
-                          <td className="py-2.5 px-3 text-right font-bold">
-                            {systemSettings.mode !== 'OPERACAO_OFICIAL' || systemSettings.status !== 'loaded' ? (
-                              <span className="text-[10px] text-[#5F5F5F] font-normal">SLA n/a</span>
-                            ) : (
-                              <span className={`px-2 py-0.5 rounded border text-[11px] ${badgeColor}`}>
-                                {p.taxa}%
-                              </span>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-
-          {/* TABELA COBERTURA POR INDÚSTRIA */}
-          <div className="p-6 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5] shadow-xl space-y-4">
-            <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-3">
-              <h3 className="text-sm font-bold text-[#171717] uppercase tracking-wider flex items-center gap-2">
-                <span className="material-symbols-outlined text-purple-400">factory</span>
-                Cobertura por Indústria
-              </h3>
-              <span className="text-[10px] text-[#7E22CE] font-bold">Top Indústrias</span>
-            </div>
-
-            {rankingIndustrias.length === 0 ? (
-              <p className="text-[#5F5F5F] italic text-center py-6">Nenhuma indústria no período.</p>
-            ) : (
-              <div className="overflow-x-auto max-h-[360px] overflow-y-auto">
-                <table className="w-full text-left border-collapse">
-                  <thead className="sticky top-0 bg-[#F7F6F2] border-b border-[#CFCDC5] text-[10px] text-[#77766F] uppercase">
-                    <tr>
-                      <th className="py-2.5 px-2">Indústria</th>
-                      <th className="py-2.5 px-2 text-center">Plan.</th>
-                      <th className="py-2.5 px-2 text-center">Conc.</th>
-                      <th className="py-2.5 px-2 text-right">Ocorr.</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-[#CFCDC5]">
-                    {rankingIndustrias.map((ind) => {
-                      const perc = ind.planejadas > 0 ? Math.round((ind.concluidas / ind.planejadas) * 100) : 0;
-                      return (
-                        <tr key={ind.codigo} className="hover:bg-[#EAE8E2]/50 transition-colors">
-                          <td className="py-2.5 px-2 font-bold text-purple-300">
-                            {ind.nome}
-                            <span className="text-[10px] text-[#5F5F5F] block font-normal">Cód: {ind.codigo}</span>
-                          </td>
-                          <td className="py-2.5 px-2 text-center text-[#171717] font-bold">{ind.planejadas}</td>
-                          <td className="py-2.5 px-2 text-center font-bold text-emerald-400">
-                            {ind.concluidas}
-                            <span className="text-[9px] text-[#5F5F5F] block">({perc}%)</span>
-                          </td>
-                          <td className="py-2.5 px-2 text-right font-bold text-rose-400">
-                            {ind.ocorrencias > 0 ? ind.ocorrencias : '0'}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        </div>
-      </section>
-
-      {/* SEÇÃO 4: OCORRÊNCIAS CRÍTICAS RECENTES */}
-      {listaOcorrenciasCriticas.length > 0 && (
-        <section className="bg-[#F7F6F2] border border-rose-500/30 rounded-2xl p-6 shadow-2xl space-y-3 font-mono text-xs">
-          <h3 className="text-sm font-bold text-[#171717] uppercase tracking-wider flex items-center gap-2">
-            <span className="material-symbols-outlined text-rose-400">warning</span>
-            Últimas Ocorrências Críticas Registradas em Campo ({listaOcorrenciasCriticas.length})
-          </h3>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {listaOcorrenciasCriticas.slice(0, 6).map((occ) => (
-              <div key={occ.id} className="p-3.5 rounded-xl bg-[#EAE8E2] border border-rose-500/20 space-y-1">
-                <div className="flex justify-between items-center text-[10px]">
-                  <span className="px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 font-bold uppercase">
-                    {occ.tipo.replace('_', ' ')}
+        return (
+          <DataTable<Visit>
+            data={filteredVisits}
+            columns={visitColumns}
+            keyExtractor={(v) => v.id}
+            title="Acompanhamento Inteligente de Visitas"
+            titleIcon="checklist"
+            badgeCount={filteredVisits.length}
+            defaultPageSize={10}
+            pageSizeOptions={[10, 25, 50]}
+            emptyTitle="Nenhuma visita encontrada"
+            emptyMessage="Não há registros de visitas correspondentes aos filtros operacionais aplicados."
+            headerActions={
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="relative">
+                  <span className="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-[#737373] pointer-events-none">
+                    search
                   </span>
-                  {occ.dataHora && (
-                    <span className="text-[#5F5F5F]">
-                      {new Date(occ.dataHora).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
-                    </span>
+                  <input
+                    type="text"
+                    value={tableSearch}
+                    onChange={(e) => setTableSearch(e.target.value)}
+                    placeholder="Buscar promotor, loja, indústria ou código..."
+                    className="h-8 pl-8 pr-3 bg-white border border-[#CFCDC5] rounded-xl text-xs text-[#171717] focus:outline-none focus:border-purple-600 w-[240px] sm:w-[280px]"
+                    aria-label="Buscar visitas"
+                  />
+                  {tableSearch && (
+                    <button
+                      onClick={() => setTableSearch('')}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-[#737373] hover:text-[#171717] p-0.5"
+                      title="Limpar busca"
+                    >
+                      <span className="material-symbols-outlined text-xs">close</span>
+                    </button>
                   )}
                 </div>
-                <div className="font-bold text-[#171717] truncate">{occ.loja}</div>
-                <div className="text-[#77766F] text-[11px] truncate">Ind: {occ.industria} • Promotor: {occ.promotor}</div>
-                <p className="text-[#171717] text-[11px] pt-1">{occ.descricao}</p>
+
+                <div className="flex items-center gap-1.5">
+                  <label htmlFor="filter-status-select" className="text-[11px] text-[#737373] font-mono uppercase hidden sm:inline">
+                    Status:
+                  </label>
+                  <select
+                    id="filter-status-select"
+                    value={tableStatus}
+                    onChange={(e) => setTableStatus(e.target.value)}
+                    className="h-8 px-2.5 bg-white border border-[#CFCDC5] rounded-xl text-xs text-[#171717] focus:outline-none focus:border-purple-600 font-mono"
+                    aria-label="Filtrar por status da visita"
+                  >
+                    <option value="all">Todos os Status</option>
+                    <option value="em_andamento">Em Andamento</option>
+                    <option value="concluida">Concluída</option>
+                    <option value="nao_realizada">Não Realizada</option>
+                    <option value="pendente">Pendente</option>
+                  </select>
+                </div>
               </div>
-            ))}
-          </div>
-        </section>
-      )}
+            }
+          />
+        );
+      })()}
 
-      {/* FILTROS E TABELA DE VISITAS */}
-      <section className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-6 shadow-2xl space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <h3 className="text-sm font-bold text-[#171717] uppercase tracking-wider font-mono flex items-center gap-2">
-            <span className="material-symbols-outlined text-purple-400">checklist</span>
-            Visitas Registradas ({filteredVisits.length})
-          </h3>
-
-          <div className="flex flex-wrap items-center gap-3 font-mono text-xs">
-            <input
-              type="text"
-              value={tableSearch}
-              onChange={(e) => setTableSearch(e.target.value)}
-              placeholder="Buscar por promotor, loja ou indústria..."
-              className="h-9 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-purple-500 min-w-[240px]"
-            />
-
-            <select
-              value={tableStatus}
-              onChange={(e) => setTableStatus(e.target.value)}
-              className="h-9 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-purple-500"
-            >
-              <option value="all">Status: Todos</option>
-              <option value="em_andamento">Em Andamento</option>
-              <option value="concluida">Concluída</option>
-              <option value="nao_realizada">Não Realizada</option>
-              <option value="pendente">Pendente</option>
-            </select>
-          </div>
-        </div>
-
-        {/* LOADING */}
-        {loading && (
-          <div className="py-16 text-center space-y-3 font-mono">
-            <div className="w-10 h-10 border-4 border-purple-500/20 border-t-purple-500 rounded-full animate-spin mx-auto"></div>
-            <p className="text-xs text-[#77766F]">Carregando telemetria de visitas do Supabase...</p>
-          </div>
-        )}
-
-        {/* VAZIO */}
-        {!loading && filteredVisits.length === 0 && (
-          <div className="py-16 text-center space-y-3 font-mono">
-            <div className="w-14 h-14 rounded-full bg-[#EAE8E2] border border-[#CFCDC5] flex items-center justify-center text-[#5F5F5F] mx-auto">
-              <span className="material-symbols-outlined text-3xl">inbox</span>
-            </div>
-            <h4 className="text-sm font-bold text-[#171717]">Nenhuma Visita Encontrada</h4>
-            <p className="text-xs text-[#77766F] max-w-md mx-auto">
-              Não foram encontradas visitas de campo registradas. O promotor pode iniciar os atendimentos pelo <strong>Portal do Promotor</strong>.
-            </p>
-          </div>
-        )}
-
-        {/* TABELA REALS */}
-        {!loading && filteredVisits.length > 0 && (
-          <div className="overflow-x-auto rounded-xl border border-[#CFCDC5]">
-            <table className="w-full text-left text-xs border-collapse font-mono">
-              <thead>
-                <tr className="bg-[#E3E1DA] border-b border-[#CFCDC5] text-[11px] font-bold text-[#171717] uppercase tracking-wider">
-                  <th className="py-3.5 px-4">Promotor</th>
-                  <th className="py-3.5 px-4">Loja / PDV</th>
-                  <th className="py-3.5 px-4">Indústria</th>
-                  <th className="py-3.5 px-4">Início / Fim</th>
-                  <th className="py-3.5 px-4">Status</th>
-                  <th className="py-3.5 px-4">Checklist / Fotos</th>
-                  <th className="py-3.5 px-4 text-right">Ação</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#CFCDC5] text-[#171717]">
-                {filteredVisits.map((v) => (
-                  <tr key={v.id} className="hover:bg-[#EAE8E1] transition-colors">
-                    <td className="py-3.5 px-4">
-                      <div className="font-bold text-[#171717]">{v.promotor?.nome || v.promotor_matricula}</div>
-                      <div className="text-[10px] text-[#5F5F5F]">Mat: {v.promotor_matricula}</div>
-                    </td>
-
-                    <td className="py-3.5 px-4">
-                      <div className="font-bold text-[#171717]">{v.loja?.nome || v.loja_codigo}</div>
-                      <div className="text-[10px] text-[#5F5F5F]">{v.loja?.cidade || '—'}</div>
-                    </td>
-
-                    <td className="py-3.5 px-4 font-bold text-[#7E22CE]">
-                      {v.industria?.nome || v.industria_codigo}
-                    </td>
-
-                    <td className="py-3.5 px-4 text-[#77766F] text-[11px]">
-                      <div>Início: {v.started_at ? new Date(v.started_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—'}</div>
-                      <div>Fim: {v.completed_at ? new Date(v.completed_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—'}</div>
-                    </td>
-
-                    <td className="py-3.5 px-4">
-                      <span
-                        className={`px-2.5 py-1 rounded-full text-[10px] font-bold border uppercase ${
-                          v.status === 'concluida'
-                            ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
-                            : v.status === 'em_andamento'
-                            ? 'bg-amber-500/10 text-amber-300 border-amber-500/30 animate-pulse'
-                            : v.status === 'nao_realizada'
-                            ? 'bg-rose-500/10 text-rose-400 border-rose-500/30'
-                            : 'bg-slate-800 text-[#77766F] border-[#CFCDC5]'
-                        }`}
-                      >
-                        {v.status.replace('_', ' ')}
-                      </span>
-                    </td>
-
-                    <td className="py-3.5 px-4 text-[#171717] text-[11px]">
-                      <div>Checklist: {v.checklist_items?.filter((c) => c.checked).length || 0} ok</div>
-                      <div>Fotos: {v.photos?.length || 0} anexadas</div>
-                    </td>
-
-                    <td className="py-3.5 px-4 text-right">
-                      <button
-                        onClick={() => setSelectedVisit(v)}
-                        className="p-1.5 rounded-lg bg-[#EAE8E2] hover:bg-[#E4E2DB] text-cyan-300 border border-[#CFCDC5] cursor-pointer"
-                        title="Ver Detalhes da Visita"
-                      >
-                        <span className="material-symbols-outlined text-[16px]">visibility</span>
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-
-      {/* MODAL DETALHE COMPLETO DA VISITA */}
+      {/* ========================================================= */}
+      {/* MODAL DETALHE COMPLETO DA VISITA                         */}
+      {/* ========================================================= */}
       {selectedVisit && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl max-w-2xl w-full p-6 shadow-2xl space-y-6 max-h-[85vh] overflow-y-auto">
-            <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-4">
-              <div className="flex items-center gap-2 font-mono">
-                <span className="material-symbols-outlined text-purple-400 text-xl">assignment</span>
-                <h3 className="text-base font-bold text-[#171717]">
-                  Ficha Completa da Visita ({selectedVisit.id.substring(0, 8)})
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl max-w-2xl w-full p-5 shadow-2xl space-y-4 max-h-[88vh] overflow-y-auto font-mono">
+            <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-3">
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-purple-600 text-lg">assignment</span>
+                <h3 className="text-sm font-black text-[#171717]">
+                  Ficha da Visita ({selectedVisit.id.substring(0, 8)})
                 </h3>
               </div>
-              <button onClick={() => setSelectedVisit(null)} className="text-[#77766F] hover:text-white">
-                <span className="material-symbols-outlined">close</span>
+              <button
+                onClick={() => setSelectedVisit(null)}
+                className="text-[#77766F] hover:text-[#171717] p-1 rounded-lg hover:bg-[#EAE8E2] cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-lg">close</span>
               </button>
             </div>
 
-            <div className="grid grid-cols-2 gap-3 text-xs font-mono">
-              <div className="p-3 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5]">
-                <span className="text-[#5F5F5F] block">PROMOTOR:</span>
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <div className="p-2.5 rounded-xl bg-white border border-[#CFCDC5]">
+                <span className="text-[#77766F] text-[10px] block font-bold">PROMOTOR:</span>
                 <span className="text-[#171717] font-bold">{selectedVisit.promotor?.nome || selectedVisit.promotor_matricula}</span>
               </div>
 
-              <div className="p-3 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5]">
-                <span className="text-[#5F5F5F] block">LOJA / PDV:</span>
+              <div className="p-2.5 rounded-xl bg-white border border-[#CFCDC5]">
+                <span className="text-[#77766F] text-[10px] block font-bold">LOJA / PDV:</span>
                 <span className="text-[#171717] font-bold">{selectedVisit.loja?.nome || selectedVisit.loja_codigo}</span>
               </div>
 
-              <div className="p-3 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5]">
-                <span className="text-[#5F5F5F] block">INDÚSTRIA:</span>
+              <div className="p-2.5 rounded-xl bg-white border border-[#CFCDC5]">
+                <span className="text-[#77766F] text-[10px] block font-bold">INDÚSTRIA:</span>
                 <span className="text-[#7E22CE] font-bold">{selectedVisit.industria?.nome || selectedVisit.industria_codigo}</span>
               </div>
 
-              <div className="p-3 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5]">
-                <span className="text-[#5F5F5F] block">STATUS DA VISITA:</span>
-                <span className="text-emerald-400 font-bold uppercase">{selectedVisit.status}</span>
+              <div className="p-2.5 rounded-xl bg-white border border-[#CFCDC5]">
+                <span className="text-[#77766F] text-[10px] block font-bold">STATUS DA VISITA:</span>
+                <span className="text-emerald-700 font-bold uppercase">{selectedVisit.status}</span>
               </div>
             </div>
 
-            {/* Botão Traçar Rota de Atendimento para a Loja */}
-            <div className="p-3 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs font-mono">
+            {/* Rota Google Maps */}
+            <div className="p-2.5 rounded-xl bg-white border border-[#CFCDC5] flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
               <div className="space-y-0.5">
-                <span className="text-[#5F5F5F] block text-[10px] uppercase font-bold">Localização / Destino da Loja:</span>
+                <span className="text-[#77766F] text-[10px] font-bold uppercase block">Destino da Loja:</span>
                 <span className="text-[#171717] font-semibold">
                   {selectedVisit.loja?.nome || selectedVisit.loja_codigo}
                   {selectedVisit.loja?.endereco ? ` — ${selectedVisit.loja.endereco}` : ''}
@@ -3448,29 +3662,16 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
                         href={directionsUrl}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs shadow-md transition-all active:scale-95 shrink-0"
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-700 hover:bg-purple-800 text-white font-bold text-xs shadow-xs transition-all active:scale-95 shrink-0"
                       >
                         <span className="material-symbols-outlined text-sm">directions</span>
-                        Ver rota de atendimento
+                        Google Maps
                       </a>
                     );
                   }
 
                   return (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onShowToast({
-                          type: 'error',
-                          title: 'Rota Indisponível',
-                          message: 'Não há dados cadastrados suficientes de nome ou endereço da loja para traçar a rota no Google Maps.'
-                        });
-                      }}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#E4E2DB] text-[#77766F] font-bold text-xs border border-[#CFCDC5] cursor-pointer shrink-0"
-                    >
-                      <span className="material-symbols-outlined text-sm">location_off</span>
-                      Endereço da loja indisponível
-                    </button>
+                    <span className="text-[10px] text-[#77766F] italic">Endereço indisponível</span>
                   );
                 })()}
               </div>
@@ -3483,56 +3684,45 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
               const legacyChecklistItems = items.filter((item) => !CHECKLIST_QUANTITY_KEYS.has(item.item_key));
 
               return (
-                <div className="space-y-3 font-mono text-xs">
-                  {/* Checklist Operacional Atual */}
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[#171717] font-bold uppercase block flex items-center gap-1.5">
-                        <span className="material-symbols-outlined text-emerald-400 text-base">fact_check</span>
-                        Checklist Operacional:
-                      </span>
-                      <span className="text-[10px] text-[#77766F]">Novo Modelo Simplificado</span>
-                    </div>
-
-                    {currentChecklistItems.length > 0 ? (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                        {currentChecklistItems.map((item, idx) => (
-                          <div key={idx} className="p-3 rounded-xl bg-[#EAE8E2] border border-emerald-500/30 flex flex-col justify-between space-y-1">
-                            <span className="text-[#5F5F5F] text-[11px] block">{item.item_label}</span>
-                            <div className="flex items-center justify-between pt-1 border-t border-[#CFCDC5]/50">
-                              <span className="text-[10px] text-emerald-500 font-bold uppercase">Quantidade informada:</span>
-                              <span className="text-sm font-extrabold text-[#171717]">
-                                {item.valor_texto && item.valor_texto.trim() !== '' ? item.valor_texto : '0'}
-                              </span>
-                            </div>
-                            {item.observacao && (
-                              <span className="text-[10px] text-[#77766F] block italic">Obs: {item.observacao}</span>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="p-3 rounded-xl bg-[#EAE8E2]/60 border border-[#CFCDC5] text-[#77766F] italic text-center">
-                        Nenhum item do checklist operacional atual registrado nesta visita.
-                      </div>
-                    )}
+                <div className="space-y-2.5 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[#171717] font-bold uppercase flex items-center gap-1">
+                      <span className="material-symbols-outlined text-emerald-600 text-sm">fact_check</span>
+                      Checklist Operacional:
+                    </span>
+                    <span className="text-[10px] text-[#77766F]">Modelo Simplificado</span>
                   </div>
 
-                  {/* Respostas do Checklist Histórico (Legado) — Exibido apenas para consultas retroativas sem alterar dados */}
-                  {legacyChecklistItems.length > 0 && (
-                    <details className="mt-3 p-3 rounded-xl bg-[#EAE8E2]/60 border border-amber-500/30 space-y-2 text-xs">
-                      <summary className="cursor-pointer font-bold text-amber-500 uppercase flex items-center justify-between select-none">
-                        <span className="flex items-center gap-1.5">
-                          <span className="material-symbols-outlined text-sm">history</span>
-                          Consultar Respostas do Checklist Histórico ({legacyChecklistItems.length})
-                        </span>
-                        <span className="text-[10px] font-normal text-[#77766F] lowercase">clique para expandir/recolher</span>
-                      </summary>
+                  {currentChecklistItems.length > 0 ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {currentChecklistItems.map((item, idx) => (
+                        <div key={idx} className="p-2.5 rounded-xl bg-white border border-emerald-300 flex flex-col justify-between space-y-1">
+                          <span className="text-[#5F5F5F] text-[11px] block">{item.item_label}</span>
+                          <div className="flex items-center justify-between pt-1 border-t border-[#CFCDC5]/50">
+                            <span className="text-[10px] text-emerald-700 font-bold uppercase">Quantidade:</span>
+                            <span className="text-sm font-black text-[#171717]">
+                              {item.valor_texto && item.valor_texto.trim() !== '' ? item.valor_texto : '0'}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="p-2.5 rounded-xl bg-white border border-[#CFCDC5] text-[#77766F] italic text-center">
+                      Nenhum item do checklist operacional atual preenchido.
+                    </div>
+                  )}
 
+                  {legacyChecklistItems.length > 0 && (
+                    <details className="p-2.5 rounded-xl bg-white border border-amber-300 text-xs">
+                      <summary className="cursor-pointer font-bold text-amber-800 uppercase flex items-center justify-between">
+                        <span>Checklist Histórico ({legacyChecklistItems.length})</span>
+                        <span className="text-[10px] text-[#77766F] lowercase">expandir/recolher</span>
+                      </summary>
                       <div className="space-y-1 pt-2">
                         {legacyChecklistItems.map((item, idx) => (
-                          <div key={idx} className="p-2 rounded bg-[#F7F6F2] border border-[#CFCDC5] flex justify-between items-center text-[11px]">
-                            <span className={item.checked ? 'text-emerald-500 font-bold' : 'text-[#77766F]'}>
+                          <div key={idx} className="p-1.5 rounded bg-[#F7F6F2] border border-[#CFCDC5] flex justify-between items-center text-[11px]">
+                            <span className={item.checked ? 'text-emerald-700 font-bold' : 'text-[#77766F]'}>
                               {item.checked ? '✓' : '✗'} {item.item_label}
                             </span>
                             {item.valor_texto && <span className="text-[#7E22CE] font-bold">{item.valor_texto}</span>}
@@ -3545,24 +3735,24 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
               );
             })()}
 
-            {/* Ocorrências e Rupturas */}
+            {/* Ocorrências */}
             {selectedVisit.occurrences && selectedVisit.occurrences.length > 0 && (
-              <div className="space-y-2 font-mono text-xs">
-                <span className="text-rose-400 font-bold uppercase block flex items-center gap-1.5">
-                  <span className="material-symbols-outlined text-rose-500 text-sm">report_problem</span>
-                  Ocorrências e Rupturas Registradas ({selectedVisit.occurrences.length}):
+              <div className="space-y-2 text-xs">
+                <span className="text-rose-700 font-bold uppercase block flex items-center gap-1">
+                  <span className="material-symbols-outlined text-rose-600 text-sm">report_problem</span>
+                  Ocorrências Registradas ({selectedVisit.occurrences.length}):
                 </span>
                 <div className="space-y-1.5">
                   {selectedVisit.occurrences.map((occ, idx) => (
-                    <div key={idx} className="p-2.5 rounded-xl bg-[#EAE8E2] border border-rose-500/30 flex justify-between items-center text-[#171717]">
+                    <div key={idx} className="p-2 rounded-xl bg-white border border-rose-300 flex justify-between items-center">
                       <div>
-                        <span className="px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-400 text-[9px] font-bold uppercase mr-2">
+                        <span className="px-1.5 py-0.5 rounded bg-rose-50 text-rose-800 text-[9px] font-bold uppercase mr-1.5 border border-rose-200">
                           {occ.tipo}
                         </span>
-                        <strong className="text-xs">{occ.descricao}</strong>
+                        <strong className="text-xs text-[#171717]">{occ.descricao}</strong>
                       </div>
                       <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                        occ.resolvido ? 'bg-emerald-500/20 text-emerald-300' : 'bg-rose-500/20 text-rose-300'
+                        occ.resolvido ? 'bg-emerald-50 text-emerald-800 border border-emerald-300' : 'bg-rose-50 text-rose-800 border border-rose-300'
                       }`}>
                         {occ.resolvido ? 'Resolvido' : 'Pendente'}
                       </span>
@@ -3572,41 +3762,39 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
               </div>
             )}
 
-            {/* Validades de Produtos */}
+            {/* Validades */}
             {selectedVisit.validity_items && selectedVisit.validity_items.length > 0 && (
-              <div className="space-y-2 font-mono text-xs">
-                <span className="text-amber-400 font-bold uppercase block">Controle de Validade de Produtos:</span>
-                <div className="space-y-1">
-                  {selectedVisit.validity_items.map((val, idx) => (
-                    <div key={idx} className="p-2.5 rounded bg-[#EAE8E2] border border-[#CFCDC5] flex justify-between items-center text-[#171717]">
-                      <div>
-                        <strong>{val.produto_nome}</strong> (Qtd: {val.quantidade})
-                        {val.lote && <span className="text-[#77766F] text-[10px] block font-mono">Lote: {val.lote}</span>}
-                      </div>
-                      <span className="text-amber-400 font-bold">
-                        Venc: {new Date(val.data_vencimento).toLocaleDateString('pt-BR')}
-                      </span>
+              <div className="space-y-1.5 text-xs">
+                <span className="text-amber-800 font-bold uppercase block">Controle de Validade ({selectedVisit.validity_items.length}):</span>
+                {selectedVisit.validity_items.map((val, idx) => (
+                  <div key={idx} className="p-2 rounded bg-white border border-[#CFCDC5] flex justify-between items-center text-[#171717]">
+                    <div>
+                      <strong>{val.produto_nome}</strong> (Qtd: {val.quantidade})
+                      {val.lote && <span className="text-[#77766F] text-[10px] block">Lote: {val.lote}</span>}
                     </div>
-                  ))}
-                </div>
+                    <span className="text-amber-800 font-bold">
+                      Venc: {new Date(val.data_vencimento).toLocaleDateString('pt-BR')}
+                    </span>
+                  </div>
+                ))}
               </div>
             )}
 
             {/* Fotos */}
             {selectedVisit.photos && selectedVisit.photos.length > 0 && (
-              <div className="space-y-2 font-mono text-xs">
-                <span className="text-cyan-400 font-bold uppercase block">Galeria de Fotos Anexadas:</span>
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              <div className="space-y-1.5 text-xs">
+                <span className="text-cyan-800 font-bold uppercase block">Galeria de Fotos ({selectedVisit.photos.length}):</span>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                   {selectedVisit.photos.map((p, idx) => (
-                    <div key={idx} className="p-2 rounded bg-[#EAE8E2] border border-[#CFCDC5] space-y-1">
-                      <span className="px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 text-[9px] font-bold block uppercase">
+                    <div key={idx} className="p-2 rounded bg-white border border-[#CFCDC5] space-y-1">
+                      <span className="px-1.5 py-0.5 rounded bg-cyan-50 text-cyan-800 text-[9px] font-bold block uppercase border border-cyan-200">
                         {p.tipo_foto}
                       </span>
                       <a
                         href={p.file_url}
                         target="_blank"
                         rel="noreferrer"
-                        className="text-purple-400 text-[10px] underline block truncate"
+                        className="text-purple-700 text-[10px] underline block truncate font-bold"
                       >
                         Abrir Foto Privada
                       </a>
@@ -3617,18 +3805,367 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
             )}
 
             {selectedVisit.motivo_nao_realizada && (
-              <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-xs font-mono text-rose-300">
+              <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-300 text-xs text-rose-800">
                 <strong>Motivo de Não Realização:</strong> {selectedVisit.motivo_nao_realizada}
               </div>
             )}
 
-            <div className="pt-3 border-t border-[#CFCDC5] flex justify-end font-mono">
+            <div className="pt-2 border-t border-[#CFCDC5] flex justify-end">
               <button
                 onClick={() => setSelectedVisit(null)}
-                className="px-5 py-2 rounded-xl bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] border border-[#CFCDC5] text-xs font-semibold"
+                className="px-4 py-1.5 rounded-xl bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] border border-[#CFCDC5] text-xs font-bold cursor-pointer"
               >
                 Fechar
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* MODAL DETALHES DA PENDÊNCIA OPERACIONAL                   */}
+      {/* ========================================================= */}
+      {selectedPendingItem && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl max-w-md w-full p-5 shadow-2xl space-y-4 font-mono">
+            <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-2.5">
+              <h3 className="text-sm font-black text-[#171717] flex items-center gap-1.5">
+                <span className="material-symbols-outlined text-purple-600">pending_actions</span>
+                VISITA PENDENTE — DETALHES
+              </h3>
+              <button onClick={() => setSelectedPendingItem(null)} className="text-[#77766F] hover:text-[#171717] p-1 rounded-lg">
+                <span className="material-symbols-outlined text-lg">close</span>
+              </button>
+            </div>
+
+            <div className="space-y-2.5 text-xs">
+              <div className="p-2 rounded-lg bg-white border border-[#CFCDC5]">
+                <span className="text-[#77766F] text-[10px] block font-bold">PROMOTOR:</span>
+                <span className="text-[#171717] font-bold text-sm">{selectedPendingItem.promotorNome}</span>
+                <span className="text-[10px] text-[#77766F] block">Matrícula: {selectedPendingItem.promotorMatricula}</span>
+              </div>
+              <div className="p-2 rounded-lg bg-white border border-[#CFCDC5]">
+                <span className="text-[#77766F] text-[10px] block font-bold">LOJA / PDV:</span>
+                <span className="text-[#171717] font-bold">{selectedPendingItem.lojaNome}</span>
+                {selectedPendingItem.lojaCidade && (
+                  <span className="text-[10px] text-[#77766F] block">{selectedPendingItem.lojaCidade} - {selectedPendingItem.lojaUf}</span>
+                )}
+              </div>
+              <div className="p-2 rounded-lg bg-white border border-[#CFCDC5]">
+                <span className="text-[#77766F] text-[10px] block font-bold">INDÚSTRIA:</span>
+                <span className="text-[#7E22CE] font-bold">{selectedPendingItem.industriaNome}</span>
+              </div>
+              <div className="p-2 rounded-lg bg-white border border-[#CFCDC5]">
+                <span className="text-[#77766F] text-[10px] block font-bold">DATA PREVISTA / FREQUÊNCIA:</span>
+                <span className="text-[#171717] font-bold">{selectedPendingItem.dataStr} ({selectedPendingItem.dayOfWeekLabel}) • {selectedPendingItem.frequencia}</span>
+              </div>
+              <div className="p-2 rounded-lg bg-white border border-[#CFCDC5]">
+                <span className="text-[#77766F] text-[10px] block font-bold">SITUAÇÃO ATUAL:</span>
+                <span className="font-black text-rose-700 uppercase">
+                  {selectedPendingItem.isPastOverdue ? '🚨 Pendente (Atrasada)' : selectedPendingItem.status}
+                </span>
+              </div>
+              {selectedPendingItem.motivoNaoRealizada && (
+                <div className="p-2 rounded-lg bg-rose-50 border border-rose-300 text-rose-800">
+                  <span className="text-[10px] font-bold uppercase block">Motivo Informado:</span>
+                  <span>{selectedPendingItem.motivoNaoRealizada}</span>
+                </div>
+              )}
+            </div>
+
+            <div className="pt-2 border-t border-[#CFCDC5] flex flex-wrap items-center justify-end gap-2">
+              <button
+                onClick={() => setSelectedPendingItem(null)}
+                className="px-3.5 py-1.5 rounded-xl bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] border border-[#CFCDC5] text-xs font-bold cursor-pointer"
+              >
+                Fechar
+              </button>
+              {(() => {
+                const pendingDirectionsUrl = buildGoogleMapsDirectionsUrl({
+                  name: selectedPendingItem.lojaNome || (selectedPendingItem.lojaCodigo ? `Loja ${selectedPendingItem.lojaCodigo}` : null),
+                  city: selectedPendingItem.lojaCidade,
+                  uf: selectedPendingItem.lojaUf
+                });
+
+                if (pendingDirectionsUrl) {
+                  return (
+                    <a
+                      href={pendingDirectionsUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-3.5 py-1.5 rounded-xl bg-purple-700 hover:bg-purple-800 text-white font-bold text-xs flex items-center gap-1 shadow-xs cursor-pointer"
+                    >
+                      <span className="material-symbols-outlined text-sm">directions</span>
+                      Google Maps
+                    </a>
+                  );
+                }
+                return null;
+              })()}
+              <button
+                onClick={() => {
+                  setSelectedPendingItem(null);
+                  setFilterPromotor(selectedPendingItem.promotorMatricula);
+                  setFilterLoja(selectedPendingItem.lojaCodigo);
+                }}
+                className="px-3.5 py-1.5 rounded-xl bg-[#222222] hover:bg-black text-white font-bold text-xs flex items-center gap-1 cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-sm">filter_alt</span>
+                Filtrar no Painel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* MODAL DE CONFIRMAÇÃO DE RESOLUÇÃO (ONDA 4.4B)              */}
+      {/* ========================================================= */}
+      {occurrenceToResolve && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl max-w-md w-full p-5 shadow-2xl space-y-4 font-mono">
+            <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-3">
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-emerald-700 text-xl">task_alt</span>
+                <h3 className="text-sm font-black text-[#171717]">
+                  CONFIRMAR RESOLUÇÃO
+                </h3>
+              </div>
+              <button
+                onClick={() => setOccurrenceToResolve(null)}
+                className="text-[#77766F] hover:text-[#171717] p-1 rounded-lg hover:bg-[#EAE8E2] cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-lg">close</span>
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div className="p-3 rounded-xl bg-amber-50 border border-amber-300 text-amber-900 leading-relaxed font-sans">
+                <strong>Atenção:</strong> Você está prestes a marcar esta ocorrência como <strong>RESOLVIDA</strong>.
+                Esta ação atualizará o status operacional no Supabase e informará os supervisores.
+              </div>
+
+              <div className="p-2.5 rounded-xl bg-white border border-[#CFCDC5] space-y-1">
+                <span className="text-[10px] text-[#77766F] block font-bold uppercase">Item:</span>
+                <span className="text-[#171717] font-bold block">{occurrenceToResolve.titulo}</span>
+                <span className="text-[11px] text-[#7E22CE] font-semibold block">{occurrenceToResolve.lojaNome}</span>
+                {occurrenceToResolve.descricao && (
+                  <p className="text-[11px] text-[#171717] pt-1 border-t border-[#CFCDC5]/50 leading-tight">
+                    {occurrenceToResolve.descricao}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <div className="pt-2 border-t border-[#CFCDC5] flex items-center justify-end gap-2">
+              <button
+                onClick={() => setOccurrenceToResolve(null)}
+                disabled={resolvingId === occurrenceToResolve.id}
+                className="px-4 py-2 rounded-xl bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] border border-[#CFCDC5] text-xs font-bold cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={() => handleResolveRupture(occurrenceToResolve.id)}
+                disabled={resolvingId === occurrenceToResolve.id}
+                className="px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs flex items-center gap-1.5 shadow-sm cursor-pointer transition-colors"
+              >
+                {resolvingId === occurrenceToResolve.id ? (
+                  <>
+                    <span className="material-symbols-outlined text-sm animate-spin">refresh</span>
+                    Salvando...
+                  </>
+                ) : (
+                  <>
+                    <span className="material-symbols-outlined text-sm">check</span>
+                    Sim, Marcar Resolvida
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* MODAL DETALHES RICOS DA OCORRÊNCIA (ONDA 4.4B)            */}
+      {/* ========================================================= */}
+      {selectedOccurrenceDetail && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl max-w-lg w-full p-5 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto font-mono">
+            {/* Cabeçalho */}
+            <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-3">
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-rose-600 text-xl">report_problem</span>
+                <div>
+                  <h3 className="text-sm font-black text-[#171717]">
+                    FICHA DA OCORRÊNCIA
+                  </h3>
+                  <span className="text-[10px] text-[#77766F] font-mono">
+                    ID: {selectedOccurrenceDetail.id.substring(0, 12)}
+                  </span>
+                </div>
+              </div>
+              <button
+                onClick={() => setSelectedOccurrenceDetail(null)}
+                className="text-[#77766F] hover:text-[#171717] p-1 rounded-lg hover:bg-[#EAE8E2] cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-lg">close</span>
+              </button>
+            </div>
+
+            {/* Status e Identificação */}
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <div className="p-2.5 rounded-xl bg-white border border-[#CFCDC5]">
+                <span className="text-[#77766F] text-[10px] block font-bold uppercase">SITUAÇÃO:</span>
+                <div className="mt-1">
+                  {selectedOccurrenceDetail.resolvido ? (
+                    <StatusBadge status="concluida" label="RESOLVIDA" />
+                  ) : (
+                    <StatusBadge status="critico" label="EM ABERTO" />
+                  )}
+                </div>
+              </div>
+
+              <div className="p-2.5 rounded-xl bg-white border border-[#CFCDC5]">
+                <span className="text-[#77766F] text-[10px] block font-bold uppercase">TIPO:</span>
+                <span className="font-bold text-[#171717] text-sm uppercase block mt-1">
+                  {selectedOccurrenceDetail.tipo.replace('_', ' ')}
+                </span>
+              </div>
+            </div>
+
+            {/* Detalhes do Local e Agentes */}
+            <div className="space-y-2 text-xs">
+              <div className="p-2.5 rounded-xl bg-white border border-[#CFCDC5]">
+                <span className="text-[#77766F] text-[10px] block font-bold uppercase">LOJA / PDV:</span>
+                <span className="text-[#171717] font-bold text-sm block">{selectedOccurrenceDetail.lojaNome}</span>
+                {selectedOccurrenceDetail.lojaCodigo && (
+                  <span className="text-[10px] text-[#77766F] block font-mono">Código: {selectedOccurrenceDetail.lojaCodigo}</span>
+                )}
+                {selectedOccurrenceDetail.lojaEndereco && (
+                  <span className="text-[10px] text-[#77766F] block font-sans">{selectedOccurrenceDetail.lojaEndereco}</span>
+                )}
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div className="p-2.5 rounded-xl bg-white border border-[#CFCDC5]">
+                  <span className="text-[#77766F] text-[10px] block font-bold uppercase">INDÚSTRIA:</span>
+                  <span className="text-[#7E22CE] font-bold block">{selectedOccurrenceDetail.industriaNome}</span>
+                  {selectedOccurrenceDetail.industriaCodigo && (
+                    <span className="text-[10px] text-[#77766F] block font-mono">Cód: {selectedOccurrenceDetail.industriaCodigo}</span>
+                  )}
+                </div>
+
+                <div className="p-2.5 rounded-xl bg-white border border-[#CFCDC5]">
+                  <span className="text-[#77766F] text-[10px] block font-bold uppercase">PROMOTOR RESPONSÁVEL:</span>
+                  <span className="text-[#171717] font-bold block">{selectedOccurrenceDetail.promotorNome}</span>
+                  {selectedOccurrenceDetail.promotorMatricula && (
+                    <span className="text-[10px] text-[#77766F] block font-mono">Matrícula: {selectedOccurrenceDetail.promotorMatricula}</span>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Descrição Detalhada */}
+            <div className="p-3 rounded-xl bg-white border border-[#CFCDC5] space-y-1 text-xs">
+              <span className="text-[#77766F] text-[10px] block font-bold uppercase">DESCRIÇÃO REGISTRADA:</span>
+              <p className="text-[#171717] leading-relaxed font-sans">{selectedOccurrenceDetail.descricao}</p>
+            </div>
+
+            {/* Evidência Fotográfica Segura */}
+            <div className="p-3 rounded-xl bg-white border border-[#CFCDC5] space-y-2 text-xs">
+              <span className="text-[#77766F] text-[10px] block font-bold uppercase flex items-center gap-1">
+                <span className="material-symbols-outlined text-sm">photo_camera</span>
+                EVIDÊNCIA FOTOGRÁFICA REGISTRADA:
+              </span>
+              {selectedOccurrenceDetail.photoSignedUrl ? (
+                <div className="space-y-2">
+                  <div className="rounded-xl overflow-hidden border border-[#CFCDC5] bg-black/5 max-h-48 flex items-center justify-center">
+                    <img
+                      src={selectedOccurrenceDetail.photoSignedUrl}
+                      alt="Evidência da Ocorrência"
+                      className="max-h-48 object-contain w-full"
+                    />
+                  </div>
+                  <div className="flex justify-between items-center text-[10px]">
+                    <span className="text-emerald-700 font-bold flex items-center gap-1">
+                      <span className="material-symbols-outlined text-xs">verified</span>
+                      URL Assinada Segura (1h de validade)
+                    </span>
+                    <a
+                      href={selectedOccurrenceDetail.photoSignedUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-purple-700 underline font-bold"
+                    >
+                      Abrir em Alta Resolução
+                    </a>
+                  </div>
+                </div>
+              ) : (
+                <div className="p-3 rounded-lg bg-[#F7F6F2] border border-[#CFCDC5] text-center text-[#77766F] italic">
+                  Nenhuma foto anexada a esta ocorrência ou permissão de acesso restrita.
+                </div>
+              )}
+            </div>
+
+            {/* Histórico Factual Auditável */}
+            <div className="p-2.5 rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] space-y-1 text-[11px]">
+              <span className="text-[#77766F] text-[10px] block font-bold uppercase">HISTÓRICO FACTUAL:</span>
+              <div className="flex items-center justify-between text-[#171717]">
+                <span>Data do Registro:</span>
+                <strong>{new Date(selectedOccurrenceDetail.data).toLocaleString('pt-BR')}</strong>
+              </div>
+              {selectedOccurrenceDetail.visitObj && (
+                <div className="flex items-center justify-between text-[#171717]">
+                  <span>Visita Vinculada:</span>
+                  <span className="font-mono text-[10px]">ID {selectedOccurrenceDetail.visitObj.id.substring(0, 8)}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Ações Autorizadas */}
+            <div className="pt-2 border-t border-[#CFCDC5] flex flex-wrap items-center justify-between gap-2">
+              <button
+                onClick={() => setSelectedOccurrenceDetail(null)}
+                className="px-3.5 py-1.5 rounded-xl bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] border border-[#CFCDC5] text-xs font-bold cursor-pointer"
+              >
+                Fechar
+              </button>
+
+              <div className="flex items-center gap-2">
+                {selectedOccurrenceDetail.visitObj && (
+                  <button
+                    onClick={() => {
+                      const v = selectedOccurrenceDetail.visitObj!;
+                      setSelectedOccurrenceDetail(null);
+                      setSelectedVisit(v);
+                    }}
+                    className="px-3.5 py-1.5 rounded-xl bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] border border-[#CFCDC5] text-xs font-bold cursor-pointer"
+                  >
+                    Ver Ficha da Visita
+                  </button>
+                )}
+
+                {!selectedOccurrenceDetail.resolvido && canResolve && (
+                  <button
+                    onClick={() => {
+                      const target = {
+                        id: selectedOccurrenceDetail.id,
+                        titulo: selectedOccurrenceDetail.titulo,
+                        lojaNome: selectedOccurrenceDetail.lojaNome,
+                        descricao: selectedOccurrenceDetail.descricao
+                      };
+                      setOccurrenceToResolve(target);
+                    }}
+                    className="px-4 py-1.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs flex items-center gap-1 shadow-xs cursor-pointer transition-colors"
+                  >
+                    <span className="material-symbols-outlined text-sm">check_circle</span>
+                    Marcar como Resolvida
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         </div>

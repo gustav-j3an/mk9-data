@@ -1,0 +1,160 @@
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import { calculateOperationalVisits, getWeekDaysRange } from '../utils/routePlanner';
+import type { RouteItem, Visit } from '../types';
+
+describe('Portal do Promotor - Administração: Histórico Semanal e Propagação de Escala', () => {
+  const dummyPromoter = 'PRM-004';
+
+  const mockRoute1: RouteItem = {
+    id: 'route-1',
+    codigo_rota: 'R-01',
+    promotor_matricula: dummyPromoter,
+    loja_codigo: 'LJ-01',
+    industria_codigo: 'IND-01',
+    frequencia: 'SEMANAL',
+    segunda: false,
+    terca: true,
+    quarta: false,
+    quinta: true,
+    sexta: false,
+    sabado: false,
+    domingo: false,
+    loja: { codigo: 'LJ-01', nome: 'Supermercado Modelo', cidade: 'Brasília', uf: 'DF' },
+    industria: { codigo: 'IND-01', nome: 'Alimentos MK' }
+  };
+
+  const mockRoute2: RouteItem = {
+    id: 'route-2',
+    codigo_rota: 'R-02',
+    promotor_matricula: dummyPromoter,
+    loja_codigo: 'LJ-02',
+    industria_codigo: 'IND-02',
+    frequencia: 'SEMANAL',
+    segunda: true,
+    terca: false,
+    quarta: true,
+    quinta: false,
+    sexta: true,
+    sabado: false,
+    domingo: false,
+    loja: { codigo: 'LJ-02', nome: 'Hipermercado Central', cidade: 'Brasília', uf: 'DF' },
+    industria: { codigo: 'IND-02', nome: 'Bebidas MK' }
+  };
+
+  const routes = [mockRoute1, mockRoute2];
+  const refDate = new Date(2026, 9, 18); // Domingo 18/10/2026
+  const weekRange = getWeekDaysRange(refDate, 0); // 12/10 (Seg) a 18/10 (Dom)
+
+  it('1. Explica e valida por que o domingo exibia zero registros enquanto o cabeçalho marcava registros na semana', () => {
+    const visits: Visit[] = [];
+    const allVisits = calculateOperationalVisits({
+      routes,
+      visits,
+      daysRange: weekRange,
+      todayStr: '2026-10-18'
+    });
+
+    // Total de visitas geradas na semana (Segunda a Sexta)
+    assert.equal(allVisits.length, 5, 'Deveria ter 5 visitas na semana toda');
+
+    // Domingo (18/10/2026) não possui rota programada
+    const sundayVisits = allVisits.filter((v) => v.dataStr === '2026-10-18');
+    assert.equal(sundayVisits.length, 0, 'Domingo não tem visitas programadas');
+
+    // Terça-feira (13/10/2026) possui 1 visita (route-1)
+    const tuesdayVisits = allVisits.filter((v) => v.dataStr === '2026-10-13');
+    assert.equal(tuesdayVisits.length, 1);
+    assert.equal(tuesdayVisits[0].lojaNome, 'Supermercado Modelo');
+
+    // Sexta-feira (16/10/2026) possui 1 visita (route-2)
+    const fridayVisits = allVisits.filter((v) => v.dataStr === '2026-10-16');
+    assert.equal(fridayVisits.length, 1);
+    assert.equal(fridayVisits[0].lojaNome, 'Hipermercado Central');
+
+    // Sábado (17/10/2026) possui 0 visitas
+    const saturdayVisits = allVisits.filter((v) => v.dataStr === '2026-10-17');
+    assert.equal(saturdayVisits.length, 0);
+  });
+
+  it('2. Modo "Todos da Semana" permite visualizar todos os registros independentemente do dia selecionado', () => {
+    const allVisits = calculateOperationalVisits({
+      routes,
+      visits: [],
+      daysRange: weekRange,
+      todayStr: '2026-10-18'
+    });
+
+    // Simula lógica de visualização com filtro
+    const filterModeDay = (selectedDate: string) => allVisits.filter((v) => v.dataStr === selectedDate);
+    const filterModeAll = () => allVisits;
+
+    // Se o usuário selecionou domingo no modo "Por Dia", a lista filtrada tem 0 itens
+    assert.equal(filterModeDay('2026-10-18').length, 0);
+
+    // No modo "Todos da Semana", todos os 5 atendimentos são exibidos
+    assert.equal(filterModeAll().length, 5);
+  });
+
+  it('3. Propagação de alterações da escala fixa reflete imediatamente nas visitas futuras sem alterar visitas concluídas passadas', () => {
+    // Cenário: Uma visita de segunda-feira (12/10/2026) já foi concluída com evidências
+    const completedVisit: Visit = {
+      id: 'visit-audit-1',
+      promotor_matricula: dummyPromoter,
+      loja_codigo: 'LJ-02',
+      industria_codigo: 'IND-02',
+      data_visita: '2026-10-12',
+      status: 'concluida',
+      started_at: '2026-10-12T08:00:00Z',
+      completed_at: '2026-10-12T09:30:00Z',
+      observacao_geral: 'Atendimento perfeito com fotos auditadas',
+      checklist_items: [{ id: 'chk-1', visit_id: 'visit-audit-1', item_key: 'ruptura_cafe', checked: false }],
+      photos: [{ id: 'ph-1', visit_id: 'visit-audit-1', photo_type: 'gondola', storage_path: 'photos/p1.jpg' }],
+      occurrences: []
+    };
+
+    // Administrador altera route-2: remove segunda-feira e adiciona sábado
+    const updatedRoute2: RouteItem = {
+      ...mockRoute2,
+      segunda: false,
+      sabado: true
+    };
+
+    const newRoutes = [mockRoute1, updatedRoute2];
+
+    const recalculateWithVisits = calculateOperationalVisits({
+      routes: newRoutes,
+      visits: [completedVisit],
+      daysRange: weekRange,
+      todayStr: '2026-10-18'
+    });
+
+    // A visita concluída em 12/10 continua presente e concluída como histórico auditado
+    const mondayCompleted = recalculateWithVisits.find((v) => v.dataStr === '2026-10-12');
+    assert.ok(mondayCompleted, 'A visita de segunda concluída deve permanecer no histórico');
+    assert.equal(mondayCompleted?.status, 'concluida');
+    assert.equal(mondayCompleted?.visitObj?.id, 'visit-audit-1');
+    assert.equal(mondayCompleted?.visitObj?.photos?.length, 1);
+
+    // O sábado (17/10) agora possui visita programada projetada pela nova escala
+    const saturdayNew = recalculateWithVisits.find((v) => v.dataStr === '2026-10-17');
+    assert.ok(saturdayNew, 'Sábado agora deve ter visita programada após a alteração da escala');
+    assert.equal(saturdayNew?.lojaCodigo, 'LJ-02');
+    assert.equal(saturdayNew?.status, 'planejada');
+  });
+
+  it('4. Validação de navegação semanal gera intervalos corretos para semana anterior, atual e próxima', () => {
+    const prevWeek = getWeekDaysRange(refDate, -1);
+    const currWeek = getWeekDaysRange(refDate, 0);
+    const nextWeek = getWeekDaysRange(refDate, 1);
+
+    assert.equal(prevWeek[0].dateStr, '2026-10-05', 'Semana anterior inicia em 05/10/2026');
+    assert.equal(prevWeek[6].dateStr, '2026-10-11', 'Semana anterior termina em 11/10/2026');
+
+    assert.equal(currWeek[0].dateStr, '2026-10-12', 'Semana atual inicia em 12/10/2026');
+    assert.equal(currWeek[6].dateStr, '2026-10-18', 'Semana atual termina em 18/10/2026');
+
+    assert.equal(nextWeek[0].dateStr, '2026-10-19', 'Próxima semana inicia em 19/10/2026');
+    assert.equal(nextWeek[6].dateStr, '2026-10-25', 'Próxima semana termina em 25/10/2026');
+  });
+});

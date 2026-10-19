@@ -20,6 +20,7 @@ import {
   isSupportedVisitPhoto,
   isWithinVisitPhotoLimit
 } from '../utils/visitExecution';
+import { SearchableSelect } from '../components/SearchableSelect';
 import { AuthorSignature } from '../components/AuthorSignature';
 
 interface PromoterPortalViewProps {
@@ -76,6 +77,13 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
   const [weekOffset, setWeekOffset] = useState<number>(0);
   const [weekVisits, setWeekVisits] = useState<Visit[]>([]);
   const [selectedDayDateStr, setSelectedDayDateStr] = useState<string>(getLocalDateString(new Date()));
+  const [weekHistoryFilterMode, setWeekHistoryFilterMode] = useState<'day' | 'all'>('day');
+
+  // Visualização da Escala Fixa Semanal e Modal de Edição (Item 3 e 4)
+  const [scaleViewMode, setScaleViewMode] = useState<'semana' | 'dia'>('semana');
+  const [selectedScaleDayKey, setSelectedScaleDayKey] = useState<string>('segunda');
+  const [editingScaleRoute, setEditingScaleRoute] = useState<RouteItem | null>(null);
+  const [savingScaleRoute, setSavingScaleRoute] = useState<boolean>(false);
 
   // Form State para Visita em Andamento
   const [checklist, setChecklist] = useState<
@@ -389,6 +397,66 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
     };
   }, [adminInspectionVisit]);
 
+  // Salvar Edição da Escala Fixa da Rota (Item 4)
+  const handleSaveRouteScale = async (routeToSave: RouteItem) => {
+    if (!supabase) {
+      onShowToast({
+        title: 'Erro de Conexão',
+        message: 'Cliente Supabase não inicializado.',
+        type: 'error'
+      });
+      return;
+    }
+
+    const { segunda, terca, quarta, quinta, sexta, sabado, domingo } = routeToSave;
+    if (!segunda && !terca && !quarta && !quinta && !sexta && !sabado && !domingo) {
+      onShowToast({
+        title: 'Atenção: Nenhum dia selecionado',
+        message: 'A rota ficará salva sem visitas programadas em nenhum dia da semana.',
+        type: 'warning'
+      });
+    }
+
+    setSavingScaleRoute(true);
+    try {
+      const { error: updateErr } = await supabase
+        .from('rotas')
+        .update({
+          frequencia: routeToSave.frequencia,
+          segunda: routeToSave.segunda,
+          terca: routeToSave.terca,
+          quarta: routeToSave.quarta,
+          quinta: routeToSave.quinta,
+          sexta: routeToSave.sexta,
+          sabado: routeToSave.sabado,
+          domingo: routeToSave.domingo,
+          observacao: routeToSave.observacao ? routeToSave.observacao.trim() : null,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', routeToSave.id);
+
+      if (updateErr) throw updateErr;
+
+      onShowToast({
+        title: 'Escala Fixa Atualizada',
+        message: `A escala da rota foi atualizada com sucesso. As visitas futuras refletirão esta nova grade.`,
+        type: 'success'
+      });
+
+      setEditingScaleRoute(null);
+      await loadPortalData();
+    } catch (err: any) {
+      console.error('Erro ao atualizar escala da rota:', err);
+      onShowToast({
+        title: 'Falha ao Salvar Escala',
+        message: err.message || 'Ocorreu um erro ao atualizar a escala da rota.',
+        type: 'error'
+      });
+    } finally {
+      setSavingScaleRoute(false);
+    }
+  };
+
   const todayStr = useMemo(() => getLocalDateString(new Date()), []);
   const weekDaysRange = useMemo(() => getWeekDaysRange(new Date(), weekOffset), [weekOffset]);
 
@@ -418,6 +486,19 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
       return a.lojaNome.localeCompare(b.lojaNome);
     });
   }, [allWeekOperationalVisits, todayStr]);
+
+  // Visitas filtradas exclusivamente para o dia selecionado no Histórico Semanal (Item 2)
+  const selectedDayOperationalVisits = useMemo(() => {
+    return allWeekOperationalVisits.filter((item) => item.dataStr === selectedDayDateStr);
+  }, [allWeekOperationalVisits, selectedDayDateStr]);
+
+  // Lista final a ser exibida no histórico semanal (por dia ou a semana toda)
+  const displayedWeekVisits = useMemo(() => {
+    if (weekHistoryFilterMode === 'all') {
+      return allWeekOperationalVisits;
+    }
+    return selectedDayOperationalVisits;
+  }, [weekHistoryFilterMode, allWeekOperationalVisits, selectedDayOperationalVisits]);
 
   const realName = promoterDetails?.nome || profile?.promotor_nome || profile?.name || (promotorMatricula ? 'Promotor de Campo' : 'Promotor não vinculado');
   const realMatricula = promoterDetails?.matricula || profile?.promotor_matricula || null;
@@ -522,6 +603,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
         // Obter Geolocalização do dispositivo com timeout seguro e sem travar o início da visita
         let lat: number | null = null;
         let lng: number | null = null;
+        let accuracy: number | null = null;
 
         if (typeof navigator !== 'undefined' && navigator.geolocation) {
           try {
@@ -544,6 +626,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
             });
             lat = pos.coords.latitude;
             lng = pos.coords.longitude;
+            accuracy = pos.coords.accuracy;
           } catch (e) {
             console.warn('Geolocalização não concedida ou timeout:', e);
           }
@@ -554,29 +637,11 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
         const validRouteInDb = routes.find((r) => r.id === route.id);
         const rotaIdToInsert = (validRouteInDb || isUuid) ? route.id : null;
 
-        // Inserir registro de visita em_andamento no Supabase usando schema exato
-        const { data: newVisit, error: insertErr } = await supabase
-          .from('visits')
-          .insert([
-            {
-              rota_id: rotaIdToInsert,
-              promotor_matricula: promotorMatricula,
-              loja_codigo: route.loja_codigo,
-              industria_codigo: route.industria_codigo,
-              data_visita: todayStr,
-              started_at: new Date().toISOString(),
-              latitude: lat,
-              longitude: lng,
-              status: 'em_andamento'
-            }
-          ])
-          .select(`
-            *,
-            industria:industrias(codigo, nome),
-            loja:lojas(codigo, nome, cidade, uf, endereco),
-            promotor:promotores(matricula, nome)
-          `)
-          .single();
+        // Server identifies the authenticated promoter and timestamps the event.
+        const { data: newVisit, error: insertErr } = await supabase.rpc('attendance_check_in', {
+          p_store: route.loja_codigo, p_industry: route.industria_codigo, p_route: rotaIdToInsert,
+          p_lat: lat, p_lng: lng, p_accuracy: accuracy
+        });
 
         if (insertErr) {
           // Se ocorreu duplicidade por corrida concorrente, tenta carregar a visita criada
@@ -1052,8 +1117,9 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
       await checklistWriteQueueRef.current;
 
       // 1. Obter Geolocalização do dispositivo no check-out se disponível
-      let lat: number | null = activeVisit.latitude || null;
-      let lng: number | null = activeVisit.longitude || null;
+      let lat: number | null = null;
+      let lng: number | null = null;
+      let checkoutAccuracy: number | null = null;
 
       if (navigator.geolocation) {
         try {
@@ -1062,6 +1128,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
           });
           lat = pos.coords.latitude;
           lng = pos.coords.longitude;
+          checkoutAccuracy = pos.coords.accuracy;
         } catch (e) {
           console.warn('Geolocalização no check-out não concedida ou timeout');
         }
@@ -1098,17 +1165,10 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
 
       // 3. Atualizar visita com status oficial 'concluida' e completed_at (preservando started_at)
       const nowIso = new Date().toISOString();
-      const { error: updateErr } = await supabase
-        .from('visits')
-        .update({
-          status: 'concluida',
-          completed_at: nowIso,
-          latitude: lat,
-          longitude: lng,
-          observacao_geral: generalObs.trim() || null,
-          updated_at: nowIso
-        })
-        .eq('id', activeVisit.id);
+      const { error: updateErr } = await supabase.rpc('attendance_check_out', {
+        p_visit: activeVisit.id, p_lat: lat, p_lng: lng, p_accuracy: checkoutAccuracy,
+        p_observation: generalObs.trim() || null
+      });
 
       if (updateErr) throw updateErr;
 
@@ -1587,19 +1647,19 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
               </p>
             </div>
 
-            <div className="w-full sm:w-72">
-              <select
+            <div className="w-full sm:w-96 min-w-[280px]">
+              <SearchableSelect
+                id="promoter-admin-select"
                 value={selectedPromoterMatricula}
-                onChange={(e) => setSelectedPromoterMatricula(e.target.value)}
-                className="w-full p-2.5 bg-white border border-[#CFCDC5] rounded-xl text-xs font-semibold text-[#171717] focus:outline-hidden"
-              >
-                <option value="">Selecione um promotor...</option>
-                {adminPromotersList.map((p) => (
-                  <option key={p.matricula} value={p.matricula}>
-                    {p.nome} ({p.matricula})
-                  </option>
-                ))}
-              </select>
+                placeholder="Selecione um promotor..."
+                options={adminPromotersList.map((p) => ({
+                  value: p.matricula,
+                  label: `${p.nome} (${p.matricula})`,
+                  searchText: `${p.nome} ${p.matricula} ${p.cidade || ''} ${p.uf || ''} ${p.supervisor || ''}`,
+                  detail: p.cidade ? `${p.cidade} - ${p.uf || ''}` : undefined
+                }))}
+                onChange={(val) => setSelectedPromoterMatricula(val)}
+              />
             </div>
           </div>
 
@@ -1723,30 +1783,30 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
               <span>Resumo do Promotor (Hoje)</span>
             </div>
           )}
-          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 font-mono">
-            <div className="p-3.5 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5]">
-              <span className="text-[10px] text-[#5F5F5F] block font-bold uppercase">PLANEJADAS HOJE</span>
-              <span className="text-2xl font-extrabold text-[#171717]">{totalPlanned}</span>
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5 font-mono">
+            <div className="p-2.5 rounded-xl bg-[#F7F6F2] border border-[#CFCDC5]">
+              <span className="text-[9px] text-[#5F5F5F] block font-bold uppercase">PLANEJADAS</span>
+              <span className="text-xl font-extrabold text-[#171717]">{totalPlanned}</span>
             </div>
 
-            <div className="p-3.5 rounded-2xl bg-[#F7F6F2] border border-[#FCE19B]">
-              <span className="text-[10px] text-[#986000] block font-bold uppercase">EM ANDAMENTO</span>
-              <span className="text-2xl font-extrabold text-[#986000]">{inProgressCount}</span>
+            <div className="p-2.5 rounded-xl bg-[#F7F6F2] border border-[#FCE19B]">
+              <span className="text-[9px] text-[#986000] block font-bold uppercase">EM ANDAMENTO</span>
+              <span className="text-xl font-extrabold text-[#986000]">{inProgressCount}</span>
             </div>
 
-            <div className="p-3.5 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5]">
-              <span className="text-[10px] text-[#5F5F5F] block font-bold uppercase">PENDENTES HOJE</span>
-              <span className="text-2xl font-extrabold text-[#222222]">{pendingCount}</span>
+            <div className="p-2.5 rounded-xl bg-[#F7F6F2] border border-[#CFCDC5]">
+              <span className="text-[9px] text-[#5F5F5F] block font-bold uppercase">PENDENTES</span>
+              <span className="text-xl font-extrabold text-[#222222]">{pendingCount}</span>
             </div>
 
-            <div className="p-3.5 rounded-2xl bg-[#F7F6F2] border border-[#B9E5D0]">
-              <span className="text-[10px] text-[#16794F] block font-bold uppercase">CONCLUÍDAS HOJE</span>
-              <span className="text-2xl font-extrabold text-[#16794F]">{completedCount}</span>
+            <div className="p-2.5 rounded-xl bg-[#F7F6F2] border border-[#B9E5D0]">
+              <span className="text-[9px] text-[#16794F] block font-bold uppercase">CONCLUÍDAS</span>
+              <span className="text-xl font-extrabold text-[#16794F]">{completedCount}</span>
             </div>
 
-            <div className="p-3.5 rounded-2xl bg-[#F7F6F2] border border-[#F8C8C8] col-span-2 sm:col-span-1">
-              <span className="text-[10px] text-[#C62828] block font-bold uppercase">NÃO REALIZADAS</span>
-              <span className="text-2xl font-extrabold text-[#C62828]">{notDoneCount}</span>
+            <div className="p-2.5 rounded-xl bg-[#F7F6F2] border border-[#F8C8C8] col-span-2 sm:col-span-1">
+              <span className="text-[9px] text-[#C62828] block font-bold uppercase">NÃO REALIZADAS</span>
+              <span className="text-xl font-extrabold text-[#C62828]">{notDoneCount}</span>
             </div>
           </div>
 
@@ -1842,13 +1902,13 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
         )}
 
         {todayOperationalVisits.length === 0 ? (
-          <div className="py-10 text-center space-y-3 font-mono">
-            <div className="w-12 h-12 rounded-full bg-[#EAE8E2] border border-[#CFCDC5] flex items-center justify-center text-[#5F5F5F] mx-auto">
-              <span className="material-symbols-outlined text-2xl">event_available</span>
+          <div className="py-4 px-3 text-center space-y-1.5 font-mono">
+            <div className="w-8 h-8 rounded-full bg-[#EAE8E2] border border-[#CFCDC5] flex items-center justify-center text-[#5F5F5F] mx-auto">
+              <span className="material-symbols-outlined text-lg">event_available</span>
             </div>
             <h4 className="text-xs font-bold text-[#171717]">Nenhuma Rota Prevista para Hoje</h4>
             <p className="text-[11px] text-[#77766F] max-w-sm mx-auto">
-              Não há lojas agendadas para o seu perfil no dia de hoje ({todayStr.split('-').reverse().join('/')}). Consulte o histórico semanal abaixo para ver outras datas.
+              Não há lojas agendadas para a data atual ({todayStr.split('-').reverse().join('/')}). Consulte o histórico semanal ou a escala fixa abaixo.
             </p>
           </div>
         ) : (
@@ -2805,8 +2865,9 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
           {/* Navegação entre semanas (visível sempre) */}
           <div className="flex items-center gap-2 shrink-0 font-mono text-xs">
             <button
+              type="button"
               onClick={() => setWeekOffset((prev) => prev - 1)}
-              className="p-1.5 rounded-lg bg-[#EAE8E2] hover:bg-[#1a202c] border border-[#CFCDC5] text-[#171717] hover:text-white cursor-pointer flex items-center gap-1"
+              className="p-1.5 rounded-lg bg-[#EAE8E2] hover:bg-[#CFCDC5] border border-[#CFCDC5] text-[#171717] cursor-pointer flex items-center gap-1 transition-colors"
               title="Semana anterior"
             >
               <span className="material-symbols-outlined text-sm">chevron_left</span>
@@ -2814,19 +2875,25 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
             </button>
 
             <button
-              onClick={() => setWeekOffset(0)}
-              className={`px-3 py-1.5 rounded-lg border text-xs font-bold transition-colors cursor-pointer ${
+              type="button"
+              onClick={() => {
+                setWeekOffset(0);
+                setSelectedDayDateStr(getLocalDateString(new Date()));
+              }}
+              className={`px-3 py-1.5 rounded-lg border text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
                 weekOffset === 0
-                  ? 'bg-purple-600/30 text-purple-300 border-purple-500/50'
-                  : 'bg-[#EAE8E2] text-slate-300 border-[#CFCDC5] hover:text-white'
+                  ? 'bg-[#3B0764] hover:bg-[#2E0854] text-white border-[#2E0854] shadow-sm ring-1 ring-purple-900/50'
+                  : 'bg-[#EAE8E2] text-[#171717] border-[#CFCDC5] hover:bg-[#CFCDC5]'
               }`}
             >
-              Semana Atual
+              {weekOffset === 0 && <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>}
+              <span>Semana Atual</span>
             </button>
 
             <button
+              type="button"
               onClick={() => setWeekOffset((prev) => prev + 1)}
-              className="p-1.5 rounded-lg bg-[#EAE8E2] hover:bg-[#1a202c] border border-[#CFCDC5] text-[#171717] hover:text-white cursor-pointer flex items-center gap-1"
+              className="p-1.5 rounded-lg bg-[#EAE8E2] hover:bg-[#CFCDC5] border border-[#CFCDC5] text-[#171717] cursor-pointer flex items-center gap-1 transition-colors"
               title="Próxima semana"
             >
               <span className="hidden md:inline">Próxima</span>
@@ -2837,59 +2904,158 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
 
         {/* CONTEÚDO EXPANSÍVEL DA SEMANA */}
         {isWeekHistoryOpen && (
-          <div className="space-y-5 pt-1">
-            {/* Resumo rápido por dia da semana */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2 font-mono">
-              {weekDaysRange.map((day) => {
-                const isTodayDay = day.dateStr === getLocalDateString(new Date());
-                const dayVisits = allWeekOperationalVisits.filter((v) => v.dataStr === day.dateStr);
-                const pendingCount = dayVisits.filter((v) => v.status === 'pendente').length;
-                const completedCount = dayVisits.filter((v) => v.status === 'concluida').length;
-
-                return (
-                  <div
-                    key={day.dateStr}
-                    className={`p-2.5 rounded-xl border flex flex-col justify-between space-y-1 ${
-                      isTodayDay
-                        ? 'bg-purple-950/20 border-purple-500/40'
-                        : 'bg-[#EAE8E2] border-[#CFCDC5]'
+          <div className="space-y-4 pt-1">
+            {/* Controles de visualização: Seletores dos 7 dias + Alternância Semana / Dia */}
+            <div>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2 font-mono text-xs text-[#5F5F5F]">
+                <span>Selecione um dia da semana ou visualize a grade completa:</span>
+                <div className="flex items-center gap-1.5 self-end sm:self-auto">
+                  <button
+                    type="button"
+                    onClick={() => setWeekHistoryFilterMode('day')}
+                    className={`px-2.5 py-1 rounded-lg font-bold text-xs transition-colors cursor-pointer ${
+                      weekHistoryFilterMode === 'day'
+                        ? 'bg-[#171717] text-white shadow-xs'
+                        : 'bg-[#EAE8E2] text-[#5F5F5F] hover:text-[#171717] border border-[#CFCDC5]'
                     }`}
                   >
-                    <div className="flex items-center justify-between">
-                      <span className="text-[10px] font-bold text-[#77766F] uppercase">{day.dayShort}</span>
-                      {isTodayDay && (
-                        <span className="px-1.5 py-0.2 text-[8px] font-bold rounded bg-purple-500/20 text-purple-300">
-                          HOJE
+                    Por Dia
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setWeekHistoryFilterMode('all')}
+                    className={`px-2.5 py-1 rounded-lg font-bold text-xs transition-colors cursor-pointer ${
+                      weekHistoryFilterMode === 'all'
+                        ? 'bg-[#171717] text-white shadow-xs'
+                        : 'bg-[#EAE8E2] text-[#5F5F5F] hover:text-[#171717] border border-[#CFCDC5]'
+                    }`}
+                  >
+                    Todos da Semana ({allWeekOperationalVisits.length})
+                  </button>
+                </div>
+              </div>
+
+              {/* Grade com os 7 botões de dias */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2 font-mono">
+                {weekDaysRange.map((day) => {
+                  const isTodayDay = day.dateStr === getLocalDateString(new Date());
+                  const isSelected = weekHistoryFilterMode === 'day' && day.dateStr === selectedDayDateStr;
+                  const dayVisits = allWeekOperationalVisits.filter((v) => v.dataStr === day.dateStr);
+                  const storeCount = dayVisits.length;
+                  const pendingCount = dayVisits.filter((v) => v.status === 'pendente').length;
+                  const completedCount = dayVisits.filter((v) => v.status === 'concluida').length;
+
+                  return (
+                    <button
+                      key={day.dateStr}
+                      type="button"
+                      onClick={() => {
+                        setSelectedDayDateStr(day.dateStr);
+                        setWeekHistoryFilterMode('day');
+                      }}
+                      className={`p-2.5 rounded-xl border text-left flex flex-col justify-between space-y-1.5 transition-all cursor-pointer ${
+                        isSelected
+                          ? 'bg-[#171717] text-white border-[#171717] shadow-sm ring-2 ring-[#3B0764]/40'
+                          : isTodayDay
+                          ? 'bg-purple-100/80 border-purple-300 text-[#171717] hover:bg-purple-200/70'
+                          : 'bg-[#EAE8E2] border-[#CFCDC5] text-[#171717] hover:bg-[#E4E2DB]'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between w-full">
+                        <span className={`text-[10px] font-bold uppercase ${isSelected ? 'text-amber-400' : 'text-[#77766F]'}`}>
+                          {day.dayShort}
                         </span>
-                      )}
-                    </div>
-                    <div className="text-xs font-bold text-[#171717]">
-                      {day.dateStr.split('-').reverse().slice(0, 2).join('/')}
-                    </div>
-                    <div className="flex items-center gap-1.5 text-[10px] pt-1 border-t border-[#CFCDC5]/50">
-                      {completedCount > 0 && <span className="text-emerald-400 font-bold">🟢 {completedCount}</span>}
-                      {pendingCount > 0 && <span className="text-rose-400 font-bold">🔴 {pendingCount}</span>}
-                      {dayVisits.length === 0 && <span className="text-slate-600">—</span>}
-                    </div>
-                  </div>
-                );
-              })}
+                        {isTodayDay ? (
+                          <span className={`px-1.5 py-0.2 text-[8px] font-bold rounded ${isSelected ? 'bg-purple-900 text-purple-200' : 'bg-[#3B0764] text-white'}`}>
+                            HOJE
+                          </span>
+                        ) : (
+                          <span className={`px-1.5 py-0.2 text-[8px] font-bold rounded ${isSelected ? 'bg-white/20 text-white' : 'bg-[#E4E2DB] text-[#5F5F5F]'}`}>
+                            {storeCount} {storeCount === 1 ? 'loja' : 'lojas'}
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="flex items-baseline justify-between w-full">
+                        <span className={`text-xs font-bold ${isSelected ? 'text-white' : 'text-[#171717]'}`}>
+                          {day.dateStr.split('-').reverse().slice(0, 2).join('/')}
+                        </span>
+                        {isTodayDay && (
+                          <span className={`text-[10px] font-semibold ${isSelected ? 'text-slate-300' : 'text-[#5F5F5F]'}`}>
+                            {storeCount} {storeCount === 1 ? 'loja' : 'lojas'}
+                          </span>
+                        )}
+                      </div>
+
+                      <div className={`flex items-center gap-1.5 text-[10px] pt-1 border-t ${isSelected ? 'border-white/20' : 'border-[#CFCDC5]/60'}`}>
+                        {completedCount > 0 && <span className="font-bold text-emerald-600">🟢 {completedCount}</span>}
+                        {pendingCount > 0 && <span className="font-bold text-rose-600">🔴 {pendingCount}</span>}
+                        {storeCount === 0 && <span className={isSelected ? 'text-slate-400' : 'text-[#77766F]'}>Sem visitas</span>}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
-            {/* Lista detalhada das visitas da semana */}
-            {allWeekOperationalVisits.length === 0 ? (
-              <div className="py-12 text-center space-y-3 font-mono">
-                <div className="w-12 h-12 rounded-full bg-[#EAE8E2] border border-[#CFCDC5] flex items-center justify-center text-[#5F5F5F] mx-auto">
-                  <span className="material-symbols-outlined text-2xl">event_busy</span>
+            {/* Cabeçalho informativo da listagem */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 pt-2 border-t border-[#CFCDC5]">
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-xs font-bold text-[#171717]">
+                  {weekHistoryFilterMode === 'all'
+                    ? `Todos os Atendimentos da Semana (${displayedWeekVisits.length} ${displayedWeekVisits.length === 1 ? 'registro' : 'registros'})`
+                    : `Atendimentos de ${selectedDayDateStr.split('-').reverse().join('/')} (${selectedDayOperationalVisits.length} no dia • ${allWeekOperationalVisits.length} na semana)`}
+                </span>
+                {weekHistoryFilterMode === 'day' && selectedDayOperationalVisits.length === 0 && allWeekOperationalVisits.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setWeekHistoryFilterMode('all')}
+                    className="text-[11px] font-bold text-[#286FF5] hover:underline cursor-pointer"
+                  >
+                    (Ver todos os {allWeekOperationalVisits.length} registros da semana)
+                  </button>
+                )}
+              </div>
+              <span className="font-mono text-[11px] text-[#77766F]">
+                {weekHistoryFilterMode === 'all'
+                  ? 'Exibindo segunda a domingo'
+                  : weekDaysRange.find((d) => d.dateStr === selectedDayDateStr)?.dayLabel || ''}
+              </span>
+            </div>
+
+            {/* Lista detalhada das visitas do DIA SELECIONADO ou DA SEMANA */}
+            {displayedWeekVisits.length === 0 ? (
+              <div className="py-8 text-center space-y-2 font-mono bg-[#EAE8E2] rounded-xl border border-[#CFCDC5]">
+                <div className="w-10 h-10 rounded-full bg-[#F7F6F2] border border-[#CFCDC5] flex items-center justify-center text-[#5F5F5F] mx-auto">
+                  <span className="material-symbols-outlined text-xl">event_busy</span>
                 </div>
-                <h4 className="text-xs font-bold text-[#171717]">Nenhuma Rota para esta Semana</h4>
+                <h4 className="text-xs font-bold text-[#171717]">
+                  {weekHistoryFilterMode === 'all'
+                    ? 'Nenhum Atendimento Programado nesta Semana'
+                    : 'Nenhum Atendimento para este Dia'}
+                </h4>
                 <p className="text-[11px] text-[#77766F] max-w-sm mx-auto">
-                  Não foram encontradas rotas cadastradas para a sua matrícula na semana selecionada.
+                  {weekHistoryFilterMode === 'all'
+                    ? 'Não foram encontrados registros para o promotor nesta semana selecionada.'
+                    : allWeekOperationalVisits.length > 0
+                    ? `Não há visitas programadas para ${selectedDayDateStr.split('-').reverse().join('/')}, mas há ${allWeekOperationalVisits.length} atendimentos em outros dias desta semana. Clique nos dias acima ou em "Todos da Semana".`
+                    : `Não há visitas programadas ou registros de campo para ${selectedDayDateStr.split('-').reverse().join('/')}. Selecione outro dia nos botões acima.`}
                 </p>
+                {weekHistoryFilterMode === 'day' && allWeekOperationalVisits.length > 0 && (
+                  <div className="pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setWeekHistoryFilterMode('all')}
+                      className="px-3 py-1.5 rounded-lg bg-[#171717] hover:bg-black text-white text-xs font-bold cursor-pointer transition-colors"
+                    >
+                      Exibir Todos os {allWeekOperationalVisits.length} da Semana
+                    </button>
+                  </div>
+                )}
               </div>
             ) : (
               <div className="space-y-3">
-                {allWeekOperationalVisits.map((item, idx) => {
+                {displayedWeekVisits.map((item, idx) => {
                   const isTodayItem = item.dataStr === getLocalDateString(new Date());
                   const routeObj = routes.find((r) => r.id === item.routeId) || {
                     id: item.routeId,
@@ -2921,7 +3087,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                           <span className="w-5 h-5 rounded-full bg-[#F7F6F2] border border-[#CFCDC5] text-[#7E22CE] font-bold text-[10px] flex items-center justify-center">
                             {idx + 1}
                           </span>
-                          <span className="text-xs font-bold text-purple-300 uppercase">
+                          <span className="text-xs font-bold text-[#5B21B6] uppercase">
                             {item.dataStr.split('-').reverse().join('/')} • {item.dayOfWeekLabel}
                           </span>
                           <span
@@ -2953,10 +3119,10 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                           Cidade/UF: {item.lojaCidade || '—'}/{item.lojaUf || '-'}
                         </p>
                         <div className="flex flex-wrap items-center gap-3 text-[10px] text-[#5F5F5F]">
-                          <span>Indústria: <strong className="text-purple-300">{item.industriaNome}</strong></span>
-                          <span>Frequência: <strong className="text-cyan-300">{item.frequencia}</strong></span>
+                          <span>Indústria: <strong className="text-[#7E22CE] font-bold">{item.industriaNome}</strong></span>
+                          <span>Frequência: <strong className="text-[#0E7490] font-bold">{item.frequencia}</strong></span>
                           {item.completedAt && (
-                            <span>Concluído às: <strong className="text-emerald-300">{new Date(item.completedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</strong></span>
+                            <span>Concluído às: <strong className="text-emerald-700 font-bold">{new Date(item.completedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</strong></span>
                           )}
                         </div>
                       </div>
@@ -3087,6 +3253,440 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
           </div>
         )}
       </section>
+      )}
+
+      {/* 4. ESCALA FIXA DA SEMANA (Itens 3 e 4) */}
+      {(!isAdminUser || selectedPromoterMatricula) && (
+        <section className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-5 sm:p-6 shadow-xs space-y-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#CFCDC5] pb-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-[#7E22CE]">calendar_month</span>
+                <h3 className="text-sm font-bold text-[#171717] uppercase tracking-wider font-mono flex items-center gap-2">
+                  Escala Fixa da Semana ({routes.length} {routes.length === 1 ? 'rota programada' : 'rotas programadas'})
+                </h3>
+              </div>
+              <p className="text-[11px] text-[#77766F] font-mono mt-0.5">
+                Grade contratada oficial (segunda a domingo) cadastrada no sistema para este promotor.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0 font-mono text-xs">
+              {/* Alternância Semana / Dia */}
+              <div className="flex items-center p-0.5 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl">
+                <button
+                  type="button"
+                  onClick={() => setScaleViewMode('semana')}
+                  className={`px-3 py-1.5 rounded-lg font-bold text-xs transition-colors cursor-pointer ${
+                    scaleViewMode === 'semana'
+                      ? 'bg-[#171717] text-white shadow-xs'
+                      : 'text-[#5F5F5F] hover:text-[#171717]'
+                  }`}
+                >
+                  Semana
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setScaleViewMode('dia')}
+                  className={`px-3 py-1.5 rounded-lg font-bold text-xs transition-colors cursor-pointer ${
+                    scaleViewMode === 'dia'
+                      ? 'bg-[#171717] text-white shadow-xs'
+                      : 'text-[#5F5F5F] hover:text-[#171717]'
+                  }`}
+                >
+                  Dia
+                </button>
+              </div>
+
+              {/* Botão compacto "Editar escala fixa" para perfis com permissão */}
+              {isAdminUser && routes.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setEditingScaleRoute(routes[0])}
+                  className="px-3 py-1.5 rounded-xl bg-[#3B0764] hover:bg-[#2E0854] text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-xs transition-colors border border-[#2E0854] focus:outline-none focus:ring-2 focus:ring-purple-900/50"
+                  title="Editar a escala fixa oficial de rotas deste promotor"
+                >
+                  <span className="material-symbols-outlined text-sm">edit_calendar</span>
+                  <span>Editar escala fixa</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {routes.length === 0 ? (
+            <div className="py-8 text-center space-y-2 font-mono bg-[#EAE8E2] rounded-xl border border-[#CFCDC5]">
+              <div className="w-10 h-10 rounded-full bg-[#F7F6F2] border border-[#CFCDC5] flex items-center justify-center text-[#5F5F5F] mx-auto">
+                <span className="material-symbols-outlined text-xl">event_busy</span>
+              </div>
+              <h4 className="text-xs font-bold text-[#171717]">Nenhuma Rota Fixa Cadastrada</h4>
+              <p className="text-[11px] text-[#77766F] max-w-sm mx-auto">
+                Não há rotas vinculadas à matrícula {realMatricula || 'selecionada'} na tabela oficial de escalas.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {/* Visão de Segunda a Domingo com contador de lojas */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2 font-mono text-xs">
+                {[
+                  { key: 'segunda', label: 'Segunda', short: 'SEG' },
+                  { key: 'terca', label: 'Terça', short: 'TER' },
+                  { key: 'quarta', label: 'Quarta', short: 'QUA' },
+                  { key: 'quinta', label: 'Quinta', short: 'QUI' },
+                  { key: 'sexta', label: 'Sexta', short: 'SEX' },
+                  { key: 'sabado', label: 'Sábado', short: 'SÁB' },
+                  { key: 'domingo', label: 'Domingo', short: 'DOM' }
+                ].map((d) => {
+                  const dayRoutes = routes.filter((r) => Boolean((r as any)[d.key]));
+                  const isSelected = selectedScaleDayKey === d.key;
+
+                  return (
+                    <button
+                      key={d.key}
+                      type="button"
+                      onClick={() => {
+                        setSelectedScaleDayKey(d.key);
+                        if (scaleViewMode !== 'dia') setScaleViewMode('dia');
+                      }}
+                      className={`p-2.5 rounded-xl border text-left flex flex-col justify-between space-y-1 transition-all cursor-pointer ${
+                        isSelected && scaleViewMode === 'dia'
+                          ? 'bg-[#171717] text-white border-[#171717] shadow-sm ring-2 ring-purple-600/40'
+                          : 'bg-[#EAE8E2] border-[#CFCDC5] text-[#171717] hover:bg-[#E4E2DB]'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between w-full">
+                        <span className={`text-[10px] font-bold uppercase ${isSelected && scaleViewMode === 'dia' ? 'text-amber-400' : 'text-[#77766F]'}`}>
+                          {d.short}
+                        </span>
+                        <span className={`px-1.5 py-0.2 text-[8px] font-bold rounded ${isSelected && scaleViewMode === 'dia' ? 'bg-white/20 text-white' : 'bg-[#E4E2DB] text-[#5F5F5F]'}`}>
+                          {dayRoutes.length} {dayRoutes.length === 1 ? 'loja' : 'lojas'}
+                        </span>
+                      </div>
+                      <div className="text-xs font-bold truncate">
+                        {d.label}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Conteúdo da Escala: Modo SEMANA ou Modo DIA */}
+              {scaleViewMode === 'semana' ? (
+                /* Modo Semana: Grade completa de rotas cadastradas */
+                <div className="space-y-2.5">
+                  <div className="text-xs font-mono font-bold text-[#171717] flex items-center justify-between">
+                    <span>Todas as Rotas Programadas na Escala Fixa:</span>
+                    <span className="text-[11px] text-[#77766F] font-normal">Exibindo {routes.length} rotas ativas</span>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 font-mono">
+                    {routes.map((r, idx) => {
+                      const activeDays = [
+                        r.segunda && 'SEG',
+                        r.terca && 'TER',
+                        r.quarta && 'QUA',
+                        r.quinta && 'QUI',
+                        r.sexta && 'SEX',
+                        r.sabado && 'SÁB',
+                        r.domingo && 'DOM'
+                      ].filter(Boolean);
+
+                      return (
+                        <div
+                          key={r.id || idx}
+                          className="p-3.5 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] space-y-2 flex flex-col justify-between hover:border-[#171717]/40 transition-colors"
+                        >
+                          <div className="space-y-1">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-[#F7F6F2] border border-[#CFCDC5] text-[#7E22CE]">
+                                ROTA: {r.codigo_rota || `R-${idx + 1}`}
+                              </span>
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-cyan-100 text-cyan-800 border border-cyan-300">
+                                {r.frequencia || 'SEMANAL'}
+                              </span>
+                            </div>
+                            <h4 className="text-xs font-bold text-[#171717]">
+                              {r.loja?.nome || r.loja_codigo}
+                            </h4>
+                            <p className="text-[11px] text-[#77766F]">
+                              Indústria: <strong className="text-[#171717]">{r.industria?.nome || r.industria_codigo}</strong> • {r.loja?.cidade || '—'}/{r.loja?.uf || '-'}
+                            </p>
+                            {r.observacao && (
+                              <p className="text-[10px] text-[#5F5F5F] italic bg-[#F7F6F2] p-1.5 rounded border border-[#CFCDC5]/50">
+                                Obs: {r.observacao}
+                              </p>
+                            )}
+                          </div>
+
+                          <div className="pt-2 border-t border-[#CFCDC5] flex items-center justify-between">
+                            <div className="flex flex-wrap gap-1 text-[9px] font-bold">
+                              {['segunda', 'terca', 'quarta', 'quinta', 'sexta', 'sabado', 'domingo'].map((dKey, dIdx) => {
+                                const dayLabels = ['S', 'T', 'Q', 'Q', 'S', 'S', 'D'];
+                                const active = Boolean((r as any)[dKey]);
+                                return (
+                                  <span
+                                    key={dKey}
+                                    className={`w-4 h-4 rounded-full flex items-center justify-center text-[9px] ${
+                                      active
+                                        ? 'bg-[#171717] text-white font-bold'
+                                        : 'bg-[#E4E2DB] text-[#999891]'
+                                    }`}
+                                  >
+                                    {dayLabels[dIdx]}
+                                  </span>
+                                );
+                              })}
+                            </div>
+
+                            {isAdminUser && (
+                              <button
+                                type="button"
+                                onClick={() => setEditingScaleRoute(r)}
+                                className="px-2 py-1 rounded-lg bg-[#F7F6F2] hover:bg-[#171717] text-[#171717] hover:text-white border border-[#CFCDC5] text-[10px] font-bold cursor-pointer transition-colors"
+                              >
+                                Editar
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : (
+                /* Modo Dia: Exibe rotas programadas para o dia da semana selecionado */
+                <div className="space-y-3 font-mono">
+                  <div className="text-xs font-bold text-[#171717] flex items-center justify-between border-b border-[#CFCDC5] pb-2">
+                    <span className="uppercase">
+                      Programação Fixa para {
+                        selectedScaleDayKey === 'segunda' ? 'Segunda-feira' :
+                        selectedScaleDayKey === 'terca' ? 'Terça-feira' :
+                        selectedScaleDayKey === 'quarta' ? 'Quarta-feira' :
+                        selectedScaleDayKey === 'quinta' ? 'Quinta-feira' :
+                        selectedScaleDayKey === 'sexta' ? 'Sexta-feira' :
+                        selectedScaleDayKey === 'sabado' ? 'Sábado' : 'Domingo'
+                      }
+                    </span>
+                    <span className="text-[11px] text-[#77766F] font-normal">
+                      {routes.filter((r) => Boolean((r as any)[selectedScaleDayKey])).length} lojas programadas
+                    </span>
+                  </div>
+
+                  {routes.filter((r) => Boolean((r as any)[selectedScaleDayKey])).length === 0 ? (
+                    <div className="py-6 text-center space-y-1 bg-[#EAE8E2] rounded-xl border border-[#CFCDC5]">
+                      <p className="text-xs font-bold text-[#171717]">Nenhuma loja na escala deste dia da semana.</p>
+                      <p className="text-[11px] text-[#77766F]">
+                        Este promotor não possui previsão contratada de atendimento neste dia.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {routes
+                        .filter((r) => Boolean((r as any)[selectedScaleDayKey]))
+                        .map((r, idx) => (
+                          <div
+                            key={r.id || idx}
+                            className="p-3 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs"
+                          >
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-2">
+                                <span className="w-5 h-5 rounded-full bg-[#171717] text-white text-[10px] font-bold flex items-center justify-center">
+                                  {idx + 1}
+                                </span>
+                                <h4 className="font-bold text-[#171717]">
+                                  {r.loja?.nome || r.loja_codigo}
+                                </h4>
+                                <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-cyan-100 text-cyan-800 border border-cyan-300">
+                                  {r.frequencia || 'SEMANAL'}
+                                </span>
+                              </div>
+                              <p className="text-[11px] text-[#77766F] pl-7">
+                                Indústria: <strong className="text-[#171717]">{r.industria?.nome || r.industria_codigo}</strong> • {r.loja?.cidade || '—'}/{r.loja?.uf || '-'}
+                                {r.observacao ? ` • Obs: ${r.observacao}` : ''}
+                              </p>
+                            </div>
+
+                            {isAdminUser && (
+                              <button
+                                type="button"
+                                onClick={() => setEditingScaleRoute(r)}
+                                className="px-2.5 py-1 rounded-xl bg-[#F7F6F2] hover:bg-[#171717] text-[#171717] hover:text-white border border-[#CFCDC5] text-xs font-bold cursor-pointer transition-colors self-end sm:self-auto"
+                              >
+                                Editar Escala
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* MODAL DE EDIÇÃO DA ESCALA FIXA (Item 4) */}
+      {editingScaleRoute && (
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-5 font-mono text-xs">
+            <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-3">
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-purple-700">edit_calendar</span>
+                <h3 className="text-sm font-bold text-[#171717] uppercase">
+                  Editar Escala Fixa da Rota
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingScaleRoute(null)}
+                className="text-[#77766F] hover:text-[#171717] cursor-pointer"
+              >
+                <span className="material-symbols-outlined">close</span>
+              </button>
+            </div>
+
+            {/* Identificação da Loja e Indústria */}
+            <div className="p-3 bg-[#EAE8E2] rounded-xl border border-[#CFCDC5] space-y-1">
+              <div className="text-[#171717] font-bold text-sm">
+                {editingScaleRoute.loja?.nome || editingScaleRoute.loja_codigo}
+              </div>
+              <div className="text-[11px] text-[#77766F]">
+                Indústria: <strong className="text-[#171717]">{editingScaleRoute.industria?.nome || editingScaleRoute.industria_codigo}</strong> • Rota: {editingScaleRoute.codigo_rota || editingScaleRoute.id}
+              </div>
+            </div>
+
+            {/* Seletor de Rota / Troca de Rota para Editar */}
+            {routes.length > 1 && (
+              <div>
+                <label className="text-[11px] font-bold text-[#77766F] block mb-1">
+                  SELECIONAR ROTA PARA CONFIGURAR:
+                </label>
+                <select
+                  value={editingScaleRoute.id}
+                  onChange={(e) => {
+                    const found = routes.find((r) => r.id === e.target.value);
+                    if (found) setEditingScaleRoute(found);
+                  }}
+                  className="w-full h-9 px-3 bg-white border border-[#CFCDC5] rounded-xl text-xs font-semibold text-[#171717]"
+                >
+                  {routes.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.loja?.nome || r.loja_codigo} ({r.industria?.nome || r.industria_codigo}) - {r.codigo_rota}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {/* Frequência */}
+            <div>
+              <label className="text-[11px] font-bold text-[#77766F] block mb-1">FREQUÊNCIA DA ROTA:</label>
+              <div className="grid grid-cols-2 gap-2">
+                {(['SEMANAL', 'QUINZENAL'] as const).map((freq) => (
+                  <button
+                    key={freq}
+                    type="button"
+                    onClick={() => setEditingScaleRoute({ ...editingScaleRoute, frequencia: freq })}
+                    className={`p-2 rounded-xl border text-center font-bold cursor-pointer transition-colors ${
+                      editingScaleRoute.frequencia === freq
+                        ? 'bg-[#171717] text-white border-[#171717]'
+                        : 'bg-[#EAE8E2] text-[#171717] border-[#CFCDC5] hover:bg-[#E4E2DB]'
+                    }`}
+                  >
+                    {freq}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Dias da Semana (Segunda a Domingo) */}
+            <div>
+              <label className="text-[11px] font-bold text-[#77766F] block mb-1.5">
+                DIAS DE VISITA ATIVOS:
+              </label>
+              <div className="grid grid-cols-7 gap-1.5 text-center">
+                {[
+                  { key: 'segunda', label: 'SEG' },
+                  { key: 'terca', label: 'TER' },
+                  { key: 'quarta', label: 'QUA' },
+                  { key: 'quinta', label: 'QUI' },
+                  { key: 'sexta', label: 'SEX' },
+                  { key: 'sabado', label: 'SÁB' },
+                  { key: 'domingo', label: 'DOM' }
+                ].map((d) => {
+                  const isActive = Boolean((editingScaleRoute as any)[d.key]);
+                  return (
+                    <button
+                      key={d.key}
+                      type="button"
+                      onClick={() =>
+                        setEditingScaleRoute({
+                          ...editingScaleRoute,
+                          [d.key]: !isActive
+                        })
+                      }
+                      className={`p-2 rounded-xl border font-bold text-xs cursor-pointer transition-all ${
+                        isActive
+                          ? 'bg-[#3B0764] text-white border-[#2E0854] shadow-xs'
+                          : 'bg-[#EAE8E2] text-[#77766F] border-[#CFCDC5] hover:bg-[#E4E2DB]'
+                      }`}
+                    >
+                      {d.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Observações da Escala */}
+            <div>
+              <label className="text-[11px] font-bold text-[#77766F] block mb-1">
+                OBSERVAÇÕES DA ROTA (OPCIONAL):
+              </label>
+              <input
+                type="text"
+                value={editingScaleRoute.observacao || ''}
+                onChange={(e) => setEditingScaleRoute({ ...editingScaleRoute, observacao: e.target.value })}
+                placeholder="Ex: Prioridade matutina, verificar ruptura de café..."
+                className="w-full h-9 px-3 bg-white border border-[#CFCDC5] rounded-xl text-xs text-[#171717]"
+              />
+            </div>
+
+            {/* Aviso de propagação segura */}
+            <div className="p-2.5 rounded-xl bg-purple-50 border border-purple-200 text-purple-900 text-[11px] leading-relaxed">
+              <strong>Regra de Propagação:</strong> As alterações salvas atualizarão a escala fixa e a geração das próximas visitas. Visitas já concluídas, fotos e ocorrências passadas não sofrerão nenhuma alteração.
+            </div>
+
+            {/* Ações do Modal */}
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-[#CFCDC5]">
+              <button
+                type="button"
+                onClick={() => setEditingScaleRoute(null)}
+                disabled={savingScaleRoute}
+                className="px-4 py-2 rounded-xl bg-[#EAE8E2] hover:bg-[#CFCDC5] text-[#171717] font-bold cursor-pointer transition-colors disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSaveRouteScale(editingScaleRoute)}
+                disabled={savingScaleRoute}
+                className="px-4 py-2 rounded-xl bg-[#3B0764] hover:bg-[#2E0854] text-white font-bold cursor-pointer shadow-md transition-colors flex items-center gap-1.5 disabled:opacity-50 border border-[#2E0854] focus:outline-none focus:ring-2 focus:ring-purple-900/50"
+              >
+                {savingScaleRoute ? (
+                  <>
+                    <span className="material-symbols-outlined text-sm animate-spin">refresh</span>
+                    <span>Salvando...</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="material-symbols-outlined text-sm">check</span>
+                    <span>Confirmar e Salvar Escala</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* MODAL JUSTIFICAR VISITA ANTERIOR EM ANDAMENTO COMO NÃO REALIZADA */}

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../auth/AuthProvider';
 import { supabase } from '../lib/supabase';
 import type { StoreItem, ToastMessage } from '../types';
+import { StatCard, StatusBadge, DataTable, Column } from '../components/ui';
 
 interface StoresViewProps {
   onShowToast: (toast: Omit<ToastMessage, 'id'>) => void;
@@ -106,6 +107,104 @@ export const StoresView: React.FC<StoresViewProps> = ({ onShowToast }) => {
       return matchesSearch && matchesStatus && matchesUf;
     });
   }, [stores, searchTerm, statusFilter, ufFilter]);
+
+  // Colunas padronizadas para o DataTable compartilhado
+  const columns: Column<StoreItem>[] = useMemo(() => [
+    {
+      key: 'codigo',
+      header: 'Código',
+      sortable: true,
+      className: 'font-mono font-bold text-[#286FF5]',
+      accessor: (s) => s.codigo
+    },
+    {
+      key: 'nome',
+      header: 'Nome da Loja',
+      sortable: true,
+      className: 'font-bold text-[#171717]',
+      accessor: (s) => s.nome
+    },
+    {
+      key: 'rede',
+      header: 'Rede',
+      sortable: true,
+      className: 'text-[#525252]',
+      render: (s) => s.rede || '—',
+      accessor: (s) => s.rede || ''
+    },
+    {
+      key: 'cidade_uf',
+      header: 'Cidade / UF',
+      sortable: true,
+      accessor: (s) => `${s.cidade} ${s.uf}`,
+      render: (s) => (
+        <span>
+          {s.cidade} / <strong className="text-[#171717]">{s.uf}</strong>
+        </span>
+      )
+    },
+    {
+      key: 'cnpj',
+      header: 'CNPJ',
+      className: 'font-mono text-[#737373]',
+      render: (s) => s.cnpj || '—'
+    },
+    {
+      key: 'status',
+      header: 'Status',
+      sortable: true,
+      accessor: (s) => s.status,
+      render: (s) => (
+        <StatusBadge
+          status={s.status}
+          variant={s.status === 'ativo' ? 'ativo' : 'inativo'}
+          label={s.status.toUpperCase()}
+        />
+      )
+    },
+    {
+      key: 'acoes',
+      header: 'Ações',
+      headerClassName: 'text-right',
+      className: 'text-right space-x-1.5',
+      render: (store) => (
+        <div className="inline-flex items-center justify-end gap-1.5">
+          <button
+            onClick={() => setViewingItem(store)}
+            className="p-1.5 rounded-lg bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] border border-[#CFCDC5] cursor-pointer transition-colors"
+            title="Ver Detalhes"
+          >
+            <span className="material-symbols-outlined text-[16px]">visibility</span>
+          </button>
+
+          {canEdit && (
+            <>
+              <button
+                onClick={() => handleOpenEdit(store)}
+                className="p-1.5 rounded-lg bg-[#EBF2FE] hover:bg-blue-100 text-[#286FF5] border border-[#C3D9FD] cursor-pointer transition-colors"
+                title="Editar"
+              >
+                <span className="material-symbols-outlined text-[16px]">edit</span>
+              </button>
+              <button
+                onClick={() => handleToggleStatus(store)}
+                className={`p-1.5 rounded-lg border cursor-pointer transition-colors ${
+                  store.status === 'ativo'
+                    ? 'bg-[#FDF2F2] hover:bg-rose-100 text-[#D93636] border-[#F8C8C8]'
+                    : 'bg-[#E8F5EE] hover:bg-emerald-100 text-[#16845B] border-[#B9E5D0]'
+                }`}
+                title={store.status === 'ativo' ? 'Inativar' : 'Ativar'}
+              >
+                <span className="material-symbols-outlined text-[16px]">
+                  {store.status === 'ativo' ? 'block' : 'check_circle'}
+                </span>
+              </button>
+            </>
+          )}
+        </div>
+      )
+    }
+  ], [canEdit]);
 
   // Abrir Modal Criar
   const handleOpenCreate = async () => {
@@ -298,196 +397,99 @@ export const StoresView: React.FC<StoresViewProps> = ({ onShowToast }) => {
         </div>
       </section>
 
-      {/* METRICAS */}
+      {/* METRICAS PADRONIZADAS COM STATCARD */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
-        <div className="p-5 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5] shadow-xl">
-          <div className="flex items-center justify-between text-[#77766F] font-mono text-xs">
-            <span>TOTAL DE LOJAS</span>
-            <span className="material-symbols-outlined text-cyan-400">store</span>
-          </div>
-          <div className="text-3xl font-extrabold text-[#171717] font-mono mt-2">{stores.length}</div>
-        </div>
-
-        <div className="p-5 rounded-2xl bg-[#F7F6F2] border border-emerald-500/30 shadow-xl">
-          <div className="flex items-center justify-between text-emerald-400 font-mono text-xs font-bold">
-            <span>LOJAS ATIVAS</span>
-            <span className="material-symbols-outlined">check_circle</span>
-          </div>
-          <div className="text-3xl font-extrabold text-emerald-400 font-mono mt-2">
-            {stores.filter((s) => s.status === 'ativo').length}
-          </div>
-        </div>
-
-        <div className="p-5 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5] shadow-xl">
-          <div className="flex items-center justify-between text-[#77766F] font-mono text-xs">
-            <span>UFS ATENDIDAS</span>
-            <span className="material-symbols-outlined text-purple-400">map</span>
-          </div>
-          <div className="text-3xl font-extrabold text-purple-400 font-mono mt-2">
-            {availableUFs.length}
-          </div>
-        </div>
+        <StatCard
+          title="TOTAL DE LOJAS"
+          value={stores.length}
+          icon="store"
+          variant="default"
+          description="PDVs cadastrados no sistema"
+        />
+        <StatCard
+          title="LOJAS ATIVAS"
+          value={stores.filter((s) => s.status === 'ativo').length}
+          icon="check_circle"
+          variant="success"
+          description="Em operação na malha de roteiros"
+        />
+        <StatCard
+          title="UFS ATENDIDAS"
+          value={availableUFs.length}
+          icon="map"
+          variant="info"
+          description="Estados com cobertura ativa"
+        />
       </div>
 
-      {/* FILTROS */}
-      <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-5 shadow-2xl space-y-4">
-        <div className="grid grid-cols-1 sm:grid-cols-12 gap-4">
-          <div className="sm:col-span-6 relative">
-            <span className="material-symbols-outlined absolute left-3.5 top-1/2 -translate-y-1/2 text-[#77766F] text-lg">
-              search
-            </span>
-            <input
-              type="text"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Buscar por código, nome, cidade, rede ou UF..."
-              className="w-full h-10 pl-10 pr-4 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-xs text-[#171717] placeholder:text-[#5F5F5F] focus:outline-none focus:border-cyan-500 transition-all font-sans"
-            />
+      {/* FILTROS ADICIONAIS DE STATUS E UF */}
+      <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-4 shadow-xs space-y-3">
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
+          <div className="text-xs font-mono font-bold text-[#737373] uppercase tracking-wider flex items-center gap-1.5">
+            <span className="material-symbols-outlined text-[16px]">filter_list</span>
+            Filtros Avançados
           </div>
-
-          <div className="sm:col-span-3">
+          <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value as any)}
-              className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-xs text-[#171717] focus:outline-none focus:border-cyan-500 font-mono"
+              className="h-9 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-lg text-xs text-[#171717] focus:outline-none focus:border-[#111114] font-mono"
             >
               <option value="todos">Status: Todos</option>
               <option value="ativo">Ativas</option>
               <option value="inativo">Inativas</option>
             </select>
-          </div>
 
-          <div className="sm:col-span-3">
             <select
               value={ufFilter}
               onChange={(e) => setUfFilter(e.target.value)}
-              className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-xs text-[#171717] focus:outline-none focus:border-cyan-500 font-mono"
+              className="h-9 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-lg text-xs text-[#171717] focus:outline-none focus:border-[#111114] font-mono"
             >
               <option value="todas">UF: Todas</option>
               {availableUFs.map((uf) => (
                 <option key={uf} value={uf}>{uf}</option>
               ))}
             </select>
+
+            {(statusFilter !== 'todos' || ufFilter !== 'todas' || searchTerm) && (
+              <button
+                onClick={() => {
+                  setStatusFilter('todos');
+                  setUfFilter('todas');
+                  setSearchTerm('');
+                }}
+                className="text-xs text-[#D93636] hover:underline font-mono px-2 py-1"
+              >
+                Limpar Filtros
+              </button>
+            )}
           </div>
         </div>
       </div>
 
-      {/* TABELA DE REGISTROS */}
-      <section className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-6 shadow-2xl space-y-4">
-        <div className="flex items-center justify-between">
-          <h3 className="text-sm font-bold text-[#171717] uppercase tracking-wider font-mono flex items-center gap-2">
-            <span className="material-symbols-outlined text-cyan-400">table_chart</span>
-            Lojas Cadastradas ({filteredStores.length})
-          </h3>
-        </div>
-
-        {/* LOADING */}
-        {loading && (
-          <div className="py-16 text-center space-y-3">
-            <div className="w-10 h-10 border-4 border-cyan-500/20 border-t-cyan-500 rounded-full animate-spin mx-auto"></div>
-            <p className="text-xs font-mono text-[#77766F]">Carregando lojas do Supabase...</p>
-          </div>
-        )}
-
-        {/* ERRO */}
-        {!loading && error && (
-          <div className="p-6 bg-rose-500/10 border border-rose-500/30 rounded-xl text-center space-y-3">
-            <span className="material-symbols-outlined text-rose-400 text-3xl">warning</span>
-            <h4 className="text-sm font-bold text-rose-300">Erro de Carregamento</h4>
-            <p className="text-xs text-[#77766F] font-mono">{error}</p>
-          </div>
-        )}
-
-        {/* VAZIO */}
-        {!loading && !error && filteredStores.length === 0 && (
-          <div className="py-16 text-center space-y-3">
-            <div className="w-14 h-14 rounded-full bg-[#EAE8E2] border border-[#CFCDC5] flex items-center justify-center text-[#5F5F5F] mx-auto">
-              <span className="material-symbols-outlined text-3xl">search_off</span>
-            </div>
-            <h4 className="text-sm font-bold text-[#171717]">Nenhuma Loja Encontrada</h4>
-            <p className="text-xs text-[#77766F] max-w-sm mx-auto">
-              Não há registros de lojas/PDVs correspondentes aos filtros aplicados.
-            </p>
-          </div>
-        )}
-
-        {/* LISTA */}
-        {!loading && !error && filteredStores.length > 0 && (
-          <div className="overflow-x-auto rounded-xl border border-[#CFCDC5]">
-            <table className="w-full text-left text-xs border-collapse">
-              <thead>
-                <tr className="bg-[#E3E1DA] border-b border-[#CFCDC5] text-[11px] font-bold text-[#171717] uppercase tracking-wider font-mono">
-                  <th className="py-3.5 px-4">Código</th>
-                  <th className="py-3.5 px-4">Nome da Loja</th>
-                  <th className="py-3.5 px-4">Rede</th>
-                  <th className="py-3.5 px-4">Cidade / UF</th>
-                  <th className="py-3.5 px-4">CNPJ</th>
-                  <th className="py-3.5 px-4">Status</th>
-                  <th className="py-3.5 px-4 text-right">Ações</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#CFCDC5] text-[#171717] font-mono">
-                {filteredStores.map((store) => (
-                  <tr key={store.id} className="hover:bg-[#EAE8E1] transition-colors">
-                    <td className="py-3.5 px-4 font-bold text-cyan-400">{store.codigo}</td>
-                    <td className="py-3.5 px-4 font-bold text-white">{store.nome}</td>
-                    <td className="py-3.5 px-4 text-[#171717]">{store.rede || '—'}</td>
-                    <td className="py-3.5 px-4 text-[#171717]">
-                      {store.cidade} / <span className="font-bold text-amber-400">{store.uf}</span>
-                    </td>
-                    <td className="py-3.5 px-4 text-[#77766F]">{store.cnpj || '—'}</td>
-                    <td className="py-3.5 px-4">
-                      <span
-                        className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${
-                          store.status === 'ativo'
-                            ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
-                            : 'bg-rose-500/10 text-rose-400 border-rose-500/30'
-                        }`}
-                      >
-                        {store.status.toUpperCase()}
-                      </span>
-                    </td>
-                    <td className="py-3.5 px-4 text-right space-x-2">
-                      <button
-                        onClick={() => setViewingItem(store)}
-                        className="p-1.5 rounded-lg bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] border border-[#CFCDC5] cursor-pointer"
-                        title="Ver Detalhes"
-                      >
-                        <span className="material-symbols-outlined text-[16px]">visibility</span>
-                      </button>
-
-                      {canEdit && (
-                        <>
-                          <button
-                            onClick={() => handleOpenEdit(store)}
-                            className="p-1.5 rounded-lg bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 cursor-pointer"
-                            title="Editar"
-                          >
-                            <span className="material-symbols-outlined text-[16px]">edit</span>
-                          </button>
-                          <button
-                            onClick={() => handleToggleStatus(store)}
-                            className={`p-1.5 rounded-lg border cursor-pointer ${
-                              store.status === 'ativo'
-                                ? 'bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border-rose-500/30'
-                                : 'bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
-                            }`}
-                            title={store.status === 'ativo' ? 'Inativar' : 'Ativar'}
-                          >
-                            <span className="material-symbols-outlined text-[16px]">
-                              {store.status === 'ativo' ? 'block' : 'check_circle'}
-                            </span>
-                          </button>
-                        </>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
+      {/* TABELA PADRONIZADA COM DATATABLE REUTILIZÁVEL */}
+      <DataTable<StoreItem>
+        title="Lojas Cadastradas"
+        titleIcon="store"
+        badgeCount={filteredStores.length}
+        data={filteredStores}
+        columns={columns}
+        keyExtractor={(item) => item.id}
+        loading={loading}
+        loadingMessage="Carregando lojas do banco de dados..."
+        error={error}
+        emptyTitle="Nenhuma Loja Encontrada"
+        emptyMessage="Não há registros de lojas/PDVs correspondentes aos filtros aplicados."
+        searchPlaceholder="Buscar por código, nome, cidade, rede..."
+        searchFilter={(store, query) =>
+          store.codigo.toLowerCase().includes(query) ||
+          store.nome.toLowerCase().includes(query) ||
+          store.cidade.toLowerCase().includes(query) ||
+          (store.rede && store.rede.toLowerCase().includes(query)) ||
+          store.uf.toLowerCase().includes(query)
+        }
+        defaultPageSize={10}
+      />
 
       {/* MODAL DETALHES */}
       {viewingItem && (
