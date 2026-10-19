@@ -233,7 +233,7 @@ export const equipesService = {
 
         const { data: rBatch, error: rErr } = await supabase
           .from('rotas')
-          .select('promotor_matricula, loja_codigo')
+          .select('*')
           .range(from, to);
 
         if (rErr) {
@@ -241,7 +241,8 @@ export const equipesService = {
         }
 
         if (rBatch && rBatch.length > 0) {
-          allRotas.push(...rBatch);
+          const activeBatch = rBatch.filter((r: any) => !r.encerrada_em);
+          allRotas.push(...activeBatch);
           if (rBatch.length < PAGE_SIZE) {
             hasMoreRotas = false;
           } else {
@@ -611,4 +612,3 @@ export const equipesService = {
     }
   }
 };
-

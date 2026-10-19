@@ -1,0 +1,123 @@
+{
+  "planHash": "655f10e1d1b5b4b38201f893ddb6c645311c26d0e92e77760e548f229a2f1a1b",
+  "phase": "baseline",
+  "recordedAtUtc": "2026-10-19T02:47:23.2250183Z",
+  "retryCount": 0,
+  "resetBaseline": true,
+  "complete": true,
+  "result": {
+    "setupSucceeded": true,
+    "setupDurationMs": 13098,
+    "setupFailureOutput": null,
+    "assertions": [
+      {
+        "name": "typescript-no-emit",
+        "kind": "process",
+        "verificationMethod": "exit-code",
+        "passed": true,
+        "timedOut": false,
+        "skipped": false,
+        "skippedReason": null,
+        "exitCode": 0,
+        "outputSample": "npm notice run react-example@0.0.0 lint\r\nnpm notice run tsc --noEmit\r\n",
+        "durationMs": 2244
+      },
+      {
+        "name": "tests-pass",
+        "kind": "process",
+        "verificationMethod": "exit-code",
+        "passed": true,
+        "timedOut": false,
+        "skipped": false,
+        "skippedReason": null,
+        "exitCode": 0,
+        "outputSample": "npm notice run react-example@0.0.0 test\r\nnpm notice run tsx --test src/**/*.test.ts\r\nTAP version 13\r\n# Subtest: Avatar Management Logic\r\n    # Subtest: 1. Deve preservar avatar anterior se nenhum novo blob ou remo\u00E7\u00E3o foi solicitada\r\n    ok 1 - 1. Deve preservar avatar anterior se nenhum novo blob ou remo\u00E7\u00E3o foi solicitada\r\n      ---\r\n      duration_ms: 1.5783\r\n      type: \u0027test\u0027\r\n      ...\r\n    # Subtest: 2. Deve acionar upload e gerar caminho est\u00E1vel quando blob fornecido\r\n    ok 2 - 2. Deve acionar upload e gerar caminho est\u00E1vel quando blob fornecido\r\n      ---\r\n      duration_ms: 1.1377\r\n      type: \u0027test\u0027\r\n      ...\r\n    # Subtest: 3. Deve acionar remo\u00E7\u00E3o e setar caminho nulo quando removeAvatar for true\r\n    ok 3 - 3. Deve acionar remo\u00E7\u00E3o e setar caminho nulo quando removeAvatar for true\r\n      ---\r\n      duration_ms: 0.2135\r\n      type: \u0027test\u0027\r\n      ...\r\n    # Subtest: 4. Deve resolver URLs HTTP completas sem chamar createSignedUrl\r\n    ok 4 - 4. Deve resolver URLs HTTP completas sem chamar createSignedUrl\r\n      ---\r\n      duration_ms: 0.3078\r\n      type: \u0027test\u0027\r\n      ...\r\n    # Subtest: 5. Deve identificar storage path relativo e preparar para createSignedUrl\r\n    ok 5 - 5. Deve identificar storage path relativo e preparar para createSignedUrl\r\n      ---\r\n      duration_ms: 0.2074\r\n      type: \u0027test\u0027\r\n      ...\r\n    1..5\r\nok 1 - Avatar Management Logic\r\n  ---\r\n  duration_ms: 5.3646\r\n  type: \u0027suite\u0027\r\n  ...\r\n# Subtest: ErrorBoundary Component Logic\r\n    # Subtest: deve atualizar o estado hasError e error ao chamar getDerivedStateFromError\r\n    ok 1 - deve atualizar o estado hasError e error ao chamar getDerivedStateFromError\r\n      ---\r\n      duration_ms: 1.3234\r\n      type: \u0027test\u0027\r\n      ...\r\n    # Subtest: deve tratar exce\u00E7\u00F5es gen\u00E9ricas preservando a mensagem\r\n    ok 2 - deve tratar exce\u00E7\u00F5es gen\u00E9ricas preservando a mensagem\r\n      ---\r\n      duration_ms: 0.2962\r\n      type: \u0027test\u0027\r\n      ...\r\n    # Subtest: deve identificar mensagens cl\u00E1ssicas de erro de carregamento de chunk\r\n    ok 3 - deve identificar mensagens cl\u00E1ssicas de erro de carregamento de chunk\r\n      ---\r\n      duration_ms: 0.2639\r\n      type: \u0027test\u0027\r\n      ...\r\n    1..3\r\nok 2 - ErrorBoundary Component Logic\r\n  ---\r\n  duration_ms: 3.7246\r\n  type: \u0027suite\u0027\r\n  ...\r\n# Subtest: PWAInstallPrompt \u2014 Regras de Reexibi\u00E7\u00E3o e Instala\u00E7\u00E3o\r\n    # Subtest: 1. Deve exibir o prompt quando o app n\u00E3o estiver instalado e houver suporte\r\n    ok 1 - 1. Deve exibir o prompt quando o app n\u00E3o estiver instalado e houver suporte\r\n      ---\r\n      duration_ms: 1.8425\r\n      type: \u0027test\u0027\r\n      ...\r\n    # Subtest: 2. Ao dispensar (\u0022Agora n\u00E3o\u0022), deve ocultar na sess\u00E3o atual\r\n    ok 2 - 2. Ao dispensar (\u0022Agora n\u00E3o\u0022), deve ocultar na sess\u00E3o atual\r\n      ---\r\n      duration_ms: 0.4317\r\n      type: \u0027test\u0027\r\n      ...\r\n    # Subtest: 3. Em uma nova sess\u00E3o (sessionStorage limpa), volta a exibir se n\u00E3o instalado\r\n    ok 3 - 3. Em uma nova sess\u00E3o (sessionStorage limpa), volta a exibir se n\u00E3o instalado\r\n      ---\r\n      duration_ms: 0.4752\r\n      type: \u0027test\u0027\r\n      ...\r\n    # Subtest: 4. Ap\u00F3s a instala\u00E7\u00E3o (appinstalled ou standalone), NUNCA mais volta a exibir\r\n    ok 4 - 4. Ap\u00F3s a instala\u00E7\u00E3o (appinstalled ou standalone), NUNCA mais volta a exibir\r\n      ---\r\n      duration_ms: 0.538\r\n      type: \u0027test\u0027\r\n      ...\r\n    # Subtest: 5. N\u00E3o deve exibir quando j\u00E1 estiver rodando em standalone\r\n    ok 5 - 5. N\u00E3o deve exibir quando j\u00E1 estiver rodando em standalone\r\n      ---\r\n      duration_ms: 0.6791\r\n      type: \u0027test\u0027\r\n      ...\r\n    # Subtest: 6. N\u00E3o deve exibir em momento cr\u00EDtico de preenchimento de visita do promotor\r\n    ok 6 - 6. N\u00E3o deve exibir em momento cr\u00EDtico de preenchimento de visita do promotor\r\n      ---\r\n      duration_ms: 0.4627\r\n      type: \u0027test\u0027\r\n      ...\r\n    # Subtest: 7. No iOS Safari sem standalone, exibe as instru\u00E7\u00F5es manuais\r\n    ok 7 - 7. No iOS Safari sem standalone, exibe as instru\u00E7\u00F5es manuais\r\n      ---\r\n      duration_ms: 0.2872\r\n      type: \u0027test\u0027\r\n      ...\r\n    1..7\r\nok 3 - PWAInstallPrompt \u2014 Regras de Reexibi\u00E7\u00E3o e Instala\u00E7\u00E3o\r\n  ---\r\n  duration_ms: 6.6063\r\n \n\u2026[truncated]",
+        "durationMs": 1912
+      },
+      {
+        "name": "production-build",
+        "kind": "process",
+        "verificationMethod": "exit-code",
+        "passed": true,
+        "timedOut": false,
+        "skipped": false,
+        "skippedReason": null,
+        "exitCode": 0,
+        "outputSample": "npm notice run react-example@0.0.0 build\r\nnpm notice run vite build\r\n\u001B[33m(!) Your Vite config uses features that are unsupported by \u0060configLoader: \u0027native\u0027\u0060, which is planned to become the default in a future major version of Vite:\r\n  - \u0060__dirname\u0060 (vite.config.ts:11:27). Use \u0060import.meta.dirname\u0060 instead\r\nSet \u0060VITE_CONFIG_NATIVE_IGNORE_WARNING=true\u0060 to suppress this warning.\u001B[39m\r\n\u001B[36mvite v8.3.1 \u001B[32mbuilding client environment for production...\u001B[36m\u001B[39m\r\ntransforming...\r\n\u2713 129 modules transformed.\r\nrendering chunks...\r\ncomputing gzip size...\r\ndist/index.html                     2.31 kB \u2502 gzip:   0.93 kB\r\ndist/assets/index-DCqlx-R8.css    121.55 kB \u2502 gzip:  19.10 kB\r\ndist/assets/index-Bid1zTEV.js   1,869.96 kB \u2502 gzip: 453.78 kB\r\n\r\n\u001B[33m[plugin builtin:vite-reporter] \r\n(!) Some chunks are larger than 500 kB after minification. Consider:\r\n- Using dynamic import() to code-split the application\r\n- Use build.rolldownOptions.output.codeSplitting to improve chunking: https://rolldown.rs/reference/OutputOptions.codeSplitting\r\n- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.\u001B[39m\r\n\u001B[32m\u2713 built in 682ms\u001B[39m\r\n",
+        "durationMs": 1452
+      },
+      {
+        "name": "dev-server-serves-home",
+        "kind": "http-probe",
+        "verificationMethod": "http-status",
+        "passed": true,
+        "timedOut": false,
+        "skipped": false,
+        "skippedReason": null,
+        "exitCode": null,
+        "outputSample": "HTTP 200\n\u003C!doctype html\u003E\r\n\u003Chtml lang=\u0022pt-BR\u0022\u003E\r\n  \u003Chead\u003E\n    \u003Cscript type=\u0022module\u0022\u003Eimport { injectIntoGlobalHook } from \u0022/@react-refresh\u0022;\ninjectIntoGlobalHook(window);\nwindow.$RefreshReg$ = () =\u003E {};\nwindow.$RefreshSig$ = () =\u003E (type) =\u003E type;\u003C/script\u003E\n\n    \u003Cscript type=\u0022module\u0022 src=\u0022/@vite/client\u0022\u003E\u003C/script\u003E\n\r\n    \u003Cmeta charset=\u0022UTF-8\u0022 /\u003E\r\n    \u003Cmeta name=\u0022viewport\u0022 content=\u0022width=device-width, initial-scale=1.0\u0022 /\u003E\r\n    \u003Ctitle\u003EMK9 Date \u2014 Trade Marketing Operations\u003C/title\u003E\r\n    \u003Cmeta name=\u0022description\u0022 content=\u0022MK9 Date \u2014 Plataforma de opera\u00E7\u00F5es de trade marketing: Cockpit operacional, Painel, Controle de Presen\u00E7a, Gest\u00E3o de Equipes, Promotores, Rotas e Portal da Ind\u00FAstria.\u0022 /\u003E\r\n    \u003Cmeta property=\u0022og:title\u0022 content=\u0022MK9 Date \u2014 Trade Marketing Operations\u0022 /\u003E\r\n    \u003Cmeta property=\u0022og:description\u0022 content=\u0022MK9 Date \u2014 Plataforma de opera\u00E7\u00F5es de trade marketing: Cockpit operacional, Painel, Controle de Presen\u00E7a, Gest\u00E3o de Equipes, Promotores, Rotas e Portal da Ind\u00FAstria.\u0022 /\u003E\r\n    \u003Cmeta property=\u0022og:type\u0022 content=\u0022website\u0022 /\u003E\r\n    \u003Cmeta name=\u0022twitter:card\u0022 content=\u0022summary_large_image\u0022 /\u003E\r\n    \u003Clink rel=\u0022preconnect\u0022 href=\u0022https://fonts.googleapis.com\u0022 /\u003E\r\n    \u003Clink rel=\u0022preconnect\u0022 href=\u0022https://fonts.gstatic.com\u0022 crossorigin /\u003E\r\n    \u003Clink href=\u0022https://fonts.googleapis.com/css2?family=Plus\u002BJakarta\u002BSans:wght@300;400;500;600;700;800\u0026family=JetBrains\u002BMono:wght@400;500;600;700\u0026display=swap\u0022 rel=\u0022stylesheet\u0022 /\u003E\r\n    \u003Clink href=\u0022https://fonts.googleapis.com/css2?family=Material\u002BSymbols\u002BOutlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200\u0022 rel=\u0022stylesheet\u0022 /\u003E\r\n    \u003Clink href=\u0022https://fonts.googleapis.com/icon?family=Material\u002BIcons\u0022 rel=\u0022stylesheet\u0022 /\u003E\r\n    \u003C!-- Configura\u00E7\u00F5es PWA e Mobile (iOS \u0026 Android) --\u003E\r\n    \u003Cmeta name=\u0022theme-color\u0022 content=\u0022#F3F2EE\u0022 /\u003E\r\n    \u003Cmeta name=\u0022mobile-web-app-capable\u0022 content=\u0022yes\u0022 /\u003E\r\n    \u003Cmeta name=\u0022apple-mobile-web-app-capable\u0022 content=\u0022yes\u0022 /\u003E\r\n    \u003Cmeta name=\u0022apple-mobile-web-app-status-bar-style\u0022 content=\u0022default\u0022 /\u003E\r\n    \u003Cmeta name=\u0022apple-mobile-web-app-title\u0022 content=\u0022MK9 Date\u0022 /\u003E\r\n    \u003Clink rel=\u0022manifest\u0022 href=\u0022/manifest.json\u0022 /\u003E\r\n    \u003Clink rel=\u0022icon\u0022 type=\u0022image/svg\u002Bxml\u0022 href=\u0022/icons/icon.svg\u0022 /\u003E\r\n    \u003Clink rel=\u0022apple-touch-icon\u0022 href=\u0022/icons/icon-512.png\u0022 /\u003E\r\n  \u003C/head\u003E\r\n  \u003Cbody class=\u0022bg-[#F3F2EE] text-[#171717] antialiased selection:bg-[#111114] selection:text-white min-h-screen\u0022\u003E\r\n    \u003Cdiv id=\u0022root\u0022\u003E\u003C/div\u003E\r\n    \u003Cscript type=\u0022module\u0022 src=\u0022/src/main.tsx\u0022\u003E\u003C/script\u003E\r\n  \u003C/body\u003E\r\n\u003C/html\u003E\r\n\r\n\n--- server output ---\nnpm notice run react-example@0.0.0 dev\r\nnpm notice run vite --port=3000 --host=0.0.0.0\r\n\u001B[33m(!) Your Vite config uses features that are unsupported by \u0060configLoader: \u0027native\u0027\u0060, which is planned to become the default in a future major version of Vite:\r\n  - \u0060__dirname\u0060 (vite.config.ts:11:27). Use \u0060import.meta.dirname\u0060 instead\r\nSet \u0060VITE_CONFIG_NATIVE_IGNORE_WARNING=true\u0060 to suppress this warning.\u001B[39m\r\n\r\n  \u001B[32m\u001B[1mVITE\u001B[22m v8.3.1\u001B[39m  \u001B[2mready in \u001B[0m\u001B[1m435\u001B[22m\u001B[2m\u001B[0m ms\u001B[22m\r\n\r\n  \u001B[32m\u279C\u001B[39m  \u001B[1mLocal\u001B[22m:   \u001B[36mhttp://localhost:\u001B[1m3000\u001B[22m/\u001B[39m\r\n  \u001B[32m\u279C\u001B[39m  \u001B[1mNetwork\u001B[22m: \u001B[36mhttp://172.21.112.1:\u001B[1m3000\u001B[22m/\u001B[39m  \u001B[2mvEthernet (WSL)\u001B[22m\r\n  \u001B[32m\u279C\u001B[39m  \u001B[1mNetwork\u001B[22m: \u001B[36mhttp://192.168.1.16:\u001B[1m3000\u001B[22m/\u001B[39m  \u001B[2mEthernet\u001B[22m\r\n",
+        "durationMs": 2072
+      }
+    ],
+    "executions": [
+      {
+        "source": "setup[0]",
+        "resolvedExecutable": "C:\\Users\\gusta\\AppData\\Local\\hermes\\node\\npm.CMD",
+        "args": [
+          "ci"
+        ],
+        "cwd": "C:\\projetos\\mk9-data",
+        "env": {},
+        "prependPath": [],
+        "platform": "win32"
+      },
+      {
+        "source": "typescript-no-emit",
+        "resolvedExecutable": "C:\\Users\\gusta\\AppData\\Local\\hermes\\node\\npm.CMD",
+        "args": [
+          "run",
+          "lint"
+        ],
+        "cwd": "C:\\projetos\\mk9-data",
+        "env": {},
+        "prependPath": [],
+        "platform": "win32"
+      },
+      {
+        "source": "tests-pass",
+        "resolvedExecutable": "C:\\Users\\gusta\\AppData\\Local\\hermes\\node\\npm.CMD",
+        "args": [
+          "test"
+        ],
+        "cwd": "C:\\projetos\\mk9-data",
+        "env": {},
+        "prependPath": [],
+        "platform": "win32"
+      },
+      {
+        "source": "production-build",
+        "resolvedExecutable": "C:\\Users\\gusta\\AppData\\Local\\hermes\\node\\npm.CMD",
+        "args": [
+          "run",
+          "build"
+        ],
+        "cwd": "C:\\projetos\\mk9-data",
+        "env": {},
+        "prependPath": [],
+        "platform": "win32"
+      },
+      {
+        "source": "dev-server-serves-home",
+        "resolvedExecutable": "C:\\Users\\gusta\\AppData\\Local\\hermes\\node\\npm.CMD",
+        "args": [
+          "run",
+          "dev"
+        ],
+        "cwd": "C:\\projetos\\mk9-data",
+        "env": {},
+        "prependPath": [],
+        "platform": "win32"
+      }
+    ]
+  }
+}

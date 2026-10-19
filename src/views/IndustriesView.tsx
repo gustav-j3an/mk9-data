@@ -248,7 +248,8 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
       if (rotasRes.error) throw rotasRes.error;
       if (visitsRes.error) throw visitsRes.error;
 
-      setRoutes((rotasRes.data as unknown as RouteItem[]) || []);
+      const rawRoutes = (rotasRes.data as unknown as RouteItem[]) || [];
+      setRoutes(rawRoutes.filter((r) => !r.encerrada_em));
       setVisits((visitsRes.data as unknown as Visit[]) || []);
       setLojasList((lojasRes.data as unknown as StoreItem[]) || []);
       setPromotoresList(promotoresRes.data || []);

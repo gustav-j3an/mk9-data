@@ -445,13 +445,34 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
               <span className="material-symbols-outlined text-4xl">person_search</span>
             </div>
             <div className="space-y-1">
-              <h3 className="text-base font-bold text-[#171717]">{items.length ? 'Nenhum promotor corresponde aos filtros.' : 'Nenhum promotor disponível nesta data.'}</h3>
-              <p className="text-xs text-[#77766F]">
-                Nenhum registro de presença ou telemetria operacional foi cadastrado ou encontrado com os filtros aplicados.
+              <h3 className="text-base font-bold text-[#171717]">
+                {items.length === 0
+                  ? 'Nenhum promotor cadastrado ou autorizado nesta visualização.'
+                  : !includeOffSchedule && items.every((i) => !i.eligible)
+                  ? 'Nenhum promotor com escala/jornada programada nesta data.'
+                  : 'Nenhum promotor corresponde aos filtros aplicados.'}
+              </h3>
+              <p className="text-xs text-[#77766F] max-w-lg">
+                {items.length === 0
+                  ? 'Não foram encontrados promotores ativos no escopo da sua conta ou permissão.'
+                  : !includeOffSchedule && items.every((i) => !i.eligible)
+                  ? `Foram encontrados ${items.length} promotores ativos, porém nenhum possui jornada ou expediente configurado para ${dateVal}. Para visualizar todos os promotores mesmo sem expediente, habilite a opção "Incluir folgas e sem expediente".`
+                  : 'Nenhum registro de presença ou telemetria operacional foi localizado com os critérios selecionados.'}
               </p>
             </div>
-            <div className="flex items-center gap-2 pt-2">
+            <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
+              {!includeOffSchedule && items.some((i) => !i.eligible) && (
+                <button
+                  type="button"
+                  onClick={() => setIncludeOffSchedule(true)}
+                  className="flex items-center gap-2 px-4 py-2 rounded-xl bg-purple-700 hover:bg-purple-800 text-white font-bold text-xs shadow-xs transition-all cursor-pointer"
+                >
+                  <span className="material-symbols-outlined text-base">visibility</span>
+                  <span>Exibir promotores sem expediente ({items.length})</span>
+                </button>
+              )}
               <button
+                type="button"
                 onClick={() => {
                   setSearch('');
                   setSupervisorFilter('');
@@ -459,7 +480,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                   setQuickFilter('all');
                   setIncludeOffSchedule(false);
                 }}
-                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-[#222222] hover:bg-black text-white font-bold text-xs shadow-xs transition-all"
+                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-[#222222] hover:bg-black text-white font-bold text-xs shadow-xs transition-all cursor-pointer"
               >
                 <span className="material-symbols-outlined text-base">restart_alt</span>
                 <span>Limpar Filtros</span>

@@ -2,8 +2,18 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../auth/AuthProvider';
 import { SearchableSelect, type SearchableSelectOption } from '../components/SearchableSelect';
 import { StatCard, StatusBadge } from '../components/ui';
+import { ConfirmRouteCloseModal } from '../components/ConfirmRouteCloseModal';
 import { supabase } from '../lib/supabase';
 import type { RouteItem, ToastMessage } from '../types';
+import {
+  buildRoutePayload,
+  closeFixedRoute,
+  createFixedRoute,
+  hasAnyScheduledDay,
+  isDuplicateActiveRoute,
+  updateFixedRouteSchedule
+} from '../lib/routesService';
+import { calculateRouteIndicators } from '../utils/routeIndicators';
 
 interface RoutesViewProps {
   onNavigate?: (screen: any) => void;
@@ -62,8 +72,10 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
   // Modais de Visualização, Edição e Criação
   const [viewingRoute, setViewingRoute] = useState<RouteItem | null>(null);
   const [editingRoute, setEditingRoute] = useState<RouteItem | null>(null);
+  const [closingRoute, setClosingRoute] = useState<RouteItem | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [closing, setClosing] = useState(false);
 
   // State para nova rota
   const [newRouteForm, setNewRouteForm] = useState({
@@ -141,7 +153,8 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
 
       if (rotasRes.error) throw rotasRes.error;
 
-      setRoutes((rotasRes.data as unknown as RouteItem[]) || []);
+      const rawRoutes = (rotasRes.data as unknown as RouteItem[]) || [];
+      setRoutes(rawRoutes.filter((r) => !r.encerrada_em));
       setIndustriasList(industrias);
       setLojasList(lojas);
       setPromotoresList(promotores);
@@ -303,22 +316,13 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
   // Resumo de métricas no topo (Geral vs Individual por Promotor selecionado)
   const metrics = useMemo(() => {
     const isPromotorSelected = selectedPromotor !== 'TODOS';
+    const generalIndicators = calculateRouteIndicators(routes);
 
     // Quando nenhum promotor estiver selecionado, preserva os indicadores gerais da base carregada
     if (!isPromotorSelected) {
-      const totalRotas = routes.length;
-      const semanais = routes.filter((r) => r.frequencia === 'SEMANAL').length;
-      const quinzenais = routes.filter((r) => r.frequencia === 'QUINZENAL').length;
-      const promotoresUnicos = new Set(routes.map((r) => r.promotor_matricula)).size;
-      const lojasUnicas = new Set(routes.map((r) => r.loja_codigo)).size;
-
       return {
         isIndividual: false,
-        totalRotas,
-        semanais,
-        quinzenais,
-        promotoresUnicos,
-        lojasUnicas,
+        ...generalIndicators,
         visitasSemanais: 0,
         visitasQuinzenais: 0,
         promotorNome: null
@@ -327,33 +331,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
 
     // Quando um promotor específico estiver selecionado, calcula métricas individuais respeitando os filtros ativos
     const targetRoutes = filteredAndSortedRoutes;
-    const totalRotas = targetRoutes.length;
-    const lojasUnicas = new Set(targetRoutes.map((r) => r.loja_codigo)).size;
-
-    // Função auxiliar para contar dias ativos em uma rota
-    const countActiveDays = (r: RouteItem): number => {
-      let count = 0;
-      if (r.segunda) count++;
-      if (r.terca) count++;
-      if (r.quarta) count++;
-      if (r.quinta) count++;
-      if (r.sexta) count++;
-      if (r.sabado) count++;
-      if (r.domingo) count++;
-      return count;
-    };
-
-    let visitasSemanais = 0;
-    let visitasQuinzenais = 0;
-
-    targetRoutes.forEach((r) => {
-      const activeDays = countActiveDays(r);
-      if (r.frequencia === 'SEMANAL') {
-        visitasSemanais += activeDays;
-      } else if (r.frequencia === 'QUINZENAL') {
-        visitasQuinzenais += activeDays;
-      }
-    });
+    const individualIndicators = calculateRouteIndicators(targetRoutes);
 
     // Nome do promotor selecionado para exibição contextual
     const promotorName =
@@ -363,13 +341,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
 
     return {
       isIndividual: true,
-      totalRotas,
-      lojasUnicas,
-      visitasSemanais,
-      visitasQuinzenais,
-      promotoresUnicos: 1,
-      semanais: targetRoutes.filter((r) => r.frequencia === 'SEMANAL').length,
-      quinzenais: targetRoutes.filter((r) => r.frequencia === 'QUINZENAL').length,
+      ...individualIndicators,
       promotorNome: promotorName
     };
   }, [routes, filteredAndSortedRoutes, selectedPromotor, availablePromotores]);
@@ -448,23 +420,17 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
     try {
       if (!supabase) throw new Error('Cliente Supabase não inicializado.');
 
-      const { error: updateErr } = await supabase
-        .from('rotas')
-        .update({
-          frequencia: editingRoute.frequencia,
-          segunda: editingRoute.segunda,
-          terca: editingRoute.terca,
-          quarta: editingRoute.quarta,
-          quinta: editingRoute.quinta,
-          sexta: editingRoute.sexta,
-          sabado: editingRoute.sabado,
-          domingo: editingRoute.domingo,
-          observacao: editingRoute.observacao || null,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', editingRoute.id);
-
-      if (updateErr) throw updateErr;
+      await updateFixedRouteSchedule(editingRoute.id, {
+        frequencia: editingRoute.frequencia,
+        segunda: editingRoute.segunda,
+        terca: editingRoute.terca,
+        quarta: editingRoute.quarta,
+        quinta: editingRoute.quinta,
+        sexta: editingRoute.sexta,
+        sabado: editingRoute.sabado,
+        domingo: editingRoute.domingo,
+        observacao: editingRoute.observacao || null
+      });
 
       onShowToast({
         title: 'Rota Salva',
@@ -473,7 +439,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
       });
 
       setEditingRoute(null);
-      fetchRoutes();
+      await fetchRoutes();
     } catch (err: any) {
       console.error('Erro ao atualizar rota:', err);
       onShowToast({
@@ -498,41 +464,40 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
       });
       return;
     }
+    if (!hasAnyScheduledDay(newRouteForm)) {
+      onShowToast({
+        title: 'Selecione um Dia',
+        message: 'Marque pelo menos um dia de atendimento para criar a rota.',
+        type: 'warning'
+      });
+      return;
+    }
 
     setSaving(true);
 
     try {
       if (!supabase) throw new Error('Cliente Supabase indisponível.');
 
-      const code = newRouteForm.codigo_rota.trim() || `ROT-${newRouteForm.promotor_matricula}`;
-      const payload = {
-        codigo_rota: code,
-        industria_codigo: newRouteForm.industria_codigo,
-        loja_codigo: newRouteForm.loja_codigo,
-        promotor_matricula: newRouteForm.promotor_matricula,
-        uf: newRouteForm.uf,
-        frequencia: newRouteForm.frequencia,
-        segunda: newRouteForm.segunda,
-        terca: newRouteForm.terca,
-        quarta: newRouteForm.quarta,
-        quinta: newRouteForm.quinta,
-        sexta: newRouteForm.sexta,
-        sabado: newRouteForm.sabado,
-        domingo: newRouteForm.domingo,
-        observacao: newRouteForm.observacao.trim() || null
-      };
+      if (isDuplicateActiveRoute(routes, newRouteForm)) {
+        onShowToast({
+          title: 'Escala Duplicada',
+          message: 'Já existe uma escala ativa para este promotor, loja e indústria.',
+          type: 'warning'
+        });
+        return;
+      }
 
-      const { error: insertErr } = await supabase.from('rotas').insert([payload]);
-      if (insertErr) throw insertErr;
+      const payload = buildRoutePayload(newRouteForm);
+      await createFixedRoute(newRouteForm);
 
       onShowToast({
         title: 'Rota Criada',
-        message: `Rota ${code} cadastrada com sucesso!`,
+        message: `Rota ${payload.codigo_rota} cadastrada com sucesso!`,
         type: 'success'
       });
 
       setShowCreateModal(false);
-      fetchRoutes();
+      await fetchRoutes();
     } catch (err: any) {
       console.error(err);
       onShowToast({
@@ -542,6 +507,31 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
       });
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleCloseRoute = async () => {
+    if (!closingRoute) return;
+
+    setClosing(true);
+    try {
+      await closeFixedRoute(closingRoute.id);
+      onShowToast({
+        title: 'Escala Encerrada',
+        message: 'A rota foi removida das escalas ativas. Os registros operacionais foram preservados.',
+        type: 'success'
+      });
+      setClosingRoute(null);
+      await fetchRoutes();
+    } catch (err: any) {
+      console.error('Erro ao encerrar rota fixa:', err);
+      onShowToast({
+        title: 'Falha ao Encerrar Rota',
+        message: err.message || 'Não foi possível encerrar esta escala.',
+        type: 'error'
+      });
+    } finally {
+      setClosing(false);
     }
   };
 
@@ -1152,15 +1142,26 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
                                       </button>
 
                                       {canEdit && (
-                                        <button
-                                          type="button"
-                                          onClick={() => setEditingRoute({ ...r })}
-                                          className="p-1 rounded-md bg-amber-500/10 hover:bg-amber-500/20 text-amber-800 border border-amber-500/30 cursor-pointer transition-colors"
-                                          title="Editar Escala"
-                                          aria-label="Editar escala da rota"
-                                        >
-                                          <span className="material-symbols-outlined text-[15px]">edit</span>
-                                        </button>
+                                        <>
+                                          <button
+                                            type="button"
+                                            onClick={() => setEditingRoute({ ...r })}
+                                            className="p-1 rounded-md bg-amber-500/10 hover:bg-amber-500/20 text-amber-800 border border-amber-500/30 cursor-pointer transition-colors"
+                                            title="Editar Escala"
+                                            aria-label="Editar escala da rota"
+                                          >
+                                            <span className="material-symbols-outlined text-[15px]">edit</span>
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => setClosingRoute(r)}
+                                            className="p-1 rounded-md bg-rose-500/10 hover:bg-rose-500/20 text-rose-700 border border-rose-500/30 cursor-pointer transition-colors"
+                                            title="Excluir Rota"
+                                            aria-label="Excluir rota fixa"
+                                          >
+                                            <span className="material-symbols-outlined text-[15px]">delete</span>
+                                          </button>
+                                        </>
                                       )}
                                     </div>
                                   </td>
@@ -1216,14 +1217,26 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
                                     <span className="material-symbols-outlined text-[16px]">visibility</span>
                                   </button>
                                   {canEdit && (
-                                    <button
-                                      type="button"
-                                      onClick={() => setEditingRoute({ ...r })}
-                                      className="p-1 rounded bg-amber-500/10 border border-amber-500/30 text-amber-800 cursor-pointer"
-                                      title="Editar"
-                                    >
-                                      <span className="material-symbols-outlined text-[16px]">edit</span>
-                                    </button>
+                                    <>
+                                      <button
+                                        type="button"
+                                        onClick={() => setEditingRoute({ ...r })}
+                                        className="p-1 rounded bg-amber-500/10 border border-amber-500/30 text-amber-800 cursor-pointer"
+                                        title="Editar"
+                                        aria-label="Editar escala da rota"
+                                      >
+                                        <span className="material-symbols-outlined text-[16px]">edit</span>
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => setClosingRoute(r)}
+                                        className="p-1 rounded bg-rose-500/10 border border-rose-500/30 text-rose-700 cursor-pointer"
+                                        title="Excluir"
+                                        aria-label="Excluir rota fixa"
+                                      >
+                                        <span className="material-symbols-outlined text-[16px]">delete</span>
+                                      </button>
+                                    </>
                                   )}
                                 </div>
                               </div>
@@ -1445,7 +1458,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
                 <select
                   value={editingRoute.frequencia}
                   onChange={(e) =>
-                    setEditingRoute({ ...editingRoute, frequencia: e.target.value as any })
+                    setEditingRoute({ ...editingRoute, frequencia: e.target.value as RouteItem['frequencia'] })
                   }
                   className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-600 cursor-pointer"
                 >
@@ -1533,6 +1546,15 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
         </div>
       )}
 
+      {closingRoute && (
+        <ConfirmRouteCloseModal
+          route={closingRoute}
+          saving={closing}
+          onCancel={() => setClosingRoute(null)}
+          onConfirm={handleCloseRoute}
+        />
+      )}
+
       {/* MODAL CRIAR NOVA ROTA FIXA */}
       {showCreateModal && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
@@ -1613,7 +1635,9 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
                 <label className="text-[#171717] block mb-1 font-bold">FREQUÊNCIA (*)</label>
                 <select
                   value={newRouteForm.frequencia}
-                  onChange={(e) => setNewRouteForm({ ...newRouteForm, frequencia: e.target.value as any })}
+                  onChange={(e) =>
+                    setNewRouteForm({ ...newRouteForm, frequencia: e.target.value as RouteItem['frequencia'] })
+                  }
                   className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-600 cursor-pointer"
                 >
                   <option value="SEMANAL">SEMANAL</option>
@@ -1653,6 +1677,16 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
                       </label>
                     );
                   })}
+                </div>
+
+                <div className="sm:col-span-2">
+                  <label className="text-[#171717] block mb-1 font-bold">OBSERVAÇÕES DA ESCALA</label>
+                  <textarea
+                    value={newRouteForm.observacao}
+                    onChange={(e) => setNewRouteForm({ ...newRouteForm, observacao: e.target.value })}
+                    placeholder="Observações opcionais..."
+                    className="w-full p-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-600 h-20 resize-none"
+                  />
                 </div>
               </div>
             </div>

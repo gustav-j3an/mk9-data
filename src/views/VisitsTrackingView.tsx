@@ -150,7 +150,7 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
           }
         }
 
-        return allRoutes;
+        return allRoutes.filter((r) => !r.encerrada_em);
       };
 
       const promotoresPromise = supabase.from('promotores').select('*');

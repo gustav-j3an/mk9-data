@@ -223,7 +223,8 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
       if (promotoresRes.error) throw promotoresRes.error;
 
       const realVisits = (visitsRes.data as unknown as Visit[]) || [];
-      const realRoutes = (rotasRes.data as unknown as RouteItem[]) || [];
+      const rawRoutes = (rotasRes.data as unknown as RouteItem[]) || [];
+      const realRoutes = rawRoutes.filter((r) => !r.encerrada_em);
 
       setVisits(realVisits);
       setRoutes(realRoutes);

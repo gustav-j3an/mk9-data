@@ -456,7 +456,7 @@ export const ImportView: React.FC<ImportViewProps> = ({ onShowToast }) => {
           const onConflictKey =
             selectedType === 'industrias' ? 'codigo' :
             selectedType === 'lojas' ? 'codigo' :
-            selectedType === 'promotores' ? 'matricula' : 'promotor_matricula,loja_codigo,industria_codigo';
+            selectedType === 'promotores' ? 'matricula' : 'rota_ativa_chave';
 
           const { error: upsertErr } = await supabase
             .from(selectedType)

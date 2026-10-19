@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import type { RouteItem } from '../types';
+import { calculateRouteIndicators } from './routeIndicators';
 
 describe('Cálculo de Indicadores Individuais de Rotas Fixas', () => {
   // Cenário de teste: Promotor PRM-TEST com 3 rotas cadastradas:
@@ -158,5 +159,21 @@ describe('Cálculo de Indicadores Individuais de Rotas Fixas', () => {
     assert.strictEqual(quinzenaisGeral, 1);
     assert.strictEqual(promotoresGeral, 2);
     assert.strictEqual(lojasGeral, 3);
+  });
+
+  it('deve excluir escalas encerradas dos indicadores ativos', () => {
+    const indicators = calculateRouteIndicators([
+      mockRoutes[0],
+      { ...mockRoutes[1], encerrada_em: '2026-10-18T12:00:00Z' },
+      mockRoutes[2]
+    ]);
+
+    assert.strictEqual(indicators.totalRotas, 2);
+    assert.strictEqual(indicators.semanais, 1);
+    assert.strictEqual(indicators.quinzenais, 1);
+    assert.strictEqual(indicators.promotoresUnicos, 1);
+    assert.strictEqual(indicators.lojasUnicas, 2);
+    assert.strictEqual(indicators.visitasSemanais, 2);
+    assert.strictEqual(indicators.visitasQuinzenais, 2);
   });
 });

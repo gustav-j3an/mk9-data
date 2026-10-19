@@ -117,7 +117,18 @@ npx tsx --test src/utils/promoterPortalWeekly.test.ts -> 5 testes aprovados (0 f
 
 ### 5. Conformidade com Regras e Segurança
 
-- **Banco de Dados & Schema:** Nenhuma tabela, trigger, RLS ou migration foi alterada.
+- **Banco de Dados & Schema (escopo da Onda 3.3):** Nenhuma tabela, trigger, RLS ou migration foi alterada.
 - **Regras Operacionais:** Regras de frequências SEMANAL/QUINZENAL, dias da semana e vínculos de rotas foram integralmente preservadas.
 - **Git:** Nenhum commit automático foi executado.
 
+---
+
+### 6. Gerenciamento Integrado e Encerramento Seguro de Escalas
+
+Atualização posterior da gestão de rotas:
+
+- Rotas Fixas e a escala do Portal do Promotor compartilham as operações de criação, edição e encerramento em `src/lib/routesService.ts`.
+- Administradores e gestores podem criar, editar e encerrar escalas pelas duas telas; operadores e promotores mantêm apenas as permissões operacionais/de consulta já existentes.
+- O encerramento registra `encerrada_em`, sem excluir a linha de `rotas` nem modificar visitas, evidências, check-ins/outs, conferências, aprovações ou auditorias. As telas e o gerador de agenda ignoram escalas encerradas.
+- A migração `../../supabase/migrations/20261018235500_soft_delete_fixed_routes.sql` mantém a unicidade da combinação promotor/loja/indústria entre escalas ativas, permite nova associação após encerramento e remove a política RLS de exclusão física. A coluna gerada `rota_ativa_chave` mantém a importação por upsert compatível.
+- A migração foi adicionada ao repositório, mas não foi aplicada a nenhum ambiente. Deve ser implantada antes da versão frontend que consulta `encerrada_em`.

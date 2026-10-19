@@ -188,16 +188,19 @@ export const AppShell: React.FC<AppShellProps> = ({
           ? (async () => {
               const { data } = await supabase
                 .from('rotas')
-                .select('id, codigo_rota, promotor_matricula, loja_codigo, industria_codigo, frequencia')
+                .select('*')
                 .or(`codigo_rota.ilike.${pattern},promotor_matricula.ilike.${pattern},loja_codigo.ilike.${pattern},industria_codigo.ilike.${pattern}`)
-                .limit(5);
+                .limit(10);
 
-              return (data || []).map((r: any) => ({
-                id: r.id || r.codigo_rota,
-                title: `Rota ${r.codigo_rota || r.id.slice(0, 8)}`,
-                subtitle: `Promotor: ${r.promotor_matricula} • Loja: ${r.loja_codigo} • ${r.frequencia || 'SEMANAL'}`.trim(),
-                target: 'rotas-fixas' as ScreenId
-              }));
+              return (data || [])
+                .filter((r: any) => !r.encerrada_em)
+                .slice(0, 5)
+                .map((r: any) => ({
+                  id: r.id || r.codigo_rota,
+                  title: `Rota ${r.codigo_rota || r.id.slice(0, 8)}`,
+                  subtitle: `Promotor: ${r.promotor_matricula} • Loja: ${r.loja_codigo} • ${r.frequencia || 'SEMANAL'}`.trim(),
+                  target: 'rotas-fixas' as ScreenId
+                }));
             })()
           : Promise.resolve([]);
 
