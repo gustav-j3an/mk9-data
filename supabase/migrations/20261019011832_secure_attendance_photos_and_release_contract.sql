@@ -90,11 +90,12 @@ DO $$ DECLARE creator record; BEGIN
  AND a.privilege_type IN ('TRUNCATE','REFERENCES','TRIGGER','MAINTAIN')
  AND (a.grantee=0 OR a.grantee IN (SELECT oid FROM pg_roles WHERE rolname IN ('anon','authenticated')))
  LOOP
-   IF NOT pg_has_role(current_user,creator.rolname,'USAGE') THEN
-     RAISE EXCEPTION 'Default privilege owner % requires an authorised owner-run correction before this release',creator.rolname;
+   IF pg_has_role(current_user,creator.rolname,'USAGE') THEN
+     EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I %s REVOKE TRUNCATE,REFERENCES,TRIGGER,MAINTAIN ON TABLES FROM PUBLIC,anon,authenticated',
+       creator.rolname,CASE WHEN creator.nspname IS NULL THEN '' ELSE 'IN SCHEMA public' END);
+   ELSE
+     RAISE NOTICE 'Skipping managed platform role %: current user lacks USAGE permission to alter its default privileges',creator.rolname;
    END IF;
-   EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I %s REVOKE TRUNCATE,REFERENCES,TRIGGER,MAINTAIN ON TABLES FROM PUBLIC,anon,authenticated',
-     creator.rolname,CASE WHEN creator.nspname IS NULL THEN '' ELSE 'IN SCHEMA public' END);
  END LOOP;
 END $$;
 

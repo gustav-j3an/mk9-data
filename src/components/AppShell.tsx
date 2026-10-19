@@ -5,6 +5,7 @@ import { notificationService } from '../lib/notificationService';
 import { supabase } from '../lib/supabase';
 import { PWAInstallPrompt } from './PWAInstallPrompt';
 import { AuthorSignature } from './AuthorSignature';
+import { useRhAccess } from '../lib/rhAccess';
 
 interface AppShellProps {
   currentScreen: ScreenId;
@@ -22,6 +23,7 @@ export const AppShell: React.FC<AppShellProps> = ({
   onDismissToast
 }) => {
   const { session, profile, role, signOut, hasPermission } = useAuth();
+  const rh = useRhAccess();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [globalSearch, setGlobalSearch] = useState('');
   const [searchFocused, setSearchFocused] = useState(false);
@@ -306,6 +308,10 @@ export const AppShell: React.FC<AppShellProps> = ({
 
   const navItems = [
     {
+      group: role === 'promotor' ? 'Meu RH' : role === 'admin' ? 'Gestão RH' : 'Equipe RH',
+      items: [{ id: 'rh-ausencias' as ScreenId, label: role === 'promotor' ? 'Minhas Ausências' : 'Faltas e Atestados', icon: 'event_busy', roles: ['admin', 'gestor', 'promotor'] as UserRole[] }]
+    },
+    {
       group: 'Visão Geral',
       items: [
         { id: 'cockpit' as ScreenId, label: 'Cockpit', icon: 'speed', roles: ['admin', 'gestor', 'operador'] as UserRole[] },
@@ -446,7 +452,7 @@ export const AppShell: React.FC<AppShellProps> = ({
           {/* Navigation Links */}
           <div className="py-4 px-2.5 space-y-4">
             {navItems.map((section) => {
-              const visibleItems = section.items.filter((item) => !item.roles || hasPermission(item.roles));
+              const visibleItems = section.items.filter((item) => item.id === 'rh-ausencias' ? (rh.mine || rh.team || rh.management) : !item.roles || hasPermission(item.roles));
               if (visibleItems.length === 0) return null;
 
               return (

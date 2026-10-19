@@ -1,0 +1,18 @@
+[
+  {
+    "file": "supabase/migrations/20260930_create_profiles.sql",
+    "sha256": "b85f6f474cbfb2c9f87fc46f570321cf05e549fd74c764e66562ecf934f84340"
+  },
+  {
+    "file": "supabase/migrations/20260930_create_import_tables.sql",
+    "sha256": "8d6861d3fc5e3d6551c6bd471c8dcde605d927dabed06cc9e426734214a42f12"
+  },
+  {
+    "file": "supabase/migrations/20260930_add_status_to_profiles.sql",
+    "sha256": "117fc97551ba03fc6b6d2c703a7c9aeddd07186db4a583e7e60b4983fba2d803"
+  },
+  {
+    "file": "supabase/migrations/20261019151754_mk9_rh_explicit_bindings.sql",
+    "sha256": "69cc71ed5ae49f799bd0d6f45d40d2b1a9efc86e018597ce5fb0c5843f1747e0"
+  }
+]

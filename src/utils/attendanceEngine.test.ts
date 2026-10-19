@@ -169,3 +169,23 @@ test('feriado local usa localidade da jornada, sem presumir residência; sem loc
   assert.equal(status({promoters:[{...promoter,uf:'RJ',cidade:'Rio'}],schedules:[{...shift,work_uf:'SP',work_city:'Campinas'}],holidays:[holiday]}).operationalStatus,'feriado');
   assert.equal(status({now:'2026-10-20T12:00:00Z',holidays:[holiday]}).operationalStatus,'sem_registro');
 });
+test('promotores sem jornada cadastrada são classificados como sem_expediente, 0 elegíveis e visíveis via quickFilter sem_expediente', () => {
+  const p1 = { ...promoter, id: 'p1', matricula: '001', nome: 'Promotor 1' };
+  const p2 = { ...promoter, id: 'p2', matricula: '002', nome: 'Promotor 2' };
+  const roster = buildRoster({ ...base(), promoters: [p1, p2], schedules: [] });
+  assert.equal(roster.length, 2);
+  assert.equal(roster.filter(i => i.eligible).length, 0);
+  assert.equal(roster.filter(i => i.operationalStatus === 'sem_expediente').length, 2);
+  assert.equal(roster.filter(i => i.status === 'falta').length, 0);
+
+  // Sem includeOffSchedule e quick=all: filteredRoster é vazio para evitar contaminação dos indicadores
+  assert.equal(filterRoster(roster, { search: '', supervisor: '', squad: '', quick: 'all' }).length, 0);
+
+  // Com quickFilter sem_expediente: lista imediatamente todos os 2 promotores sem expediente
+  const semExpedienteFiltered = filterRoster(roster, { search: '', supervisor: '', squad: '', quick: 'sem_expediente' });
+  assert.equal(semExpedienteFiltered.length, 2);
+
+  // Com includeOffSchedule = true: lista todos os 2 promotores
+  const allOffSchedule = filterRoster(roster, { search: '', supervisor: '', squad: '', quick: 'all', offSchedule: true });
+  assert.equal(allOffSchedule.length, 2);
+});
