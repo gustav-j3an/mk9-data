@@ -1,21 +1,24 @@
-﻿import { friendlyStatus, type Absence } from '../shared/mk9.ts';
+import { friendlyStatus, type Absence, type Mk9ApiAbsenceRecord } from '../shared/mk9.ts';
 
 export class IntegrationError extends Error {
   constructor(public readonly code: 'configuration' | 'upstream' | 'incomplete' | 'invalid') { super(code); }
 }
 const text = (v: unknown) => typeof v === 'string' ? v.slice(0, 200) : '';
-const date = (v: unknown) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null;
-export interface InternalAbsence extends Absence { projectId: string; recordKey: string }
-// Explicit projection: never forward raw MK9 objects, medical fields or technical IDs.
+const date = (v: unknown) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) && Number.isFinite(Date.parse(v)) && new Date(v).toISOString().slice(0, 10) === v ? v : null;
+export interface InternalAbsence extends Absence { projectId: string; recordKey: string; externalMatricula: string }
+// Explicit projection: raw MK9 objects and medical fields stay server-side; only scoped identity is added.
 export function normalizeAbsence(value: unknown): InternalAbsence | null {
   if (!value || typeof value !== 'object') return null;
-  const v = value as Record<string, any>;
+  const v = value as Mk9ApiAbsenceRecord;
   const matricula = text(v.colaborador?.matricula);
   const projectId = text(v.projeto?.id);
-  if (!matricula || !projectId) return null;
+  const recordId = text(v.id) || null;
+  const recordKey = recordId || text(v.protocolo);
+  if (!matricula || !projectId || !recordKey || !date(v.periodo?.inicio) ||
+    (v.periodo?.fim != null && !date(v.periodo.fim)) || (v.periodo?.retorno != null && !date(v.periodo.retorno))) return null;
   return {
-    projectId, recordKey: text(v.id) || text(v.protocolo), matricula, nome: text(v.colaborador?.nome), projeto: text(v.projeto?.nome) || 'Projeto',
-    supervisor: '', protocolo: text(v.protocolo),
+    projectId, recordKey, externalMatricula: matricula, matricula, nome: text(v.colaborador?.nome), projeto: text(v.projeto?.nome) || 'Projeto',
+    supervisor: '', protocolo: text(v.protocolo), externalIdentity: { recordId, projectId, matricula },
     tipo: v.tipo?.categoria === 'FALTA' ? 'Falta' : v.tipo?.categoria === 'ATESTADO' ? 'Atestado' : 'Ausência',
     inicio: date(v.periodo?.inicio), fim: date(v.periodo?.fim), retorno: date(v.periodo?.retorno),
     dias: typeof v.periodo?.dias === 'number' && Number.isFinite(v.periodo.dias) && v.periodo.dias >= 0 ? v.periodo.dias : null,

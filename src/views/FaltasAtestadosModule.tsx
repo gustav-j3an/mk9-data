@@ -1,11 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { useRhAccess } from '../lib/rhAccess';
+import { useRhAccess, type RhView } from '../lib/rhAccess';
+import { useAuth } from '../auth/AuthProvider';
 import { useFaltasAtestadosAccess } from '../lib/faltasAtestadosAccess';
 import { supabase } from '../lib/supabase';
 import {
   absenceTypes, externalWriteEnabled, inclusiveDays, isBindingSelectable,
   resolveBinding, reviewNotSent, validateAbsenceDraft, type AbsenceDraft, type CrmBinding
 } from '../lib/faltasAtestados';
+import { filterAbsenceHistory, parseAbsenceHistory, type ParsedAbsenceHistory } from '../lib/faltasAtestadosReceived';
 
 type Area = 'overview' | 'new' | 'history' | 'people' | 'projects' | 'settings';
 const areas: { id: Area; label: string; icon: string }[] = [
@@ -21,10 +23,13 @@ const field = 'mt-1 w-full rounded-lg border border-[#CFCDC5] bg-white px-3 py-2
 const button = 'rounded-lg border border-[#CFCDC5] px-3 py-2 text-sm font-medium text-[#383832] hover:border-[#286FF5]';
 const primary = 'rounded-lg bg-[#222222] px-4 py-2.5 text-sm font-semibold text-white hover:bg-black disabled:cursor-not-allowed disabled:opacity-40';
 const formatDate = (value: string | null) => value ? new Date(value.length === 10 ? `${value}T12:00:00` : value).toLocaleDateString('pt-BR') : 'Sem data final';
+const today = () => new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
+const isObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 const formatStatus = (value: string) => ({ aprovado: 'Aprovado', pendente: 'Pendente', revogado: 'Revogado' }[value] || 'Sem vínculo');
 const emptyDraft = (): AbsenceDraft => ({ alocacaoId: '', tipo: '', inicio: '', fim: '', retorno: '', empresa: '', supervisor: '', localidade: '', motivo: '', informacoes: '', loja: '' });
 
 export function FaltasAtestadosModule() {
+  const { session } = useAuth();
   const rh = useRhAccess();
   const permission = useFaltasAtestadosAccess();
   const [area, setArea] = useState<Area>('overview');
@@ -35,6 +40,19 @@ export function FaltasAtestadosModule() {
   const [step, setStep] = useState(0);
   const [draft, setDraft] = useState<AbsenceDraft>(emptyDraft);
   const [formError, setFormError] = useState('');
+  const [history, setHistory] = useState<ParsedAbsenceHistory | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState('');
+  const [historyView, setHistoryView] = useState<RhView>('mine');
+  const [historyStart, setHistoryStart] = useState(() => `${today().slice(0, 7)}-01`);
+  const [historyEnd, setHistoryEnd] = useState(today);
+  const [historyProject, setHistoryProject] = useState('');
+  const [historyType, setHistoryType] = useState('');
+  const [historyMatricula, setHistoryMatricula] = useState('');
+  const [historyRefresh, setHistoryRefresh] = useState(0);
+
+  const availableRhViews = (['mine', 'team', 'management'] as RhView[]).filter(view => rh[view]);
+  const selectedHistoryView = availableRhViews.includes(historyView) ? historyView : availableRhViews[0];
 
   const loadBindings = useCallback(async () => {
     if (!supabase || !permission.allowed) { setBindings([]); setLoading(false); return; }
@@ -50,6 +68,51 @@ export function FaltasAtestadosModule() {
   }, [permission.allowed]);
 
   useEffect(() => { void loadBindings(); }, [loadBindings]);
+
+  useEffect(() => {
+    if (loading) { setHistoryLoading(false); return; }
+    if (error) { setHistory(null); setHistoryLoading(false); setHistoryError(error); return; }
+    if (!permission.allowed || !session?.access_token || !selectedHistoryView) {
+      setHistory(null);
+      setHistoryError('');
+      setHistoryLoading(false);
+      return;
+    }
+    const controller = new AbortController();
+    let disposed = false;
+    const timer = setTimeout(() => controller.abort(), 35_000);
+    setHistoryLoading(true);
+    setHistoryError('');
+    const params = new URLSearchParams({ view: selectedHistoryView, data_inicio: historyStart, data_fim: historyEnd });
+    void (async () => {
+      try {
+        const response = await fetch(`/api/faltas-atestados/ausencias?${params}`, {
+          headers: { Authorization: `Bearer ${session.access_token}` },
+          cache: 'no-store',
+          signal: controller.signal
+        });
+        const body: unknown = await response.json();
+        if (!response.ok) {
+          if (response.status === 400) throw new Error('Selecione um período válido de até um ano.');
+          if (response.status === 401) throw new Error('Entre novamente para consultar estes registros.');
+          if (response.status === 403) throw new Error('Sua conta não possui a permissão do módulo ou o escopo RH para esta consulta.');
+          if (isObject(body) && body.message === 'Há muitas ocorrências neste período. Selecione um intervalo menor.') throw new Error('Há muitas ocorrências neste período. Selecione um intervalo menor.');
+          throw new Error('A consulta ao CRM está temporariamente indisponível. Tente novamente.');
+        }
+        const parsed = parseAbsenceHistory(body, bindings);
+        if (!disposed) setHistory(parsed);
+      } catch (error) {
+        if (!disposed) {
+          setHistory(null);
+          setHistoryError(controller.signal.aborted ? 'A consulta excedeu o tempo limite. Tente novamente.' : error instanceof Error ? error.message : 'A consulta ao CRM está temporariamente indisponível. Tente novamente.');
+        }
+      } finally {
+        clearTimeout(timer);
+        if (!disposed) setHistoryLoading(false);
+      }
+    })();
+    return () => { disposed = true; clearTimeout(timer); controller.abort(); };
+  }, [permission.allowed, session?.access_token, selectedHistoryView, historyStart, historyEnd, historyRefresh, bindings, loading, error]);
 
   const selectedBinding = resolveBinding(bindings, draft.alocacaoId);
   const selectable = useMemo(() => bindings.filter(row => isBindingSelectable(row)), [bindings]);
@@ -99,6 +162,16 @@ export function FaltasAtestadosModule() {
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">{[
           ['Colaboradores vinculados', distinctPeople], ['Vínculos aprovados e vigentes', approved], ['Vínculos pendentes', pending], ['Projetos CRM associados', projectRows.length], ['Consulta GET', activeGet ? 'Acesso disponível' : 'Sem acesso confirmado']
         ].map(([label, value]) => <article className={panel} key={String(label)}><p className="text-xs text-[#737373]">{label}</p><p className="mt-2 text-lg font-bold sm:text-xl">{value}</p></article>)}</div>
+        {history && <div className={`${panel} grid grid-cols-2 gap-3 sm:grid-cols-4`}>
+          {[
+            ['Faltas', history.records.filter(row => row.type === 'Falta').length],
+            ['Atestados', history.records.filter(row => row.type === 'Atestado').length],
+            ['Em análise', history.records.filter(row => row.status === 'Em análise').length],
+            ['Processados', history.records.filter(row => row.status === 'Processado').length]
+          ].map(([label, value]) => <div key={String(label)}><p className="text-xs text-[#737373]">{label}</p><p className="mt-1 text-xl font-bold">{value}</p></div>)}
+          <p className="col-span-2 text-xs text-[#737373] sm:col-span-4">Indicadores calculados dos registros CRM entre {historyStart} e {historyEnd}. <button className="underline" onClick={() => setArea('history')}>Abrir histórico</button></p>
+        </div>}
+        {historyError && <p role="status" className="text-xs text-[#737373]">Indicadores externos indisponíveis: {historyError}</p>}
         <div className={`${panel} flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between`}><div><h2 className="font-bold">Preparação local</h2><p className="mt-1 text-sm text-[#5F5F5F]">Nenhum indicador de envio é exibido. O formulário não grava nem transmite dados.</p></div><button className={primary} onClick={() => setArea('new')}>Preparar revisão</button></div>
       </div>}
 
@@ -142,8 +215,41 @@ export function FaltasAtestadosModule() {
         <div className="flex flex-wrap justify-between gap-2"><button type="button" className={button} onClick={() => { resetForm(); setArea('overview'); }}>Cancelar revisão</button><div className="flex gap-2">{step > 0 && <button type="button" className={button} onClick={previousStep}>Voltar</button>}{step < 3 && <button type="button" className={primary} onClick={nextStep}>{step === 2 ? 'Revisar' : 'Continuar'}</button>}</div></div>
       </div>}
 
-      {area === 'history' && <div className={`${panel} py-12 text-center`}><span className="material-symbols-outlined text-4xl text-[#77766F]">history</span><h2 className="mt-3 font-bold">Histórico ainda indisponível</h2><p className="mx-auto mt-2 max-w-xl text-sm text-[#5F5F5F]">Não existe API de escrita nem persistência própria para esses lançamentos. Nenhum registro ou protocolo de demonstração é exibido.</p></div>}
-
+      {area === 'history' && <div className="space-y-4">
+        <div className={`${panel} grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-6`}>
+          {availableRhViews.length > 1 && <label className="text-xs">Escopo<select className={field} value={selectedHistoryView || ''} onChange={event => setHistoryView(event.target.value as RhView)}>{availableRhViews.map(view => <option key={view} value={view}>{view === 'mine' ? 'Pessoal' : view === 'team' ? 'Equipe autorizada' : 'Gestão autorizada'}</option>)}</select></label>}
+          <label className="text-xs">Data inicial<input className={field} type="date" value={historyStart} max={historyEnd} onChange={event => setHistoryStart(event.target.value)} /></label>
+          <label className="text-xs">Data final<input className={field} type="date" value={historyEnd} min={historyStart} onChange={event => setHistoryEnd(event.target.value)} /></label>
+          <label className="text-xs">Projeto CRM<select className={field} value={historyProject} onChange={event => setHistoryProject(event.target.value)}><option value="">Todos</option>{[...new Map((history?.records || []).map(record => [record.projectId, record.projectName])).entries()].map(([id, name]) => <option key={id} value={id}>{name} · {id}</option>)}</select></label>
+          <label className="text-xs">Tipo de ausência<select className={field} value={historyType} onChange={event => setHistoryType(event.target.value)}><option value="">Todos</option><option>Falta</option><option>Atestado</option><option>Ausência</option></select></label>
+          <label className="text-xs">Matrícula<input className={field} value={historyMatricula} onChange={event => setHistoryMatricula(event.target.value)} placeholder="Interna ou CRM" /></label>
+          <button className={`${button} self-end`} onClick={() => setHistoryRefresh(value => value + 1)} disabled={historyLoading}>{historyLoading ? 'Atualizando…' : 'Atualizar agora'}</button>
+        </div>
+        {availableRhViews.length === 0 && <div className={panel}>Sua conta não possui um escopo RH aprovado para consultar estes registros.</div>}
+        {historyLoading && <div className={panel} role="status">Consultando registros externos autorizados…</div>}
+        {historyError && <div className={panel} role="alert"><p>{historyError}</p><button className={`${button} mt-3`} onClick={() => setHistoryRefresh(value => value + 1)}>Tentar novamente</button></div>}
+        {!historyLoading && !historyError && history && <>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            {[
+              ['Registros', history.records.length],
+              ['Faltas', history.records.filter(record => record.type === 'Falta').length],
+              ['Atestados', history.records.filter(record => record.type === 'Atestado').length],
+              ['Em análise', history.records.filter(record => record.status === 'Em análise').length]
+            ].map(([label, value]) => <article className={panel} key={String(label)}><p className="text-xs text-[#737373]">{label}</p><p className="mt-1 text-xl font-bold">{value}</p></article>)}
+          </div>
+          <p className="text-xs text-[#737373]">Última consulta: {new Date(history.updatedAt).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}. Dados de CID, diagnóstico e documentos médicos não são recebidos nem exibidos.</p>
+          {history.unmatchedCount > 0 && <p role="status" className="text-xs text-amber-900">{history.unmatchedCount} registro(s) foram omitidos porque não correspondem a vínculo aprovado, projeto e matrícula externos exatos.</p>}
+          {(() => {
+            const rows = filterAbsenceHistory(history.records, { start: historyStart, end: historyEnd, projectId: historyProject, type: historyType, matricula: historyMatricula });
+            return rows.length ? <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">{rows.map(record => { const displayKey = JSON.stringify([record.projectId, record.externalMatricula, record.externalRecordId || record.externalProtocol]); const display = history.display.find(item => item.key === displayKey); return <article className={`${panel} space-y-3`} key={displayKey}>
+              <div className="flex flex-wrap items-start justify-between gap-2"><div><h2 className="font-bold">{display?.collaborator || record.collaboratorName}</h2><p className="text-xs text-[#5F5F5F]">Matrícula interna {record.internalMatricula} · matrícula CRM {record.externalMatricula}</p></div><span className="rounded-full bg-[#EBF2FE] px-3 py-1 text-xs font-semibold text-[#286FF5]">{display?.status || record.status}</span></div>
+              <p className="text-sm">{display?.type || record.type} · {display?.period || formatDate(record.startDate)}</p>
+              <p className="text-xs text-[#5F5F5F]">Projeto CRM: {display?.project || record.projectName} · {display?.projectId || record.projectId}</p>
+              <details className="border-t border-[#E2E0D9] pt-2 text-sm"><summary className="cursor-pointer font-medium">Detalhes do registro</summary><dl className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2"><div><dt className="text-xs text-[#737373]">Duração informada pelo CRM</dt><dd>{record.days === null ? 'Não informada' : `${record.days} ${record.days === 1 ? 'dia' : 'dias'}`}</dd></div><div><dt className="text-xs text-[#737373]">Retorno</dt><dd>{formatDate(record.returnDate)}</dd></div><div><dt className="text-xs text-[#737373]">Protocolo externo</dt><dd className="break-all">{display?.protocol || record.externalProtocol || 'Não informado'}</dd></div><div><dt className="text-xs text-[#737373]">ID externo</dt><dd className="break-all">{record.externalRecordId || 'Não fornecido'}</dd></div></dl></details>
+            </article>; })}</div> : <div className={`${panel} py-10 text-center`}><h2 className="font-bold">Nenhum registro encontrado</h2><p className="mt-2 text-sm text-[#737373]">Não há registros externos para o período e os filtros escolhidos.</p></div>;
+          })()}
+        </>}
+      </div>}
       {area === 'people' && <div className="space-y-3"><div className={`${panel} flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between`}><div><h2 className="font-bold">Colaboradores e matrículas</h2><p className="text-xs text-[#737373]">Somente vínculos retornados pelo backend autorizado.</p></div><label className="text-xs">Pesquisar<input className={field} value={query} onChange={event => setQuery(event.target.value)} placeholder="Nome, matrícula ou projeto" /></label></div><div className="overflow-x-auto rounded-xl border border-[#CFCDC5] bg-white"><table className="w-full min-w-[850px] text-left text-sm"><thead className="bg-[#EAE8E2] text-xs uppercase text-[#5F5F5F]"><tr>{['Colaborador', 'Matrícula interna', 'Matrícula externa', 'Projeto CRM', 'Vigência', 'Vínculo'].map(label => <th key={label} className="px-3 py-3">{label}</th>)}</tr></thead><tbody>{searched.map(row => <tr key={row.alocacao_id} className="border-t border-[#EAE8E2]"><td className="px-3 py-3 font-semibold">{row.colaborador}</td><td className="px-3 py-3 font-mono text-xs">{row.matricula_interna}</td><td className="px-3 py-3 font-mono text-xs">{row.matricula_externa}</td><td className="max-w-[220px] break-all px-3 py-3 font-mono text-xs">{row.projeto_crm}</td><td className="px-3 py-3 text-xs">{formatDate(row.valido_desde)} – {formatDate(row.valido_ate)}</td><td className="px-3 py-3"><Status identity={row.identidade_status} allocation={row.alocacao_status} /></td></tr>)}</tbody></table>{!searched.length && <p className="p-6 text-center text-sm text-[#737373]">Nenhum vínculo corresponde à pesquisa.</p>}</div></div>}
 
       {area === 'projects' && <div className="space-y-3"><h2 className="font-bold">Projetos vinculados</h2><p className="text-sm text-[#5F5F5F]">Os projetos abaixo vêm dos UUIDs registrados nas alocações. Não há catálogo de nomes; nenhum projeto é inferido ou criado.</p><div className="grid grid-cols-1 gap-3 lg:grid-cols-2">{projectRows.map(project => <article className={panel} key={project.id}><p className="text-xs text-[#737373]">UUID do projeto CRM</p><p className="mt-1 break-all font-mono text-sm font-semibold">{project.id}</p><p className="mt-3 text-xs text-[#5F5F5F]">{project.rows.length} alocações · {project.rows.filter(row => row.alocacao_status === 'aprovado' && isBindingSelectable(row)).length} aprovadas e vigentes · {project.rows.filter(row => row.alocacao_status === 'pendente').length} pendentes</p></article>)}</div>{!projectRows.length && <div className={panel}>Nenhum projeto CRM está vinculado.</div>}</div>}

@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test:faltas-atestados": "node --import tsx --test src/lib/faltasAtestados.test.ts",
+    "test:faltas-atestados": "node --import tsx --test src/lib/faltasAtestados.test.ts src/lib/faltasAtestadosReceived.test.ts",
+    "test:rh-integration": "node --import tsx --test server/mk9-faltas.test.ts",
     "security:faltas-atestados": "node tests/faltas-atestados-security.mjs"
   },
   "dependencies": {
