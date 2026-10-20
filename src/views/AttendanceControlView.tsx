@@ -31,6 +31,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
   const [quickFilter, setQuickFilter] = useState<'all' | 'presente' | 'falta' | 'atestado' | 'atestado_pendente' | 'sem_registro' | 'sem_expediente'>('all');
   const [promoters, setPromoters] = useState<Promoter[]>([]);
   const [audit, setAudit] = useState<{ name:string; rows:AttendanceAuditEntry[] } | null>(null);
+  const [activityModalItem, setActivityModalItem] = useState<PresenceItem | null>(null);
   const [includeOffSchedule, setIncludeOffSchedule] = useState(false);
   const [canEdit, setCanEdit] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -207,6 +208,9 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
         const faltas = metrics.filter((i) => i.status === 'falta').length;
         const atestados = metrics.filter((i) => i.status === 'atestado').length;
         const semRegistro = metrics.filter((i) => i.status === 'sem_registro').length;
+        const atividadeConfirmada = metrics.filter((i) => i.activity?.status === 'confirmada').length;
+        const emAtividadeCampo = metrics.filter((i) => i.activity?.status === 'em_atividade').length;
+        const semEvidenciaAtendimento = metrics.filter((i) => i.activity?.status === 'sem_evidencia').length;
 
         const pPct = !loading && !error && total > 0 ? ((presentes / total) * 100).toFixed(1) : '0';
         const fPct = !loading && !error && total > 0 ? ((faltas / total) * 100).toFixed(1) : '0';

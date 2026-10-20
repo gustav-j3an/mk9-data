@@ -1,6 +1,6 @@
 import { supabase } from './supabase';
 import { buildRoster, parseRules, validDate, type OverrideStatus, type Promoter, type Team, type Supervisor, type Override, type Schedule, type Absence, type AttendanceHoliday } from '../utils/attendanceEngine';
-import type { Visit } from '../types';
+import type { RouteItem, Visit } from '../types';
 import type { PostgrestError } from '@supabase/supabase-js';
 import { automaticAbsenceApproved } from './attendanceAdministration';
 
@@ -39,11 +39,11 @@ export async function fetchAttendance(date: string) {
     }
   };
   const visitsForDate = async () => {
-    try { return await page<Visit>('visits', 'id,promotor_matricula,loja_codigo,industria_codigo,data_visita,status,started_at,latitude,longitude,gps_accuracy_meters,work_schedule_id', q => q.eq('data_visita', date)); }
+    try { return await page<Visit>('visits', 'id,promotor_matricula,loja_codigo,industria_codigo,data_visita,status,started_at,completed_at,latitude,longitude,gps_accuracy_meters,work_schedule_id', q => q.eq('data_visita', date)); }
     catch (error) {
       if ((error as PostgrestError).code !== '42703') throw error;
       missing.push('telemetry');
-      return page<Visit>('visits', 'id,promotor_matricula,loja_codigo,industria_codigo,data_visita,status,started_at,latitude,longitude', q => q.eq('data_visita', date));
+      return page<Visit>('visits', 'id,promotor_matricula,loja_codigo,industria_codigo,data_visita,status,started_at,completed_at,latitude,longitude', q => q.eq('data_visita', date));
     }
   };
   const results = await Promise.allSettled([
@@ -55,11 +55,12 @@ export async function fetchAttendance(date: string) {
     optional<Schedule>('promoter_work_schedules', 'id,promotor_matricula,dia_semana,hora_inicio,hora_fim,ativo,valid_from,valid_to,interval_minutes,tolerance_minutes,timezone,modalidade,is_exception,work_uf,work_city', q => q.eq('ativo', true)),
     optional<Absence>('promoter_absences', 'id,promotor_matricula,tipo,data_inicio,data_fim,data_aprovacao', q => q.lte('data_inicio', date).gte('data_fim', date)),
     db.from('system_settings').select('key,value').in('key', ['attendance_rules', 'operation_mode', 'official_start_date'])
-    ,optional<AttendanceHoliday>('attendance_holidays','id,data,nome,uf,cidade,behavior',q=>q.eq('data',date))
+    ,optional<AttendanceHoliday>('attendance_holidays','id,data,nome,uf,cidade,behavior',q=>q.eq('data',date)),
+    optional<RouteItem>('rotas', 'id,codigo_rota,promotor_matricula,loja_codigo,industria_codigo,frequencia,segunda,terca,quarta,quinta,sexta,sabado,domingo,encerrada_em')
   ] as const);
   for (const result of results) if (result.status === 'rejected') throw result.reason;
   const fulfilled = <T,>(result: PromiseSettledResult<T>): T => { if(result.status==='rejected') throw result.reason; return result.value; };
-  const promoters=fulfilled(results[0]), visits=fulfilled(results[1]), teams=fulfilled(results[2]), supervisors=fulfilled(results[3]), overrides=fulfilled(results[4]), schedules=fulfilled(results[5]), absences=fulfilled(results[6]), settingsResult=fulfilled(results[7]), holidays=fulfilled(results[8]);
+  const promoters=fulfilled(results[0]), visits=fulfilled(results[1]), teams=fulfilled(results[2]), supervisors=fulfilled(results[3]), overrides=fulfilled(results[4]), schedules=fulfilled(results[5]), absences=fulfilled(results[6]), settingsResult=fulfilled(results[7]), holidays=fulfilled(results[8]), routes=fulfilled(results[9]);
   if (settingsResult.error) throw settingsResult.error;
   const readiness = await db.rpc('attendance_setup_status');
   if (readiness.error) {
@@ -73,7 +74,7 @@ export async function fetchAttendance(date: string) {
   const officialStart = settings.get('official_start_date') || null;
   if (officialStart != null && (typeof officialStart !== 'string' || !validDate(officialStart))) throw new Error('Data de início oficial inválida.');
   const approvedRules = automaticAbsenceApproved(settings.get('attendance_rules'));
-  const items = buildRoster({ promoters, routes: [], visits, teams, supervisors, overrides, schedules, absences, holidays, date, now, rules, official: official && approvedRules && missing.length === 0, officialStart });
+  const items = buildRoster({ promoters, routes: routes || [], visits, teams, supervisors, overrides, schedules, absences, holidays, date, now, rules, official: official && approvedRules && missing.length === 0, officialStart });
   const warnings = [];
   if (missing.length) warnings.push(`Estruturas indisponíveis: ${missing.join(', ')}. Verifique as migrations deste ambiente. Ausência de tabela não comprova ausência de jornadas; cadastros e ajustes desabilitados.`);
   if (!rules.close || rules.tolerance == null || !official || !officialStart) warnings.push('Faltas automáticas desabilitadas: fechamento, tolerância ou início da operação oficial não configurados.');
