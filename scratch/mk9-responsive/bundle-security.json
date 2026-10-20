@@ -1,0 +1,8 @@
+{
+  "passed": true,
+  "filesScanned": 9,
+  "sentinelAbsent": true,
+  "configuredSecretPresentInEnvironment": false,
+  "configuredSecretAbsentFromBundle": true,
+  "serverKeyVariableAbsent": true
+}

@@ -1,0 +1,38 @@
+{
+  "report": [
+    {
+      "step": "1. HUD e Indicadores Iniciais",
+      "status": "PASS",
+      "screenshot": "scratch/mk9-browser-homologation/01-hud-e-empty-state-desktop.png"
+    },
+    {
+      "step": "2. Listagem dos 44 Promotores sem Expediente",
+      "status": "PASS",
+      "totalExibido": 44,
+      "screenshot": "scratch/mk9-browser-homologation/02-tabela-44-promotores-sem-expediente.png"
+    },
+    {
+      "step": "3. Busca Textual por Promotor",
+      "status": "PASS",
+      "resultado": "1 promotor encontrado",
+      "screenshot": "scratch/mk9-browser-homologation/03-busca-promotor-fabio.png"
+    },
+    {
+      "step": "4. Filtro por Supervisor",
+      "status": "PASS",
+      "totalSupervisoraAna": 22,
+      "screenshot": "scratch/mk9-browser-homologation/04-filtro-supervisor-ana.png"
+    },
+    {
+      "step": "5. Abertura do Painel de Jornadas",
+      "status": "PASS",
+      "screenshot": "scratch/mk9-browser-homologation/05-painel-jornadas-aberto.png"
+    },
+    {
+      "step": "6. Responsividade Mobile (360px)",
+      "status": "PASS",
+      "screenshot": "scratch/mk9-browser-homologation/06-visualizacao-mobile-360px.png"
+    }
+  ],
+  "consoleErrors": []
+}

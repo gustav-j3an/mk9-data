@@ -95,6 +95,24 @@ export function validateOverride(status: string, justification: string, medicalD
   if (justification.trim().length < 5) throw new Error('Informe uma justificativa com pelo menos 5 caracteres.');
   if (status.startsWith('atestado_') && (!Number.isInteger(medicalDays) || medicalDays! < 1 || medicalDays! > 30)) throw new Error('Informe de 1 a 30 dias de atestado.');
 }
+export interface CrmAttendanceResolution {
+  status: 'pronto' | 'ambiguo' | 'pendente' | 'revogado' | 'sem_identidade' | 'sem_alocacao' | 'fora_vigencia_ou_janela' | 'indisponivel';
+  alocacoes_validas: number; projeto_externo_id: string | null; matricula_externa: string | null;
+}
+export async function resolveCrmAttendance(matricula: string, date: string): Promise<CrmAttendanceResolution> {
+  if (!supabase) return { status: 'indisponivel', alocacoes_validas: 0, projeto_externo_id: null, matricula_externa: null };
+  try {
+    const { data, error } = await supabase.rpc('mk9_rh_resolve_attendance', { p_matricula_local: matricula, p_data: date });
+    if (error || !Array.isArray(data) || data.length !== 1) throw error || new Error('Invalid resolution response');
+    const row = data[0];
+    const allowed = ['pronto','ambiguo','pendente','revogado','sem_identidade','sem_alocacao','fora_vigencia_ou_janela'];
+    if (!allowed.includes(row.status) || !Number.isInteger(row.alocacoes_validas)) throw new Error('Invalid resolution response');
+    return { status: row.status, alocacoes_validas: row.alocacoes_validas, projeto_externo_id: row.projeto_externo_id, matricula_externa: row.matricula_externa };
+  } catch {
+    // An integration lookup must never mask a successful local attendance save.
+    return { status: 'indisponivel', alocacoes_validas: 0, projeto_externo_id: null, matricula_externa: null };
+  }
+}
 export async function saveAttendance(input: { matricula: string; date: string; status: OverrideStatus; justification: string; medicalDays: number }) {
   if (!supabase) throw new Error('Cliente Supabase não inicializado.');
   validateOverride(input.status, input.justification, input.medicalDays);

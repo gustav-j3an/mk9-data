@@ -9,7 +9,16 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test": "tsx --test src/**/*.test.ts"
+    "typecheck": "tsc --noEmit",
+    "test": "node scripts/run-tests.mjs",
+    "test:mk9": "node --import tsx --test server/mk9-faltas.test.ts",
+    "test:mk9:responsive": "node tests/mk9-responsive.mjs",
+    "test:mk9:bundle": "node tests/mk9-bundle-security.mjs",
+    "mk9:homologation:check": "node --import tsx scripts/mk9-homologation.ts --check",
+    "mk9:homologation:real": "node --import tsx scripts/mk9-homologation.ts --real",
+    "rh:local:up": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/mk9-rh-local.ps1 up",
+    "rh:local:down": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/mk9-rh-local.ps1 down",
+    "rh:local:verify": "node scripts/mk9-rh-local-verify.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

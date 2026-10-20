@@ -1,0 +1,86 @@
+[
+  {
+    "role": "promotor",
+    "width": 360,
+    "state": "success",
+    "horizontalOverflow": false,
+    "screenshot": "scratch/mk9-responsive/promotor-360.png"
+  },
+  {
+    "role": "promotor",
+    "width": 768,
+    "state": "success",
+    "horizontalOverflow": false,
+    "screenshot": "scratch/mk9-responsive/promotor-768.png"
+  },
+  {
+    "role": "promotor",
+    "width": 1440,
+    "state": "success",
+    "horizontalOverflow": false,
+    "screenshot": "scratch/mk9-responsive/promotor-1440.png"
+  },
+  {
+    "role": "promotor",
+    "error": "passed",
+    "retry": "passed",
+    "empty": "passed",
+    "pageErrors": []
+  },
+  {
+    "role": "gestor",
+    "width": 360,
+    "state": "success",
+    "horizontalOverflow": false,
+    "screenshot": "scratch/mk9-responsive/gestor-360.png"
+  },
+  {
+    "role": "gestor",
+    "width": 768,
+    "state": "success",
+    "horizontalOverflow": false,
+    "screenshot": "scratch/mk9-responsive/gestor-768.png"
+  },
+  {
+    "role": "gestor",
+    "width": 1440,
+    "state": "success",
+    "horizontalOverflow": false,
+    "screenshot": "scratch/mk9-responsive/gestor-1440.png"
+  },
+  {
+    "role": "gestor",
+    "error": "passed",
+    "retry": "passed",
+    "empty": "passed",
+    "pageErrors": []
+  },
+  {
+    "role": "admin",
+    "width": 360,
+    "state": "success",
+    "horizontalOverflow": false,
+    "screenshot": "scratch/mk9-responsive/admin-360.png"
+  },
+  {
+    "role": "admin",
+    "width": 768,
+    "state": "success",
+    "horizontalOverflow": false,
+    "screenshot": "scratch/mk9-responsive/admin-768.png"
+  },
+  {
+    "role": "admin",
+    "width": 1440,
+    "state": "success",
+    "horizontalOverflow": false,
+    "screenshot": "scratch/mk9-responsive/admin-1440.png"
+  },
+  {
+    "role": "admin",
+    "error": "passed",
+    "retry": "passed",
+    "empty": "passed",
+    "pageErrors": []
+  }
+]
