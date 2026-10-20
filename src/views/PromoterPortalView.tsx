@@ -23,6 +23,8 @@ import {
 import { SearchableSelect, type SearchableSelectOption } from '../components/SearchableSelect';
 import { AuthorSignature } from '../components/AuthorSignature';
 import { ConfirmRouteCloseModal } from '../components/ConfirmRouteCloseModal';
+import { ShareWhatsAppModal } from '../components/ShareWhatsAppModal';
+import type { VisitShareData } from '../utils/whatsappShare';
 import {
   ROUTE_DAYS,
   buildRoutePayload,
@@ -85,6 +87,9 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
 
   // Controle de colapso do Histórico da Semana (Fechado por padrão no mobile)
   const [isWeekHistoryOpen, setIsWeekHistoryOpen] = useState<boolean>(false);
+
+  // Estado para Compartilhamento WhatsApp (Etapa 3)
+  const [shareModalData, setShareModalData] = useState<VisitShareData | null>(null);
 
   // Estado para Agenda Semanal "MINHA SEMANA" (Etapa 7.2)
   const [weekOffset, setWeekOffset] = useState<number>(0);
@@ -248,7 +253,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
 
         visitsQuery = supabase.from('visits').select(`
           *,
-          industria:industrias(codigo, nome),
+          industria:industrias(codigo, nome, whatsapp_group_link),
           loja:lojas(codigo, nome, cidade, uf, endereco),
           promotor:promotores(matricula, nome),
           checklist_items:visit_checklist_items(*),
@@ -260,7 +265,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
         // Buscar visitas anteriores a hoje que ainda não foram concluídas (em_andamento ou nao_realizada)
         openVisitsQuery = supabase.from('visits').select(`
           *,
-          industria:industrias(codigo, nome),
+          industria:industrias(codigo, nome, whatsapp_group_link),
           loja:lojas(codigo, nome, cidade, uf, endereco),
           promotor:promotores(matricula, nome),
           checklist_items:visit_checklist_items(*),
@@ -1353,8 +1358,32 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
         type: 'success'
       });
 
+      // Prepara dados para compartilhamento imediato no WhatsApp (sem forçar nem travar a conclusão)
+      const currentPhotos = activeVisit.photos || [];
+      const shareData: VisitShareData = {
+        visitId: activeVisit.id,
+        promotorNome: activeVisit.promotor?.nome || promoterDetails?.nome,
+        promotorMatricula: activeVisit.promotor_matricula,
+        lojaNome: activeVisit.loja?.nome || activeVisit.loja_codigo,
+        lojaCodigo: activeVisit.loja_codigo,
+        industriaNome: activeVisit.industria?.nome || activeVisit.industria_codigo,
+        industriaCodigo: activeVisit.industria_codigo,
+        dataVisita: activeVisit.data_visita,
+        horaInicio: activeVisit.started_at ? new Date(activeVisit.started_at).toLocaleTimeString('pt-BR') : null,
+        horaFim: new Date().toLocaleTimeString('pt-BR'),
+        status: 'concluida',
+        observacoes: generalObs.trim() || null,
+        resumoAtendimento: `Visita finalizada com ${currentPhotos.length} foto(s) e checklist respondido.`,
+        fotos: currentPhotos.map((p) => ({
+          url: p.signed_url || p.file_url,
+          descricao: p.legenda || p.tipo_foto,
+        })),
+        whatsappGroupLink: (activeVisit.industria as any)?.whatsapp_group_link || null,
+      };
+
       setActiveVisit(null);
       await loadPortalData();
+      setShareModalData(shareData);
     } catch (err: any) {
       console.error('Erro ao finalizar visita:', err);
       onShowToast({
@@ -3375,10 +3404,43 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                         )}
 
                         {item.status === 'concluida' && (
-                          <span className="text-xs text-emerald-400 font-bold flex items-center gap-1 px-3 py-2 bg-emerald-500/10 rounded-xl border border-emerald-500/30">
-                            <span className="material-symbols-outlined text-sm">check_circle</span>
-                            Concluída
-                          </span>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-xs text-emerald-400 font-bold flex items-center gap-1 px-3 py-1.5 bg-emerald-500/10 rounded-xl border border-emerald-500/30">
+                              <span className="material-symbols-outlined text-sm">check_circle</span>
+                              Concluída
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const visitObj = item.visitObj;
+                                setShareModalData({
+                                  visitId: visitObj?.id || item.key,
+                                  promotorNome: item.promotorNome || promoterDetails?.nome,
+                                  promotorMatricula: item.promotorMatricula,
+                                  lojaNome: item.lojaNome,
+                                  lojaCodigo: item.lojaCodigo,
+                                  industriaNome: item.industriaNome,
+                                  industriaCodigo: item.industriaCodigo,
+                                  dataVisita: item.dataStr,
+                                  horaInicio: item.startedAt,
+                                  horaFim: item.completedAt,
+                                  status: 'concluida',
+                                  observacoes: visitObj?.observacao_geral || null,
+                                  resumoAtendimento: `Visita concluída com ${visitObj?.photos?.length || 0} foto(s).`,
+                                  fotos: (visitObj?.photos || []).map((p: any) => ({
+                                    url: p.signed_url || p.file_url || p.url,
+                                    descricao: p.legenda || p.tipo_foto || p.tipo,
+                                  })),
+                                  whatsappGroupLink: (visitObj?.industria as any)?.whatsapp_group_link || null,
+                                });
+                              }}
+                              className="px-2.5 py-1.5 rounded-xl bg-emerald-600/20 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-600/30 text-xs font-bold font-mono flex items-center gap-1 cursor-pointer transition-colors"
+                              title="Compartilhar relatório desta visita no WhatsApp"
+                            >
+                              <span className="material-symbols-outlined text-sm">share</span>
+                              <span>WhatsApp</span>
+                            </button>
+                          </div>
                         )}
 
                         {item.status === 'nao_realizada' && (
@@ -4652,6 +4714,15 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
             </button>
           </div>
         </div>
+      )}
+
+      {/* MODAL DE COMPARTILHAMENTO WHATSAPP */}
+      {shareModalData && (
+        <ShareWhatsAppModal
+          isOpen={Boolean(shareModalData)}
+          onClose={() => setShareModalData(null)}
+          data={shareModalData}
+        />
       )}
     </div>
   );

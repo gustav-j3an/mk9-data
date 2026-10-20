@@ -12,6 +12,8 @@ import {
 } from '../utils/routePlanner';
 import { ExecutiveReportDocument } from '../components/reports/ExecutiveReportDocument';
 import { AuthorSignature } from '../components/AuthorSignature';
+import { ShareWhatsAppModal } from '../components/ShareWhatsAppModal';
+import type { VisitShareData } from '../utils/whatsappShare';
 
 interface IndustryPortalViewProps {
   onShowToast: (toast: Omit<ToastMessage, 'id'>) => void;
@@ -69,6 +71,7 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
   // Modal de Detalhes da Visita (Somente Leitura)
   const [selectedVisitItem, setSelectedVisitItem] = useState<OperationalVisitItem | null>(null);
   const [loadingDetails, setLoadingDetails] = useState(false);
+  const [shareWhatsAppModalData, setShareWhatsAppModalData] = useState<VisitShareData | null>(null);
 
   // Modal / Drawer de Histórico por Loja
   const [selectedStoreCode, setSelectedStoreCode] = useState<string | null>(null);
@@ -2948,7 +2951,39 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
             </div>
 
             {/* RODAPÉ DO MODAL */}
-            <div className="pt-3 border-t border-[#CFCDC5] flex justify-end">
+            <div className="pt-3 border-t border-[#CFCDC5] flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => {
+                  const visitObj = selectedVisitItem.visitObj;
+                  setShareWhatsAppModalData({
+                    visitId: visitObj?.id || selectedVisitItem.key,
+                    promotorNome: selectedVisitItem.promotorNome,
+                    promotorMatricula: selectedVisitItem.promotorMatricula,
+                    lojaNome: selectedVisitItem.lojaNome,
+                    lojaCodigo: selectedVisitItem.lojaCodigo,
+                    industriaNome: selectedVisitItem.industriaNome,
+                    industriaCodigo: selectedVisitItem.industriaCodigo,
+                    dataVisita: selectedVisitItem.dataStr,
+                    horaInicio: selectedVisitItem.startedAt,
+                    horaFim: selectedVisitItem.completedAt,
+                    status: selectedVisitItem.status,
+                    observacoes: visitObj?.observacao_geral || null,
+                    resumoAtendimento: `Visita ${selectedVisitItem.status.toUpperCase()} - Portal da Indústria.`,
+                    fotos: (visitObj?.photos || []).map((p: any) => ({
+                      url: signedPhotoUrls[p.storage_path] || p.file_url || p.signed_url || '',
+                      descricao: p.legenda || p.tipo_foto || p.tipo,
+                    })),
+                    whatsappGroupLink: (visitObj?.industria as any)?.whatsapp_group_link || null,
+                  });
+                }}
+                className="px-4 py-2 rounded-xl bg-emerald-600/20 text-emerald-800 border border-emerald-500/40 text-xs font-bold hover:bg-emerald-600/30 transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs"
+                title="Compartilhar relatório desta visita via WhatsApp"
+              >
+                <span className="material-symbols-outlined text-sm">share</span>
+                <span>Compartilhar WhatsApp</span>
+              </button>
+
               <button
                 onClick={() => setSelectedVisitItem(null)}
                 className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs cursor-pointer transition-all shadow-md"
@@ -2958,6 +2993,15 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
             </div>
           </div>
         </div>
+      )}
+
+      {/* 9.1 MODAL DE COMPARTILHAMENTO WHATSAPP */}
+      {shareWhatsAppModalData && (
+        <ShareWhatsAppModal
+          isOpen={Boolean(shareWhatsAppModalData)}
+          onClose={() => setShareWhatsAppModalData(null)}
+          data={shareWhatsAppModalData}
+        />
       )}
 
       {/* 10. MODAL / DRAWER DE HISTÓRICO OPERACIONAL DA LOJA SELECIONADA */}

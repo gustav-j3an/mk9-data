@@ -3,6 +3,7 @@ import { useAuth } from '../auth/AuthProvider';
 import { supabase } from '../lib/supabase';
 import type { IndustryItem, StoreItem, RouteItem, Visit, ToastMessage, ContratoLoja, PeriodoContratual, CreateContratoLojaDTO } from '../types';
 import { getMonthlyQuinzenalDates } from '../utils/routePlanner';
+import { isValidWhatsAppGroupLink, sanitizeWhatsAppGroupLink, openIndustryWhatsAppGroup } from '../utils/whatsappShare';
 import { analyzeRotasForContracts, contratosService, parseISODate, classificarParContratual } from '../lib/contratosService';
 import { StatCard, StatusBadge, DataTable, Column } from '../components/ui';
 
@@ -162,7 +163,8 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
     cnpj: '',
     status: 'ativo' as 'ativo' | 'inativo',
     observacao: '',
-    data_inicio_operacao: ''
+    data_inicio_operacao: '',
+    whatsapp_group_link: ''
   });
 
   // Busca dados de public.industrias
@@ -1246,7 +1248,8 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
       cnpj: '',
       status: 'ativo',
       observacao: '',
-      data_inicio_operacao: ''
+      data_inicio_operacao: '',
+      whatsapp_group_link: ''
     });
     setShowModal(true);
   };
@@ -1260,7 +1263,8 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
       cnpj: item.cnpj || '',
       status: item.status,
       observacao: item.observacao || '',
-      data_inicio_operacao: item.data_inicio_operacao ? item.data_inicio_operacao.slice(0, 10) : ''
+      data_inicio_operacao: item.data_inicio_operacao ? item.data_inicio_operacao.slice(0, 10) : '',
+      whatsapp_group_link: item.whatsapp_group_link || ''
     });
     setShowModal(true);
   };
@@ -1311,6 +1315,16 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
       return;
     }
 
+    const groupLinkRaw = formData.whatsapp_group_link.trim();
+    if (groupLinkRaw && !isValidWhatsAppGroupLink(groupLinkRaw)) {
+      onShowToast({
+        title: 'Link de WhatsApp Inválido',
+        message: 'O link do grupo deve ser no formato https://chat.whatsapp.com/[código]. Links wa.me ou de outros domínios são rejeitados.',
+        type: 'error'
+      });
+      return;
+    }
+
     setSaving(true);
 
     try {
@@ -1323,6 +1337,7 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
         status: formData.status,
         observacao: formData.observacao.trim() || null,
         data_inicio_operacao: formData.data_inicio_operacao.trim() || null,
+        whatsapp_group_link: sanitizeWhatsAppGroupLink(groupLinkRaw),
         updated_at: new Date().toISOString()
       };
 
@@ -2412,6 +2427,25 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
                   </div>
 
                   <div className="sm:col-span-2 p-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[#5F5F5F] block text-[10px] uppercase font-bold">Grupo de WhatsApp</span>
+                      {viewingItem.whatsapp_group_link && isValidWhatsAppGroupLink(viewingItem.whatsapp_group_link) && (
+                        <button
+                          type="button"
+                          onClick={() => openIndustryWhatsAppGroup(viewingItem.whatsapp_group_link)}
+                          className="text-[11px] text-emerald-700 hover:text-emerald-800 font-bold flex items-center gap-1 cursor-pointer"
+                        >
+                          <span className="material-symbols-outlined text-[14px]">open_in_new</span>
+                          <span>Abrir Convite</span>
+                        </button>
+                      )}
+                    </div>
+                    <span className="text-[#171717] font-mono text-[11px] block break-all">
+                      {viewingItem.whatsapp_group_link || 'Nenhum link cadastrado para esta indústria.'}
+                    </span>
+                  </div>
+
+                  <div className="sm:col-span-2 p-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl space-y-1">
                     <span className="text-[#5F5F5F] block text-[10px] uppercase font-bold">Observações / Anotações Gerais</span>
                     <p className="text-[#171717] whitespace-pre-wrap leading-relaxed text-[11px]">
                       {viewingItem.observacao || 'Nenhuma observação cadastrada para esta indústria.'}
@@ -2781,6 +2815,25 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
                   onChange={(e) => setFormData({ ...formData, data_inicio_operacao: e.target.value })}
                   className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-purple-500 font-mono"
                 />
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-[#171717]">LINK DO GRUPO DE WHATSAPP</label>
+                  <span className="text-[10px] text-[#77766F] font-mono">
+                    (Opcional - Somente convite oficial)
+                  </span>
+                </div>
+                <input
+                  type="url"
+                  value={formData.whatsapp_group_link}
+                  onChange={(e) => setFormData({ ...formData, whatsapp_group_link: e.target.value })}
+                  placeholder="https://chat.whatsapp.com/..."
+                  className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-purple-500 font-mono text-xs"
+                />
+                <p className="text-[10px] text-[#77766F] mt-1 font-mono">
+                  Aceita estritamente: <code>https://chat.whatsapp.com/...</code>. Rejeita <code>wa.me</code> e outros domínios.
+                </p>
               </div>
 
               <div>

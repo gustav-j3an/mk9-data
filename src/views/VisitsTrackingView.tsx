@@ -12,6 +12,8 @@ import {
   OperationalVisitItem,
   DayOfWeekDate
 } from '../utils/routePlanner';
+import { ShareWhatsAppModal } from '../components/ShareWhatsAppModal';
+import type { VisitShareData } from '../utils/whatsappShare';
 
 interface VisitsTrackingViewProps {
   onNavigate: (screen: ScreenId) => void;
@@ -69,6 +71,7 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
   const [signedPhotoUrls, setSignedPhotoUrls] = useState<Record<string, string>>({});
   const [loadingPhotos, setLoadingPhotos] = useState(false);
   const [zoomedPhotoUrl, setZoomedPhotoUrl] = useState<string | null>(null);
+  const [shareWhatsAppVisit, setShareWhatsAppVisit] = useState<VisitShareData | null>(null);
 
   // Controle de concorrência e identificador sequencial de requisição
   const reqSeqRef = useRef<number>(0);
@@ -1419,16 +1422,58 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
             </div>
 
             {/* Footer Modal */}
-            <div className="px-6 py-3 border-t border-[#E4E2DB] bg-[#FCFCFB] flex justify-end">
+            <div className="px-6 py-3 border-t border-[#E4E2DB] bg-[#FCFCFB] flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => {
+                  const visitObj = selectedVisitItem.visitObj;
+                  const targetInd = industriasList.find((ind) => ind.codigo === selectedVisitItem.industriaCodigo);
+                  setShareWhatsAppVisit({
+                    visitId: visitObj?.id || selectedVisitItem.key,
+                    promotorNome: selectedVisitItem.promotorNome,
+                    promotorMatricula: selectedVisitItem.promotorMatricula,
+                    lojaNome: selectedVisitItem.lojaNome,
+                    lojaCodigo: selectedVisitItem.lojaCodigo,
+                    industriaNome: selectedVisitItem.industriaNome,
+                    industriaCodigo: selectedVisitItem.industriaCodigo,
+                    dataVisita: selectedVisitItem.dataStr,
+                    horaInicio: selectedVisitItem.startedAt,
+                    horaFim: selectedVisitItem.completedAt,
+                    status: selectedVisitItem.status,
+                    observacoes: visitObj?.observacao_geral || null,
+                    resumoAtendimento: `Visita ${selectedVisitItem.status.toUpperCase()} acompanhada via central de monitoramento.`,
+                    fotos: (visitObj?.photos || []).map((p: any) => ({
+                      url: signedPhotoUrls[p.id || p.storage_path] || p.file_url || p.signed_url || '',
+                      descricao: p.legenda || p.tipo_foto || p.tipo,
+                    })),
+                    whatsappGroupLink: targetInd?.whatsapp_group_link || null,
+                  });
+                }}
+                className="px-4 py-2 bg-emerald-600/20 text-emerald-800 border border-emerald-500/40 rounded-xl text-xs font-bold hover:bg-emerald-600/30 transition-colors flex items-center gap-1.5 cursor-pointer"
+                title="Compartilhar relatório desta visita via WhatsApp"
+              >
+                <span className="material-symbols-outlined text-sm">share</span>
+                <span>Compartilhar WhatsApp</span>
+              </button>
+
               <button
                 onClick={() => setSelectedVisitItem(null)}
-                className="px-4 py-2 bg-[#171717] text-white rounded-xl text-xs font-semibold hover:bg-[#2C2C2C] transition-colors"
+                className="px-4 py-2 bg-[#171717] text-white rounded-xl text-xs font-semibold hover:bg-[#2C2C2C] transition-colors cursor-pointer"
               >
                 Fechar
               </button>
             </div>
           </div>
         </div>
+      )}
+
+      {/* 6.1 Modal Compartilhar WhatsApp */}
+      {shareWhatsAppVisit && (
+        <ShareWhatsAppModal
+          isOpen={Boolean(shareWhatsAppVisit)}
+          onClose={() => setShareWhatsAppVisit(null)}
+          data={shareWhatsAppVisit}
+        />
       )}
 
       {/* 7. Modal de Zoom de Foto */}
