@@ -3,8 +3,8 @@ import { ScreenId, ToastMessage, RouteItem, Visit } from '../types';
 import { fetchAttendance, saveAttendance, fetchAttendanceAudit, attendanceErrorMessage, type AttendanceAuditEntry } from '../lib/attendanceService';
 import { AttendanceJourneyPanel } from '../components/AttendanceJourneyPanel';
 import type { Promoter } from '../utils/attendanceEngine';
-import { LABELS, filterRoster, exportRows, zoned, type PresenceItem, type OverrideStatus } from '../utils/attendanceEngine';
-import { type PromoterOperationalSummary, type PromoterVisitDetail, type RouteExecutionStatus } from '../utils/visitActivityEngine';
+import { zoned, type PresenceItem, type OverrideStatus } from '../utils/attendanceEngine';
+import { type PromoterOperationalSummary, type RouteExecutionStatus } from '../utils/visitActivityEngine';
 import * as XLSX from 'xlsx';
 
 interface AttendanceControlViewProps {
@@ -30,6 +30,9 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
   // Filtros de Busca e Visualização
   const [search, setSearch] = useState('');
   const [supervisorFilter, setSupervisorFilter] = useState('');
+  // Filtro de Programação: 'com_roteiro' (padrão), 'todos', 'sem_programacao'
+  const [scopeFilter, setScopeFilter] = useState<'com_roteiro' | 'todos' | 'sem_programacao'>('com_roteiro');
+
   const [promoters, setPromoters] = useState<Promoter[]>([]);
   const [audit, setAudit] = useState<{ name: string; rows: AttendanceAuditEntry[] } | null>(null);
   const [canEdit, setCanEdit] = useState(false);
@@ -128,13 +131,21 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
   const filteredSummaries = useMemo(() => {
     const term = search.trim().toLowerCase();
     return operationalSummaries.filter(summary => {
+      // 1. Filtro de escopo de programação:
+      if (scopeFilter === 'com_roteiro' && summary.scheduledVisitsCount === 0) return false;
+      if (scopeFilter === 'sem_programacao' && summary.scheduledVisitsCount > 0) return false;
+
+      // 2. Busca por nome ou matrícula
       const matchSearch = !term ||
         summary.name.toLowerCase().includes(term) ||
         summary.matricula.toLowerCase().includes(term);
+
+      // 3. Filtro por supervisor
       const matchSupervisor = !supervisorFilter || summary.supervisor === supervisorFilter;
+
       return matchSearch && matchSupervisor;
     });
-  }, [operationalSummaries, search, supervisorFilter]);
+  }, [operationalSummaries, scopeFilter, search, supervisorFilter]);
 
   // Lista única de supervisores para o filtro
   const availableSupervisors = useMemo(() => {
@@ -147,21 +158,46 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
     return Array.from(set).sort((a, b) => a.localeCompare(b, 'pt-BR'));
   }, [operationalSummaries]);
 
-  // Quatro Indicadores Centrais
-  const kpiMetrics = useMemo(() => {
-    let completas = 0;
+  // Indicadores de Roteiro e Resumo de Visitas da Operação
+  const metrics = useMemo(() => {
+    // Calculados sobre os promotores do filtro atual
+    let completos = 0;
     let parciais = 0;
-    let naoRealizadas = 0;
-    let emAndamento = 0;
+    let naoRealizados = 0;
+    let emAtividade = 0;
+    let aguardandoInicio = 0;
+
+    let totalProgramadas = 0;
+    let totalConcluidas = 0;
+    let totalPendentes = 0;
 
     filteredSummaries.forEach(s => {
-      if (s.routeStatus === 'COMPLETA') completas++;
+      if (s.routeStatus === 'COMPLETO') completos++;
       else if (s.routeStatus === 'PARCIAL') parciais++;
-      else if (s.routeStatus === 'NAO_REALIZADO') naoRealizadas++;
-      else if (s.routeStatus === 'EM_ANDAMENTO') emAndamento++;
+      else if (s.routeStatus === 'NAO_REALIZADO') naoRealizados++;
+      else if (s.routeStatus === 'EM_ATIVIDADE') emAtividade++;
+      else if (s.routeStatus === 'AGUARDANDO_INICIO') aguardandoInicio++;
+
+      totalProgramadas += s.scheduledVisitsCount;
+      totalConcluidas += s.completedVisitsCount;
+      totalPendentes += s.pendingVisitsCount;
     });
 
-    return { completas, parciais, naoRealizadas, emAndamento };
+    const percentualExecucao = totalProgramadas > 0
+      ? Math.round((totalConcluidas / totalProgramadas) * 100)
+      : 0;
+
+    return {
+      completos,
+      parciais,
+      naoRealizados,
+      emAtividade,
+      aguardandoInicio,
+      totalProgramadas,
+      totalConcluidas,
+      totalPendentes,
+      percentualExecucao
+    };
   }, [filteredSummaries]);
 
   const handleExport = () => {
@@ -176,12 +212,13 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
         'Primeira Atividade': s.firstActivityTime || '--:--',
         'Visitas Concluídas': s.completedVisitsCount,
         'Visitas Programadas': s.scheduledVisitsCount,
+        'Visitas Pendentes': s.pendingVisitsCount,
         'Relação': `${s.completedVisitsCount}/${s.scheduledVisitsCount}`,
         'Situação do Roteiro': s.routeStatus
       }));
       const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Presença Operacional');
-      XLSX.writeFile(wb, `MK9_Presenca_Operacional_${dateVal}.xlsx`);
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Controle Diário');
+      XLSX.writeFile(wb, `MK9_Controle_Diario_${dateVal}.xlsx`);
     } catch {
       onShowToast({ title: 'Exportação não concluída', message: 'Não foi possível gerar a planilha.', type: 'error' });
     }
@@ -190,11 +227,11 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
   // Badge para Situação do Roteiro
   const renderRouteBadge = (status: RouteExecutionStatus) => {
     switch (status) {
-      case 'COMPLETA':
+      case 'COMPLETO':
         return (
           <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-800 border border-emerald-300">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-600" />
-            COMPLETA
+            COMPLETO
           </span>
         );
       case 'PARCIAL':
@@ -211,11 +248,18 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
             NÃO REALIZADO
           </span>
         );
-      case 'EM_ANDAMENTO':
+      case 'EM_ATIVIDADE':
         return (
           <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-blue-50 text-blue-800 border border-blue-300">
             <span className="w-1.5 h-1.5 rounded-full bg-blue-600 animate-pulse" />
-            EM ANDAMENTO
+            EM ATIVIDADE
+          </span>
+        );
+      case 'AGUARDANDO_INICIO':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-700 border border-slate-300">
+            <span className="w-1.5 h-1.5 rounded-full bg-slate-500" />
+            AGUARDANDO INÍCIO
           </span>
         );
       case 'SEM_PROGRAMACAO':
@@ -253,7 +297,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
           <button
             onClick={handleExport}
             disabled={loading || filteredSummaries.length === 0}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#F7F6F2] hover:bg-[#E4E2DB] text-[#171717] border border-[#CFCDC5] text-xs font-semibold shadow-xs transition-all"
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#F7F6F2] hover:bg-[#E4E2DB] text-[#171717] border border-[#CFCDC5] text-xs font-semibold shadow-xs transition-all cursor-pointer"
             title="Exportar planilha"
           >
             <span className="material-symbols-outlined text-[18px]">download</span>
@@ -283,7 +327,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
             </div>
             <button
               onClick={() => setShowConfig(false)}
-              className="p-1 text-[#77766F] hover:text-[#171717] rounded-lg"
+              className="p-1 text-[#77766F] hover:text-[#171717] rounded-lg cursor-pointer"
             >
               <span className="material-symbols-outlined text-lg">close</span>
             </button>
@@ -311,7 +355,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
           <div className="flex justify-end pt-2">
             <button
               onClick={() => onNavigate('gestao-equipes')}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#222222] text-white text-xs font-semibold hover:bg-black"
+              className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#222222] text-white text-xs font-semibold hover:bg-black cursor-pointer"
             >
               <span className="material-symbols-outlined text-[16px]">groups</span>
               <span>Gerenciar equipes</span>
@@ -320,116 +364,188 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
         </div>
       )}
 
-      {/* BARRA DE FILTROS: DATA, BUSCA POR PROMOTOR E SUPERVISOR */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3 p-4 rounded-xl bg-[#F7F6F2] border border-[#CFCDC5]">
-        {/* Data selecionada */}
-        <div className="lg:col-span-3 flex items-center bg-[#EAE8E2] border border-[#CFCDC5] px-3 py-2 rounded-lg">
-          <span className="material-symbols-outlined text-[#77766F] mr-2 text-[18px]">calendar_today</span>
-          <div className="flex flex-col min-w-0 flex-1">
-            <span className="text-[9px] uppercase font-mono font-bold text-[#77766F]">Data Operacional</span>
+      {/* BARRA DE FILTROS: DATA, ESCOPO, BUSCA POR PROMOTOR E SUPERVISOR */}
+      <div className="p-4 rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] space-y-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3">
+          {/* Data selecionada */}
+          <div className="lg:col-span-3 flex items-center bg-[#EAE8E2] border border-[#CFCDC5] px-3 py-2 rounded-lg">
+            <span className="material-symbols-outlined text-[#77766F] mr-2 text-[18px]">calendar_today</span>
+            <div className="flex flex-col min-w-0 flex-1">
+              <span className="text-[9px] uppercase font-mono font-bold text-[#77766F]">Data Operacional</span>
+              <input
+                type="date"
+                aria-label="Data operacional"
+                value={dateVal}
+                onChange={(e) => setDateVal(e.target.value)}
+                className="bg-transparent font-semibold text-xs text-[#171717] focus:outline-none cursor-pointer"
+              />
+            </div>
+          </div>
+
+          {/* Busca por Promotor */}
+          <div className="lg:col-span-5 flex items-center bg-[#EAE8E2] border border-[#CFCDC5] px-3 py-2 rounded-lg">
+            <span className="material-symbols-outlined text-[#77766F] mr-2 text-[18px]">search</span>
             <input
-              type="date"
-              aria-label="Data operacional"
-              value={dateVal}
-              onChange={(e) => setDateVal(e.target.value)}
-              className="bg-transparent font-semibold text-xs text-[#171717] focus:outline-none cursor-pointer"
+              type="text"
+              aria-label="Buscar promotor ou matrícula"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Buscar promotor por nome ou matrícula..."
+              className="w-full bg-transparent text-xs text-[#171717] placeholder:text-[#77766F] focus:outline-none"
             />
+            {search && (
+              <button onClick={() => setSearch('')} className="text-[#77766F] hover:text-[#171717] p-1 cursor-pointer">
+                ✕
+              </button>
+            )}
+          </div>
+
+          {/* Filtro por Supervisor */}
+          <div className="lg:col-span-4 flex items-center bg-[#EAE8E2] border border-[#CFCDC5] px-3 py-2 rounded-lg">
+            <span className="material-symbols-outlined text-[#77766F] mr-2 text-[18px]">supervisor_account</span>
+            <div className="flex flex-col min-w-0 flex-1">
+              <span className="text-[9px] uppercase font-mono font-bold text-[#77766F]">Supervisor</span>
+              <select
+                aria-label="Filtrar por supervisor"
+                value={supervisorFilter}
+                onChange={(e) => setSupervisorFilter(e.target.value)}
+                className="bg-transparent text-xs text-[#171717] focus:outline-none cursor-pointer font-medium"
+              >
+                <option value="" className="bg-[#F7F6F2]">Todos os supervisores</option>
+                {availableSupervisors.map(sup => (
+                  <option key={sup} value={sup} className="bg-[#F7F6F2]">{sup}</option>
+                ))}
+              </select>
+            </div>
           </div>
         </div>
 
-        {/* Busca por Promotor */}
-        <div className="lg:col-span-5 flex items-center bg-[#EAE8E2] border border-[#CFCDC5] px-3 py-2 rounded-lg">
-          <span className="material-symbols-outlined text-[#77766F] mr-2 text-[18px]">search</span>
-          <input
-            type="text"
-            aria-label="Buscar promotor ou matrícula"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Buscar promotor por nome ou matrícula..."
-            className="w-full bg-transparent text-xs text-[#171717] placeholder:text-[#77766F] focus:outline-none"
-          />
-          {search && (
-            <button onClick={() => setSearch('')} className="text-[#77766F] hover:text-[#171717] p-1">
-              ✕
-            </button>
-          )}
-        </div>
-
-        {/* Filtro por Supervisor */}
-        <div className="lg:col-span-4 flex items-center bg-[#EAE8E2] border border-[#CFCDC5] px-3 py-2 rounded-lg">
-          <span className="material-symbols-outlined text-[#77766F] mr-2 text-[18px]">supervisor_account</span>
-          <div className="flex flex-col min-w-0 flex-1">
-            <span className="text-[9px] uppercase font-mono font-bold text-[#77766F]">Supervisor</span>
-            <select
-              aria-label="Filtrar por supervisor"
-              value={supervisorFilter}
-              onChange={(e) => setSupervisorFilter(e.target.value)}
-              className="bg-transparent text-xs text-[#171717] focus:outline-none cursor-pointer font-medium"
-            >
-              <option value="" className="bg-[#F7F6F2]">Todos os supervisores</option>
-              {availableSupervisors.map(sup => (
-                <option key={sup} value={sup} className="bg-[#F7F6F2]">{sup}</option>
-              ))}
-            </select>
-          </div>
+        {/* Filtro rápido de Escopo de Programação */}
+        <div className="flex items-center gap-2 pt-2 border-t border-[#CFCDC5] text-xs">
+          <span className="text-[10px] font-bold text-[#77766F] uppercase tracking-wider font-mono mr-1">
+            Visualizar:
+          </span>
+          <button
+            onClick={() => setScopeFilter('com_roteiro')}
+            className={`px-3 py-1 rounded-full font-semibold transition-all cursor-pointer ${
+              scopeFilter === 'com_roteiro'
+                ? 'bg-[#222222] text-white shadow-xs'
+                : 'bg-[#EAE8E2] text-[#5F5F5F] hover:bg-[#E4E2DB] border border-[#CFCDC5]'
+            }`}
+          >
+            Com roteiro programado ({operationalSummaries.filter(s => s.scheduledVisitsCount > 0).length})
+          </button>
+          <button
+            onClick={() => setScopeFilter('todos')}
+            className={`px-3 py-1 rounded-full font-semibold transition-all cursor-pointer ${
+              scopeFilter === 'todos'
+                ? 'bg-[#222222] text-white shadow-xs'
+                : 'bg-[#EAE8E2] text-[#5F5F5F] hover:bg-[#E4E2DB] border border-[#CFCDC5]'
+            }`}
+          >
+            Todos os promotores ({operationalSummaries.length})
+          </button>
+          <button
+            onClick={() => setScopeFilter('sem_programacao')}
+            className={`px-3 py-1 rounded-full font-semibold transition-all cursor-pointer ${
+              scopeFilter === 'sem_programacao'
+                ? 'bg-[#222222] text-white shadow-xs'
+                : 'bg-[#EAE8E2] text-[#5F5F5F] hover:bg-[#E4E2DB] border border-[#CFCDC5]'
+            }`}
+          >
+            Sem programação ({operationalSummaries.filter(s => s.scheduledVisitsCount === 0).length})
+          </button>
         </div>
       </div>
 
-      {/* 2. QUATRO INDICADORES SIMPLES */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        {/* Completas */}
-        <div className="p-4 rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] flex items-center justify-between shadow-xs">
-          <div>
-            <span className="text-[11px] font-bold text-[#77766F] uppercase tracking-wider font-mono">Completas</span>
-            <div className="text-2xl font-extrabold text-emerald-700 font-mono mt-0.5">
-              {loading ? '—' : kpiMetrics.completas}
+      {/* 2. QUATRO INDICADORES DE ROTEIRO + RESUMO COMPACTO DE PENDÊNCIAS */}
+      <div className="space-y-3">
+        {/* Quatro Indicadores */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          {/* Completos */}
+          <div className="p-4 rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] flex items-center justify-between shadow-xs">
+            <div>
+              <span className="text-[11px] font-bold text-[#77766F] uppercase tracking-wider font-mono">Completos</span>
+              <div className="text-2xl font-extrabold text-emerald-700 font-mono mt-0.5">
+                {loading ? '—' : metrics.completos}
+              </div>
+              <p className="text-[10px] text-[#77766F] mt-1">100% visitas realizadas</p>
             </div>
-            <p className="text-[10px] text-[#77766F] mt-1">Todas visitas realizadas</p>
+            <div className="p-2.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200">
+              <span className="material-symbols-outlined text-2xl">task_alt</span>
+            </div>
           </div>
-          <div className="p-2.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200">
-            <span className="material-symbols-outlined text-2xl">task_alt</span>
+
+          {/* Parciais */}
+          <div className="p-4 rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] flex items-center justify-between shadow-xs">
+            <div>
+              <span className="text-[11px] font-bold text-[#77766F] uppercase tracking-wider font-mono">Parciais</span>
+              <div className="text-2xl font-extrabold text-amber-700 font-mono mt-0.5">
+                {loading ? '—' : metrics.parciais}
+              </div>
+              <p className="text-[10px] text-[#77766F] mt-1">Dia fechado com pendência</p>
+            </div>
+            <div className="p-2.5 rounded-lg bg-amber-50 text-amber-700 border border-amber-200">
+              <span className="material-symbols-outlined text-2xl">timelapse</span>
+            </div>
+          </div>
+
+          {/* Não realizados */}
+          <div className="p-4 rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] flex items-center justify-between shadow-xs">
+            <div>
+              <span className="text-[11px] font-bold text-[#77766F] uppercase tracking-wider font-mono">Não Realizados</span>
+              <div className="text-2xl font-extrabold text-rose-700 font-mono mt-0.5">
+                {loading ? '—' : metrics.naoRealizados}
+              </div>
+              <p className="text-[10px] text-[#77766F] mt-1">Nenhuma visita concluída</p>
+            </div>
+            <div className="p-2.5 rounded-lg bg-rose-50 text-rose-700 border border-rose-200">
+              <span className="material-symbols-outlined text-2xl">cancel</span>
+            </div>
+          </div>
+
+          {/* Em atividade / Aguardando início */}
+          <div className="p-4 rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] flex items-center justify-between shadow-xs">
+            <div>
+              <span className="text-[11px] font-bold text-[#77766F] uppercase tracking-wider font-mono">Em Atividade</span>
+              <div className="text-2xl font-extrabold text-blue-700 font-mono mt-0.5">
+                {loading ? '—' : metrics.emAtividade}
+              </div>
+              <p className="text-[10px] text-[#77766F] mt-1">
+                {metrics.aguardandoInicio > 0 ? `${metrics.aguardandoInicio} aguardando início` : 'Dia em andamento'}
+              </p>
+            </div>
+            <div className="p-2.5 rounded-lg bg-blue-50 text-blue-700 border border-blue-200">
+              <span className="material-symbols-outlined text-2xl">person_pin_circle</span>
+            </div>
           </div>
         </div>
 
-        {/* Parciais */}
-        <div className="p-4 rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] flex items-center justify-between shadow-xs">
-          <div>
-            <span className="text-[11px] font-bold text-[#77766F] uppercase tracking-wider font-mono">Parciais</span>
-            <div className="text-2xl font-extrabold text-amber-700 font-mono mt-0.5">
-              {loading ? '—' : kpiMetrics.parciais}
-            </div>
-            <p className="text-[10px] text-[#77766F] mt-1">Ao menos 1 concluída</p>
+        {/* Resumo Compacto de Visitas e Pendências Operacionais */}
+        <div className="px-4 py-2.5 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] flex flex-wrap items-center justify-between gap-3 text-xs font-mono">
+          <div className="flex items-center gap-4 flex-wrap">
+            <span>
+              Visitas Programadas: <strong className="text-[#171717]">{metrics.totalProgramadas}</strong>
+            </span>
+            <span>•</span>
+            <span>
+              Concluídas: <strong className="text-emerald-800">{metrics.totalConcluidas}</strong>
+            </span>
+            <span>•</span>
+            <span className="flex items-center gap-1">
+              Pendentes: <strong className={metrics.totalPendentes > 0 ? 'text-amber-800 font-bold' : 'text-[#171717]'}>{metrics.totalPendentes}</strong>
+            </span>
           </div>
-          <div className="p-2.5 rounded-lg bg-amber-50 text-amber-700 border border-amber-200">
-            <span className="material-symbols-outlined text-2xl">timelapse</span>
-          </div>
-        </div>
 
-        {/* Não realizadas */}
-        <div className="p-4 rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] flex items-center justify-between shadow-xs">
-          <div>
-            <span className="text-[11px] font-bold text-[#77766F] uppercase tracking-wider font-mono">Não Realizadas</span>
-            <div className="text-2xl font-extrabold text-rose-700 font-mono mt-0.5">
-              {loading ? '—' : kpiMetrics.naoRealizadas}
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] text-[#5F5F5F]">Execução Geral:</span>
+            <div className="w-24 h-2 rounded-full bg-[#CFCDC5] overflow-hidden">
+              <div
+                className="h-full bg-emerald-600 transition-all duration-300"
+                style={{ width: `${metrics.percentualExecucao}%` }}
+              />
             </div>
-            <p className="text-[10px] text-[#77766F] mt-1">Nenhuma concluída</p>
-          </div>
-          <div className="p-2.5 rounded-lg bg-rose-50 text-rose-700 border border-rose-200">
-            <span className="material-symbols-outlined text-2xl">cancel</span>
-          </div>
-        </div>
-
-        {/* Em andamento */}
-        <div className="p-4 rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] flex items-center justify-between shadow-xs">
-          <div>
-            <span className="text-[11px] font-bold text-[#77766F] uppercase tracking-wider font-mono">Em Andamento</span>
-            <div className="text-2xl font-extrabold text-blue-700 font-mono mt-0.5">
-              {loading ? '—' : kpiMetrics.emAndamento}
-            </div>
-            <p className="text-[10px] text-[#77766F] mt-1">Dia atual em campo</p>
-          </div>
-          <div className="p-2.5 rounded-lg bg-blue-50 text-blue-700 border border-blue-200">
-            <span className="material-symbols-outlined text-2xl">pending_actions</span>
+            <strong className="text-emerald-800">{metrics.percentualExecucao}%</strong>
           </div>
         </div>
       </div>
@@ -467,12 +583,12 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
             <p className="text-xs text-[#77766F]">
               Não foram encontrados promotores para os filtros informados nesta data operacional.
             </p>
-            {(search || supervisorFilter) && (
+            {(search || supervisorFilter || scopeFilter !== 'com_roteiro') && (
               <button
-                onClick={() => { setSearch(''); setSupervisorFilter(''); }}
-                className="px-3 py-1.5 rounded-lg bg-[#222222] text-white text-xs font-semibold"
+                onClick={() => { setSearch(''); setSupervisorFilter(''); setScopeFilter('com_roteiro'); }}
+                className="px-3 py-1.5 rounded-lg bg-[#222222] text-white text-xs font-semibold cursor-pointer"
               >
-                Limpar filtros
+                Restaurar visualização padrão
               </button>
             )}
           </div>
@@ -485,7 +601,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                 <tr className="bg-[#E4E2DB] text-[#77766F] font-mono text-[10px] uppercase tracking-wider h-10 border-b border-[#CFCDC5] select-none">
                   <th className="py-2.5 px-4 font-semibold">Promotor</th>
                   <th className="py-2.5 px-4 font-semibold">Presença Operacional</th>
-                  <th className="py-2.5 px-4 font-semibold text-center">Visitas Concluídas / Programadas</th>
+                  <th className="py-2.5 px-4 font-semibold text-center">Visitas (Concluídas / Programadas)</th>
                   <th className="py-2.5 px-4 font-semibold">Situação do Roteiro</th>
                   <th className="py-2.5 px-4 text-right font-semibold">Detalhes</th>
                 </tr>
@@ -525,9 +641,16 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
 
                     {/* Visitas Concluídas / Programadas */}
                     <td className="py-3 px-4 text-center">
-                      <span className="font-mono text-sm font-bold text-[#171717]">
-                        {summary.completedVisitsCount} / {summary.scheduledVisitsCount}
-                      </span>
+                      <div className="inline-flex items-center gap-1.5 font-mono">
+                        <span className="text-sm font-bold text-[#171717]">
+                          {summary.completedVisitsCount} / {summary.scheduledVisitsCount}
+                        </span>
+                        {summary.pendingVisitsCount > 0 && (
+                          <span className="text-[11px] text-amber-800 font-semibold">
+                            ({summary.pendingVisitsCount} pendente{summary.pendingVisitsCount > 1 ? 's' : ''})
+                          </span>
+                        )}
+                      </div>
                     </td>
 
                     {/* Situação do Roteiro */}
@@ -553,7 +676,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
 
           {/* Rodapé da tabela */}
           <div className="p-3 bg-[#E4E2DB] border-t border-[#CFCDC5] flex items-center justify-between text-xs text-[#5F5F5F]">
-            <span>Exibindo <strong>{filteredSummaries.length}</strong> promotores</span>
+            <span>Exibindo <strong>{filteredSummaries.length}</strong> de <strong>{operationalSummaries.length}</strong> promotores</span>
             <span className="text-[11px]">MK9 Date — Presença Operacional por Atendimentos</span>
           </div>
         </div>
@@ -578,7 +701,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
               </div>
               <button
                 onClick={() => setDetailPromoter(null)}
-                className="p-1.5 rounded-lg text-[#77766F] hover:text-[#171717] hover:bg-[#DCDAD2]"
+                className="p-1.5 rounded-lg text-[#77766F] hover:text-[#171717] hover:bg-[#DCDAD2] cursor-pointer"
                 title="Fechar"
               >
                 <span className="material-symbols-outlined text-lg">close</span>
@@ -587,12 +710,12 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
 
             {/* Conteúdo: Lista de Lojas e Visitas */}
             <div className="p-4 overflow-y-auto space-y-3 flex-1">
-              <div className="flex items-center justify-between text-xs pb-1">
+              <div className="flex items-center justify-between text-xs pb-1 font-mono">
                 <span className="font-bold text-[#171717]">
                   Atendimentos ({detailPromoter.visits.length})
                 </span>
-                <span className="font-mono text-[#5F5F5F]">
-                  {detailPromoter.completedVisitsCount} de {detailPromoter.scheduledVisitsCount} concluídas
+                <span className="text-[#5F5F5F]">
+                  <strong>{detailPromoter.completedVisitsCount}</strong> concluídas • <strong className={detailPromoter.pendingVisitsCount > 0 ? 'text-amber-800' : ''}>{detailPromoter.pendingVisitsCount}</strong> pendentes de {detailPromoter.scheduledVisitsCount}
                 </span>
               </div>
 
@@ -603,22 +726,30 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
               ) : (
                 <div className="space-y-2">
                   {detailPromoter.visits.map((v) => {
-                    const isNotDone = v.status === 'nao_realizada' || (v.status === 'pendente' && v.isScheduled);
+                    const isPending = v.status === 'pendente' || v.status === 'nao_realizada';
                     return (
                       <div
                         key={v.id}
                         className={`p-3 rounded-xl border text-xs space-y-1.5 transition-all ${
                           v.status === 'concluida'
                             ? 'bg-emerald-50/50 border-emerald-200'
-                            : isNotDone
+                            : v.status === 'nao_realizada'
                             ? 'bg-rose-50/40 border-rose-200'
-                            : 'bg-blue-50/40 border-blue-200'
+                            : v.status === 'em_andamento'
+                            ? 'bg-blue-50/40 border-blue-200'
+                            : 'bg-amber-50/30 border-amber-200'
                         }`}
                       >
                         <div className="flex items-start justify-between gap-2">
                           <div>
-                            <div className="font-bold text-[#171717] text-sm">
-                              {v.lojaNome} ({v.lojaCodigo})
+                            <div className="font-bold text-[#171717] text-sm flex items-center gap-2">
+                              <span>{v.lojaNome}</span>
+                              <span className="text-[10px] font-mono text-[#77766F]">({v.lojaCodigo})</span>
+                              {isPending && (
+                                <span className="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300">
+                                  Pendente
+                                </span>
+                              )}
                             </div>
                             <div className="text-[11px] text-[#5F5F5F]">
                               Indústria: <strong>{v.industriaNome}</strong>
@@ -642,7 +773,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                               </span>
                             ) : (
                               <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-[#E4E2DB] text-[#5F5F5F]">
-                                Pendente
+                                Aguardando visita
                               </span>
                             )}
                           </div>
@@ -675,7 +806,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
             <div className="p-3 bg-[#EAE8E2] border-t border-[#CFCDC5] flex justify-end">
               <button
                 onClick={() => setDetailPromoter(null)}
-                className="px-4 py-1.5 rounded-xl bg-[#222222] text-white text-xs font-semibold hover:bg-black"
+                className="px-4 py-1.5 rounded-xl bg-[#222222] text-white text-xs font-semibold hover:bg-black cursor-pointer"
               >
                 Fechar
               </button>

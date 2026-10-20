@@ -3,7 +3,13 @@ import { zoned, validDate } from './attendanceEngine';
 
 export type OperationalPresenceStatus = 'presente' | 'sem_atividade';
 
-export type RouteExecutionStatus = 'COMPLETA' | 'PARCIAL' | 'NAO_REALIZADO' | 'EM_ANDAMENTO' | 'SEM_PROGRAMACAO';
+export type RouteExecutionStatus =
+  | 'COMPLETO'
+  | 'PARCIAL'
+  | 'NAO_REALIZADO'
+  | 'EM_ATIVIDADE'
+  | 'AGUARDANDO_INICIO'
+  | 'SEM_PROGRAMACAO';
 
 export interface PromoterOperationalSummary {
   promoterId: string;
@@ -16,6 +22,7 @@ export interface PromoterOperationalSummary {
   scheduledVisitsCount: number;
   completedVisitsCount: number;
   inProgressVisitsCount: number;
+  pendingVisitsCount: number;
   routeStatus: RouteExecutionStatus;
   visits: PromoterVisitDetail[];
 }
@@ -54,19 +61,24 @@ export interface DayActivityInput {
 const DAY_KEYS = ['domingo', 'segunda', 'terca', 'quarta', 'quinta', 'sexta', 'sabado'] as const;
 
 /**
- * Calcula a Presença Operacional e o Cumprimento de Roteiro do dia para todos os promotores.
- * 
- * Regras:
+ * Calcula a Presença Operacional e a Situação do Roteiro para todos os promotores na data.
+ *
+ * REGRAS OPERACIONAIS:
  * 1. Presença operacional é confirmada ('presente') quando o promotor inicia sua primeira visita válida do dia (started_at ou status 'em_andamento'/'concluida').
  * 2. Horário da primeira atividade registrado no fuso operacional (padrão 'America/Sao_Paulo').
- * 3. Uma única confirmação diária por promotor. Visitas de outros promotores não interferem.
- * 4. Situação do Roteiro:
- *    - 'SEM_PROGRAMACAO': nenhuma visita programada válida para o dia.
- *    - 'COMPLETA': todas as visitas programadas foram concluídas (completedVisitsCount >= scheduledVisitsCount && scheduledVisitsCount > 0).
- *    - 'EM_ANDAMENTO': durante o dia operacional em andamento (date >= today), se nem todas foram concluídas e ainda não finalizou o dia.
- *    - 'PARCIAL': após o fechamento do dia (ou quando não há mais visitas em andamento e pelo menos 1 foi concluída), concluiu pelo menos 1 mas não todas.
- *    - 'NAO_REALIZADO': após o fechamento do dia (ou sem visitas em andamento), nenhuma visita programada concluída.
- * 5. Nenhuma falta CLT é gerada automaticamente.
+ * 3. Classificação semântica precisa do Roteiro:
+ *    - SEM_PROGRAMACAO: promotor não possui nenhuma visita programada para a data. Não gera falta.
+ *    - COMPLETO: concluiu todas as visitas programadas (completedVisitsCount >= scheduledVisitsCount && scheduledVisitsCount > 0).
+ *    - Se o dia operacional foi encerrado (date < today):
+ *        * PARCIAL: concluiu pelo menos 1 visita, mas não todas.
+ *        * NAO_REALIZADO: nenhuma visita programada concluída. Não gera falta automática CLT.
+ *    - Se o dia operacional está em andamento (date >= today):
+ *        * EM_ATIVIDADE: iniciou pelo menos uma visita válida (em andamento ou concluída), com visitas ainda pendentes para completar.
+ *        * AGUARDANDO_INICIO: possui visitas programadas, mas nenhuma visita foi iniciada ainda no dia.
+ * 4. Contagem precisa de visitas:
+ *    - Respeita cada rota cadastrada válida para o dia da semana da data.
+ *    - Chave de obrigação: promotor + loja + indústria. Múltiplas indústrias na mesma loja são obrigações distintas e ambas contam.
+ *    - Rotas duplicadas com mesmo promotor, loja, indústria e frequência são desduplicadas por ID/chave idêntica.
  */
 export function calculateOperationalActivity(input: DayActivityInput): PromoterOperationalSummary[] {
   const { date, promoters, routes, visits, timezone = 'America/Sao_Paulo' } = input;
@@ -94,10 +106,9 @@ export function calculateOperationalActivity(input: DayActivityInput): PromoterO
     }
   });
 
-  // Indexar rotas válidas para a data por promotor
+  // Indexar rotas ativas no dia da semana por promotor
   const routesByPromoter = new Map<string, RouteItem[]>();
   routes.forEach(r => {
-    // Verificar se a rota está ativa no dia da semana correspondente
     const isActiveForDay = Boolean(r[dayKey]);
     if (isActiveForDay) {
       const list = routesByPromoter.get(r.promotor_matricula) || [];
@@ -111,7 +122,9 @@ export function calculateOperationalActivity(input: DayActivityInput): PromoterO
     const promoterRoutes = routesByPromoter.get(matricula) || [];
     const promoterVisits = visitsByPromoter.get(matricula) || [];
 
-    // Desduplicar rotas da programação por loja e indústria
+    // Cada rota programada para o promotor na data representa uma obrigação de visita.
+    // Chave única de obrigação: loja_codigo + '|' + industria_codigo.
+    // Lojas diferentes para a mesma indústria OU indústrias diferentes na mesma loja são obrigações legítimas separadas.
     const scheduledKeys = new Set<string>();
     const deduplicatedRoutes: RouteItem[] = [];
     promoterRoutes.forEach(r => {
@@ -172,9 +185,10 @@ export function calculateOperationalActivity(input: DayActivityInput): PromoterO
       }
     });
 
-    // Contagem de visitas programadas concluídas e em andamento
+    // Contagem de visitas programadas
     const completedScheduled = visitDetails.filter(vd => vd.isScheduled && vd.status === 'concluida').length;
     const inProgressScheduled = visitDetails.filter(vd => vd.isScheduled && vd.status === 'em_andamento').length;
+    const pendingScheduled = Math.max(0, scheduledVisitsCount - completedScheduled);
 
     // Presença operacional: confirmada se qualquer visita (programada ou avulsa) foi iniciada (started_at ou em_andamento ou concluída)
     // Visitas canceladas sem started_at ou marcadas como nao_realizada sem ter sido iniciada não contam
@@ -196,22 +210,28 @@ export function calculateOperationalActivity(input: DayActivityInput): PromoterO
       firstActivityTime = zoned(visitsWithStartedAt[0].startedAt!, timezone).time;
     }
 
-    // Determinar Situação do Roteiro
+    // Determinar Situação Semântica do Roteiro
     let routeStatus: RouteExecutionStatus = 'SEM_PROGRAMACAO';
 
     if (scheduledVisitsCount === 0) {
       routeStatus = 'SEM_PROGRAMACAO';
     } else if (completedScheduled >= scheduledVisitsCount) {
-      routeStatus = 'COMPLETA';
+      routeStatus = 'COMPLETO';
     } else {
       if (isDayClosed) {
+        // Dia encerrado no passado
         if (completedScheduled > 0) {
           routeStatus = 'PARCIAL';
         } else {
           routeStatus = 'NAO_REALIZADO';
         }
       } else {
-        routeStatus = 'EM_ANDAMENTO';
+        // Dia de hoje ou futuro (em andamento)
+        if (isPresent) {
+          routeStatus = 'EM_ATIVIDADE';
+        } else {
+          routeStatus = 'AGUARDANDO_INICIO';
+        }
       }
     }
 
@@ -226,6 +246,7 @@ export function calculateOperationalActivity(input: DayActivityInput): PromoterO
       scheduledVisitsCount,
       completedVisitsCount: completedScheduled,
       inProgressVisitsCount: inProgressScheduled,
+      pendingVisitsCount: pendingScheduled,
       routeStatus,
       visits: visitDetails
     };
