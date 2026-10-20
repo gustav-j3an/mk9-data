@@ -34,6 +34,7 @@ export function FaltasAtestadosModule() {
   const permission = useFaltasAtestadosAccess();
   const [area, setArea] = useState<Area>('overview');
   const [bindings, setBindings] = useState<CrmBinding[]>([]);
+  const [rhMatriculas, setRhMatriculas] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
@@ -68,6 +69,12 @@ export function FaltasAtestadosModule() {
       if (rpcError) throw rpcError;
       if (!Array.isArray(data)) throw new Error('invalid response');
       setBindings(data as CrmBinding[]);
+      const rhResult = await supabase.rpc('mk9_faltas_atestados_rh_matriculas').abortSignal(AbortSignal.timeout(10000));
+      const byPromoter: Record<string, string> = {};
+      if (!rhResult.error && Array.isArray(rhResult.data)) {
+        for (const row of rhResult.data as Array<{ promotor_id: string; matricula_rh: string }>) byPromoter[row.promotor_id] = row.matricula_rh;
+      }
+      setRhMatriculas(byPromoter);
     } catch {
       setError('Não foi possível consultar os vínculos CRM autorizados. Tente novamente.');
     } finally { setLoading(false); }
@@ -217,8 +224,8 @@ export function FaltasAtestadosModule() {
         </div>
         {formError && <p role="alert" className="rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-800">{formError}</p>}
         {step === 0 && <div className={`${panel} grid grid-cols-1 gap-4 sm:grid-cols-2`}>
-          <label className="text-sm font-medium sm:col-span-2">Colaborador / projeto CRM<select className={field} value={draft.alocacaoId} onChange={event => { setDraft(current => ({ ...current, alocacaoId: event.target.value })); setFormError(''); }}><option value="">Selecione um vínculo aprovado</option>{selectable.map(row => <option key={row.alocacao_id} value={row.alocacao_id}>{row.colaborador} · {row.matricula_interna} · {row.matricula_externa} · {row.projeto_crm}</option>)}</select></label>
-          {selectedBinding ? <><ReadOnly label="Matrícula interna" value={selectedBinding.matricula_interna} /><ReadOnly label="Matrícula real CRM" value={selectedBinding.matricula_externa} /><ReadOnly label="Projeto CRM (UUID confirmado)" value={selectedBinding.projeto_crm} /><ReadOnly label="Vigência do vínculo" value={`${formatDate(selectedBinding.valido_desde)} – ${formatDate(selectedBinding.valido_ate)}`} /></> : <p className="text-xs text-[#737373] sm:col-span-2">Matrícula externa e projeto são resolvidos exclusivamente pelo vínculo aprovado; não podem ser digitados neste formulário.</p>}
+          <label className="text-sm font-medium sm:col-span-2">Colaborador / projeto CRM<select className={field} value={draft.alocacaoId} onChange={event => { setDraft(current => ({ ...current, alocacaoId: event.target.value })); setFormError(''); }}><option value="">Selecione um vínculo aprovado</option>{selectable.map(row => <option key={row.alocacao_id} value={row.alocacao_id}>{row.colaborador} · {row.matricula_interna} · {rhMatriculas[row.promotor_id] || 'Matrícula RH pendente de conferência'} · {row.matricula_externa} · {row.projeto_crm}</option>)}</select></label>
+          {selectedBinding ? <><ReadOnly label="Código MK9" value={selectedBinding.matricula_interna} /><ReadOnly label="Matrícula RH" value={rhMatriculas[selectedBinding.promotor_id] || 'Matrícula RH pendente de conferência'} /><ReadOnly label="Matrícula externa CRM" value={selectedBinding.matricula_externa} /><ReadOnly label="Projeto CRM (UUID confirmado)" value={selectedBinding.projeto_crm} /><ReadOnly label="Vigência do vínculo" value={`${formatDate(selectedBinding.valido_desde)} – ${formatDate(selectedBinding.valido_ate)}`} /><p className="text-xs text-[#737373] sm:col-span-2">O envio ao CRM permanece desabilitado até a homologação do contrato oficial. Matrículas RH pendentes não podem ser usadas como identificador externo.</p></> : <p className="text-xs text-[#737373] sm:col-span-2">Matrícula externa e projeto são resolvidos exclusivamente pelo vínculo aprovado; não podem ser digitados neste formulário.</p>}
         </div>}
         {step === 1 && <div className={`${panel} grid grid-cols-1 gap-4 sm:grid-cols-2`}>
           <label className="text-sm font-medium">Tipo<select className={field} value={draft.tipo} onChange={event => set('tipo', event.target.value)}><option value="">Selecione</option>{absenceTypes.map(type => <option key={type}>{type}</option>)}</select></label>

@@ -7,6 +7,7 @@ import { PWAInstallPrompt } from './PWAInstallPrompt';
 import { AuthorSignature } from './AuthorSignature';
 import { useRhAccess } from '../lib/rhAccess';
 import { useFaltasAtestadosAccess } from '../lib/faltasAtestadosAccess';
+import { useRhMatriculasAccess } from '../lib/rhMatriculasAccess';
 
 interface AppShellProps {
   currentScreen: ScreenId;
@@ -26,6 +27,7 @@ export const AppShell: React.FC<AppShellProps> = ({
   const { session, profile, role, signOut, hasPermission } = useAuth();
   const rh = useRhAccess();
   const faltasAtestados = useFaltasAtestadosAccess();
+  const rhMatriculas = useRhMatriculasAccess();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [globalSearch, setGlobalSearch] = useState('');
   const [searchFocused, setSearchFocused] = useState(false);
@@ -315,7 +317,10 @@ export const AppShell: React.FC<AppShellProps> = ({
     },
     {
       group: role === 'promotor' ? 'Meu RH' : role === 'admin' ? 'Gestão RH' : 'Equipe RH',
-      items: [{ id: 'rh-ausencias' as ScreenId, label: role === 'promotor' ? 'Minhas Ausências' : 'Faltas e Atestados', icon: 'event_busy', roles: ['admin', 'gestor', 'promotor'] as UserRole[] }]
+      items: [
+        { id: 'rh-ausencias' as ScreenId, label: role === 'promotor' ? 'Minhas Ausências' : 'Faltas e Atestados', icon: 'event_busy', roles: ['admin', 'gestor', 'promotor'] as UserRole[] },
+        { id: 'rh-matriculas' as ScreenId, label: 'Conciliação de Matrículas RH', icon: 'badge', roles: ['admin'] as UserRole[] }
+      ]
     },
     {
       group: 'Visão Geral',
@@ -458,7 +463,7 @@ export const AppShell: React.FC<AppShellProps> = ({
           {/* Navigation Links */}
           <div className="py-4 px-2.5 space-y-4">
             {navItems.map((section) => {
-              const visibleItems = section.items.filter((item) => item.id === 'rh-ausencias' ? (rh.mine || rh.team || rh.management) : item.id === 'faltas-atestados' ? faltasAtestados.allowed : !item.roles || hasPermission(item.roles));
+              const visibleItems = section.items.filter((item) => item.id === 'rh-ausencias' ? (rh.mine || rh.team || rh.management) : item.id === 'faltas-atestados' ? faltasAtestados.allowed : item.id === 'rh-matriculas' ? rhMatriculas.allowed && role === 'admin' : !item.roles || hasPermission(item.roles));
               if (visibleItems.length === 0) return null;
 
               return (
