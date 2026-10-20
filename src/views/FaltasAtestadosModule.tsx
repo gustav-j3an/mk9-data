@@ -1,0 +1,162 @@
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useRhAccess } from '../lib/rhAccess';
+import { useFaltasAtestadosAccess } from '../lib/faltasAtestadosAccess';
+import { supabase } from '../lib/supabase';
+import {
+  absenceTypes, externalWriteEnabled, inclusiveDays, isBindingSelectable,
+  resolveBinding, reviewNotSent, validateAbsenceDraft, type AbsenceDraft, type CrmBinding
+} from '../lib/faltasAtestados';
+
+type Area = 'overview' | 'new' | 'history' | 'people' | 'projects' | 'settings';
+const areas: { id: Area; label: string; icon: string }[] = [
+  { id: 'overview', label: 'Visão geral', icon: 'dashboard' },
+  { id: 'new', label: 'Nova ausência', icon: 'note_add' },
+  { id: 'history', label: 'Histórico de lançamentos', icon: 'history' },
+  { id: 'people', label: 'Colaboradores e matrículas', icon: 'badge' },
+  { id: 'projects', label: 'Projetos CRM', icon: 'workspaces' },
+  { id: 'settings', label: 'Configurações', icon: 'settings' }
+];
+const panel = 'rounded-xl border border-[#CFCDC5] bg-[#F7F6F2] p-4 sm:p-5';
+const field = 'mt-1 w-full rounded-lg border border-[#CFCDC5] bg-white px-3 py-2.5 text-sm text-[#171717] focus:border-[#286FF5] focus:outline-none focus:ring-2 focus:ring-[#286FF5]/20';
+const button = 'rounded-lg border border-[#CFCDC5] px-3 py-2 text-sm font-medium text-[#383832] hover:border-[#286FF5]';
+const primary = 'rounded-lg bg-[#222222] px-4 py-2.5 text-sm font-semibold text-white hover:bg-black disabled:cursor-not-allowed disabled:opacity-40';
+const formatDate = (value: string | null) => value ? new Date(value.length === 10 ? `${value}T12:00:00` : value).toLocaleDateString('pt-BR') : 'Sem data final';
+const formatStatus = (value: string) => ({ aprovado: 'Aprovado', pendente: 'Pendente', revogado: 'Revogado' }[value] || 'Sem vínculo');
+const emptyDraft = (): AbsenceDraft => ({ alocacaoId: '', tipo: '', inicio: '', fim: '', retorno: '', empresa: '', supervisor: '', localidade: '', motivo: '', informacoes: '', loja: '' });
+
+export function FaltasAtestadosModule() {
+  const rh = useRhAccess();
+  const permission = useFaltasAtestadosAccess();
+  const [area, setArea] = useState<Area>('overview');
+  const [bindings, setBindings] = useState<CrmBinding[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [query, setQuery] = useState('');
+  const [step, setStep] = useState(0);
+  const [draft, setDraft] = useState<AbsenceDraft>(emptyDraft);
+  const [formError, setFormError] = useState('');
+
+  const loadBindings = useCallback(async () => {
+    if (!supabase || !permission.allowed) { setBindings([]); setLoading(false); return; }
+    setLoading(true); setError('');
+    try {
+      const { data, error: rpcError } = await supabase.rpc('mk9_faltas_atestados_bindings').abortSignal(AbortSignal.timeout(10000));
+      if (rpcError) throw rpcError;
+      if (!Array.isArray(data)) throw new Error('invalid response');
+      setBindings(data as CrmBinding[]);
+    } catch {
+      setError('Não foi possível consultar os vínculos CRM autorizados. Tente novamente.');
+    } finally { setLoading(false); }
+  }, [permission.allowed]);
+
+  useEffect(() => { void loadBindings(); }, [loadBindings]);
+
+  const selectedBinding = resolveBinding(bindings, draft.alocacaoId);
+  const selectable = useMemo(() => bindings.filter(row => isBindingSelectable(row)), [bindings]);
+  const activeGet = rh.mine || rh.team || rh.management;
+  const distinctPeople = new Set(bindings.map(row => row.promotor_id)).size;
+  const approved = bindings.filter(row => row.identidade_status === 'aprovado' && row.alocacao_status === 'aprovado' && isBindingSelectable(row)).length;
+  const pending = bindings.filter(row => row.identidade_status === 'pendente' || row.alocacao_status === 'pendente').length;
+  const projectRows = useMemo(() => {
+    const projects = new Map<string, CrmBinding[]>();
+    for (const row of bindings) projects.set(row.projeto_crm, [...(projects.get(row.projeto_crm) || []), row]);
+    return [...projects.entries()].map(([id, rows]) => ({ id, rows }));
+  }, [bindings]);
+  const searched = bindings.filter(row => `${row.colaborador} ${row.matricula_interna} ${row.matricula_externa} ${row.projeto_crm} ${row.supervisor}`.toLowerCase().includes(query.trim().toLowerCase()));
+  const set = (key: keyof AbsenceDraft, value: string) => setDraft(current => ({ ...current, [key]: value }));
+  const resetForm = () => { setDraft(emptyDraft()); setStep(0); setFormError(''); };
+
+  const validateStep = (current: number): boolean => {
+    setFormError('');
+    const issues: string[] = [];
+    if (current === 0 && !selectedBinding) issues.push('Selecione um colaborador com vínculo CRM aprovado e vigente.');
+    if (current === 1) {
+      issues.push(...validateAbsenceDraft({ ...draft, empresa: 'ok', supervisor: 'ok', localidade: 'ok' }, selectedBinding).filter(item => item !== 'Informe a empresa.' && item !== 'Informe o supervisor.' && item !== 'Informe a localidade.'));
+    }
+    if (current === 2) issues.push(...validateAbsenceDraft(draft, selectedBinding).filter(item => item.startsWith('Informe a empresa') || item.startsWith('Informe o supervisor') || item.startsWith('Informe a localidade')));
+    if (issues.length) { setFormError(issues[0]); return false; }
+    return true;
+  };
+
+  const nextStep = () => { if (validateStep(step)) setStep(value => Math.min(3, value + 1)); };
+  const previousStep = () => { setFormError(''); setStep(value => Math.max(0, value - 1)); };
+
+  if (permission.loading) return <section className="p-6 text-sm text-[#5F5F5F]" role="status">Verificando permissão específica…</section>;
+  if (!permission.allowed) return <section className="m-4 rounded-xl border border-amber-300 bg-amber-50 p-5 text-sm text-amber-900" role="alert">Sua conta não possui a permissão específica <code>faltas_atestados_prepare</code>. O papel de administrador, por si só, não libera este módulo.</section>;
+
+  return <section className="w-full min-w-0 space-y-5 p-4 text-[#171717] sm:p-6">
+    <header className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+      <div><p className="text-xs font-bold uppercase tracking-wider text-[#737373]">Integração CRM MK9</p><h1 className="mt-1 text-2xl font-bold sm:text-3xl">Faltas e Atestados</h1><p className="mt-1 max-w-3xl text-sm text-[#5F5F5F]">Preparação de lançamentos para revisão. O envio externo aguarda contrato e homologação.</p></div>
+      {area !== 'new' && <span className="w-fit rounded-full border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-900">{reviewNotSent}</span>}
+    </header>
+
+    <nav aria-label="Áreas Faltas e Atestados" className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
+      {areas.map(item => <button key={item.id} type="button" aria-current={area === item.id ? 'page' : undefined} onClick={() => { setArea(item.id); setFormError(''); }} className={`flex min-h-12 items-center gap-2 rounded-lg border px-3 py-2 text-left text-xs font-semibold sm:text-sm ${area === item.id ? 'border-[#222] bg-[#222] text-white' : 'border-[#CFCDC5] bg-white text-[#383832] hover:border-[#286FF5]'}`}><span className="material-symbols-outlined text-lg">{item.icon}</span><span>{item.label}</span></button>)}
+    </nav>
+
+    {loading ? <div className={panel} role="status">Carregando vínculos CRM…</div> : error ? <div className={panel} role="alert"><p>{error}</p><button className={`${button} mt-3`} onClick={() => void loadBindings()}>Tentar novamente</button></div> : <>
+      {area === 'overview' && <div className="space-y-4">
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">{[
+          ['Colaboradores vinculados', distinctPeople], ['Vínculos aprovados e vigentes', approved], ['Vínculos pendentes', pending], ['Projetos CRM associados', projectRows.length], ['Consulta GET', activeGet ? 'Acesso disponível' : 'Sem acesso confirmado']
+        ].map(([label, value]) => <article className={panel} key={String(label)}><p className="text-xs text-[#737373]">{label}</p><p className="mt-2 text-lg font-bold sm:text-xl">{value}</p></article>)}</div>
+        <div className={`${panel} flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between`}><div><h2 className="font-bold">Preparação local</h2><p className="mt-1 text-sm text-[#5F5F5F]">Nenhum indicador de envio é exibido. O formulário não grava nem transmite dados.</p></div><button className={primary} onClick={() => setArea('new')}>Preparar revisão</button></div>
+      </div>}
+
+      {area === 'new' && <div className="mx-auto max-w-4xl space-y-4">
+        <div className={panel}>
+          <ol aria-label="Etapas do formulário" className="grid grid-cols-4 gap-2">{['Colaborador', 'Ocorrência', 'Complementos', 'Revisão'].map((label, index) => <li key={label} aria-current={step === index ? 'step' : undefined} className={`border-b-2 pb-2 text-center text-[11px] font-semibold sm:text-sm ${index <= step ? 'border-[#286FF5] text-[#171717]' : 'border-[#D8D6CF] text-[#77766F]'}`}><span className="mr-1 hidden sm:inline">{index + 1}.</span>{label}</li>)}</ol>
+        </div>
+        {formError && <p role="alert" className="rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-800">{formError}</p>}
+        {step === 0 && <div className={`${panel} grid grid-cols-1 gap-4 sm:grid-cols-2`}>
+          <label className="text-sm font-medium sm:col-span-2">Colaborador / vínculo CRM<select className={field} value={draft.alocacaoId} onChange={event => { const row = selectable.find(item => item.alocacao_id === event.target.value); setDraft(current => ({ ...current, alocacaoId: event.target.value, supervisor: row?.supervisor || '', localidade: [row?.cidade, row?.uf].filter(Boolean).join('/') })); setFormError(''); }}><option value="">Selecione um vínculo aprovado</option>{selectable.map(row => <option key={row.alocacao_id} value={row.alocacao_id}>{row.colaborador} · {row.matricula_interna} · {row.matricula_externa} · {row.projeto_crm}</option>)}</select></label>
+          {selectedBinding ? <><ReadOnly label="Matrícula interna" value={selectedBinding.matricula_interna} /><ReadOnly label="Matrícula real CRM" value={selectedBinding.matricula_externa} /><ReadOnly label="Projeto CRM (UUID confirmado)" value={selectedBinding.projeto_crm} /><ReadOnly label="Vigência do vínculo" value={`${formatDate(selectedBinding.valido_desde)} – ${formatDate(selectedBinding.valido_ate)}`} /></> : <p className="text-xs text-[#737373] sm:col-span-2">Matrícula externa e projeto são resolvidos exclusivamente pelo vínculo aprovado; não podem ser digitados neste formulário.</p>}
+        </div>}
+        {step === 1 && <div className={`${panel} grid grid-cols-1 gap-4 sm:grid-cols-2`}>
+          <label className="text-sm font-medium">Tipo<select className={field} value={draft.tipo} onChange={event => set('tipo', event.target.value)}><option value="">Selecione</option>{absenceTypes.map(type => <option key={type}>{type}</option>)}</select></label>
+          <ReadOnly label="Unidade de lançamento" value="Período informado para revisão (sem regra de envio confirmada)" />
+          <label className="text-sm font-medium">Data inicial<input className={field} type="date" value={draft.inicio} onChange={event => set('inicio', event.target.value)} /></label>
+          <label className="text-sm font-medium">Data final<input className={field} type="date" min={draft.inicio || undefined} value={draft.fim} onChange={event => set('fim', event.target.value)} /></label>
+          <ReadOnly label="Quantidade de dias corridos (informativa)" value={draft.inicio && draft.fim ? String(inclusiveDays(draft.inicio, draft.fim) ?? 'Período inválido') : '—'} />
+          <label className="text-sm font-medium">Previsão de retorno<input className={field} type="date" min={draft.fim || draft.inicio || undefined} value={draft.retorno} onChange={event => set('retorno', event.target.value)} /></label>
+          <p className="text-xs text-[#737373] sm:col-span-2">A contagem é apenas informativa; dias úteis, inclusão das datas e unidade de ocorrência aguardam definição do CRM.</p>
+        </div>}
+        {step === 2 && <div className={`${panel} grid grid-cols-1 gap-4 sm:grid-cols-2`}>
+          <label className="text-sm font-medium">Empresa<input className={field} maxLength={160} value={draft.empresa} onChange={event => set('empresa', event.target.value)} /></label>
+          <label className="text-sm font-medium">Supervisor<input className={field} maxLength={160} value={draft.supervisor} onChange={event => set('supervisor', event.target.value || selectedBinding?.supervisor || '')} placeholder={selectedBinding?.supervisor || 'Informe o supervisor'} /></label>
+          <label className="text-sm font-medium">Localidade<input className={field} maxLength={160} value={draft.localidade} onChange={event => set('localidade', event.target.value)} placeholder={[selectedBinding?.cidade, selectedBinding?.uf].filter(Boolean).join('/')} /></label>
+          <label className="text-sm font-medium">Loja (quando aplicável)<input className={field} maxLength={160} value={draft.loja} onChange={event => set('loja', event.target.value)} /></label>
+          <label className="text-sm font-medium sm:col-span-2">Motivo ou justificativa<textarea className={field} maxLength={500} rows={3} value={draft.motivo} onChange={event => set('motivo', event.target.value)} placeholder="Não inclua diagnóstico ou dados médicos detalhados." /></label>
+          <label className="text-sm font-medium sm:col-span-2">Informações administrativas<textarea className={field} maxLength={500} rows={3} value={draft.informacoes} onChange={event => set('informacoes', event.target.value)} /></label>
+          <fieldset className="grid grid-cols-2 gap-3 sm:col-span-2" disabled><legend className="mb-2 text-sm font-semibold">Dados restritos</legend><label className="rounded-lg border border-dashed border-[#C8C6BF] p-3 text-xs text-[#77766F]">CID <input className={`${field} cursor-not-allowed`} placeholder="Desabilitado" /></label><label className="rounded-lg border border-dashed border-[#C8C6BF] p-3 text-xs text-[#77766F]">Anexos médicos <input className={`${field} cursor-not-allowed`} type="file" /></label></fieldset>
+          <p className="text-xs text-[#737373] sm:col-span-2">Os campos ficam somente na memória desta tela. Não serão salvos ou enviados.</p>
+        </div>}
+        {step === 3 && <div className={`${panel} space-y-4`}>
+          <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm font-semibold text-amber-950">{reviewNotSent}</div>
+          <h2 className="text-lg font-bold">Revisão do formulário</h2>
+          {selectedBinding ? <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">{[
+            ['Colaborador', selectedBinding.colaborador], ['Matrícula interna', selectedBinding.matricula_interna], ['Matrícula real CRM', selectedBinding.matricula_externa], ['Projeto CRM', selectedBinding.projeto_crm], ['Tipo', draft.tipo], ['Período', `${formatDate(draft.inicio)} – ${formatDate(draft.fim)}`], ['Dias corridos (informativo)', String(inclusiveDays(draft.inicio, draft.fim) ?? '—')], ['Retorno previsto', formatDate(draft.retorno)], ['Empresa', draft.empresa], ['Supervisor', draft.supervisor], ['Localidade', draft.localidade], ['Loja', draft.loja || 'Não informada'], ['Motivo / justificativa', draft.motivo || 'Não informado'], ['Informações administrativas', draft.informacoes || 'Não informadas']
+          ].map(([label, value]) => <div key={label} className="min-w-0 border-b border-[#E2E0D9] pb-2"><dt className="text-xs text-[#737373]">{label}</dt><dd className="mt-1 break-words text-sm font-medium">{value}</dd></div>)}</dl> : <p role="alert">O vínculo selecionado não está disponível. Volte e selecione outro.</p>}
+          <p className="text-xs text-[#737373]">Esta revisão não cria registro, protocolo, confirmação ou histórico.</p>
+          <button type="button" className={primary} disabled={!externalWriteEnabled}>Enviar para o CRM (indisponível)</button>
+        </div>}
+        <div className="flex flex-wrap justify-between gap-2"><button type="button" className={button} onClick={() => { resetForm(); setArea('overview'); }}>Cancelar revisão</button><div className="flex gap-2">{step > 0 && <button type="button" className={button} onClick={previousStep}>Voltar</button>}{step < 3 && <button type="button" className={primary} onClick={nextStep}>{step === 2 ? 'Revisar' : 'Continuar'}</button>}</div></div>
+      </div>}
+
+      {area === 'history' && <div className={`${panel} py-12 text-center`}><span className="material-symbols-outlined text-4xl text-[#77766F]">history</span><h2 className="mt-3 font-bold">Histórico ainda indisponível</h2><p className="mx-auto mt-2 max-w-xl text-sm text-[#5F5F5F]">Não existe API de escrita nem persistência própria para esses lançamentos. Nenhum registro ou protocolo de demonstração é exibido.</p></div>}
+
+      {area === 'people' && <div className="space-y-3"><div className={`${panel} flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between`}><div><h2 className="font-bold">Colaboradores e matrículas</h2><p className="text-xs text-[#737373]">Somente vínculos retornados pelo backend autorizado.</p></div><label className="text-xs">Pesquisar<input className={field} value={query} onChange={event => setQuery(event.target.value)} placeholder="Nome, matrícula ou projeto" /></label></div><div className="overflow-x-auto rounded-xl border border-[#CFCDC5] bg-white"><table className="w-full min-w-[850px] text-left text-sm"><thead className="bg-[#EAE8E2] text-xs uppercase text-[#5F5F5F]"><tr>{['Colaborador', 'Matrícula interna', 'Matrícula externa', 'Projeto CRM', 'Vigência', 'Vínculo'].map(label => <th key={label} className="px-3 py-3">{label}</th>)}</tr></thead><tbody>{searched.map(row => <tr key={row.alocacao_id} className="border-t border-[#EAE8E2]"><td className="px-3 py-3 font-semibold">{row.colaborador}</td><td className="px-3 py-3 font-mono text-xs">{row.matricula_interna}</td><td className="px-3 py-3 font-mono text-xs">{row.matricula_externa}</td><td className="max-w-[220px] break-all px-3 py-3 font-mono text-xs">{row.projeto_crm}</td><td className="px-3 py-3 text-xs">{formatDate(row.valido_desde)} – {formatDate(row.valido_ate)}</td><td className="px-3 py-3"><Status identity={row.identidade_status} allocation={row.alocacao_status} /></td></tr>)}</tbody></table>{!searched.length && <p className="p-6 text-center text-sm text-[#737373]">Nenhum vínculo corresponde à pesquisa.</p>}</div></div>}
+
+      {area === 'projects' && <div className="space-y-3"><h2 className="font-bold">Projetos vinculados</h2><p className="text-sm text-[#5F5F5F]">Os projetos abaixo vêm dos UUIDs registrados nas alocações. Não há catálogo de nomes; nenhum projeto é inferido ou criado.</p><div className="grid grid-cols-1 gap-3 lg:grid-cols-2">{projectRows.map(project => <article className={panel} key={project.id}><p className="text-xs text-[#737373]">UUID do projeto CRM</p><p className="mt-1 break-all font-mono text-sm font-semibold">{project.id}</p><p className="mt-3 text-xs text-[#5F5F5F]">{project.rows.length} alocações · {project.rows.filter(row => row.alocacao_status === 'aprovado' && isBindingSelectable(row)).length} aprovadas e vigentes · {project.rows.filter(row => row.alocacao_status === 'pendente').length} pendentes</p></article>)}</div>{!projectRows.length && <div className={panel}>Nenhum projeto CRM está vinculado.</div>}</div>}
+
+      {area === 'settings' && <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+        <article className={panel}><h2 className="font-bold">Integração GET</h2><p className="mt-2 text-sm">{activeGet ? 'Há escopo de consulta RH disponível para esta conta.' : 'Nenhum escopo GET foi confirmado para esta conta.'}</p><p className="mt-1 text-xs text-[#737373]">O GET consulta ocorrências externas e não habilita escrita.</p></article>
+        <article className={panel}><h2 className="font-bold">API de escrita</h2><p className="mt-2 text-sm">Não disponível. Aguarda contrato oficial, ambiente de homologação e aprovação.</p><p className="mt-1 text-xs text-[#737373]">Este módulo não realiza chamadas POST e não expõe credenciais.</p></article>
+        <article className={panel}><h2 className="font-bold">Permissão</h2><p className="mt-2 text-sm">Capacidade específica verificada por RPC no backend: <code>faltas_atestados_prepare</code>.</p><p className="mt-1 text-xs text-[#737373]">A concessão é individual; a função administrativa, por si só, não concede acesso.</p></article>
+        <article className={panel}><h2 className="font-bold">Pendências de homologação</h2><ul className="mt-2 list-inside list-disc space-y-1 text-sm text-[#5F5F5F]"><li>Endpoint, campos e autenticação de escrita.</li><li>Semântica de períodos, dias e retorno.</li><li>Regras de idempotência, confirmação e atualização.</li><li>Projeto e matrícula sintéticos no ambiente de homologação.</li></ul></article>
+      </div>}
+    </>}
+  </section>;
+}
+
+function ReadOnly({ label, value }: { label: string; value: string }) { return <div className="min-w-0 text-sm"><p className="font-medium">{label}</p><p className="mt-1 min-h-10 break-all rounded-lg border border-[#E1DFD8] bg-[#ECEAE4] px-3 py-2.5 font-mono text-xs">{value || '—'}</p></div>; }
+function Status({ identity, allocation }: { identity: string; allocation: string }) { return <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${identity === 'aprovado' && allocation === 'aprovado' ? 'bg-emerald-100 text-emerald-800' : identity === 'revogado' || allocation === 'revogado' ? 'bg-red-100 text-red-800' : 'bg-amber-100 text-amber-900'}`}>{formatStatus(identity)} / {formatStatus(allocation)}</span>; }

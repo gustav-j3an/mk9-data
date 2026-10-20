@@ -22,12 +22,15 @@ import { IndustryPortalView } from './views/IndustryPortalView';
 import { ProfileView } from './views/ProfileView';
 import { RhAbsencesView } from './views/RhAbsencesView';
 import { RhAccessProvider, useRhAccess } from './lib/rhAccess';
+import { FaltasAtestadosAccessProvider, useFaltasAtestadosAccess } from './lib/faltasAtestadosAccess';
+import { FaltasAtestadosModule } from './views/FaltasAtestadosModule';
 import { AuthProvider, useAuth } from './auth/AuthProvider';
 import { LoginPage } from './auth/LoginPage';
 import { ResetPasswordPage } from './auth/ResetPasswordPage';
 import { ProtectedRoute } from './auth/ProtectedRoute';
 
-function isScreenAllowedForRole(screen: ScreenId, role: string, rhAllowed = false): boolean {
+function isScreenAllowedForRole(screen: ScreenId, role: string, rhAllowed = false, faltasAtestadosAllowed = false): boolean {
+  if (screen === 'faltas-atestados') return faltasAtestadosAllowed;
   if (screen === 'rh-ausencias') return rhAllowed;
   if (screen === 'meu-perfil') {
     return true;
@@ -50,6 +53,7 @@ function isScreenAllowedForRole(screen: ScreenId, role: string, rhAllowed = fals
 function Dashboard() {
   const { role, profile } = useAuth();
   const rh = useRhAccess();
+  const faltasAtestados = useFaltasAtestadosAccess();
   const rhAllowed = rh.mine || rh.team || rh.management;
   const [currentScreen, setCurrentScreen] = useState<ScreenId>(
     role === 'promotor' ? 'portal-promotor' : role === 'client_industry' ? 'portal-industria' : 'cockpit'
@@ -93,7 +97,7 @@ function Dashboard() {
   }, []);
 
   const handleNavigate = (screen: ScreenId) => {
-    if (!isScreenAllowedForRole(screen, role, rhAllowed)) {
+    if (!isScreenAllowedForRole(screen, role, rhAllowed, faltasAtestados.allowed)) {
       if (role === 'promotor') {
         setCurrentScreen('portal-promotor');
       } else if (role === 'client_industry') {
@@ -105,7 +109,7 @@ function Dashboard() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const activeScreen = isScreenAllowedForRole(currentScreen, role, rhAllowed)
+  const activeScreen = isScreenAllowedForRole(currentScreen, role, rhAllowed, faltasAtestados.allowed)
     ? currentScreen
     : role === 'promotor'
     ? 'portal-promotor'
@@ -120,6 +124,7 @@ function Dashboard() {
       toasts={toasts}
       onDismissToast={dismissToast}
     >
+      {activeScreen === 'faltas-atestados' && <FaltasAtestadosModule />}
       {activeScreen === 'rh-ausencias' && <RhAbsencesView />}
       {activeScreen === 'cockpit' && (
         <CockpitView onNavigate={handleNavigate} onShowToast={addToast} />
@@ -183,6 +188,7 @@ export default function App() {
   return (
     <AuthProvider>
       <RhAccessProvider>
+      <FaltasAtestadosAccessProvider>
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
@@ -192,6 +198,7 @@ export default function App() {
           </Route>
         </Routes>
       </BrowserRouter>
+      </FaltasAtestadosAccessProvider>
       </RhAccessProvider>
     </AuthProvider>
   );

@@ -1,4 +1,5 @@
 export type ScreenId = 
+  | 'faltas-atestados'
   | 'rh-ausencias'
   | 'cockpit'
   | 'painel-operacional'
