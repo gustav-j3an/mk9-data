@@ -60,6 +60,7 @@ export interface RouteItem {
   sabado: boolean;
   domingo: boolean;
   observacao?: string | null;
+  encerrada_em?: string | null;
   created_at?: string;
   updated_at?: string;
   // Relacionamentos com joins

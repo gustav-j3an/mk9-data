@@ -341,6 +341,8 @@ export const calculateOperationalVisits = ({
 
   // 3. Processar cada rota ativa para os dias solicitados
   routes.forEach((r) => {
+    if (r.encerrada_em) return;
+
     const isQuinzenal = (r.frequencia || '').toUpperCase() === 'QUINZENAL';
 
     daysRange.forEach((dayInfo) => {

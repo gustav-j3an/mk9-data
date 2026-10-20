@@ -144,7 +144,7 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
         // Tabela de autorizações de teste (tratamento defensivo se tabela ainda não criada)
         supabase.from('promoter_operation_authorizations').select('*'),
         // Rotas para contagem por promotor
-        supabase.from('rotas').select('promotor_matricula')
+        supabase.from('rotas').select('*')
       ]);
 
       if (industriasRes.data) {
@@ -160,10 +160,11 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
       }
       setAuthorizationsMap(authMap);
 
-      // Mapear contagem de rotas por promotor
+      // Mapear contagem de rotas ativas por promotor
       const rCountMap = new Map<string, number>();
       if (rotasRes.data && Array.isArray(rotasRes.data)) {
         rotasRes.data.forEach((r: any) => {
+          if (r.encerrada_em) return;
           const mat = r.promotor_matricula;
           if (mat) {
             rCountMap.set(mat, (rCountMap.get(mat) || 0) + 1);

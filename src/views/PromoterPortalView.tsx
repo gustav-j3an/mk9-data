@@ -20,8 +20,20 @@ import {
   isSupportedVisitPhoto,
   isWithinVisitPhotoLimit
 } from '../utils/visitExecution';
-import { SearchableSelect } from '../components/SearchableSelect';
+import { SearchableSelect, type SearchableSelectOption } from '../components/SearchableSelect';
 import { AuthorSignature } from '../components/AuthorSignature';
+import { ConfirmRouteCloseModal } from '../components/ConfirmRouteCloseModal';
+import {
+  ROUTE_DAYS,
+  buildRoutePayload,
+  canManageFixedRoutes,
+  closeFixedRoute,
+  createFixedRoute,
+  hasAnyScheduledDay,
+  isDuplicateActiveRoute,
+  updateFixedRouteSchedule,
+  type RouteFormValues
+} from '../lib/routesService';
 
 interface PromoterPortalViewProps {
   onShowToast: (toast: Omit<ToastMessage, 'id'>) => void;
@@ -30,6 +42,7 @@ interface PromoterPortalViewProps {
 export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowToast }) => {
   const { profile, role } = useAuth();
   const isAdminUser = role === 'admin' || role === 'gestor' || role === 'operador';
+  const canManageRoutes = canManageFixedRoutes(role);
 
   // Para promotor de campo, usa estritamente a matrícula do perfil
   // Para administrador/gestor/operador, permite selecionar um promotor para consulta
@@ -84,6 +97,28 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
   const [selectedScaleDayKey, setSelectedScaleDayKey] = useState<string>('segunda');
   const [editingScaleRoute, setEditingScaleRoute] = useState<RouteItem | null>(null);
   const [savingScaleRoute, setSavingScaleRoute] = useState<boolean>(false);
+  const [closingScaleRoute, setClosingScaleRoute] = useState<RouteItem | null>(null);
+  const [savingCloseScale, setSavingCloseScale] = useState(false);
+  const [showCreateScale, setShowCreateScale] = useState(false);
+  const [savingNewScale, setSavingNewScale] = useState(false);
+  const [routeIndustries, setRouteIndustries] = useState<Array<{ codigo: string; nome: string }>>([]);
+  const [routeStores, setRouteStores] = useState<Array<{ codigo: string; nome: string; cidade: string | null; uf: string | null }>>([]);
+  const [newScaleForm, setNewScaleForm] = useState<RouteFormValues>({
+    codigo_rota: '',
+    industria_codigo: '',
+    loja_codigo: '',
+    promotor_matricula: '',
+    uf: 'SP',
+    frequencia: 'SEMANAL',
+    segunda: false,
+    terca: false,
+    quarta: false,
+    quinta: false,
+    sexta: false,
+    sabado: false,
+    domingo: false,
+    observacao: ''
+  });
 
   // Form State para Visita em Andamento
   const [checklist, setChecklist] = useState<
@@ -274,7 +309,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
       setIsAuthorized(authorized);
 
       const rawRoutes = (rotasRes.data as unknown as RouteItem[]) || [];
-      setRoutes(rawRoutes);
+      setRoutes(rawRoutes.filter((r) => !r.encerrada_em));
 
       const visits = (visitsRes.data as unknown as Visit[]) || [];
       const openVisits = ((openVisitsRes && 'data' in openVisitsRes ? openVisitsRes.data : []) as unknown as Visit[]) || [];
@@ -357,6 +392,143 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
     loadPortalData();
   }, [loadPortalData, weekOffset]);
 
+  const routeIndustryOptions = useMemo<SearchableSelectOption[]>(
+    () => routeIndustries.map((industry) => ({
+      value: industry.codigo,
+      label: `${industry.nome} (${industry.codigo})`,
+      searchText: `${industry.nome} ${industry.codigo}`
+    })),
+    [routeIndustries]
+  );
+
+  const routeStoreOptions = useMemo<SearchableSelectOption[]>(
+    () => routeStores.map((store) => ({
+      value: store.codigo,
+      label: `${store.nome} (${store.codigo})`,
+      detail: [store.cidade, store.uf].filter(Boolean).join(' - '),
+      searchText: `${store.nome} ${store.codigo} ${store.cidade || ''} ${store.uf || ''}`
+    })),
+    [routeStores]
+  );
+
+  const handleOpenNewScale = async () => {
+    if (!canManageRoutes || !promotorMatricula || !supabase) return;
+
+    try {
+      const [industriesResult, storesResult] = await Promise.all([
+        supabase.from('industrias').select('codigo, nome').eq('status', 'ativo').order('nome'),
+        supabase.from('lojas').select('codigo, nome, cidade, uf').eq('status', 'ativo').order('nome')
+      ]);
+      if (industriesResult.error) throw industriesResult.error;
+      if (storesResult.error) throw storesResult.error;
+
+      setRouteIndustries(industriesResult.data || []);
+      setRouteStores(storesResult.data || []);
+      setNewScaleForm({
+        codigo_rota: '',
+        industria_codigo: '',
+        loja_codigo: '',
+        promotor_matricula: promotorMatricula,
+        uf: 'SP',
+        frequencia: 'SEMANAL',
+        segunda: false,
+        terca: false,
+        quarta: false,
+        quinta: false,
+        sexta: false,
+        sabado: false,
+        domingo: false,
+        observacao: ''
+      });
+      setShowCreateScale(true);
+    } catch (err: any) {
+      console.error('Erro ao carregar opções para nova escala:', err);
+      onShowToast({
+        title: 'Falha ao Abrir Nova Escala',
+        message: err.message || 'Não foi possível carregar indústrias e lojas ativas.',
+        type: 'error'
+      });
+    }
+  };
+
+  const handleCreateScale = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!canManageRoutes || !promotorMatricula) return;
+    if (!newScaleForm.industria_codigo || !newScaleForm.loja_codigo) {
+      onShowToast({
+        title: 'Campos Obrigatórios',
+        message: 'Selecione uma indústria e uma loja/PDV para criar a escala.',
+        type: 'warning'
+      });
+      return;
+    }
+    if (!hasAnyScheduledDay(newScaleForm)) {
+      onShowToast({
+        title: 'Selecione um Dia',
+        message: 'Marque pelo menos um dia de atendimento para criar a escala.',
+        type: 'warning'
+      });
+      return;
+    }
+    if (isDuplicateActiveRoute(routes, newScaleForm)) {
+      onShowToast({
+        title: 'Escala Duplicada',
+        message: 'Já existe uma escala ativa para este promotor, loja e indústria.',
+        type: 'warning'
+      });
+      return;
+    }
+
+    setSavingNewScale(true);
+    try {
+      const selectedStore = routeStores.find((store) => store.codigo === newScaleForm.loja_codigo);
+      const formValues = { ...newScaleForm, promotor_matricula: promotorMatricula, uf: selectedStore?.uf || newScaleForm.uf };
+      const payload = buildRoutePayload(formValues);
+      await createFixedRoute(formValues);
+      onShowToast({
+        title: 'Nova Escala Criada',
+        message: `Rota ${payload.codigo_rota} vinculada ao promotor com sucesso.`,
+        type: 'success'
+      });
+      setShowCreateScale(false);
+      await loadPortalData();
+    } catch (err: any) {
+      console.error('Erro ao criar escala do promotor:', err);
+      onShowToast({
+        title: 'Falha ao Criar Escala',
+        message: err.message || 'Não foi possível salvar a nova escala.',
+        type: 'error'
+      });
+    } finally {
+      setSavingNewScale(false);
+    }
+  };
+
+  const handleCloseScale = async () => {
+    if (!closingScaleRoute || !canManageRoutes) return;
+    setSavingCloseScale(true);
+    try {
+      await closeFixedRoute(closingScaleRoute.id);
+      onShowToast({
+        title: 'Escala Encerrada',
+        message: 'A escala foi removida das rotas ativas. Os registros operacionais foram preservados.',
+        type: 'success'
+      });
+      setClosingScaleRoute(null);
+      setEditingScaleRoute((current) => current?.id === closingScaleRoute.id ? null : current);
+      await loadPortalData();
+    } catch (err: any) {
+      console.error('Erro ao encerrar escala do promotor:', err);
+      onShowToast({
+        title: 'Falha ao Encerrar Escala',
+        message: err.message || 'Não foi possível encerrar a escala.',
+        type: 'error'
+      });
+    } finally {
+      setSavingCloseScale(false);
+    }
+  };
+
   // Carregar URLs assinadas para a visita inspecionada pelo administrador
   useEffect(() => {
     if (!adminInspectionVisit?.visitObj?.photos || adminInspectionVisit.visitObj.photos.length === 0) {
@@ -399,6 +571,15 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
 
   // Salvar Edição da Escala Fixa da Rota (Item 4)
   const handleSaveRouteScale = async (routeToSave: RouteItem) => {
+    if (!canManageRoutes) {
+      onShowToast({
+        title: 'Operação Não Permitida',
+        message: 'Somente administradores e gestores podem alterar escalas.',
+        type: 'error'
+      });
+      return;
+    }
+
     if (!supabase) {
       onShowToast({
         title: 'Erro de Conexão',
@@ -419,23 +600,17 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
 
     setSavingScaleRoute(true);
     try {
-      const { error: updateErr } = await supabase
-        .from('rotas')
-        .update({
-          frequencia: routeToSave.frequencia,
-          segunda: routeToSave.segunda,
-          terca: routeToSave.terca,
-          quarta: routeToSave.quarta,
-          quinta: routeToSave.quinta,
-          sexta: routeToSave.sexta,
-          sabado: routeToSave.sabado,
-          domingo: routeToSave.domingo,
-          observacao: routeToSave.observacao ? routeToSave.observacao.trim() : null,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', routeToSave.id);
-
-      if (updateErr) throw updateErr;
+      await updateFixedRouteSchedule(routeToSave.id, {
+        frequencia: routeToSave.frequencia,
+        segunda: routeToSave.segunda,
+        terca: routeToSave.terca,
+        quarta: routeToSave.quarta,
+        quinta: routeToSave.quinta,
+        sexta: routeToSave.sexta,
+        sabado: routeToSave.sabado,
+        domingo: routeToSave.domingo,
+        observacao: routeToSave.observacao ? routeToSave.observacao.trim() : null
+      });
 
       onShowToast({
         title: 'Escala Fixa Atualizada',
@@ -3272,6 +3447,17 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
             </div>
 
             <div className="flex items-center gap-2 shrink-0 font-mono text-xs">
+              {canManageRoutes && promotorMatricula && (
+                <button
+                  type="button"
+                  onClick={handleOpenNewScale}
+                  className="px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-xs transition-colors"
+                  title="Adicionar uma escala fixa para o promotor selecionado"
+                >
+                  <span className="material-symbols-outlined text-sm">add</span>
+                  <span>Nova Escala</span>
+                </button>
+              )}
               {/* Alternância Semana / Dia */}
               <div className="flex items-center p-0.5 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl">
                 <button
@@ -3299,7 +3485,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
               </div>
 
               {/* Botão compacto "Editar escala fixa" para perfis com permissão */}
-              {isAdminUser && routes.length > 0 && (
+              {canManageRoutes && routes.length > 0 && (
                 <button
                   type="button"
                   onClick={() => setEditingScaleRoute(routes[0])}
@@ -3436,14 +3622,25 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                               })}
                             </div>
 
-                            {isAdminUser && (
-                              <button
-                                type="button"
-                                onClick={() => setEditingScaleRoute(r)}
-                                className="px-2 py-1 rounded-lg bg-[#F7F6F2] hover:bg-[#171717] text-[#171717] hover:text-white border border-[#CFCDC5] text-[10px] font-bold cursor-pointer transition-colors"
-                              >
-                                Editar
-                              </button>
+                            {canManageRoutes && (
+                              <div className="flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingScaleRoute(r)}
+                                  className="px-2 py-1 rounded-lg bg-[#F7F6F2] hover:bg-[#171717] text-[#171717] hover:text-white border border-[#CFCDC5] text-[10px] font-bold cursor-pointer transition-colors"
+                                >
+                                  Editar
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setClosingScaleRoute(r)}
+                                  className="p-1 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-700 border border-rose-500/30 cursor-pointer"
+                                  title="Excluir escala"
+                                  aria-label="Excluir escala fixa"
+                                >
+                                  <span className="material-symbols-outlined text-sm">delete</span>
+                                </button>
+                              </div>
                             )}
                           </div>
                         </div>
@@ -3504,14 +3701,25 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                               </p>
                             </div>
 
-                            {isAdminUser && (
-                              <button
-                                type="button"
-                                onClick={() => setEditingScaleRoute(r)}
-                                className="px-2.5 py-1 rounded-xl bg-[#F7F6F2] hover:bg-[#171717] text-[#171717] hover:text-white border border-[#CFCDC5] text-xs font-bold cursor-pointer transition-colors self-end sm:self-auto"
-                              >
-                                Editar Escala
-                              </button>
+                            {canManageRoutes && (
+                              <div className="flex items-center gap-1 self-end sm:self-auto">
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingScaleRoute(r)}
+                                  className="px-2.5 py-1 rounded-xl bg-[#F7F6F2] hover:bg-[#171717] text-[#171717] hover:text-white border border-[#CFCDC5] text-xs font-bold cursor-pointer transition-colors"
+                                >
+                                  Editar Escala
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setClosingScaleRoute(r)}
+                                  className="p-1 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-700 border border-rose-500/30 cursor-pointer"
+                                  title="Excluir escala"
+                                  aria-label="Excluir escala fixa"
+                                >
+                                  <span className="material-symbols-outlined text-sm">delete</span>
+                                </button>
+                              </div>
                             )}
                           </div>
                         ))}
@@ -3687,6 +3895,145 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
             </div>
           </div>
         </div>
+      )}
+
+      {showCreateScale && canManageRoutes && (
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <form
+            onSubmit={handleCreateScale}
+            className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl max-w-lg w-full max-h-[calc(100dvh-2rem)] overflow-y-auto p-6 shadow-2xl space-y-5 font-mono text-xs"
+          >
+            <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-3">
+              <h3 className="text-sm font-bold text-[#171717] flex items-center gap-2">
+                <span className="material-symbols-outlined text-amber-700">add</span>
+                Nova Escala Fixa
+              </h3>
+              <button type="button" onClick={() => setShowCreateScale(false)} className="text-[#77766F] hover:text-[#171717]">
+                <span className="material-symbols-outlined">close</span>
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="sm:col-span-2">
+                <label className="block mb-1 font-bold text-[#171717]">PROMOTOR</label>
+                <input
+                  value={`${realName} (${promotorMatricula || ''})`}
+                  readOnly
+                  className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#5F5F5F]"
+                />
+              </div>
+              <div>
+                <label htmlFor="promoter-route-industry" className="block mb-1 font-bold text-[#171717]">INDÚSTRIA (*)</label>
+                <SearchableSelect
+                  id="promoter-route-industry"
+                  required
+                  value={newScaleForm.industria_codigo}
+                  options={routeIndustryOptions}
+                  placeholder="Selecione a Indústria"
+                  onChange={(industria_codigo) => setNewScaleForm({ ...newScaleForm, industria_codigo })}
+                />
+              </div>
+              <div>
+                <label htmlFor="promoter-route-store" className="block mb-1 font-bold text-[#171717]">LOJA / PDV (*)</label>
+                <SearchableSelect
+                  id="promoter-route-store"
+                  required
+                  value={newScaleForm.loja_codigo}
+                  options={routeStoreOptions}
+                  placeholder="Selecione a Loja"
+                  onChange={(loja_codigo) => {
+                    const store = routeStores.find((item) => item.codigo === loja_codigo);
+                    setNewScaleForm({ ...newScaleForm, loja_codigo, uf: store?.uf || 'SP' });
+                  }}
+                />
+              </div>
+              <div>
+                <label className="block mb-1 font-bold text-[#171717]">FREQUÊNCIA (*)</label>
+                <select
+                  value={newScaleForm.frequencia}
+                  onChange={(event) => setNewScaleForm({
+                    ...newScaleForm,
+                    frequencia: event.target.value as RouteItem['frequencia']
+                  })}
+                  className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717]"
+                >
+                  <option value="SEMANAL">SEMANAL</option>
+                  <option value="QUINZENAL">QUINZENAL</option>
+                </select>
+              </div>
+              <div>
+                <label className="block mb-1 font-bold text-[#171717]">CÓDIGO DA ROTA (OPCIONAL)</label>
+                <input
+                  value={newScaleForm.codigo_rota || ''}
+                  onChange={(event) => setNewScaleForm({ ...newScaleForm, codigo_rota: event.target.value })}
+                  placeholder="Gerado automaticamente se vazio"
+                  className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717]"
+                />
+              </div>
+              <div className="sm:col-span-2 space-y-2">
+                <span className="block font-bold text-[#171717]">DIAS DE ATENDIMENTO</span>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {ROUTE_DAYS.map((day) => (
+                    <label
+                      key={day.key}
+                      className={`p-2.5 rounded-xl border flex items-center gap-2 cursor-pointer ${
+                        newScaleForm[day.key]
+                          ? 'bg-amber-500/20 border-amber-500/50 text-amber-900 font-bold'
+                          : 'bg-[#EAE8E2] border-[#CFCDC5] text-[#5F5F5F]'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={newScaleForm[day.key]}
+                        onChange={(event) => setNewScaleForm({ ...newScaleForm, [day.key]: event.target.checked })}
+                        className="rounded border-[#CFCDC5] text-amber-600 focus:ring-amber-500"
+                      />
+                      {day.label}
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div className="sm:col-span-2">
+                <label htmlFor="promoter-route-notes" className="block mb-1 font-bold text-[#171717]">OBSERVAÇÕES</label>
+                <textarea
+                  id="promoter-route-notes"
+                  value={newScaleForm.observacao || ''}
+                  onChange={(event) => setNewScaleForm({ ...newScaleForm, observacao: event.target.value })}
+                  placeholder="Observações opcionais..."
+                  className="w-full p-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] h-20 resize-none"
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 border-t border-[#CFCDC5] pt-3">
+              <button
+                type="button"
+                onClick={() => setShowCreateScale(false)}
+                disabled={savingNewScale}
+                className="px-4 py-2 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] text-[#171717] font-bold disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                disabled={savingNewScale}
+                className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold flex items-center gap-1.5 disabled:opacity-50"
+              >
+                <span className="material-symbols-outlined text-sm">save</span>
+                {savingNewScale ? 'Salvando...' : 'Criar Escala'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {closingScaleRoute && canManageRoutes && (
+        <ConfirmRouteCloseModal
+          route={closingScaleRoute}
+          saving={savingCloseScale}
+          onCancel={() => setClosingScaleRoute(null)}
+          onConfirm={handleCloseScale}
+        />
       )}
 
       {/* MODAL JUSTIFICAR VISITA ANTERIOR EM ANDAMENTO COMO NÃO REALIZADA */}

@@ -134,7 +134,43 @@ describe('Portal do Promotor - Visualizacao Semanal e Escala Fixa', () => {
     assert.strictEqual(visitOnWednesday?.completedAt, `${wednesday.dateStr}T10:00:00Z`);
   });
 
-  it('5. Escala Fixa da Semana: agrupa lojas por dia de segunda a domingo', () => {
+  it('5. Escala encerrada nao agenda novas visitas e preserva visitas reais', () => {
+    const wednesday = weekDays.find((d) => d.dayKey === 'quarta')!;
+    const completedVisit: Visit = {
+      id: 'visit-closed-route',
+      promotor_matricula: 'PROM01',
+      loja_codigo: 'LJ01',
+      industria_codigo: 'IND01',
+      data_visita: wednesday.dateStr,
+      status: 'concluida',
+      started_at: `${wednesday.dateStr}T09:00:00Z`,
+      completed_at: `${wednesday.dateStr}T10:00:00Z`,
+      checklist_items: [],
+      photos: [{
+        id: 'photo-preserved',
+        visit_id: 'visit-closed-route',
+        file_url: 'https://ex.com/preserved.jpg',
+        storage_path: 'photos/preserved.jpg',
+        tipo_foto: 'fachada'
+      }],
+      occurrences: [],
+      validity_items: []
+    };
+
+    const operationalVisits = calculateOperationalVisits({
+      routes: [{ ...mockRouteSegQua, encerrada_em: `${wednesday.dateStr}T08:00:00Z` }],
+      visits: [completedVisit],
+      daysRange: weekDays,
+      todayStr: wednesday.dateStr
+    });
+
+    assert.strictEqual(operationalVisits.length, 1, 'a rota encerrada nao deve projetar outros dias');
+    assert.strictEqual(operationalVisits[0].status, 'concluida');
+    assert.strictEqual(operationalVisits[0].isRealExecution, true);
+    assert.strictEqual(operationalVisits[0].visitObj?.photos?.[0]?.id, 'photo-preserved');
+  });
+
+  it('6. Escala Fixa da Semana: agrupa lojas por dia de segunda a domingo', () => {
     const routesList = [mockRouteSegQua, mockRouteTerSex];
 
     const segLojas = routesList.filter((r) => r.segunda).length;

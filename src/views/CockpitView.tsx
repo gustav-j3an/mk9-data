@@ -133,7 +133,8 @@ export const CockpitView: React.FC<CockpitViewProps> = ({ onNavigate, onShowToas
       const promotores = (promotoresSettled.status === 'fulfilled' && !promotoresSettled.value.error) ? promotoresSettled.value.data || [] : [];
       const lojas = (lojasSettled.status === 'fulfilled' && !lojasSettled.value.error) ? lojasSettled.value.data || [] : [];
       const industrias = (industriasSettled.status === 'fulfilled' && !industriasSettled.value.error) ? industriasSettled.value.data || [] : [];
-      const rotas = (rotasSettled.status === 'fulfilled' && !rotasSettled.value.error) ? rotasSettled.value.data || [] : [];
+      const rawRotas = (rotasSettled.status === 'fulfilled' && !rotasSettled.value.error) ? rotasSettled.value.data || [] : [];
+      const rotas = rawRotas.filter((r: any) => !r.encerrada_em);
 
       const presencas = (presencaSettled.status === 'fulfilled' && !presencaSettled.value.error) ? presencaSettled.value.data || [] : [];
       const diarias = (diariasSettled.status === 'fulfilled' && !diariasSettled.value.error) ? diariasSettled.value.data || [] : [];
