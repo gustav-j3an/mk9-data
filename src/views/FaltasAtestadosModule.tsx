@@ -4,8 +4,8 @@ import { useAuth } from '../auth/AuthProvider';
 import { useFaltasAtestadosAccess } from '../lib/faltasAtestadosAccess';
 import { supabase } from '../lib/supabase';
 import {
-  absenceTypes, externalWriteEnabled, inclusiveDays, isBindingSelectable,
-  resolveBinding, reviewNotSent, validateAbsenceDraft, type AbsenceDraft, type CrmBinding
+  absenceTypes, buildAbsenceSaveArgs, externalWriteEnabled, inclusiveDays, isBindingSelectable,
+  resolveBinding, reviewNotSent, validateAbsenceDraft, type AbsenceDraft, type CrmBinding, type LocalAbsenceRecord
 } from '../lib/faltasAtestados';
 import { filterAbsenceHistory, parseAbsenceHistory, type ParsedAbsenceHistory } from '../lib/faltasAtestadosReceived';
 
@@ -26,7 +26,7 @@ const formatDate = (value: string | null) => value ? new Date(value.length === 1
 const today = () => new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
 const isObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 const formatStatus = (value: string) => ({ aprovado: 'Aprovado', pendente: 'Pendente', revogado: 'Revogado' }[value] || 'Sem vínculo');
-const emptyDraft = (): AbsenceDraft => ({ alocacaoId: '', tipo: '', inicio: '', fim: '', retorno: '', empresa: '', supervisor: '', localidade: '', motivo: '', informacoes: '', loja: '' });
+const emptyDraft = (): AbsenceDraft => ({ alocacaoId: '', tipo: '', inicio: '', fim: '', retorno: '', justificativa: '' });
 
 export function FaltasAtestadosModule() {
   const { session } = useAuth();
@@ -40,6 +40,12 @@ export function FaltasAtestadosModule() {
   const [step, setStep] = useState(0);
   const [draft, setDraft] = useState<AbsenceDraft>(emptyDraft);
   const [formError, setFormError] = useState('');
+  const [localRecords, setLocalRecords] = useState<LocalAbsenceRecord[]>([]);
+  const [localLoading, setLocalLoading] = useState(false);
+  const [localError, setLocalError] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [savedMessage, setSavedMessage] = useState('');
+  const [editingRecordId, setEditingRecordId] = useState<string | null>(null);
   const [history, setHistory] = useState<ParsedAbsenceHistory | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState('');
@@ -68,6 +74,19 @@ export function FaltasAtestadosModule() {
   }, [permission.allowed]);
 
   useEffect(() => { void loadBindings(); }, [loadBindings]);
+
+  const loadLocalRecords = useCallback(async () => {
+    if (!supabase || !permission.allowed) { setLocalRecords([]); return; }
+    setLocalLoading(true); setLocalError('');
+    try {
+      const { data, error: rpcError } = await supabase.rpc('mk9_faltas_atestados_local_records').abortSignal(AbortSignal.timeout(10000));
+      if (rpcError || !Array.isArray(data)) throw rpcError || new Error('invalid response');
+      setLocalRecords(data as LocalAbsenceRecord[]);
+    } catch { setLocalError('Não foi possível consultar os lançamentos locais salvos.'); }
+    finally { setLocalLoading(false); }
+  }, [permission.allowed]);
+
+  useEffect(() => { void loadLocalRecords(); }, [loadLocalRecords]);
 
   useEffect(() => {
     if (loading) { setHistoryLoading(false); return; }
@@ -127,16 +146,33 @@ export function FaltasAtestadosModule() {
   }, [bindings]);
   const searched = bindings.filter(row => `${row.colaborador} ${row.matricula_interna} ${row.matricula_externa} ${row.projeto_crm} ${row.supervisor}`.toLowerCase().includes(query.trim().toLowerCase()));
   const set = (key: keyof AbsenceDraft, value: string) => setDraft(current => ({ ...current, [key]: value }));
-  const resetForm = () => { setDraft(emptyDraft()); setStep(0); setFormError(''); };
+  const resetForm = () => { setDraft(emptyDraft()); setStep(0); setFormError(''); setEditingRecordId(null); setSavedMessage(''); };
+
+  const saveDraft = async () => {
+    const issues = validateAbsenceDraft(draft, selectedBinding);
+    if (issues.length) { setFormError(issues[0]); return; }
+    if (!supabase || !selectedBinding) { setFormError('A persistência não está disponível no momento.'); return; }
+    setSaving(true); setFormError(''); setSavedMessage('');
+    try {
+      const { data, error: saveError } = await supabase.rpc('mk9_faltas_atestados_save_draft',
+        buildAbsenceSaveArgs(draft, selectedBinding, editingRecordId)).abortSignal(AbortSignal.timeout(12000));
+      if (saveError || !data) throw saveError || new Error('empty response');
+      setSavedMessage('Rascunho salvo no banco de dados. Nenhum dado foi enviado ao CRM.');
+      setEditingRecordId(null);
+      await loadLocalRecords();
+    } catch {
+      setFormError('Não foi possível salvar. Confirme sua autorização, a vigência do vínculo e os dados informados.');
+    } finally { setSaving(false); }
+  };
 
   const validateStep = (current: number): boolean => {
     setFormError('');
     const issues: string[] = [];
     if (current === 0 && !selectedBinding) issues.push('Selecione um colaborador com vínculo CRM aprovado e vigente.');
     if (current === 1) {
-      issues.push(...validateAbsenceDraft({ ...draft, empresa: 'ok', supervisor: 'ok', localidade: 'ok' }, selectedBinding).filter(item => item !== 'Informe a empresa.' && item !== 'Informe o supervisor.' && item !== 'Informe a localidade.'));
+      issues.push(...validateAbsenceDraft({ ...draft, justificativa: 'ok' }, selectedBinding));
     }
-    if (current === 2) issues.push(...validateAbsenceDraft(draft, selectedBinding).filter(item => item.startsWith('Informe a empresa') || item.startsWith('Informe o supervisor') || item.startsWith('Informe a localidade')));
+    if (current === 2 && !draft.justificativa.trim()) issues.push('Informe uma justificativa.');
     if (issues.length) { setFormError(issues[0]); return false; }
     return true;
   };
@@ -172,7 +208,7 @@ export function FaltasAtestadosModule() {
           <p className="col-span-2 text-xs text-[#737373] sm:col-span-4">Indicadores calculados dos registros CRM entre {historyStart} e {historyEnd}. <button className="underline" onClick={() => setArea('history')}>Abrir histórico</button></p>
         </div>}
         {historyError && <p role="status" className="text-xs text-[#737373]">Indicadores externos indisponíveis: {historyError}</p>}
-        <div className={`${panel} flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between`}><div><h2 className="font-bold">Preparação local</h2><p className="mt-1 text-sm text-[#5F5F5F]">Nenhum indicador de envio é exibido. O formulário não grava nem transmite dados.</p></div><button className={primary} onClick={() => setArea('new')}>Preparar revisão</button></div>
+        <div className={`${panel} flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between`}><div><h2 className="font-bold">Lançamentos locais</h2><p className="mt-1 text-sm text-[#5F5F5F]">{localRecords.length} lançamento(s) salvo(s) localmente. Eles não foram recebidos pelo CRM.</p></div><button className={primary} onClick={() => { resetForm(); setArea('new'); }}>Novo lançamento</button></div>
       </div>}
 
       {area === 'new' && <div className="mx-auto max-w-4xl space-y-4">
@@ -181,7 +217,7 @@ export function FaltasAtestadosModule() {
         </div>
         {formError && <p role="alert" className="rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-800">{formError}</p>}
         {step === 0 && <div className={`${panel} grid grid-cols-1 gap-4 sm:grid-cols-2`}>
-          <label className="text-sm font-medium sm:col-span-2">Colaborador / vínculo CRM<select className={field} value={draft.alocacaoId} onChange={event => { const row = selectable.find(item => item.alocacao_id === event.target.value); setDraft(current => ({ ...current, alocacaoId: event.target.value, supervisor: row?.supervisor || '', localidade: [row?.cidade, row?.uf].filter(Boolean).join('/') })); setFormError(''); }}><option value="">Selecione um vínculo aprovado</option>{selectable.map(row => <option key={row.alocacao_id} value={row.alocacao_id}>{row.colaborador} · {row.matricula_interna} · {row.matricula_externa} · {row.projeto_crm}</option>)}</select></label>
+          <label className="text-sm font-medium sm:col-span-2">Colaborador / projeto CRM<select className={field} value={draft.alocacaoId} onChange={event => { setDraft(current => ({ ...current, alocacaoId: event.target.value })); setFormError(''); }}><option value="">Selecione um vínculo aprovado</option>{selectable.map(row => <option key={row.alocacao_id} value={row.alocacao_id}>{row.colaborador} · {row.matricula_interna} · {row.matricula_externa} · {row.projeto_crm}</option>)}</select></label>
           {selectedBinding ? <><ReadOnly label="Matrícula interna" value={selectedBinding.matricula_interna} /><ReadOnly label="Matrícula real CRM" value={selectedBinding.matricula_externa} /><ReadOnly label="Projeto CRM (UUID confirmado)" value={selectedBinding.projeto_crm} /><ReadOnly label="Vigência do vínculo" value={`${formatDate(selectedBinding.valido_desde)} – ${formatDate(selectedBinding.valido_ate)}`} /></> : <p className="text-xs text-[#737373] sm:col-span-2">Matrícula externa e projeto são resolvidos exclusivamente pelo vínculo aprovado; não podem ser digitados neste formulário.</p>}
         </div>}
         {step === 1 && <div className={`${panel} grid grid-cols-1 gap-4 sm:grid-cols-2`}>
@@ -193,29 +229,37 @@ export function FaltasAtestadosModule() {
           <label className="text-sm font-medium">Previsão de retorno<input className={field} type="date" min={draft.fim || draft.inicio || undefined} value={draft.retorno} onChange={event => set('retorno', event.target.value)} /></label>
           <p className="text-xs text-[#737373] sm:col-span-2">A contagem é apenas informativa; dias úteis, inclusão das datas e unidade de ocorrência aguardam definição do CRM.</p>
         </div>}
-        {step === 2 && <div className={`${panel} grid grid-cols-1 gap-4 sm:grid-cols-2`}>
-          <label className="text-sm font-medium">Empresa<input className={field} maxLength={160} value={draft.empresa} onChange={event => set('empresa', event.target.value)} /></label>
-          <label className="text-sm font-medium">Supervisor<input className={field} maxLength={160} value={draft.supervisor} onChange={event => set('supervisor', event.target.value || selectedBinding?.supervisor || '')} placeholder={selectedBinding?.supervisor || 'Informe o supervisor'} /></label>
-          <label className="text-sm font-medium">Localidade<input className={field} maxLength={160} value={draft.localidade} onChange={event => set('localidade', event.target.value)} placeholder={[selectedBinding?.cidade, selectedBinding?.uf].filter(Boolean).join('/')} /></label>
-          <label className="text-sm font-medium">Loja (quando aplicável)<input className={field} maxLength={160} value={draft.loja} onChange={event => set('loja', event.target.value)} /></label>
-          <label className="text-sm font-medium sm:col-span-2">Motivo ou justificativa<textarea className={field} maxLength={500} rows={3} value={draft.motivo} onChange={event => set('motivo', event.target.value)} placeholder="Não inclua diagnóstico ou dados médicos detalhados." /></label>
-          <label className="text-sm font-medium sm:col-span-2">Informações administrativas<textarea className={field} maxLength={500} rows={3} value={draft.informacoes} onChange={event => set('informacoes', event.target.value)} /></label>
-          <fieldset className="grid grid-cols-2 gap-3 sm:col-span-2" disabled><legend className="mb-2 text-sm font-semibold">Dados restritos</legend><label className="rounded-lg border border-dashed border-[#C8C6BF] p-3 text-xs text-[#77766F]">CID <input className={`${field} cursor-not-allowed`} placeholder="Desabilitado" /></label><label className="rounded-lg border border-dashed border-[#C8C6BF] p-3 text-xs text-[#77766F]">Anexos médicos <input className={`${field} cursor-not-allowed`} type="file" /></label></fieldset>
-          <p className="text-xs text-[#737373] sm:col-span-2">Os campos ficam somente na memória desta tela. Não serão salvos ou enviados.</p>
+        {step === 2 && <div className={`${panel} grid grid-cols-1 gap-4`}>
+          <label className="text-sm font-medium">Justificativa<textarea className={field} maxLength={500} rows={5} value={draft.justificativa} onChange={event => set('justificativa', event.target.value)} placeholder="Não inclua diagnóstico ou dados médicos detalhados." /></label>
+          <p className="text-xs text-[#737373]">Evite incluir informações médicas além do necessário para justificar o lançamento.</p>
         </div>}
         {step === 3 && <div className={`${panel} space-y-4`}>
           <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm font-semibold text-amber-950">{reviewNotSent}</div>
           <h2 className="text-lg font-bold">Revisão do formulário</h2>
           {selectedBinding ? <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">{[
-            ['Colaborador', selectedBinding.colaborador], ['Matrícula interna', selectedBinding.matricula_interna], ['Matrícula real CRM', selectedBinding.matricula_externa], ['Projeto CRM', selectedBinding.projeto_crm], ['Tipo', draft.tipo], ['Período', `${formatDate(draft.inicio)} – ${formatDate(draft.fim)}`], ['Dias corridos (informativo)', String(inclusiveDays(draft.inicio, draft.fim) ?? '—')], ['Retorno previsto', formatDate(draft.retorno)], ['Empresa', draft.empresa], ['Supervisor', draft.supervisor], ['Localidade', draft.localidade], ['Loja', draft.loja || 'Não informada'], ['Motivo / justificativa', draft.motivo || 'Não informado'], ['Informações administrativas', draft.informacoes || 'Não informadas']
+            ['Colaborador', selectedBinding.colaborador], ['Matrícula interna', selectedBinding.matricula_interna], ['Matrícula real CRM', selectedBinding.matricula_externa], ['Projeto CRM', selectedBinding.projeto_crm], ['Tipo', draft.tipo], ['Período', `${formatDate(draft.inicio)} – ${formatDate(draft.fim)}`], ['Dias corridos (informativo)', String(inclusiveDays(draft.inicio, draft.fim) ?? '—')], ['Retorno previsto', formatDate(draft.retorno)], ['Justificativa', draft.justificativa]
           ].map(([label, value]) => <div key={label} className="min-w-0 border-b border-[#E2E0D9] pb-2"><dt className="text-xs text-[#737373]">{label}</dt><dd className="mt-1 break-words text-sm font-medium">{value}</dd></div>)}</dl> : <p role="alert">O vínculo selecionado não está disponível. Volte e selecione outro.</p>}
-          <p className="text-xs text-[#737373]">Esta revisão não cria registro, protocolo, confirmação ou histórico.</p>
-          <button type="button" className={primary} disabled={!externalWriteEnabled}>Enviar para o CRM (indisponível)</button>
+          <p className="text-xs text-[#737373]">Salvar cria um rascunho local no banco. Isso não confirma recebimento pelo CRM.</p>
+          <div className="flex flex-wrap gap-2"><button type="button" className={primary} disabled={saving} onClick={() => void saveDraft()}>{saving ? 'Salvando…' : editingRecordId ? 'Atualizar rascunho' : 'Salvar rascunho'}</button><button type="button" className={button} disabled={!externalWriteEnabled}>Enviar ao CRM (aguardando homologação)</button></div>
         </div>}
-        <div className="flex flex-wrap justify-between gap-2"><button type="button" className={button} onClick={() => { resetForm(); setArea('overview'); }}>Cancelar revisão</button><div className="flex gap-2">{step > 0 && <button type="button" className={button} onClick={previousStep}>Voltar</button>}{step < 3 && <button type="button" className={primary} onClick={nextStep}>{step === 2 ? 'Revisar' : 'Continuar'}</button>}</div></div>
+        <div className="flex flex-wrap justify-between gap-2"><div>{savedMessage && <p role="status" className="mb-2 text-sm text-emerald-800">{savedMessage}</p>}<button type="button" className={button} onClick={() => { resetForm(); setArea('overview'); }}>Cancelar revisão</button></div><div className="flex gap-2">{step > 0 && <button type="button" className={button} onClick={previousStep}>Voltar</button>}{step < 3 && <button type="button" className={primary} onClick={nextStep}>{step === 2 ? 'Revisar' : 'Continuar'}</button>}</div></div>
       </div>}
 
       {area === 'history' && <div className="space-y-4">
+        <section className={`${panel} space-y-3`} aria-labelledby="local-records-title">
+          <div className="flex flex-wrap items-center justify-between gap-2"><div><h2 id="local-records-title" className="font-bold">Lançamentos locais</h2><p className="text-xs text-[#737373]">Registros salvos neste módulo; não são confirmações nem dados recebidos pelo CRM.</p></div><button type="button" className={button} onClick={() => void loadLocalRecords()} disabled={localLoading}>{localLoading ? 'Atualizando…' : 'Atualizar locais'}</button></div>
+          {localError && <p role="alert" className="text-sm text-red-800">{localError}</p>}
+          {!localLoading && !localError && localRecords.length === 0 && <p className="text-sm text-[#737373]">Nenhum lançamento local salvo.</p>}
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">{localRecords.map(record => <article className="rounded-lg border border-[#D8D6CF] bg-white p-4" key={record.id}>
+            <div className="flex flex-wrap items-start justify-between gap-2"><div><h3 className="font-semibold">{record.colaborador_nome} · {record.tipo}</h3><p className="text-xs text-[#5F5F5F]">Matrícula interna {record.matricula_interna} · matrícula CRM {record.matricula_externa} · Projeto {record.projeto_crm}</p></div><span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-900">Status local: {record.status === 'rascunho' ? 'rascunho' : 'preparado; não enviado'}</span></div>
+            <p className="mt-2 text-sm">{formatDate(record.data_inicio)} – {formatDate(record.data_fim)} · Retorno {formatDate(record.previsao_retorno)}</p>
+            <p className="mt-2 whitespace-pre-wrap text-sm">{record.justificativa}</p>
+            <p className="mt-2 text-xs text-[#737373]">Salvo em {new Date(record.criado_em).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}</p>
+            {record.status === 'rascunho' && <button type="button" className={`${button} mt-3`} onClick={() => { setDraft({ alocacaoId: record.alocacao_id, tipo: record.tipo, inicio: record.data_inicio, fim: record.data_fim, retorno: record.previsao_retorno, justificativa: record.justificativa }); setEditingRecordId(record.id); setSavedMessage(''); setFormError(''); setStep(0); setArea('new'); }}>Editar rascunho</button>}
+          </article>)}</div>
+        </section>
+        <h2 className="pt-2 text-lg font-bold">Registros recebidos do CRM</h2>
+        <p className="text-xs text-[#737373]">Esta seção mantém a consulta GET somente leitura já existente.</p>
         <div className={`${panel} grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-6`}>
           {availableRhViews.length > 1 && <label className="text-xs">Escopo<select className={field} value={selectedHistoryView || ''} onChange={event => setHistoryView(event.target.value as RhView)}>{availableRhViews.map(view => <option key={view} value={view}>{view === 'mine' ? 'Pessoal' : view === 'team' ? 'Equipe autorizada' : 'Gestão autorizada'}</option>)}</select></label>}
           <label className="text-xs">Data inicial<input className={field} type="date" value={historyStart} max={historyEnd} onChange={event => setHistoryStart(event.target.value)} /></label>

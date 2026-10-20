@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { test } from 'node:test';
 import {
-  externalWriteEnabled, hasPreparePermission, inclusiveDays, isBindingSelectable, isOccurrenceWithinBinding,
+  buildAbsenceSaveArgs, externalWriteEnabled, hasPreparePermission, inclusiveDays, isBindingSelectable, isOccurrenceWithinBinding,
   resolveBinding, reviewNotSent, validateAbsenceDraft, type AbsenceDraft, type CrmBinding
 } from './faltasAtestados';
 
@@ -17,8 +17,7 @@ const binding = (overrides: Partial<CrmBinding> = {}): CrmBinding => ({
 });
 const draft = (overrides: Partial<AbsenceDraft> = {}): AbsenceDraft => ({
   alocacaoId: 'a-1', tipo: 'Atestado', inicio: '2026-10-19', fim: '2026-10-20',
-  retorno: '2026-10-21', empresa: 'Empresa informada', supervisor: 'Supervisora',
-  localidade: 'São Paulo/SP', loja: '', motivo: '', informacoes: '', ...overrides
+  retorno: '2026-10-21', justificativa: 'Ausência para regularização.', ...overrides
 });
 
 test('capability exige concessão explícita verdadeira', () => {
@@ -44,6 +43,17 @@ test('matrícula externa é resolvida do vínculo, nunca de texto do formulário
   const selected = resolveBinding([binding()], 'a-1');
   assert.equal(selected?.matricula_externa, '0000042');
   assert.equal(Object.hasOwn(draft(), 'matriculaExterna'), false);
+});
+
+test('payload de criação e edição deriva vínculo no backend e contém somente campos do cadastro local', () => {
+  const args = buildAbsenceSaveArgs(draft({ justificativa: '  Necessidade de ausência.  ' }), binding(), null);
+  assert.deepEqual(args, {
+    p_alocacao_id: 'a-1', p_tipo: 'Atestado', p_data_inicio: '2026-10-19', p_data_fim: '2026-10-20',
+    p_previsao_retorno: '2026-10-21', p_justificativa: 'Necessidade de ausência.', p_record_id: null
+  });
+  assert.equal(Object.hasOwn(args, 'p_matricula_externa'), false);
+  assert.equal(Object.hasOwn(args, 'p_projeto_crm'), false);
+  assert.equal(buildAbsenceSaveArgs(draft(), binding(), 'record-1').p_record_id, 'record-1');
 });
 
 test('preserva múltiplos projetos como alocações distintas', () => {
@@ -72,8 +82,9 @@ test('datas inválidas e período invertido são rejeitados', () => {
 });
 
 test('campos requeridos do formulário são validados', () => {
-  const errors = validateAbsenceDraft(draft({ tipo: '', empresa: '', supervisor: '', localidade: '' }), binding());
-  assert.ok(errors.length >= 4);
+  const errors = validateAbsenceDraft(draft({ tipo: '', justificativa: '' }), binding());
+  assert.ok(errors.length >= 2);
+  assert.ok(validateAbsenceDraft(draft({ justificativa: ' '.repeat(4) }), binding()).some(issue => issue.toLowerCase().includes('justificativa')));
 });
 
 test('revisão informa claramente que nada foi enviado', () => {

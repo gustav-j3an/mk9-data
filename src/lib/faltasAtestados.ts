@@ -23,12 +23,27 @@ export interface AbsenceDraft {
   inicio: string;
   fim: string;
   retorno: string;
-  empresa: string;
-  supervisor: string;
-  localidade: string;
-  loja: string;
-  motivo: string;
-  informacoes: string;
+  justificativa: string;
+}
+
+export interface LocalAbsenceRecord {
+  id: string; alocacao_id: string; promotor_id: string; colaborador_nome: string; matricula_interna: string;
+  matricula_externa: string; projeto_crm: string; tipo: 'Falta' | 'Atestado';
+  data_inicio: string; data_fim: string; previsao_retorno: string; justificativa: string;
+  status: 'rascunho' | 'pronto_para_envio';
+  responsavel_id: string; criado_em: string; atualizado_em: string;
+}
+
+export function buildAbsenceSaveArgs(draft: AbsenceDraft, binding: CrmBinding, recordId: string | null) {
+  return {
+    p_alocacao_id: binding.alocacao_id,
+    p_tipo: draft.tipo,
+    p_data_inicio: draft.inicio,
+    p_data_fim: draft.fim,
+    p_previsao_retorno: draft.retorno,
+    p_justificativa: draft.justificativa.trim(),
+    p_record_id: recordId
+  };
 }
 
 export const externalWriteEnabled = false as const;
@@ -78,9 +93,7 @@ export function validateAbsenceDraft(draft: AbsenceDraft, binding: CrmBinding | 
   if (!(absenceTypes as readonly string[]).includes(draft.tipo)) errors.push('Selecione falta ou atestado.');
   if (!isDateOnly(draft.inicio) || !isDateOnly(draft.fim) || draft.fim < draft.inicio) errors.push('Informe um período válido.');
   if (!isDateOnly(draft.retorno) || (isDateOnly(draft.fim) && draft.retorno < draft.fim)) errors.push('Informe uma previsão de retorno igual ou posterior ao fim do período.');
-  if (!draft.empresa.trim()) errors.push('Informe a empresa.');
-  if (!draft.supervisor.trim()) errors.push('Informe o supervisor.');
-  if (!draft.localidade.trim()) errors.push('Informe a localidade.');
+  if (!draft.justificativa.trim() || draft.justificativa.trim().length > 500) errors.push('Preencha a justificativa (1 a 500 caracteres).');
   if (binding && isDateOnly(draft.inicio) && isDateOnly(draft.fim) && !isOccurrenceWithinBinding(binding, draft.inicio, draft.fim)) errors.push('O período está fora da janela de ocorrências ou da vigência do vínculo CRM.');
   return errors;
 }

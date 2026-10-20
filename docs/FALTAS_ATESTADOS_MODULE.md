@@ -2,7 +2,7 @@
 
 ## Estrutura
 
-O módulo aparece no menu como **Faltas e Atestados** e contém seis áreas: Visão geral, Nova ausência, Histórico de lançamentos, Colaboradores e matrículas, Projetos CRM e Configurações. `FaltasAtestadosModule.tsx` mantém as áreas e o rascunho do formulário em memória da tela. `faltasAtestados.ts` concentra validações e resolução de vínculos. `faltasAtestadosAccess.tsx` consulta a capability e condiciona navegação e interface.
+O módulo aparece no menu como **Faltas e Atestados** e contém seis áreas: Visão geral, Nova ausência, Histórico de lançamentos, Colaboradores e matrículas, Projetos CRM e Configurações. `FaltasAtestadosModule.tsx` mantém as seis áreas, o formulário em quatro etapas e a consulta aos lançamentos locais. `faltasAtestados.ts` concentra validações, resolução de vínculos e montagem do pedido de gravação. `faltasAtestadosAccess.tsx` consulta a capability e condiciona navegação e interface.
 
 ## Permissões
 
@@ -16,11 +16,19 @@ O colaborador é identificado por `promotores.id`/matrícula interna. Projeto CR
 
 O formulário tem quatro etapas: Colaborador, Ocorrência, Informações complementares e Revisão. Valida campos obrigatórios, datas, ordem do período e janela/vigência do vínculo. A contagem de dias corridos é informativa, pois a regra oficial de dias úteis e inclusão das datas ainda não foi confirmada. CID e anexos ficam desabilitados.
 
-## Estado e limites
+## Persistência local e fila futura
 
-O rascunho não é persistido. A revisão informa **“Não enviado — integração com CRM aguardando homologação.”** A área Histórico consulta registros existentes no CRM por GET e é somente leitura. Não há POST, fila, gravação, confirmação nem envio automático.
+A migration `20261020170000_mk9_absence_records_outbox.sql` cria `mk9_absence_records`, `mk9_absence_send_attempts` e `mk9_absence_audit`. O cadastro persiste colaborador, matrículas interna/externa, projeto CRM, tipo, datas, justificativa, status, responsável e timestamps. CID, anexos, diagnóstico e informações administrativas que não são necessárias ao cadastro não são armazenados.
 
-A especificação `MK9_RH_API_ESCRITA_ESPECIFICACAO.md` é uma proposta e não confirma endpoint nem contrato de escrita. Antes de qualquer envio será necessário obter o contrato oficial, homologar credenciais e projetos de teste, definir idempotência, unidade da ocorrência, estados, erros, retorno e auditoria.
+A gravação e leitura passam por RPCs autenticadas do banco. O formulário envia apenas o identificador da alocação e os campos de negócio; a função resolve matrícula interna, matrícula externa, colaborador e projeto diretamente das tabelas de vínculo. Ela exige perfil ativo, capability `faltas_atestados_prepare`, identidade e alocação aprovadas, vínculo vigente, janela de ocorrência, datas válidas e justificativa. A edição só permite rascunhos do próprio responsável. Duplicidade de vínculo/tipo/período é barrada por constraint.
+
+As tabelas têm RLS habilitada e forçada, acesso direto revogado e políticas restritivas de negação. A auditoria registra criação, edição e preparação para envio sem copiar a justificativa para os eventos. A outbox mantém chave de idempotência estável por lançamento e estados para homologação, fila, processamento, sucesso, erro e retentativa. Não existe worker nem chamada POST.
+
+No histórico, **Lançamentos locais** é uma seção distinta de **Registros recebidos do CRM**. A confirmação de salvamento aparece somente após resposta bem-sucedida da RPC. O botão de envio externo continua desabilitado.
+
+## Estado da integração externa
+
+O histórico consulta registros existentes no CRM por GET e permanece somente leitura. A especificação `MK9_RH_API_ESCRITA_ESPECIFICACAO.md` é uma proposta e não confirma endpoint nem contrato de escrita. Antes de qualquer envio será necessário obter contrato oficial, homologar credenciais e projetos de teste, definir payload, idempotência, unidade da ocorrência, estados, erros, retorno e auditoria.
 
 ## Independência operacional
 
@@ -30,7 +38,7 @@ O módulo usa as RPCs de capability e leitura de vínculos CRM, além da consult
 
 - Testes unitários: `npm run test:faltas-atestados`.
 - Testes da API RH: `npm run test:rh-integration`.
-- Teste SQL de capability: `supabase/tests/mk9_faltas_atestados_prepare_permission.sql`, apenas em banco local sintético e dentro de transação com rollback.
+- Testes SQL sintéticos de capability e persistência/RLS: `supabase/tests/mk9_faltas_atestados_prepare_permission.sql` e `supabase/tests/mk9_absence_records_security.sql`, apenas em banco local sintético e dentro de transação com rollback.
 - Typecheck: `npm run lint`.
 - Build: `npm run build`.
 - Bundle: conferir que não inclui endpoint/cliente POST, credenciais ou segredos. Nenhuma validação visual é afirmada sem capturas reais.
