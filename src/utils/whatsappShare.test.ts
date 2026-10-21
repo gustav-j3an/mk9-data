@@ -250,4 +250,230 @@ describe('Utilitário de Compartilhamento WhatsApp — MK9 Date', () => {
       }
     });
   });
+
+  describe('Cenários de Homologação A até J — Android & WhatsApp Business', () => {
+    // Cenário A: Visita concluída com texto e duas fotos
+    it('Cenário A: Visita concluída com texto estruturado e 2 fotos anexadas', () => {
+      const visitA: Visit = {
+        id: 'visita-a',
+        loja_codigo: 'LJ-10',
+        industria_codigo: 'IND-01',
+        promotor_matricula: 'MAT-501',
+        data_visita: '2026-10-21',
+        started_at: '2026-10-21T08:00:00.000Z',
+        completed_at: '2026-10-21T09:15:00.000Z',
+        status: 'concluida',
+        loja: { codigo: 'LJ-10', nome: 'Hipermercado Extra' },
+        industria: { codigo: 'IND-01', nome: 'M. Dias Branco' },
+        promotor: { matricula: 'MAT-501', nome: 'Ana Souza' },
+        photos: [
+          { tipo_foto: 'gondola', storage_path: 'visit-photos/visita-a/antes.jpg', file_url: 'https://storage/antes.jpg' },
+          { tipo_foto: 'fachada', storage_path: 'visit-photos/visita-a/depois.jpg', file_url: 'https://storage/depois.jpg' }
+        ]
+      };
+
+      const report = buildWhatsAppReportText(visitA);
+      assert.ok(report.includes('M. Dias Branco'));
+      assert.ok(report.includes('Hipermercado Extra'));
+      assert.ok(report.includes('Ana Souza'));
+      assert.ok(report.includes('✅ Concluída'));
+      assert.ok(report.includes('2 foto(s) anexada(s)'));
+    });
+
+    // Cenário B: Visita concluída com cinco fotos
+    it('Cenário B: Visita concluída com 5 fotos', () => {
+      const visitB: Visit = {
+        id: 'visita-b',
+        loja_codigo: 'LJ-20',
+        industria_codigo: 'IND-02',
+        promotor_matricula: 'MAT-502',
+        data_visita: '2026-10-21',
+        status: 'concluida',
+        photos: Array.from({ length: 5 }, (_, i) => ({
+          tipo_foto: 'gondola' as const,
+          storage_path: `visit-photos/visita-b/foto-${i + 1}.jpg`,
+          file_url: `https://storage/visita-b/foto-${i + 1}.jpg`
+        }))
+      };
+
+      const report = buildWhatsAppReportText(visitB);
+      assert.ok(report.includes('5 foto(s) anexada(s)'));
+    });
+
+    // Cenário C: Visita concluída com dez fotos
+    it('Cenário C: Visita concluída com 10 fotos', () => {
+      const visitC: Visit = {
+        id: 'visita-c',
+        loja_codigo: 'LJ-30',
+        industria_codigo: 'IND-03',
+        promotor_matricula: 'MAT-503',
+        data_visita: '2026-10-21',
+        status: 'concluida',
+        photos: Array.from({ length: 10 }, (_, i) => ({
+          tipo_foto: 'ponto_extra' as const,
+          storage_path: `visit-photos/visita-c/foto-${i + 1}.jpg`,
+          file_url: `https://storage/visita-c/foto-${i + 1}.jpg`
+        }))
+      };
+
+      const report = buildWhatsAppReportText(visitC);
+      assert.ok(report.includes('10 foto(s) anexada(s)'));
+    });
+
+    // Cenário D: Visita com ocorrência de ruptura
+    it('Cenário D: Visita com ocorrência de ruptura devidamente tipada', () => {
+      const visitD: Visit = {
+        id: 'visita-d',
+        loja_codigo: 'LJ-40',
+        industria_codigo: 'IND-04',
+        promotor_matricula: 'MAT-504',
+        data_visita: '2026-10-21',
+        status: 'concluida',
+        occurrences: [
+          { tipo: 'ruptura', descricao: 'Biscoito Cream Cracker esgotado na gôndola', resolvido: false },
+          { tipo: 'preco_divergente', descricao: 'Preço etiquetado R$ 4,50 difere do sistema R$ 3,99', resolvido: true }
+        ]
+      };
+
+      const report = buildWhatsAppReportText(visitD);
+      assert.ok(report.includes('🚨 *Ocorrências / Rupturas (2):*'));
+      assert.ok(report.includes('[RUPTURA] Biscoito Cream Cracker esgotado na gôndola (Pendente)'));
+      assert.ok(report.includes('[PRECO DIVERGENTE] Preço etiquetado R$ 4,50 difere do sistema R$ 3,99 (Resolvido)'));
+    });
+
+    // Cenário E: Visita com checklist preenchido
+    it('Cenário E: Visita com checklist operacional numérico e booleano', () => {
+      const visitE: Visit = {
+        id: 'visita-e',
+        loja_codigo: 'LJ-50',
+        industria_codigo: 'IND-05',
+        promotor_matricula: 'MAT-505',
+        data_visita: '2026-10-21',
+        status: 'concluida',
+        checklist_items: [
+          { item_key: 'gondola_limpa', item_label: 'Gôndola higienizada e organizada', checked: true },
+          { item_key: 'estoque_venda', item_label: 'Quantidade exposta', checked: true, valor_texto: '80' },
+          { item_key: 'precificacao_ok', item_label: 'Precificação 100% visível', checked: false }
+        ]
+      };
+
+      const report = buildWhatsAppReportText(visitE);
+      assert.ok(report.includes('📦 *Checklist Operacional:*'));
+      assert.ok(report.includes('Gôndola higienizada e organizada: Sim'));
+      assert.ok(report.includes('Quantidade exposta: 80 un.'));
+      assert.ok(report.includes('Precificação 100% visível: Não'));
+    });
+
+    // Cenário F: Visita sem fotos disponíveis
+    it('Cenário F: Visita sem fotos não exibe seção fotográfica nem causa erro', () => {
+      const visitF: Visit = {
+        id: 'visita-f',
+        loja_codigo: 'LJ-60',
+        industria_codigo: 'IND-06',
+        promotor_matricula: 'MAT-506',
+        data_visita: '2026-10-21',
+        status: 'concluida',
+        photos: []
+      };
+
+      const report = buildWhatsAppReportText(visitF);
+      assert.ok(!report.includes('Evidências Fotográficas'));
+    });
+
+    // Cenário G: Visita de indústria sem grupo cadastrado
+    it('Cenário G: Indústria sem link de grupo ou com link nulo é identificada com segurança', () => {
+      assert.equal(isValidWhatsAppGroupLink(null), false);
+      assert.equal(isValidWhatsAppGroupLink(undefined), false);
+      assert.equal(isValidWhatsAppGroupLink(''), false);
+    });
+
+    // Cenário H: Cancelamento do compartilhamento
+    it('Cenário H: Cancelamento pelo usuário retorna "canceled" sem quebrar a tela', async () => {
+      const { shareViaWebShare } = await import('./whatsappShare');
+      const originalShare = globalThis.navigator?.share;
+      const originalCanShare = globalThis.navigator?.canShare;
+
+      Object.defineProperty(globalThis.navigator, 'share', {
+        value: async () => {
+          const err = new Error('AbortError');
+          err.name = 'AbortError';
+          throw err;
+        },
+        configurable: true,
+        writable: true
+      });
+      Object.defineProperty(globalThis.navigator, 'canShare', {
+        value: () => true,
+        configurable: true,
+        writable: true
+      });
+
+      try {
+        const res = await shareViaWebShare({ title: 'T', text: 'M' });
+        assert.equal(res, 'canceled');
+      } finally {
+        if (originalShare) {
+          Object.defineProperty(globalThis.navigator, 'share', { value: originalShare, configurable: true });
+        } else {
+          delete (globalThis.navigator as any).share;
+        }
+        if (originalCanShare) {
+          Object.defineProperty(globalThis.navigator, 'canShare', { value: originalCanShare, configurable: true });
+        } else {
+          delete (globalThis.navigator as any).canShare;
+        }
+      }
+    });
+
+    // Cenário I: Navegador sem suporte a compartilhamento de arquivos
+    it('Cenário I: Navegador sem canShare de arquivos retorna "unsupported" e aciona fallback wa.me', async () => {
+      const { shareViaWebShare, buildWhatsAppWebUrl } = await import('./whatsappShare');
+      const originalShare = globalThis.navigator?.share;
+      const originalCanShare = globalThis.navigator?.canShare;
+
+      Object.defineProperty(globalThis.navigator, 'share', {
+        value: async () => {},
+        configurable: true,
+        writable: true
+      });
+      // Simula navegador que suporta navigator.share mas canShare({ files }) retorna false
+      Object.defineProperty(globalThis.navigator, 'canShare', {
+        value: (data?: any) => {
+          if (data && data.files) return false;
+          return true;
+        },
+        configurable: true,
+        writable: true
+      });
+
+      try {
+        const dummyFile = new (globalThis as any).File(['mock-binary'], 'foto.jpg', { type: 'image/jpeg' });
+        const res = await shareViaWebShare({ title: 'T', text: 'M', files: [dummyFile] });
+        assert.equal(res, 'unsupported');
+
+        // Fallback wa.me correspondente
+        const fallbackUrl = buildWhatsAppWebUrl('Relatório M');
+        assert.ok(fallbackUrl.startsWith('https://wa.me/?text='));
+      } finally {
+        if (originalShare) {
+          Object.defineProperty(globalThis.navigator, 'share', { value: originalShare, configurable: true });
+        } else {
+          delete (globalThis.navigator as any).share;
+        }
+        if (originalCanShare) {
+          Object.defineProperty(globalThis.navigator, 'canShare', { value: originalCanShare, configurable: true });
+        } else {
+          delete (globalThis.navigator as any).canShare;
+        }
+      }
+    });
+
+    // Cenário J: Conexão lenta ou instável / codificação segura de textos longos
+    it('Cenário J: Gera URL wa.me mesmo com relatórios longos e caracteres especiais', () => {
+      const longText = '📋 *RELATÓRIO EXTENSO*\n' + 'Linha de observação com acentuação e caracteres especiais: ção, á, é, í, ó, ú, @, #, $, %, &, *, ().\n'.repeat(10);
+      const url = buildWhatsAppWebUrl(longText);
+      assert.ok(url.startsWith('https://wa.me/?text='));
+      assert.ok(!url.includes(' ')); // Espaços devem estar codificados
+    });
+  });
 });
