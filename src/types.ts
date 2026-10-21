@@ -28,6 +28,7 @@ export interface IndustryItem {
   status: 'ativo' | 'inativo';
   observacao?: string | null;
   data_inicio_operacao?: string | null;
+  whatsapp_group_link?: string | null;
   created_at?: string;
   updated_at?: string;
 }

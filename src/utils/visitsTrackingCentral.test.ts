@@ -195,7 +195,7 @@ describe('Acompanhamento de Visitas — Central de Acompanhamento Operacional', 
 
   it('processa itens de quantidade do checklist conforme especificação MK9 Date', () => {
     const visit = mockVisits[0];
-    const items = visit.visitObj.checklist_items;
+    const items = visit.visitObj?.checklist_items || [];
 
     const currentQtyItems = items.filter((item) => CHECKLIST_QUANTITY_KEYS.has(item.item_key));
     assert.equal(currentQtyItems.length, 2);

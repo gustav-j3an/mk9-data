@@ -12,6 +12,7 @@ import {
 } from '../utils/routePlanner';
 import { ExecutiveReportDocument } from '../components/reports/ExecutiveReportDocument';
 import { AuthorSignature } from '../components/AuthorSignature';
+import { ShareWhatsAppModal } from '../components/ShareWhatsAppModal';
 
 interface IndustryPortalViewProps {
   onShowToast: (toast: Omit<ToastMessage, 'id'>) => void;
@@ -68,6 +69,7 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
 
   // Modal de Detalhes da Visita (Somente Leitura)
   const [selectedVisitItem, setSelectedVisitItem] = useState<OperationalVisitItem | null>(null);
+  const [sharingVisit, setSharingVisit] = useState<Visit | null>(null);
   const [loadingDetails, setLoadingDetails] = useState(false);
 
   // Modal / Drawer de Histórico por Loja
@@ -2947,7 +2949,17 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
             </div>
 
             {/* RODAPÉ DO MODAL */}
-            <div className="pt-3 border-t border-[#CFCDC5] flex justify-end">
+            <div className="pt-3 border-t border-[#CFCDC5] flex items-center justify-between">
+              {selectedVisitItem.visitObj ? (
+                <button
+                  type="button"
+                  onClick={() => setSharingVisit(selectedVisitItem.visitObj!)}
+                  className="px-3.5 py-2 bg-emerald-600/10 hover:bg-emerald-600/20 text-emerald-800 border border-emerald-600/30 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-colors"
+                >
+                  <span className="material-symbols-outlined text-sm">share</span>
+                  <span>Compartilhar WhatsApp</span>
+                </button>
+              ) : <div />}
               <button
                 onClick={() => setSelectedVisitItem(null)}
                 className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs cursor-pointer transition-all shadow-md"
@@ -3190,6 +3202,16 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
         temporalEvolution={temporalEvolution}
         topProblematicLojas={topProblematicLojas}
       />
+
+      {/* 11. MODAL DE COMPARTILHAMENTO WHATSAPP */}
+      {sharingVisit && (
+        <ShareWhatsAppModal
+          visit={sharingVisit}
+          industry={sharingVisit.industria ? ({ codigo: sharingVisit.industria.codigo, nome: sharingVisit.industria.nome } as any) : null}
+          onClose={() => setSharingVisit(null)}
+          onShowToast={onShowToast}
+        />
+      )}
     </div>
   );
 };

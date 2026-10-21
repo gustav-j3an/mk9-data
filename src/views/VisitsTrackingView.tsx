@@ -12,6 +12,7 @@ import {
   DayOfWeekDate
 } from '../utils/routePlanner';
 import { CHECKLIST_QUANTITY_KEYS } from '../utils/visitExecution';
+import { ShareWhatsAppModal } from '../components/ShareWhatsAppModal';
 
 interface VisitsTrackingViewProps {
   onNavigate: (screen: ScreenId) => void;
@@ -77,6 +78,7 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
   const [loadingPhotos, setLoadingPhotos] = useState(false);
   const [photoErrors, setPhotoErrors] = useState<Record<string, boolean>>({});
   const [zoomedPhotoUrl, setZoomedPhotoUrl] = useState<string | null>(null);
+  const [sharingVisit, setSharingVisit] = useState<Visit | null>(null);
 
   // Controle de concorrência e identificador sequencial de requisição
   const reqSeqRef = useRef<number>(0);
@@ -1394,7 +1396,17 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
             </div>
 
             {/* Rodapé do Modal */}
-            <div className="px-5 py-3 border-t border-[#CFCDC5] bg-[#F7F6F2] flex justify-end">
+            <div className="px-5 py-3 border-t border-[#CFCDC5] bg-[#F7F6F2] flex items-center justify-between">
+              {selectedVisitItem.visitObj ? (
+                <button
+                  type="button"
+                  onClick={() => setSharingVisit(selectedVisitItem.visitObj!)}
+                  className="px-3.5 py-2 bg-emerald-600/10 hover:bg-emerald-600/20 text-emerald-800 border border-emerald-600/30 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-colors"
+                >
+                  <span className="material-symbols-outlined text-sm">share</span>
+                  <span>Compartilhar WhatsApp</span>
+                </button>
+              ) : <div />}
               <button
                 onClick={() => setSelectedVisitItem(null)}
                 className="px-4 py-2 bg-[#171717] hover:bg-[#2C2C2C] text-white rounded-xl text-xs font-bold transition-colors cursor-pointer"
@@ -1423,6 +1435,16 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
             </button>
           </div>
         </div>
+      )}
+
+      {/* 7. MODAL DE COMPARTILHAMENTO WHATSAPP */}
+      {sharingVisit && (
+        <ShareWhatsAppModal
+          visit={sharingVisit}
+          industry={sharingVisit.industria ? ({ codigo: sharingVisit.industria.codigo, nome: sharingVisit.industria.nome } as any) : null}
+          onClose={() => setSharingVisit(null)}
+          onShowToast={onShowToast}
+        />
       )}
     </div>
   );
