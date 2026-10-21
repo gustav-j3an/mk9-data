@@ -5,6 +5,7 @@ import { AttendanceJourneyPanel } from '../components/AttendanceJourneyPanel';
 import type { Promoter } from '../utils/attendanceEngine';
 import { zoned, type PresenceItem, type OverrideStatus } from '../utils/attendanceEngine';
 import { type PromoterOperationalSummary, type RouteExecutionStatus } from '../utils/visitActivityEngine';
+import { filterPromoterSummaries, calculateOperationalMetrics, type RouteStatusFilter } from '../utils/attendanceFilters';
 import * as XLSX from 'xlsx';
 
 interface AttendanceControlViewProps {
@@ -32,6 +33,8 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
   const [supervisorFilter, setSupervisorFilter] = useState('');
   // Filtro de Programação: 'com_roteiro' (padrão), 'todos', 'sem_programacao'
   const [scopeFilter, setScopeFilter] = useState<'com_roteiro' | 'todos' | 'sem_programacao'>('com_roteiro');
+  // Filtro Interativo por Situação de Roteiro (Cards de Indicadores)
+  const [statusFilter, setStatusFilter] = useState<RouteStatusFilter>('ALL');
 
   const [promoters, setPromoters] = useState<Promoter[]>([]);
   const [audit, setAudit] = useState<{ name: string; rows: AttendanceAuditEntry[] } | null>(null);
@@ -127,25 +130,26 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
     } finally { setSaving(false); }
   };
 
-  // Filtragem dos Promotores da Visão Operacional Simplificada
-  const filteredSummaries = useMemo(() => {
-    const term = search.trim().toLowerCase();
-    return operationalSummaries.filter(summary => {
-      // 1. Filtro de escopo de programação:
-      if (scopeFilter === 'com_roteiro' && summary.scheduledVisitsCount === 0) return false;
-      if (scopeFilter === 'sem_programacao' && summary.scheduledVisitsCount > 0) return false;
-
-      // 2. Busca por nome ou matrícula
-      const matchSearch = !term ||
-        summary.name.toLowerCase().includes(term) ||
-        summary.matricula.toLowerCase().includes(term);
-
-      // 3. Filtro por supervisor
-      const matchSupervisor = !supervisorFilter || summary.supervisor === supervisorFilter;
-
-      return matchSearch && matchSupervisor;
+  // Base de promotores sob os filtros gerais (escopo, busca e supervisor)
+  // Utilizada para preservar a contagem fidedigna dos cartões de indicadores
+  const baseSummaries = useMemo(() => {
+    return filterPromoterSummaries(operationalSummaries, {
+      search,
+      supervisorFilter,
+      scopeFilter,
+      statusFilter: 'ALL'
     });
   }, [operationalSummaries, scopeFilter, search, supervisorFilter]);
+
+  // Filtragem final dos promotores (inclui o filtro interativo por indicador)
+  const filteredSummaries = useMemo(() => {
+    return filterPromoterSummaries(operationalSummaries, {
+      search,
+      supervisorFilter,
+      scopeFilter,
+      statusFilter
+    });
+  }, [operationalSummaries, scopeFilter, search, supervisorFilter, statusFilter]);
 
   // Lista única de supervisores para o filtro
   const availableSupervisors = useMemo(() => {
@@ -159,46 +163,15 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
   }, [operationalSummaries]);
 
   // Indicadores de Roteiro e Resumo de Visitas da Operação
+  // Calculados a partir de baseSummaries para manter as contagens dos cartões estáveis
   const metrics = useMemo(() => {
-    // Calculados sobre os promotores do filtro atual
-    let completos = 0;
-    let parciais = 0;
-    let naoRealizados = 0;
-    let emAtividade = 0;
-    let aguardandoInicio = 0;
+    return calculateOperationalMetrics(baseSummaries);
+  }, [baseSummaries]);
 
-    let totalProgramadas = 0;
-    let totalConcluidas = 0;
-    let totalPendentes = 0;
-
-    filteredSummaries.forEach(s => {
-      if (s.routeStatus === 'COMPLETO') completos++;
-      else if (s.routeStatus === 'PARCIAL') parciais++;
-      else if (s.routeStatus === 'NAO_REALIZADO') naoRealizados++;
-      else if (s.routeStatus === 'EM_ATIVIDADE') emAtividade++;
-      else if (s.routeStatus === 'AGUARDANDO_INICIO') aguardandoInicio++;
-
-      totalProgramadas += s.scheduledVisitsCount;
-      totalConcluidas += s.completedVisitsCount;
-      totalPendentes += s.pendingVisitsCount;
-    });
-
-    const percentualExecucao = totalProgramadas > 0
-      ? Math.round((totalConcluidas / totalProgramadas) * 100)
-      : 0;
-
-    return {
-      completos,
-      parciais,
-      naoRealizados,
-      emAtividade,
-      aguardandoInicio,
-      totalProgramadas,
-      totalConcluidas,
-      totalPendentes,
-      percentualExecucao
-    };
-  }, [filteredSummaries]);
+  // Alterna o filtro de status ao clicar no card (ou remove se já estiver ativo)
+  const handleToggleStatusFilter = (targetStatus: RouteStatusFilter) => {
+    setStatusFilter(prev => prev === targetStatus ? 'ALL' : targetStatus);
+  };
 
   const handleExport = () => {
     try {
@@ -376,7 +349,10 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                 type="date"
                 aria-label="Data operacional"
                 value={dateVal}
-                onChange={(e) => setDateVal(e.target.value)}
+                onChange={(e) => {
+                  setDateVal(e.target.value);
+                  setStatusFilter('ALL');
+                }}
                 className="bg-transparent font-semibold text-xs text-[#171717] focus:outline-none cursor-pointer"
               />
             </div>
@@ -460,54 +436,134 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
 
       {/* 2. QUATRO INDICADORES DE ROTEIRO + RESUMO COMPACTO DE PENDÊNCIAS */}
       <div className="space-y-3">
-        {/* Quatro Indicadores */}
+        {/* Quatro Indicadores Interativos */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           {/* Completos */}
-          <div className="p-4 rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] flex items-center justify-between shadow-xs">
+          <button
+            type="button"
+            onClick={() => handleToggleStatusFilter('COMPLETO')}
+            aria-pressed={statusFilter === 'COMPLETO'}
+            aria-label={`Filtrar por roteiros completos: ${metrics.completos} promotores`}
+            className={`p-4 rounded-xl flex items-center justify-between text-left transition-all duration-200 cursor-pointer border ${
+              statusFilter === 'COMPLETO'
+                ? 'bg-emerald-50/90 border-emerald-500 shadow-sm ring-2 ring-emerald-500/20'
+                : 'bg-[#F7F6F2] hover:bg-[#EAE8E2] border-[#CFCDC5] hover:border-[#B5B3A8] shadow-xs'
+            }`}
+          >
             <div>
-              <span className="text-[11px] font-bold text-[#77766F] uppercase tracking-wider font-mono">Completos</span>
+              <div className="flex items-center gap-1.5">
+                <span className="text-[11px] font-bold text-[#77766F] uppercase tracking-wider font-mono">Completos</span>
+                {statusFilter === 'COMPLETO' && (
+                  <span className="inline-flex items-center px-1.5 py-0.2 rounded-full text-[9px] font-bold bg-emerald-600 text-white font-mono">
+                    Ativo
+                  </span>
+                )}
+              </div>
               <div className="text-2xl font-extrabold text-emerald-700 font-mono mt-0.5">
                 {loading ? '—' : metrics.completos}
               </div>
               <p className="text-[10px] text-[#77766F] mt-1">100% visitas realizadas</p>
             </div>
-            <div className="p-2.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200">
+            <div className={`p-2.5 rounded-lg border transition-colors ${
+              statusFilter === 'COMPLETO'
+                ? 'bg-emerald-600 text-white border-emerald-600'
+                : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+            }`}>
               <span className="material-symbols-outlined text-2xl">task_alt</span>
             </div>
-          </div>
+          </button>
 
           {/* Parciais */}
-          <div className="p-4 rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] flex items-center justify-between shadow-xs">
+          <button
+            type="button"
+            onClick={() => handleToggleStatusFilter('PARCIAL')}
+            aria-pressed={statusFilter === 'PARCIAL'}
+            aria-label={`Filtrar por roteiros parciais: ${metrics.parciais} promotores`}
+            className={`p-4 rounded-xl flex items-center justify-between text-left transition-all duration-200 cursor-pointer border ${
+              statusFilter === 'PARCIAL'
+                ? 'bg-amber-50/90 border-amber-500 shadow-sm ring-2 ring-amber-500/20'
+                : 'bg-[#F7F6F2] hover:bg-[#EAE8E2] border-[#CFCDC5] hover:border-[#B5B3A8] shadow-xs'
+            }`}
+          >
             <div>
-              <span className="text-[11px] font-bold text-[#77766F] uppercase tracking-wider font-mono">Parciais</span>
+              <div className="flex items-center gap-1.5">
+                <span className="text-[11px] font-bold text-[#77766F] uppercase tracking-wider font-mono">Parciais</span>
+                {statusFilter === 'PARCIAL' && (
+                  <span className="inline-flex items-center px-1.5 py-0.2 rounded-full text-[9px] font-bold bg-amber-600 text-white font-mono">
+                    Ativo
+                  </span>
+                )}
+              </div>
               <div className="text-2xl font-extrabold text-amber-700 font-mono mt-0.5">
                 {loading ? '—' : metrics.parciais}
               </div>
               <p className="text-[10px] text-[#77766F] mt-1">Dia fechado com pendência</p>
             </div>
-            <div className="p-2.5 rounded-lg bg-amber-50 text-amber-700 border border-amber-200">
+            <div className={`p-2.5 rounded-lg border transition-colors ${
+              statusFilter === 'PARCIAL'
+                ? 'bg-amber-600 text-white border-amber-600'
+                : 'bg-amber-50 text-amber-700 border-amber-200'
+            }`}>
               <span className="material-symbols-outlined text-2xl">timelapse</span>
             </div>
-          </div>
+          </button>
 
           {/* Não realizados */}
-          <div className="p-4 rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] flex items-center justify-between shadow-xs">
+          <button
+            type="button"
+            onClick={() => handleToggleStatusFilter('NAO_REALIZADO')}
+            aria-pressed={statusFilter === 'NAO_REALIZADO'}
+            aria-label={`Filtrar por roteiros não realizados: ${metrics.naoRealizados} promotores`}
+            className={`p-4 rounded-xl flex items-center justify-between text-left transition-all duration-200 cursor-pointer border ${
+              statusFilter === 'NAO_REALIZADO'
+                ? 'bg-rose-50/90 border-rose-500 shadow-sm ring-2 ring-rose-500/20'
+                : 'bg-[#F7F6F2] hover:bg-[#EAE8E2] border-[#CFCDC5] hover:border-[#B5B3A8] shadow-xs'
+            }`}
+          >
             <div>
-              <span className="text-[11px] font-bold text-[#77766F] uppercase tracking-wider font-mono">Não Realizados</span>
+              <div className="flex items-center gap-1.5">
+                <span className="text-[11px] font-bold text-[#77766F] uppercase tracking-wider font-mono">Não Realizados</span>
+                {statusFilter === 'NAO_REALIZADO' && (
+                  <span className="inline-flex items-center px-1.5 py-0.2 rounded-full text-[9px] font-bold bg-rose-600 text-white font-mono">
+                    Ativo
+                  </span>
+                )}
+              </div>
               <div className="text-2xl font-extrabold text-rose-700 font-mono mt-0.5">
                 {loading ? '—' : metrics.naoRealizados}
               </div>
               <p className="text-[10px] text-[#77766F] mt-1">Nenhuma visita concluída</p>
             </div>
-            <div className="p-2.5 rounded-lg bg-rose-50 text-rose-700 border border-rose-200">
+            <div className={`p-2.5 rounded-lg border transition-colors ${
+              statusFilter === 'NAO_REALIZADO'
+                ? 'bg-rose-600 text-white border-rose-600'
+                : 'bg-rose-50 text-rose-700 border-rose-200'
+            }`}>
               <span className="material-symbols-outlined text-2xl">cancel</span>
             </div>
-          </div>
+          </button>
 
           {/* Em atividade / Aguardando início */}
-          <div className="p-4 rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] flex items-center justify-between shadow-xs">
+          <button
+            type="button"
+            onClick={() => handleToggleStatusFilter('EM_ATIVIDADE')}
+            aria-pressed={statusFilter === 'EM_ATIVIDADE'}
+            aria-label={`Filtrar por roteiros em atividade: ${metrics.emAtividade} promotores`}
+            className={`p-4 rounded-xl flex items-center justify-between text-left transition-all duration-200 cursor-pointer border ${
+              statusFilter === 'EM_ATIVIDADE'
+                ? 'bg-blue-50/90 border-blue-500 shadow-sm ring-2 ring-blue-500/20'
+                : 'bg-[#F7F6F2] hover:bg-[#EAE8E2] border-[#CFCDC5] hover:border-[#B5B3A8] shadow-xs'
+            }`}
+          >
             <div>
-              <span className="text-[11px] font-bold text-[#77766F] uppercase tracking-wider font-mono">Em Atividade</span>
+              <div className="flex items-center gap-1.5">
+                <span className="text-[11px] font-bold text-[#77766F] uppercase tracking-wider font-mono">Em Atividade</span>
+                {statusFilter === 'EM_ATIVIDADE' && (
+                  <span className="inline-flex items-center px-1.5 py-0.2 rounded-full text-[9px] font-bold bg-blue-600 text-white font-mono">
+                    Ativo
+                  </span>
+                )}
+              </div>
               <div className="text-2xl font-extrabold text-blue-700 font-mono mt-0.5">
                 {loading ? '—' : metrics.emAtividade}
               </div>
@@ -515,12 +571,39 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                 {metrics.aguardandoInicio > 0 ? `${metrics.aguardandoInicio} aguardando início` : 'Dia em andamento'}
               </p>
             </div>
-            <div className="p-2.5 rounded-lg bg-blue-50 text-blue-700 border border-blue-200">
+            <div className={`p-2.5 rounded-lg border transition-colors ${
+              statusFilter === 'EM_ATIVIDADE'
+                ? 'bg-blue-600 text-white border-blue-600'
+                : 'bg-blue-50 text-blue-700 border-blue-200'
+            }`}>
               <span className="material-symbols-outlined text-2xl">person_pin_circle</span>
             </div>
-          </div>
+          </button>
         </div>
 
+        {/* Filtro Adicional Dedicado: Aguardando Início (quando houver promotores aguardando) */}
+        {metrics.aguardandoInicio > 0 && (
+          <div className="flex items-center justify-between px-3.5 py-2 rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] text-xs">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-slate-500" />
+              <span className="text-[#5F5F5F]">
+                Há <strong className="text-[#171717]">{metrics.aguardandoInicio}</strong> promotor(es) com roteiro programado aguardando início de visitas hoje:
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => handleToggleStatusFilter('AGUARDANDO_INICIO')}
+              aria-pressed={statusFilter === 'AGUARDANDO_INICIO'}
+              className={`px-3 py-1 rounded-lg text-xs font-semibold border transition-all cursor-pointer ${
+                statusFilter === 'AGUARDANDO_INICIO'
+                  ? 'bg-slate-800 text-white border-slate-900 shadow-xs ring-2 ring-slate-400/30'
+                  : 'bg-[#EAE8E2] text-slate-700 hover:bg-[#DCDAD2] border-[#CFCDC5]'
+              }`}
+            >
+              {statusFilter === 'AGUARDANDO_INICIO' ? '✓ Filtro Ativo (Limpar)' : 'Filtrar Aguardando Início'}
+            </button>
+          </div>
+        )}
         {/* Resumo Compacto de Visitas e Pendências Operacionais */}
         <div className="px-4 py-2.5 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] flex flex-wrap items-center justify-between gap-3 text-xs font-mono">
           <div className="flex items-center gap-4 flex-wrap">
@@ -579,17 +662,31 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
             <div className="w-14 h-14 rounded-full bg-[#EAE8E2] border border-[#CFCDC5] flex items-center justify-center text-[#77766F]">
               <span className="material-symbols-outlined text-3xl">person_off</span>
             </div>
-            <h3 className="text-base font-bold text-[#171717]">Nenhum promotor encontrado</h3>
+            <h3 className="text-base font-bold text-[#171717]">
+              {statusFilter !== 'ALL' ? 'Nenhum promotor encontrado para este filtro.' : 'Nenhum promotor encontrado'}
+            </h3>
             <p className="text-xs text-[#77766F]">
-              Não foram encontrados promotores para os filtros informados nesta data operacional.
+              {statusFilter !== 'ALL'
+                ? 'Nenhum promotor corresponde ao indicador selecionado nesta data operacional.'
+                : 'Não foram encontrados promotores para os filtros informados nesta data operacional.'}
             </p>
-            {(search || supervisorFilter || scopeFilter !== 'com_roteiro') && (
-              <button
-                onClick={() => { setSearch(''); setSupervisorFilter(''); setScopeFilter('com_roteiro'); }}
-                className="px-3 py-1.5 rounded-lg bg-[#222222] text-white text-xs font-semibold cursor-pointer"
-              >
-                Restaurar visualização padrão
-              </button>
+            {(search || supervisorFilter || scopeFilter !== 'com_roteiro' || statusFilter !== 'ALL') && (
+              <div className="flex items-center gap-2 flex-wrap justify-center pt-1">
+                {statusFilter !== 'ALL' && (
+                  <button
+                    onClick={() => setStatusFilter('ALL')}
+                    className="px-3 py-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold cursor-pointer shadow-xs"
+                  >
+                    Limpar filtro do indicador
+                  </button>
+                )}
+                <button
+                  onClick={() => { setSearch(''); setSupervisorFilter(''); setScopeFilter('com_roteiro'); setStatusFilter('ALL'); }}
+                  className="px-3 py-1.5 rounded-lg bg-[#222222] hover:bg-[#333333] text-white text-xs font-semibold cursor-pointer shadow-xs"
+                >
+                  Restaurar visualização padrão
+                </button>
+              </div>
             )}
           </div>
         </div>
@@ -675,8 +772,28 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
           </div>
 
           {/* Rodapé da tabela */}
-          <div className="p-3 bg-[#E4E2DB] border-t border-[#CFCDC5] flex items-center justify-between text-xs text-[#5F5F5F]">
-            <span>Exibindo <strong>{filteredSummaries.length}</strong> de <strong>{operationalSummaries.length}</strong> promotores</span>
+          <div className="p-3 bg-[#E4E2DB] border-t border-[#CFCDC5] flex flex-wrap items-center justify-between gap-2 text-xs text-[#5F5F5F]">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span>
+                Exibindo <strong>{filteredSummaries.length}</strong> de <strong>{operationalSummaries.length}</strong> promotores
+                {baseSummaries.length !== operationalSummaries.length && (
+                  <span className="text-[#77766F]"> ({baseSummaries.length} no escopo)</span>
+                )}
+              </span>
+              {statusFilter !== 'ALL' && (
+                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-[#F7F6F2] border border-[#CFCDC5] font-mono text-[11px] text-[#171717]">
+                  Filtro: <strong className="uppercase">{statusFilter.replace('_', ' ')}</strong>
+                  <button
+                    onClick={() => setStatusFilter('ALL')}
+                    title="Remover filtro de status"
+                    aria-label="Remover filtro de status"
+                    className="hover:text-rose-600 font-bold ml-0.5 cursor-pointer"
+                  >
+                    ✕
+                  </button>
+                </span>
+              )}
+            </div>
             <span className="text-[11px]">MK9 Date — Presença Operacional por Atendimentos</span>
           </div>
         </div>
