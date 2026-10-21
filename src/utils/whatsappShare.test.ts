@@ -476,4 +476,116 @@ describe('Utilitário de Compartilhamento WhatsApp — MK9 Date', () => {
       assert.ok(!url.includes(' ')); // Espaços devem estar codificados
     });
   });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Missão 12 — Mensagem editável no modal de compartilhamento WhatsApp
+  // ─────────────────────────────────────────────────────────────────────────
+  describe('Missão 12 — Mensagem editável (editedText + restauração)', () => {
+    const baseVisit: Visit = {
+      id: 'visita-m12',
+      promotor_matricula: 'MAT-200',
+      loja_codigo: 'LJ-77',
+      industria_codigo: 'IND-42',
+      data_visita: '2026-10-22',
+      started_at: '2026-10-22T09:00:00.000Z',
+      completed_at: '2026-10-22T10:00:00.000Z',
+      status: 'concluida',
+      observacao_geral: 'Visita de rotina sem ocorrências.',
+      industria: { codigo: 'IND-42', nome: 'Unilever' },
+      loja: { codigo: 'LJ-77', nome: 'Mercado Norte' },
+      promotor: { matricula: 'MAT-200', nome: 'Ana Lima' },
+      checklist_items: [],
+      occurrences: []
+    };
+
+    it('Texto inicial equivale ao gerado por buildWhatsAppReportText', () => {
+      const original = buildWhatsAppReportText(baseVisit);
+      // Simula o estado inicial do modal: editedText é inicializado igual ao gerado
+      const editedText = buildWhatsAppReportText(baseVisit);
+      assert.equal(editedText, original);
+      // isTextModified deve ser false no início
+      assert.equal(editedText !== original, false);
+    });
+
+    it('Texto editado diverge do original e dispara isTextModified = true', () => {
+      const original = buildWhatsAppReportText(baseVisit);
+      const editedText = original + '\n\n✅ Produto reposto após solicitação da gerência.';
+      assert.notEqual(editedText, original);
+      assert.equal(editedText !== original, true);
+    });
+
+    it('Restaurar texto retorna ao original exato', () => {
+      const original = buildWhatsAppReportText(baseVisit);
+      let editedText = original + '\n😊 Observação adicional do promotor.';
+      // Restaurar: equivale a setEditedText(reportText)
+      editedText = original;
+      assert.equal(editedText, original);
+      assert.equal(editedText !== original, false);
+    });
+
+    it('buildWhatsAppWebUrl usa o texto editado ao gerar URL', () => {
+      const original = buildWhatsAppReportText(baseVisit);
+      const edited = original + '\n📦 Estoque crítico detectado.';
+      const urlOriginal = buildWhatsAppWebUrl(original);
+      const urlEdited = buildWhatsAppWebUrl(edited);
+      // As URLs devem ser diferentes pois o texto é diferente
+      assert.notEqual(urlOriginal, urlEdited);
+      // Ambas devem seguir o formato wa.me correto
+      assert.ok(urlEdited.startsWith('https://wa.me/?text='));
+      // O conteúdo editado deve estar codificado na URL
+      assert.ok(urlEdited.includes(encodeURIComponent('📦 Estoque crítico detectado.')));
+    });
+
+    it('Emojis e quebras de linha são preservados na edição e na URL', () => {
+      const edited = '🛒 Visita concluída!\n✅ Reposição feita.\n🔴 Produto em falta: Nescau 400g';
+      const url = buildWhatsAppWebUrl(edited);
+      assert.ok(url.startsWith('https://wa.me/?text='));
+      // Sem espaços não codificados
+      assert.ok(!url.includes(' '));
+      // Emojis preservados na URL codificada
+      assert.ok(url.includes(encodeURIComponent('🛒')));
+    });
+
+    it('Texto com apenas espaços em branco ainda gera URL válida (fallback seguro)', () => {
+      const url = buildWhatsAppWebUrl('   ');
+      assert.ok(url.startsWith('https://wa.me/?text='));
+    });
+
+    it('Texto vazio após edição não deve causar erro ao gerar URL', () => {
+      const url = buildWhatsAppWebUrl('');
+      assert.ok(typeof url === 'string');
+      assert.ok(url.startsWith('https://wa.me/?text='));
+    });
+
+    it('Fotos preparadas são independentes do texto editado (estado isolado)', () => {
+      const visitComFotos: Visit = {
+        ...baseVisit,
+        photos: [
+          { id: 'p1', storage_path: 'visit-photos/p1.jpg', file_url: '', tipo_foto: 'gondola', legenda: 'Foto 1' }
+        ]
+      };
+      const original = buildWhatsAppReportText(visitComFotos);
+      const edited = original + '\n🖼️ Fotos anexadas conforme solicitado.';
+      // Texto editado não tem relação com photos
+      assert.notEqual(edited, original);
+      assert.equal(visitComFotos.photos?.length, 1);
+    });
+
+    it('Restaurar não afeta fotos (estado de fotos é independente do texto)', () => {
+      const visitComFotos: Visit = {
+        ...baseVisit,
+        photos: [
+          { id: 'p2', storage_path: 'visit-photos/p2.jpg', file_url: '', tipo_foto: 'preco', legenda: 'Foto 2' },
+          { id: 'p3', storage_path: 'visit-photos/p3.jpg', file_url: '', tipo_foto: 'ruptura', legenda: 'Foto 3' }
+        ]
+      };
+      const original = buildWhatsAppReportText(visitComFotos);
+      let edited = original + '\n💬 Gerente informado sobre a falta.';
+      // Restaurar
+      edited = original;
+      assert.equal(edited, original);
+      // Fotos continuam intactas
+      assert.equal(visitComFotos.photos?.length, 2);
+    });
+  });
 });

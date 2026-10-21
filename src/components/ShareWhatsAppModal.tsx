@@ -22,8 +22,15 @@ export const ShareWhatsAppModal: React.FC<ShareWhatsAppModalProps> = ({
   onClose,
   onShowToast
 }) => {
-  // Texto do relatório pré-gerado
+  // Texto do relatório pré-gerado (imutável — base para restauração)
   const reportText = useMemo(() => buildWhatsAppReportText(visit), [visit]);
+
+  // Texto editável da mensagem (o promotor pode personalizar antes de enviar)
+  const [editedText, setEditedText] = useState(() => buildWhatsAppReportText(visit));
+  const isTextModified = editedText !== reportText;
+
+  // Restaurar texto para o original gerado automaticamente
+  const handleRestoreText = () => setEditedText(reportText);
 
   // Estados de cópia e links
   const [copied, setCopied] = useState(false);
@@ -152,14 +159,14 @@ export const ShareWhatsAppModal: React.FC<ShareWhatsAppModalProps> = ({
     };
   }, [visit, photos]);
 
-  // 2. Copiar texto do relatório
+  // 2. Copiar texto do relatório (usa o texto editado pelo promotor)
   const handleCopyReport = async () => {
     try {
       if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(reportText);
+        await navigator.clipboard.writeText(editedText);
       } else {
         const textarea = document.createElement('textarea');
-        textarea.value = reportText;
+        textarea.value = editedText;
         document.body.appendChild(textarea);
         textarea.select();
         document.execCommand('copy');
@@ -182,14 +189,14 @@ export const ShareWhatsAppModal: React.FC<ShareWhatsAppModalProps> = ({
     }
   };
 
-  // 3. Compartilhar via Web Share (com fotos preparadas se houver suporte)
+  // 3. Compartilhar via Web Share (usa o texto editado pelo promotor)
   const handleShareNative = async () => {
     setSharing(true);
     try {
       // Se tiver fotos preparadas, tenta compartilhar com arquivos
       const shareResult = await shareViaWebShare({
         title: `Relatório de Visita — ${visit.loja?.nome || visit.loja_codigo}`,
-        text: reportText,
+        text: editedText,
         files: preparedFiles.length > 0 ? preparedFiles : undefined
       });
 
@@ -206,8 +213,8 @@ export const ShareWhatsAppModal: React.FC<ShareWhatsAppModalProps> = ({
           type: 'info'
         });
       } else if (shareResult === 'unsupported' || shareResult === 'error') {
-        // Fallback: abrir WhatsApp Web / App diretamente com o texto
-        const url = buildWhatsAppWebUrl(reportText);
+        // Fallback: abrir WhatsApp Web / App diretamente com o texto editado
+        const url = buildWhatsAppWebUrl(editedText);
         window.open(url, '_blank', 'noopener,noreferrer');
         onShowToast({
           title: 'Abrindo WhatsApp 📲',
@@ -220,9 +227,9 @@ export const ShareWhatsAppModal: React.FC<ShareWhatsAppModalProps> = ({
     }
   };
 
-  // 4. Abrir link wa.me direto (fallback explícito)
+  // 4. Abrir link wa.me direto (fallback explícito, usa o texto editado)
   const handleOpenWhatsAppWeb = () => {
-    const url = buildWhatsAppWebUrl(reportText);
+    const url = buildWhatsAppWebUrl(editedText);
     window.open(url, '_blank', 'noopener,noreferrer');
   };
 
@@ -370,27 +377,54 @@ export const ShareWhatsAppModal: React.FC<ShareWhatsAppModalProps> = ({
             )}
           </div>
 
-          {/* Prévia do Texto Formatado */}
+          {/* Mensagem Editável */}
           <div>
             <div className="flex items-center justify-between mb-1.5">
               <span className="text-[11px] font-bold text-[#5F5F5F] uppercase flex items-center gap-1.5">
-                <span className="material-symbols-outlined text-sm">description</span>
-                Prévia da Mensagem
+                <span className="material-symbols-outlined text-sm">edit_note</span>
+                Mensagem
+                {isTextModified && (
+                  <span className="text-[9px] font-semibold text-amber-600 bg-amber-500/10 border border-amber-500/30 px-1.5 py-0.5 rounded-full uppercase tracking-wide">
+                    editada
+                  </span>
+                )}
               </span>
-              <button
-                type="button"
-                onClick={handleCopyReport}
-                className="text-[11px] font-bold text-emerald-700 hover:text-emerald-800 flex items-center gap-1 cursor-pointer"
-              >
-                <span className="material-symbols-outlined text-sm">
-                  {copied ? 'check' : 'content_copy'}
-                </span>
-                <span>{copied ? 'Copiado!' : 'Copiar Texto'}</span>
-              </button>
+              <div className="flex items-center gap-2">
+                {isTextModified && (
+                  <button
+                    type="button"
+                    onClick={handleRestoreText}
+                    className="text-[11px] font-bold text-amber-600 hover:text-amber-700 flex items-center gap-1 cursor-pointer"
+                    title="Desfazer edições e restaurar o texto original"
+                  >
+                    <span className="material-symbols-outlined text-sm">restart_alt</span>
+                    <span>Restaurar</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={handleCopyReport}
+                  className="text-[11px] font-bold text-emerald-700 hover:text-emerald-800 flex items-center gap-1 cursor-pointer"
+                >
+                  <span className="material-symbols-outlined text-sm">
+                    {copied ? 'check' : 'content_copy'}
+                  </span>
+                  <span>{copied ? 'Copiado!' : 'Copiar'}</span>
+                </button>
+              </div>
             </div>
-            <pre className="p-3 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] text-[#171717] text-[11px] font-mono leading-relaxed whitespace-pre-wrap max-h-48 overflow-y-auto select-all">
-              {reportText}
-            </pre>
+            <textarea
+              id="whatsapp-report-message"
+              value={editedText}
+              onChange={(e) => setEditedText(e.target.value)}
+              rows={8}
+              className="w-full p-3 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] text-[#171717] text-[11px] font-mono leading-relaxed resize-y focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500"
+              aria-label="Mensagem do relatório — editável"
+              spellCheck={false}
+            />
+            <p className="text-[10px] text-[#77766F] mt-1">
+              ✏️ Edite livremente — adicione observações, emojis ou informações extras. O registro oficial não é alterado.
+            </p>
           </div>
         </div>
 
