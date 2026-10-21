@@ -36,8 +36,43 @@ export const ShareWhatsAppModal: React.FC<ShareWhatsAppModalProps> = ({
   const [photoErrors, setPhotoErrors] = useState<Record<string, string>>({});
   const [signedUrls, setSignedUrls] = useState<Record<string, string>>({});
 
-  // Link do grupo da indústria (validação segura)
-  const groupLink = industry?.whatsapp_group_link || null;
+  // Link do grupo da indústria (validação segura e resolução resiliente)
+  const [dynamicGroupLink, setDynamicGroupLink] = useState<string | null>(industry?.whatsapp_group_link || null);
+
+  useEffect(() => {
+    let isCancelled = false;
+    // Se o link já veio no prop, usá-lo
+    if (industry?.whatsapp_group_link !== undefined) {
+      setDynamicGroupLink(industry.whatsapp_group_link || null);
+      return;
+    }
+
+    // Se veio código da indústria mas sem a coluna carregada, busca pontualmente
+    const indCodigo = industry?.codigo || visit.industria_codigo || visit.industria?.codigo;
+    if (indCodigo && supabase) {
+      (async () => {
+        try {
+          const { data, error } = await supabase
+            .from('industrias')
+            .select('whatsapp_group_link')
+            .eq('codigo', indCodigo)
+            .maybeSingle();
+
+          if (!isCancelled && !error && data) {
+            setDynamicGroupLink(data.whatsapp_group_link || null);
+          }
+        } catch {
+          // Falha silenciosa: coluna pode não existir ainda se migration não foi rodada
+        }
+      })();
+    }
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [industry, visit.industria_codigo, visit.industria?.codigo]);
+
+  const groupLink = dynamicGroupLink;
   const isGroupValid = isValidWhatsAppGroupLink(groupLink);
 
   // Fotos da visita
