@@ -1,8 +1,11 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRhAccess, type RhView } from '../lib/rhAccess';
 import { useAuth } from '../auth/AuthProvider';
 import { useFaltasAtestadosAccess } from '../lib/faltasAtestadosAccess';
+import { AbsenceAttachments, type SelectedAbsenceAttachment } from '../components/AbsenceAttachments';
+import { SavedAbsenceAttachments } from '../components/SavedAbsenceAttachments';
 import { supabase } from '../lib/supabase';
+import { createSupabaseAbsenceAttachmentService, absenceAttachmentsPersistenceEnabled } from '../lib/absenceAttachmentService';
 import {
   absenceTypes, buildAbsenceSaveArgs, externalWriteEnabled, inclusiveDays, isBindingSelectable,
   resolveBinding, reviewNotSent, validateAbsenceDraft, type AbsenceDraft, type CrmBinding, type LocalAbsenceRecord
@@ -40,6 +43,11 @@ export function FaltasAtestadosModule() {
   const [query, setQuery] = useState('');
   const [step, setStep] = useState(0);
   const [draft, setDraft] = useState<AbsenceDraft>(emptyDraft);
+  const [attachments, setAttachments] = useState<SelectedAbsenceAttachment[]>([]);
+  const [attachmentProgress, setAttachmentProgress] = useState('');
+  const attachmentService = useMemo(() => createSupabaseAbsenceAttachmentService(supabase), []);
+  const attachmentsRef = useRef(attachments);
+  attachmentsRef.current = attachments;
   const [formError, setFormError] = useState('');
   const [localRecords, setLocalRecords] = useState<LocalAbsenceRecord[]>([]);
   const [localLoading, setLocalLoading] = useState(false);
@@ -81,6 +89,8 @@ export function FaltasAtestadosModule() {
   }, [permission.allowed]);
 
   useEffect(() => { void loadBindings(); }, [loadBindings]);
+
+  useEffect(() => () => attachmentsRef.current.forEach(item => { if (item.previewUrl) URL.revokeObjectURL(item.previewUrl); }), []);
 
   const loadLocalRecords = useCallback(async () => {
     if (!supabase || !permission.allowed) { setLocalRecords([]); return; }
@@ -153,23 +163,43 @@ export function FaltasAtestadosModule() {
   }, [bindings]);
   const searched = bindings.filter(row => `${row.colaborador} ${row.matricula_interna} ${row.matricula_externa} ${row.projeto_crm} ${row.supervisor}`.toLowerCase().includes(query.trim().toLowerCase()));
   const set = (key: keyof AbsenceDraft, value: string) => setDraft(current => ({ ...current, [key]: value }));
-  const resetForm = () => { setDraft(emptyDraft()); setStep(0); setFormError(''); setEditingRecordId(null); setSavedMessage(''); };
+  const resetForm = () => { attachments.forEach(item => { if (item.previewUrl) URL.revokeObjectURL(item.previewUrl); }); setDraft(emptyDraft()); setAttachments([]); setStep(0); setFormError(''); setEditingRecordId(null); setSavedMessage(''); };
 
   const saveDraft = async () => {
     const issues = validateAbsenceDraft(draft, selectedBinding);
     if (issues.length) { setFormError(issues[0]); return; }
+    if (attachments.length && (!absenceAttachmentsPersistenceEnabled || !attachmentService)) { setFormError('O armazenamento privado de atestados ainda não foi homologado. Os arquivos selecionados não foram enviados nem salvos; remova-os para salvar apenas o rascunho.'); return; }
     if (!supabase || !selectedBinding) { setFormError('A persistência não está disponível no momento.'); return; }
     setSaving(true); setFormError(''); setSavedMessage('');
     try {
       const { data, error: saveError } = await supabase.rpc('mk9_faltas_atestados_save_draft',
         buildAbsenceSaveArgs(draft, selectedBinding, editingRecordId)).abortSignal(AbortSignal.timeout(12000));
       if (saveError || !data) throw saveError || new Error('empty response');
+      const recordId = isObject(data) && typeof data.id === 'string' ? data.id : editingRecordId;
+      if (attachments.length && !recordId) {
+        setFormError('O rascunho pode ter sido salvo, mas não foi possível confirmar seu identificador; os anexos continuam sem envio. Consulte o histórico antes de tentar novamente.');
+        return;
+      }
       setSavedMessage('Rascunho salvo no banco de dados. Nenhum dado foi enviado ao CRM.');
-      setEditingRecordId(null);
+      if (recordId) setEditingRecordId(recordId);
       await loadLocalRecords();
+      if (attachments.length && recordId && attachmentService) {
+        for (const [index, item] of attachments.entries()) {
+          setAttachmentProgress(`Enviando ${index + 1} de ${attachments.length}…`);
+          try {
+            await attachmentService.upload(recordId, item.file);
+            if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
+            setAttachments(current => current.filter(selected => selected !== item));
+          } catch {
+            setFormError('O rascunho foi preservado, mas um anexo não teve persistência confirmada. O arquivo permanece selecionado para nova tentativa.');
+            break;
+          }
+        }
+        await loadLocalRecords();
+      }
     } catch {
       setFormError('Não foi possível salvar. Confirme sua autorização, a vigência do vínculo e os dados informados.');
-    } finally { setSaving(false); }
+    } finally { setSaving(false); setAttachmentProgress(''); }
   };
 
   const validateStep = (current: number): boolean => {
@@ -239,6 +269,7 @@ export function FaltasAtestadosModule() {
         {step === 2 && <div className={`${panel} grid grid-cols-1 gap-4`}>
           <label className="text-sm font-medium">Justificativa<textarea className={field} maxLength={500} rows={5} value={draft.justificativa} onChange={event => set('justificativa', event.target.value)} placeholder="Não inclua diagnóstico ou dados médicos detalhados." /></label>
           <p className="text-xs text-[#737373]">Evite incluir informações médicas além do necessário para justificar o lançamento.</p>
+          <AbsenceAttachments attachments={attachments} onChange={setAttachments} uploadStatus={attachmentProgress} />
         </div>}
         {step === 3 && <div className={`${panel} space-y-4`}>
           <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm font-semibold text-amber-950">{reviewNotSent}</div>
@@ -246,8 +277,10 @@ export function FaltasAtestadosModule() {
           {selectedBinding ? <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">{[
             ['Colaborador', selectedBinding.colaborador], ['Matrícula interna', selectedBinding.matricula_interna], ['Matrícula real CRM', selectedBinding.matricula_externa], ['Projeto CRM', selectedBinding.projeto_crm], ['Tipo', draft.tipo], ['Período', `${formatDate(draft.inicio)} – ${formatDate(draft.fim)}`], ['Dias corridos (informativo)', String(inclusiveDays(draft.inicio, draft.fim) ?? '—')], ['Retorno previsto', formatDate(draft.retorno)], ['Justificativa', draft.justificativa]
           ].map(([label, value]) => <div key={label} className="min-w-0 border-b border-[#E2E0D9] pb-2"><dt className="text-xs text-[#737373]">{label}</dt><dd className="mt-1 break-words text-sm font-medium">{value}</dd></div>)}</dl> : <p role="alert">O vínculo selecionado não está disponível. Volte e selecione outro.</p>}
+          <div><h3 className="text-sm font-semibold">Arquivos selecionados ({attachments.length})</h3><p className="mt-1 text-xs text-amber-900">{attachments.length ? 'Estes arquivos ainda estão apenas neste navegador e não serão persistidos.' : 'Nenhum arquivo selecionado.'}</p>{attachments.map((item, index) => <p className="mt-1 break-all text-xs" key={`${item.file.name}-${index}`}>{item.file.name} · {(item.file.size / 1024 / 1024).toFixed(2)} MiB</p>)}</div>
           <p className="text-xs text-[#737373]">Salvar cria um rascunho local no banco. Isso não confirma recebimento pelo CRM.</p>
-          <div className="flex flex-wrap gap-2"><button type="button" className={primary} disabled={saving} onClick={() => void saveDraft()}>{saving ? 'Salvando…' : editingRecordId ? 'Atualizar rascunho' : 'Salvar rascunho'}</button><button type="button" className={button} disabled={!externalWriteEnabled}>Enviar ao CRM (aguardando homologação)</button></div>
+          <div className="flex flex-wrap gap-2"><button type="button" className={primary} disabled={saving || (attachments.length > 0 && !absenceAttachmentsPersistenceEnabled)} onClick={() => void saveDraft()}>{saving ? attachmentProgress || 'Salvando…' : editingRecordId ? attachments.length ? 'Salvar e enviar anexos' : 'Atualizar rascunho' : attachments.length ? 'Salvar rascunho e enviar anexos' : 'Salvar rascunho'}</button><button type="button" className={button} disabled={!externalWriteEnabled}>Enviar ao CRM (aguardando homologação)</button></div>
+          {attachments.length > 0 && !absenceAttachmentsPersistenceEnabled && <p role="status" className="text-sm text-amber-900">Para evitar um rascunho sem os documentos selecionados, o salvamento e o upload estão bloqueados até a homologação do Storage privado.</p>}
         </div>}
         <div className="flex flex-wrap justify-between gap-2"><div>{savedMessage && <p role="status" className="mb-2 text-sm text-emerald-800">{savedMessage}</p>}<button type="button" className={button} onClick={() => { resetForm(); setArea('overview'); }}>Cancelar revisão</button></div><div className="flex gap-2">{step > 0 && <button type="button" className={button} onClick={previousStep}>Voltar</button>}{step < 3 && <button type="button" className={primary} onClick={nextStep}>{step === 2 ? 'Revisar' : 'Continuar'}</button>}</div></div>
       </div>}
@@ -261,6 +294,7 @@ export function FaltasAtestadosModule() {
             <div className="flex flex-wrap items-start justify-between gap-2"><div><h3 className="font-semibold">{record.colaborador_nome} · {record.tipo}</h3><p className="text-xs text-[#5F5F5F]">Matrícula interna {record.matricula_interna} · matrícula CRM {record.matricula_externa} · Projeto {record.projeto_crm}</p></div><span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-900">Status local: {record.status === 'rascunho' ? 'rascunho' : 'preparado; não enviado'}</span></div>
             <p className="mt-2 text-sm">{formatDate(record.data_inicio)} – {formatDate(record.data_fim)} · Retorno {formatDate(record.previsao_retorno)}</p>
             <p className="mt-2 whitespace-pre-wrap text-sm">{record.justificativa}</p>
+            <SavedAbsenceAttachments recordId={record.id} canDelete={record.status === 'rascunho'} service={absenceAttachmentsPersistenceEnabled ? attachmentService : null} />
             <p className="mt-2 text-xs text-[#737373]">Salvo em {new Date(record.criado_em).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}</p>
             {record.status === 'rascunho' && <button type="button" className={`${button} mt-3`} onClick={() => { setDraft({ alocacaoId: record.alocacao_id, tipo: record.tipo, inicio: record.data_inicio, fim: record.data_fim, retorno: record.previsao_retorno, justificativa: record.justificativa }); setEditingRecordId(record.id); setSavedMessage(''); setFormError(''); setStep(0); setArea('new'); }}>Editar rascunho</button>}
           </article>)}</div>
