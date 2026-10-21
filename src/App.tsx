@@ -20,12 +20,21 @@ import { StoresView } from './views/StoresView';
 import { PromoterPortalView } from './views/PromoterPortalView';
 import { IndustryPortalView } from './views/IndustryPortalView';
 import { ProfileView } from './views/ProfileView';
+import { RhAbsencesView } from './views/RhAbsencesView';
+import { RhAccessProvider, useRhAccess } from './lib/rhAccess';
+import { FaltasAtestadosAccessProvider, useFaltasAtestadosAccess } from './lib/faltasAtestadosAccess';
+import { FaltasAtestadosModule } from './views/FaltasAtestadosModule';
+import { RhMatriculasAccessProvider, useRhMatriculasAccess } from './lib/rhMatriculasAccess';
+import { RhMatriculasReconciliationView } from './views/RhMatriculasReconciliationView';
 import { AuthProvider, useAuth } from './auth/AuthProvider';
 import { LoginPage } from './auth/LoginPage';
 import { ResetPasswordPage } from './auth/ResetPasswordPage';
 import { ProtectedRoute } from './auth/ProtectedRoute';
 
-function isScreenAllowedForRole(screen: ScreenId, role: string): boolean {
+function isScreenAllowedForRole(screen: ScreenId, role: string, rhAllowed = false, faltasAtestadosAllowed = false, rhMatriculasAllowed = false): boolean {
+  if (screen === 'faltas-atestados') return faltasAtestadosAllowed;
+  if (screen === 'rh-matriculas') return role === 'admin' && rhMatriculasAllowed;
+  if (screen === 'rh-ausencias') return rhAllowed;
   if (screen === 'meu-perfil') {
     return true;
   }
@@ -46,15 +55,19 @@ function isScreenAllowedForRole(screen: ScreenId, role: string): boolean {
 
 function Dashboard() {
   const { role, profile } = useAuth();
+  const rh = useRhAccess();
+  const faltasAtestados = useFaltasAtestadosAccess();
+  const rhMatriculas = useRhMatriculasAccess();
+  const rhAllowed = rh.mine || rh.team || rh.management;
   const [currentScreen, setCurrentScreen] = useState<ScreenId>(
     role === 'promotor' ? 'portal-promotor' : role === 'client_industry' ? 'portal-industria' : 'cockpit'
   );
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
 
   useEffect(() => {
-    if (role === 'promotor' && currentScreen !== 'portal-promotor') {
+    if (role === 'promotor' && !['portal-promotor', 'rh-ausencias'].includes(currentScreen)) {
       setCurrentScreen('portal-promotor');
-    } else if (role === 'client_industry' && currentScreen !== 'portal-industria') {
+    } else if (role === 'client_industry' && !['portal-industria', 'rh-ausencias'].includes(currentScreen)) {
       setCurrentScreen('portal-industria');
     }
   }, [role, currentScreen]);
@@ -88,7 +101,7 @@ function Dashboard() {
   }, []);
 
   const handleNavigate = (screen: ScreenId) => {
-    if (!isScreenAllowedForRole(screen, role)) {
+    if (!isScreenAllowedForRole(screen, role, rhAllowed, faltasAtestados.allowed, rhMatriculas.allowed)) {
       if (role === 'promotor') {
         setCurrentScreen('portal-promotor');
       } else if (role === 'client_industry') {
@@ -100,7 +113,7 @@ function Dashboard() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const activeScreen = isScreenAllowedForRole(currentScreen, role)
+  const activeScreen = isScreenAllowedForRole(currentScreen, role, rhAllowed, faltasAtestados.allowed, rhMatriculas.allowed)
     ? currentScreen
     : role === 'promotor'
     ? 'portal-promotor'
@@ -115,6 +128,9 @@ function Dashboard() {
       toasts={toasts}
       onDismissToast={dismissToast}
     >
+      {activeScreen === 'faltas-atestados' && <FaltasAtestadosModule />}
+      {activeScreen === 'rh-matriculas' && <RhMatriculasReconciliationView />}
+      {activeScreen === 'rh-ausencias' && <RhAbsencesView />}
       {activeScreen === 'cockpit' && (
         <CockpitView onNavigate={handleNavigate} onShowToast={addToast} />
       )}
@@ -176,6 +192,9 @@ function Dashboard() {
 export default function App() {
   return (
     <AuthProvider>
+      <RhAccessProvider>
+      <FaltasAtestadosAccessProvider>
+      <RhMatriculasAccessProvider>
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
@@ -185,6 +204,9 @@ export default function App() {
           </Route>
         </Routes>
       </BrowserRouter>
+      </RhMatriculasAccessProvider>
+      </FaltasAtestadosAccessProvider>
+      </RhAccessProvider>
     </AuthProvider>
   );
 }

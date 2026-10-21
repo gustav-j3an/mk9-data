@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { ScreenId, ToastMessage, Promoter } from '../types';
 import { supabase } from '../lib/supabase';
+import { useAuth } from '../auth/AuthProvider';
+import { Mk9CrmBindingsPanel } from '../components/Mk9CrmBindingsPanel';
 
 interface PromotersViewProps {
   onNavigate: (screen: ScreenId) => void;
@@ -48,6 +50,7 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
   onNavigate,
   onShowToast
 }) => {
+  const { role } = useAuth();
   const [promoters, setPromoters] = useState<Promoter[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1118,6 +1121,9 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
                 </button>
               </div>
             </form>
+              {editingPromoter && role === 'admin' && (
+                <Mk9CrmBindingsPanel promoter={{ id: editingPromoter.id, matricula: editingPromoter.matricula, name: editingPromoter.name }} />
+              )}
           </div>
         </div>
       )}
