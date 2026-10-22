@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useAuth } from '../auth/AuthProvider';
 import { supabase } from '../lib/supabase';
-import type { RouteItem, Visit, ToastMessage, PromoterOperationAuthorization } from '../types';
+import type { RouteItem, Visit, ToastMessage, PromoterOperationAuthorization, ScreenId } from '../types';
 import { fetchSystemSettings } from '../lib/systemSettings';
 import {
   calculateOperationalVisits,
@@ -10,6 +10,20 @@ import {
   DayOfWeekDate,
   OperationalVisitItem
 } from '../utils/routePlanner';
+import { getCurrentWeekBounds, getDaysLate, getOperationalDateRange, selectPastVisitsFromAgenda } from '../utils/promoterPendingVisits';
+import { fetchWithOptionalWhatsAppGroupLink } from '../utils/promoterPortalQueryCompatibility';
+
+async function fetchAllQueryPages<T>(queryPage: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: unknown }>, pageSize = 500): Promise<{ data: T[]; error: unknown | null }> {
+  const rows: T[] = [];
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await queryPage(from, from + pageSize - 1);
+    if (error) return { data: rows, error };
+    const page = data || [];
+    rows.push(...page);
+    if (page.length < pageSize) return { data: rows, error: null };
+  }
+}
+
 import {
   buildChecklistSyncPlan,
   CHECKLIST_GROUPS,
@@ -22,10 +36,9 @@ import {
 } from '../utils/visitExecution';
 import { SearchableSelect, type SearchableSelectOption } from '../components/SearchableSelect';
 import { AuthorSignature } from '../components/AuthorSignature';
-<<<<<<< HEAD
+import type { OperationMode } from '../types';
 import { ConfirmRouteCloseModal } from '../components/ConfirmRouteCloseModal';
 import { ShareWhatsAppModal } from '../components/ShareWhatsAppModal';
-import type { VisitShareData } from '../utils/whatsappShare';
 import {
   ROUTE_DAYS,
   buildRoutePayload,
@@ -37,16 +50,17 @@ import {
   updateFixedRouteSchedule,
   type RouteFormValues
 } from '../lib/routesService';
-=======
-import { ShareWhatsAppModal } from '../components/ShareWhatsAppModal';
 import { isWhatsAppShareableVisit } from '../utils/whatsappShare';
->>>>>>> c943d2797aff85d3e3e3468cf3e80fce8aa64f40
+import { loadRoutesWithClosureFallback } from '../utils/routeClosureCompatibility';
+import { filterHistoricalAttendances, filterPromoterAppointments, formatAppointmentDateHeading, getAppointmentsTabForMetric, getMetricDisplayValue, getRegularizationCounts, getRegularizationPresentation, getWeeklyPromoterMetricCounts, groupAppointmentsByDate, isUnresolvedVisitInProgress } from '../utils/promoterPortalPresentation';
+import { canReviewOldOpenVisits, createRequestGate, findOwnOpenVisit, formatOpenVisitConflictMessage, getOldOpenVisitCheckInBlockMessage, getOldOpenVisitsLabel, getPromoterOpenVisitAction, isAnotherVisitInProgressError, isOpenVisitFromToday } from '../utils/visitCheckInConflict';
 
 interface PromoterPortalViewProps {
+  onNavigate: (screen: ScreenId) => void;
   onShowToast: (toast: Omit<ToastMessage, 'id'>) => void;
 }
 
-export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowToast }) => {
+export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNavigate, onShowToast }) => {
   const { profile, role } = useAuth();
   const isAdminUser = role === 'admin' || role === 'gestor' || role === 'operador';
   const canManageRoutes = canManageFixedRoutes(role);
@@ -55,15 +69,20 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
   // Para administrador/gestor/operador, permite selecionar um promotor para consulta
   const [selectedPromoterMatricula, setSelectedPromoterMatricula] = useState<string>('');
   const [adminPromotersList, setAdminPromotersList] = useState<Array<{ matricula: string; nome: string; cidade?: string; uf?: string; supervisor?: string; equipe?: string }>>([]);
+  const [adminPromotersError, setAdminPromotersError] = useState<string | null>(null);
 
   const promotorMatricula = isAdminUser 
     ? (selectedPromoterMatricula || null)
     : profile?.promotor_matricula;
 
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [routes, setRoutes] = useState<RouteItem[]>([]);
+  const [operationalRoutes, setOperationalRoutes] = useState<RouteItem[]>([]);
   const [todayVisits, setTodayVisits] = useState<Visit[]>([]);
   const [activeVisit, setActiveVisit] = useState<Visit | null>(null);
+  const [oldOpenAdminVisits, setOldOpenAdminVisits] = useState<Visit[]>([]);
+  const [oldOpenAdminVisitsError, setOldOpenAdminVisitsError] = useState<string | null>(null);
 
   // Estado de Autorização do Promotor (Etapa 4.1)
   const [isAuthorized, setIsAuthorized] = useState<boolean>(false);
@@ -93,17 +112,25 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
   // Controle de colapso do Histórico da Semana (Fechado por padrão no mobile)
   const [isWeekHistoryOpen, setIsWeekHistoryOpen] = useState<boolean>(false);
 
-  // Estado para Compartilhamento WhatsApp (Etapa 3)
-  const [shareModalData, setShareModalData] = useState<VisitShareData | null>(null);
-
   // Estado para Agenda Semanal "MINHA SEMANA" (Etapa 7.2)
   const [weekOffset, setWeekOffset] = useState<number>(0);
   const [weekVisits, setWeekVisits] = useState<Visit[]>([]);
+  const [operationalHistoryVisits, setOperationalHistoryVisits] = useState<Visit[]>([]);
   const [selectedDayDateStr, setSelectedDayDateStr] = useState<string>(getLocalDateString(new Date()));
   const [weekHistoryFilterMode, setWeekHistoryFilterMode] = useState<'day' | 'all'>('day');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'planejada' | 'em_andamento' | 'pendente' | 'concluida' | 'nao_realizada'>('all');
+  const [appointmentsTab, setAppointmentsTab] = useState<'today' | 'pending' | 'upcoming' | 'history'>('today');
+  const [operationMode, setOperationMode] = useState<OperationMode | 'DESCONHECIDO'>('DESCONHECIDO');
+  const [officialStartDate, setOfficialStartDate] = useState<string | null>(null);
+  const onShowToastRef = useRef(onShowToast);
+  const lastLoadErrorRef = useRef<string | null>(null);
+  const warnedLegacyRouteSchemaRef = useRef(false);
+  const checkInGateRef = useRef(createRequestGate());
+  onShowToastRef.current = onShowToast;
 
   // Visualização da Escala Fixa Semanal e Modal de Edição (Item 3 e 4)
   const [scaleViewMode, setScaleViewMode] = useState<'semana' | 'dia'>('semana');
+  const [isFixedScaleOpen, setIsFixedScaleOpen] = useState(false);
   const [selectedScaleDayKey, setSelectedScaleDayKey] = useState<string>('segunda');
   const [editingScaleRoute, setEditingScaleRoute] = useState<RouteItem | null>(null);
   const [savingScaleRoute, setSavingScaleRoute] = useState<boolean>(false);
@@ -159,6 +186,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
 
   // Estado para Modal de Consulta de Detalhes da Visita (Modo Administrativo)
   const [adminInspectionVisit, setAdminInspectionVisit] = useState<OperationalVisitItem | null>(null);
+  const [selectedOperationalDetails, setSelectedOperationalDetails] = useState<OperationalVisitItem | null>(null);
   const [adminSignedPhotoUrls, setAdminSignedPhotoUrls] = useState<Record<string, string>>({});
   const [loadingInspectionPhotos, setLoadingInspectionPhotos] = useState(false);
   const [adminZoomedPhoto, setAdminZoomedPhoto] = useState<string | null>(null);
@@ -183,7 +211,9 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
   // Recarregar dados do portal do promotor
   const loadPortalData = useCallback(async () => {
     setLoading(true);
-    if (!supabase) {
+    setLoadError(null);
+    const db = supabase;
+    if (!db) {
       setLoading(false);
       return;
     }
@@ -198,22 +228,38 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
       // Para administradores, carregar a lista de todos os promotores cadastrados para seleção
       if (isAdminUser) {
         try {
-          const { data: allPromoters } = await supabase
+          const { data: allPromoters, error: promotersError } = await db
             .from('promotores')
             .select('matricula, nome, cidade, uf, supervisor, equipe')
             .order('nome', { ascending: true });
-          if (allPromoters) {
-            setAdminPromotersList(allPromoters);
-          }
+          if (promotersError) throw promotersError;
+          setAdminPromotersError(null);
+          setAdminPromotersList(allPromoters || []);
         } catch (pListErr) {
-          console.warn('Erro ao listar promotores para admin:', pListErr);
+          const details = pListErr && typeof pListErr === 'object'
+            ? pListErr as { code?: unknown; message?: unknown; details?: unknown; hint?: unknown }
+            : {};
+          setAdminPromotersError('Não foi possível carregar a lista de promotores. Tente novamente.');
+          if (import.meta.env.DEV) {
+            console.error('[Portal do Promotor] Falha de carregamento:', {
+              code: typeof details.code === 'string' ? details.code : 'unknown',
+              message: typeof details.message === 'string' ? details.message : 'Falha desconhecida.',
+              details: typeof details.details === 'string' ? details.details : undefined,
+              hint: typeof details.hint === 'string' ? details.hint : undefined,
+              query: 'promotores (seletor administrativo)',
+              table: 'public.promotores',
+              fields: ['matricula', 'nome', 'cidade', 'uf', 'supervisor', 'equipe'],
+              filters: [],
+              order_by: 'nome'
+            });
+          }
         }
       }
 
       // Buscar cadastro do promotor em public.promotores usando profiles.promotor_matricula = promotores.matricula
       if (promotorMatricula) {
         try {
-          const { data: pData, error: pErr } = await supabase
+          const { data: pData, error: pErr } = await db
             .from('promotores')
             .select('matricula, nome, cidade, uf, supervisor, equipe')
             .eq('matricula', promotorMatricula)
@@ -239,80 +285,172 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
       }
 
       const weekDays = getWeekDaysRange(new Date(), weekOffset);
-      const weekStartStr = weekDays[0].dateStr;
       const weekEndStr = weekDays[6].dateStr;
+      const historyStartStr = getOperationalDateRange(todayStr)[0].dateStr;
+
+      const logSchemaFallback = (query: string, column: string, error: unknown) => {
+        if (!import.meta.env.DEV) return;
+        const cause = error && typeof error === 'object'
+          ? error as { code?: unknown; message?: unknown; details?: unknown; hint?: unknown }
+          : {};
+        console.warn('[Portal do Promotor] Supabase schema compatibility fallback:', {
+          code: typeof cause.code === 'string' ? cause.code : 'unknown',
+          message: typeof cause.message === 'string' ? cause.message : 'Erro de schema sem mensagem.',
+          details: typeof cause.details === 'string' ? cause.details : undefined,
+          hint: typeof cause.hint === 'string' ? cause.hint : undefined,
+          query,
+          table: query.startsWith('visits')
+            ? 'public.visits ? public.industrias'
+            : query === 'rotas'
+              ? 'public.rotas'
+              : query === 'system_settings'
+                ? 'public.system_settings'
+                : 'public.promoter_operation_authorizations',
+          column,
+          filters: query === 'system_settings' ? [] : { promotor_matricula: promotorMatricula },
+          date_filters: query.startsWith('visits')
+            ? { data_visita_gte: historyStartStr, data_visita_lte: weekEndStr }
+            : query === 'rotas'
+              ? { encerrada_em_gte: historyStartStr }
+              : undefined,
+          page_size: 500
+        });
+      };
 
       // Segurança por perfil: Administradores e Gestores podem visualizar rotas e visitas gerais para auditoria.
       // Usuários comuns ou promotores sem matrícula associada NÃO devem carregar visitas de terceiros.
       const isPrivilegedUser = profile?.role === 'admin' || profile?.role === 'gestor';
 
-      let rotasQuery: any;
-      let visitsQuery: any;
-      let openVisitsQuery: any;
+      let rotasQuery: () => Promise<{ data: RouteItem[]; error: unknown | null }>;
+      let visitsQuery: () => Promise<{ data: Visit[]; error: unknown | null }>;
+      let activeVisitsQuery: () => Promise<{ data: Visit[]; error: unknown | null }>;
 
       if (promotorMatricula) {
         // Promotor autenticado com matrícula vinculada
-        rotasQuery = supabase.from('rotas').select(`
+        const routesBaseQuery = (filterByClosure: boolean) => {
+          const query = db.from('rotas').select(`
           *,
           industria:industrias(codigo, nome),
           loja:lojas(codigo, nome, cidade, uf, endereco),
           promotor:promotores(matricula, nome)
-        `).eq('promotor_matricula', promotorMatricula);
+          `).eq('promotor_matricula', promotorMatricula);
+          return filterByClosure
+            ? query.or(`encerrada_em.is.null,encerrada_em.gte.${historyStartStr}`)
+            : query;
+        };
+        rotasQuery = async () => {
+          const result = await loadRoutesWithClosureFallback((filterByClosure) =>
+            fetchAllQueryPages<RouteItem>((from, to) => routesBaseQuery(filterByClosure).range(from, to))
+          );
+          if (result.usedClosureFallback && !warnedLegacyRouteSchemaRef.current) {
+            logSchemaFallback('rotas', 'encerrada_em', result.closureFallbackError);
+            warnedLegacyRouteSchemaRef.current = true;
+          }
+          return result;
+        };
 
-        visitsQuery = supabase.from('visits').select(`
+        const visitsBaseQuery = (includeWhatsAppLink: boolean) => db.from('visits').select(`
           *,
-          industria:industrias(codigo, nome, whatsapp_group_link),
+          industria:industrias(codigo, nome${includeWhatsAppLink ? ', whatsapp_group_link' : ''}),
           loja:lojas(codigo, nome, cidade, uf, endereco),
           promotor:promotores(matricula, nome),
+          work_schedule:promoter_work_schedules!visits_work_schedule_id_fkey(timezone, hora_inicio, hora_fim),
           checklist_items:visit_checklist_items(*),
           photos:visit_photos(*),
           occurrences:visit_occurrences(*),
           validity_items:visit_product_validity(*)
-        `).gte('data_visita', weekStartStr).lte('data_visita', weekEndStr).eq('promotor_matricula', promotorMatricula);
+        `).gte('data_visita', historyStartStr).lte('data_visita', weekEndStr).eq('promotor_matricula', promotorMatricula).order('data_visita', { ascending: true });
+        visitsQuery = () => fetchWithOptionalWhatsAppGroupLink(
+          () => fetchAllQueryPages<Visit>((from, to) => visitsBaseQuery(true).range(from, to)),
+          () => fetchAllQueryPages<Visit>((from, to) => visitsBaseQuery(false).range(from, to)),
+          (error) => logSchemaFallback('visits (agenda)', 'whatsapp_group_link', error)
+        );
 
-        // Buscar visitas anteriores a hoje que ainda não foram concluídas (em_andamento ou nao_realizada)
-        openVisitsQuery = supabase.from('visits').select(`
+        // The agenda already contains this entire 90-day past range; derive
+        // prior visits from it instead of issuing an identical second SELECT.
+        const activeVisitsBaseQuery = (includeWhatsAppLink: boolean) => db.from('visits').select(`
           *,
-          industria:industrias(codigo, nome, whatsapp_group_link),
+          industria:industrias(codigo, nome${includeWhatsAppLink ? ', whatsapp_group_link' : ''}),
           loja:lojas(codigo, nome, cidade, uf, endereco),
           promotor:promotores(matricula, nome),
+          work_schedule:promoter_work_schedules!visits_work_schedule_id_fkey(timezone, hora_inicio, hora_fim),
           checklist_items:visit_checklist_items(*),
           photos:visit_photos(*),
           occurrences:visit_occurrences(*),
           validity_items:visit_product_validity(*)
-        `).in('status', ['em_andamento', 'nao_realizada']).lt('data_visita', todayStr).eq('promotor_matricula', promotorMatricula);
+        `).eq('promotor_matricula', promotorMatricula).eq('status', 'em_andamento').order('data_visita', { ascending: true });
+        activeVisitsQuery = () => fetchWithOptionalWhatsAppGroupLink(
+          () => fetchAllQueryPages<Visit>((from, to) => activeVisitsBaseQuery(true).range(from, to)),
+          () => fetchAllQueryPages<Visit>((from, to) => activeVisitsBaseQuery(false).range(from, to)),
+          (error) => logSchemaFallback('visits (em andamento)', 'whatsapp_group_link', error)
+        );
       } else if (isPrivilegedUser) {
         // Usuário privilegiado (Admin/Gestor) que ainda não selecionou um promotor
         // Não carrega a agenda pessoal de todos misturada como se fosse de um promotor
-        rotasQuery = Promise.resolve({ data: [], error: null });
-        visitsQuery = Promise.resolve({ data: [], error: null });
-        openVisitsQuery = Promise.resolve({ data: [], error: null });
+        rotasQuery = async () => ({ data: [], error: null });
+        visitsQuery = async () => ({ data: [], error: null });
+        activeVisitsQuery = async () => ({ data: [], error: null });
       } else {
         // Usuário não privilegiado e sem matrícula vinculada: não carrega dados de outros promotores
-        rotasQuery = Promise.resolve({ data: [], error: null });
-        visitsQuery = Promise.resolve({ data: [], error: null });
-        openVisitsQuery = Promise.resolve({ data: [], error: null });
+        rotasQuery = async () => ({ data: [], error: null });
+        visitsQuery = async () => ({ data: [], error: null });
+        activeVisitsQuery = async () => ({ data: [], error: null });
       }
 
       // Consultar autorização e modo operacional
       let authQuery = promotorMatricula
-        ? supabase.from('promoter_operation_authorizations').select('*').eq('promotor_matricula', promotorMatricula).maybeSingle()
+        ? db.from('promoter_operation_authorizations').select('*').eq('promotor_matricula', promotorMatricula).maybeSingle()
         : Promise.resolve({ data: null, error: null });
 
-      const [rotasRes, visitsRes, openVisitsRes, authRes, settings] = await Promise.all([
-        rotasQuery,
-        visitsQuery,
-        openVisitsQuery,
+      const [rotasRes, visitsRes, activeVisitsRes, authRes, settings] = await Promise.all([
+        rotasQuery(),
+        visitsQuery(),
+        activeVisitsQuery(),
         authQuery,
         fetchSystemSettings()
       ]);
 
-      if (rotasRes.error) throw rotasRes.error;
-      if (visitsRes.error) throw visitsRes.error;
-      if (openVisitsRes && 'error' in openVisitsRes && openVisitsRes.error) throw openVisitsRes.error;
+      if (profile?.role === 'admin' || profile?.role === 'gestor') {
+        const { data: oldOpenData, error: oldOpenError } = await db.from('visits').select(`
+          *,
+          industria:industrias(codigo, nome),
+          loja:lojas(codigo, nome, cidade, uf, endereco),
+          promotor:promotores(matricula, nome),
+          checklist_items:visit_checklist_items(*),
+          photos:visit_photos(*),
+          occurrences:visit_occurrences(*),
+          validity_items:visit_product_validity(*)
+        `).lt('data_visita', todayStr).eq('status', 'em_andamento').order('data_visita', { ascending: true });
+        if (oldOpenError) {
+          setOldOpenAdminVisitsError('Não foi possível carregar a fila de visitas antigas em aberto.');
+          setOldOpenAdminVisits([]);
+        } else {
+          setOldOpenAdminVisits(((oldOpenData as unknown as Visit[]) || []).filter(visit => !visit.regularization_status));
+          setOldOpenAdminVisitsError(null);
+        }
+      } else {
+        setOldOpenAdminVisits([]);
+        setOldOpenAdminVisitsError(null);
+      }
+
+      if (authRes && 'error' in authRes && authRes.error) {
+        throw Object.assign({}, authRes.error as object, { portalQuery: 'promoter_operation_authorizations' });
+      }
+      if (settings.status === 'error') {
+        throw {
+          code: 'system_settings_error',
+          message: settings.error || 'Falha ao carregar as configurações operacionais.',
+          portalQuery: 'system_settings'
+        };
+      }
+      if (rotasRes.error) throw Object.assign({}, rotasRes.error as object, { portalQuery: 'rotas' });
+      if (visitsRes.error) throw Object.assign({}, visitsRes.error as object, { portalQuery: 'visits (agenda)' });
+      if (activeVisitsRes.error) throw Object.assign({}, activeVisitsRes.error as object, { portalQuery: 'visits (em andamento)' });
 
       const isImplantacao = settings.mode !== 'OPERACAO_OFICIAL';
       setIsImplantacaoMode(isImplantacao);
+      setOperationMode(settings.mode);
+      setOfficialStartDate(settings.officialStartDate);
 
       const authData = (authRes?.data as unknown as PromoterOperationAuthorization) || null;
       setAuthRecord(authData);
@@ -323,23 +461,27 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
 
       const rawRoutes = (rotasRes.data as unknown as RouteItem[]) || [];
       setRoutes(rawRoutes.filter((r) => !r.encerrada_em));
+      setOperationalRoutes(rawRoutes.filter((r) => !r.encerrada_em || String(r.encerrada_em).slice(0, 10) >= historyStartStr));
 
       const visits = (visitsRes.data as unknown as Visit[]) || [];
-      const openVisits = ((openVisitsRes && 'data' in openVisitsRes ? openVisitsRes.data : []) as unknown as Visit[]) || [];
+      const openVisits = selectPastVisitsFromAgenda(visits, todayStr);
+      const activeVisits = (activeVisitsRes.data as unknown as Visit[]) || [];
 
       // Consolidar todas as visitas adicionando as em aberto
       const visitsMap = new Map<string, Visit>();
       visits.forEach((v) => visitsMap.set(v.id, v));
       openVisits.forEach((v) => visitsMap.set(v.id, v));
+      activeVisits.forEach((v) => visitsMap.set(v.id, v));
       const allConsolidatedVisits = Array.from(visitsMap.values());
 
       setWeekVisits(allConsolidatedVisits);
+      setOperationalHistoryVisits(allConsolidatedVisits);
       setTodayVisits(allConsolidatedVisits.filter((v) => v.data_visita === todayStr));
 
       // Identificar visitas anteriores à data atual que não foram concluídas (Requisito 2)
       // 1. Em andamento de dias anteriores (data < hoje e status = 'em_andamento')
       const stalesInProgress = allConsolidatedVisits.filter(
-        (v) => v.status === 'em_andamento' && v.data_visita < todayStr
+        (v) => isUnresolvedVisitInProgress(v) && !isOpenVisitFromToday(v, now)
       );
       setStaleInProgressVisits(stalesInProgress);
 
@@ -350,7 +492,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
       setStaleNotDoneVisits(stalesNotDone);
 
       // Visita em andamento de HOJE
-      const todayInProgress = allConsolidatedVisits.find((v) => v.status === 'em_andamento' && v.data_visita === todayStr);
+      const todayInProgress = allConsolidatedVisits.find((v) => isOpenVisitFromToday(v, now));
 
       // Se houver visita de hoje em andamento, prioriza atendimento ativo de hoje
       // Se não houver de hoje mas houver stale, candidateActive não sequestra o topo ativo de hoje
@@ -362,7 +504,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
           const photosWithSignedUrls = await Promise.all(
             candidateActive.photos.map(async (p) => {
               if (p.storage_path) {
-                const { data } = await supabase!.storage
+                const { data } = await db.storage
                   .from('visit-photos')
                   .createSignedUrl(p.storage_path, 3600);
                 if (data?.signedUrl) {
@@ -376,7 +518,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
         }
 
         // Se a visita for do dia de hoje, abre no formulário de atendimento ativo
-        if (candidateActive.data_visita === todayStr) {
+        if (isOpenVisitFromToday(candidateActive, now)) {
           setActiveVisit(candidateActive);
           setGeneralObs(candidateActive.observacao_geral || '');
 
@@ -389,21 +531,49 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
       } else {
         setActiveVisit(null);
       }
-    } catch (err: any) {
-      console.error('Erro ao carregar Portal do Promotor:', err);
-      onShowToast({
-        title: 'Erro de Carregamento',
-        message: err.message || 'Falha ao carregar suas rotas e visitas.',
-        type: 'error'
-      });
+      lastLoadErrorRef.current = null;
+      setLoadError(null);
+    } catch (err: unknown) {
+      const details = err && typeof err === 'object'
+        ? err as { code?: unknown; message?: unknown; details?: unknown; hint?: unknown; portalQuery?: unknown }
+        : {};
+      const errorCode = typeof details.code === 'string' ? details.code : 'unknown';
+      const errorMessage = typeof details.message === 'string' ? details.message : 'Falha desconhecida ao carregar dados do portal.';
+      const query = typeof details.portalQuery === 'string' ? details.portalQuery : 'dados do portal';
+      const errorKey = `${errorCode}:${errorMessage}`;
+      setLoadError(query);
+      if (lastLoadErrorRef.current !== errorKey) {
+        if (import.meta.env.DEV) {
+          console.error('[Portal do Promotor] Falha de carregamento:', {
+            code: errorCode,
+            message: errorMessage,
+            details: typeof details.details === 'string' ? details.details : undefined,
+            hint: typeof details.hint === 'string' ? details.hint : undefined,
+            query,
+            table: query.startsWith('visits') ? 'public.visits' : query === 'rotas' ? 'public.rotas' : undefined,
+            filters: {
+              promotor_matricula: promotorMatricula,
+              data_visita_min: getOperationalDateRange(getLocalDateString(new Date()))[0].dateStr,
+              data_visita_max: getWeekDaysRange(new Date(), weekOffset)[6].dateStr,
+              page_size: 500
+            }
+          });
+        }
+        onShowToastRef.current({
+          title: 'Erro de Carregamento',
+          message: 'Não foi possível carregar sua agenda agora. Tente novamente em instantes.',
+          type: 'error'
+        });
+        lastLoadErrorRef.current = errorKey;
+      }
     } finally {
       setLoading(false);
     }
-  }, [promotorMatricula, isAdminUser, weekOffset, onShowToast]);
+  }, [promotorMatricula, isAdminUser, weekOffset]);
 
   useEffect(() => {
     loadPortalData();
-  }, [loadPortalData, weekOffset]);
+  }, [loadPortalData]);
 
   const routeIndustryOptions = useMemo<SearchableSelectOption[]>(
     () => routeIndustries.map((industry) => ({
@@ -646,21 +816,49 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
   };
 
   const todayStr = useMemo(() => getLocalDateString(new Date()), []);
+  const currentWeekBounds = useMemo(() => getCurrentWeekBounds(todayStr), [todayStr]);
+  const currentWeekStartStr = currentWeekBounds.start;
+  const currentWeekEndStr = currentWeekBounds.end;
+  const currentWeekDaysRange = useMemo(() => getWeekDaysRange(new Date(), 0), []);
   const weekDaysRange = useMemo(() => getWeekDaysRange(new Date(), weekOffset), [weekOffset]);
 
-  const allWeekOperationalVisits = useMemo(() => {
+  const weekOperationalVisits = useMemo(() => {
     return calculateOperationalVisits({
-      routes,
+      routes: operationalRoutes,
       visits: weekVisits,
       daysRange: weekDaysRange,
-      todayStr
+      todayStr,
+      operationMode,
+      officialStartDate
     });
-  }, [routes, weekVisits, weekDaysRange, todayStr]);
+  }, [operationalRoutes, weekVisits, weekDaysRange, todayStr, operationMode, officialStartDate]);
+  const historicalAttendanceVisits = useMemo(() => filterHistoricalAttendances(weekOperationalVisits), [weekOperationalVisits]);
+
+  const currentWeekOperationalVisits = useMemo(() => calculateOperationalVisits({
+    routes: operationalRoutes,
+    visits: weekVisits,
+    daysRange: currentWeekDaysRange,
+    todayStr,
+    operationMode,
+    officialStartDate
+  }), [operationalRoutes, weekVisits, currentWeekDaysRange, todayStr, operationMode, officialStartDate]);
+
+  const operationalHistoryRange = useMemo(() => getOperationalDateRange(todayStr), [todayStr]);
+  const allOperationalVisits = useMemo(() => calculateOperationalVisits({
+    routes: operationalRoutes,
+    visits: operationalHistoryVisits,
+    daysRange: operationalHistoryRange,
+    todayStr,
+    operationMode,
+    officialStartDate
+  }), [operationalRoutes, operationalHistoryVisits, operationalHistoryRange, todayStr, operationMode, officialStartDate]);
 
   // Agenda das visitas de HOJE com ordenação amigável:
   // 1º Em atendimento, 2º Pendentes/Planejadas, 3º Não realizadas, 4º Concluídas
   const todayOperationalVisits = useMemo(() => {
-    const list = allWeekOperationalVisits.filter((item) => item.dataStr === todayStr);
+    // Use the same current-week projection rendered by "Minha Semana" so both
+    // views share one schedule/status calculation for today's date.
+    const list = currentWeekOperationalVisits.filter((item) => item.dataStr === todayStr);
     return list.sort((a, b) => {
       const orderScore = (status: string) => {
         if (status === 'em_andamento') return 1;
@@ -673,42 +871,58 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
       if (scoreDiff !== 0) return scoreDiff;
       return a.lojaNome.localeCompare(b.lojaNome);
     });
-  }, [allWeekOperationalVisits, todayStr]);
+  }, [currentWeekOperationalVisits, todayStr]);
+
+  const pastDueVisits = useMemo(() => allOperationalVisits.filter(item => item.dataStr >= currentWeekStartStr && item.dataStr <= todayStr && item.dataStr < currentWeekEndStr && item.isPastOverdue && item.status === 'pendente'), [allOperationalVisits, currentWeekStartStr, currentWeekEndStr, todayStr]);
+  const upcomingVisits = useMemo(() => currentWeekOperationalVisits.filter(item => item.dataStr > todayStr && item.status === 'planejada'), [currentWeekOperationalVisits, todayStr]);
+  const upcomingVisitGroups = useMemo(() => groupAppointmentsByDate(upcomingVisits), [upcomingVisits]);
+  const filteredTodayOperationalVisits = useMemo(() => filterPromoterAppointments(todayOperationalVisits, statusFilter), [todayOperationalVisits, statusFilter]);
+  const filteredPastDueVisits = useMemo(() => filterPromoterAppointments(pastDueVisits, statusFilter === 'all' ? 'all' : statusFilter), [pastDueVisits, statusFilter]);
 
   // Visitas filtradas exclusivamente para o dia selecionado no Histórico Semanal (Item 2)
-  const selectedDayOperationalVisits = useMemo(() => {
-    return allWeekOperationalVisits.filter((item) => item.dataStr === selectedDayDateStr);
-  }, [allWeekOperationalVisits, selectedDayDateStr]);
+  const filteredHistoricalAttendanceVisits = useMemo(
+    () => filterPromoterAppointments(historicalAttendanceVisits, statusFilter),
+    [historicalAttendanceVisits, statusFilter]
+  );
+  const selectedDayOperationalVisits = useMemo(() => filteredHistoricalAttendanceVisits.filter((item) => item.dataStr === selectedDayDateStr), [filteredHistoricalAttendanceVisits, selectedDayDateStr]);
 
   // Lista final a ser exibida no histórico semanal (por dia ou a semana toda)
   const displayedWeekVisits = useMemo(() => {
     if (weekHistoryFilterMode === 'all') {
-      return allWeekOperationalVisits;
+      return filteredHistoricalAttendanceVisits;
     }
     return selectedDayOperationalVisits;
-  }, [weekHistoryFilterMode, allWeekOperationalVisits, selectedDayOperationalVisits]);
+  }, [weekHistoryFilterMode, filteredHistoricalAttendanceVisits, selectedDayOperationalVisits]);
 
   const realName = promoterDetails?.nome || profile?.promotor_nome || profile?.name || (promotorMatricula ? 'Promotor de Campo' : 'Promotor não vinculado');
   const realMatricula = promoterDetails?.matricula || profile?.promotor_matricula || null;
   const realCidade = promoterDetails?.cidade || profile?.promotor_cidade;
   const realUf = promoterDetails?.uf || profile?.promotor_uf;
-  const realSupervisor = promoterDetails?.supervisor || profile?.promotor_supervisor;
-  const realEquipe = promoterDetails?.equipe || profile?.promotor_equipe;
-
-  const initials = (() => {
-    if (!realName || realName === 'Promotor não vinculado') return 'PR';
-    const parts = realName.trim().split(/\s+/);
-    if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
-    return realName.substring(0, 2).toUpperCase();
-  })();
-
   // Resumo de execução do dia de HOJE baseado nas visitas previstas para o dia atual
-  const totalPlanned = todayOperationalVisits.length;
-  const completedCount = todayOperationalVisits.filter((v) => v.status === 'concluida').length;
-  const inProgressCount = todayOperationalVisits.filter((v) => v.status === 'em_andamento').length;
-  const notDoneCount = todayOperationalVisits.filter((v) => v.status === 'nao_realizada').length;
-  const pendingCount = todayOperationalVisits.filter((v) => v.status === 'pendente' || v.status === 'planejada').length;
-  const executionPerc = totalPlanned > 0 ? Math.round((completedCount / totalPlanned) * 100) : 0;
+  const totalPlanned = todayOperationalVisits.filter(v => v.status !== 'nao_realizada' && !v.visitObj?.regularization_status).length;
+  const weeklyMetricCounts = getWeeklyPromoterMetricCounts(currentWeekOperationalVisits);
+  const completedCount = weeklyMetricCounts.completed;
+  const todayCompletedCount = todayOperationalVisits.filter((v) => v.status === 'concluida').length;
+  const todayResolutionCounts = getRegularizationCounts(todayOperationalVisits.map((v) => ({
+    status: v.status,
+    regularization_status: v.visitObj?.regularization_status || null
+  })));
+  const inProgressCount = todayResolutionCounts.inProgress;
+  const notDoneCount = weeklyMetricCounts.notDone;
+  const pendingCount = weeklyMetricCounts.pending;
+  const executionPerc = totalPlanned > 0 ? Math.round((todayCompletedCount / totalPlanned) * 100) : 0;
+  const metricText = (value: number) => getMetricDisplayValue(value, loading, Boolean(loadError));
+  const handleMetricSelect = (status: 'planejada' | 'em_andamento' | 'pendente' | 'concluida' | 'nao_realizada') => {
+    const targetTab = getAppointmentsTabForMetric(status);
+    setAppointmentsTab(targetTab);
+    setStatusFilter(current => current === status ? 'all' : status);
+    if (targetTab === 'history') {
+      setWeekOffset(0);
+      setSelectedDayDateStr(todayStr);
+      setWeekHistoryFilterMode('all');
+      setIsWeekHistoryOpen(true);
+    }
+  };
 
   // Iniciar Visita
   const handleStartVisit = async (route: RouteItem) => {
@@ -741,6 +955,13 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
       return;
     }
 
+    if (!isAdminUser && staleInProgressVisits.length > 0) {
+      if (!checkInGateRef.current.tryAcquire()) return;
+      onShowToast({ title: 'Check-in bloqueado', message: getOldOpenVisitCheckInBlockMessage(), type: 'warning' });
+      checkInGateRef.current.release();
+      return;
+    }
+
     // Se já houver uma visita em andamento (hoje ou de dias anteriores), não permite iniciar outra silenciosamente.
     // Exige decisão explícita: voltar para a atual ou interromper a anterior com justificativa.
     if (activeVisit) {
@@ -751,8 +972,8 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
       }
     }
 
-    // Prevenir duplo clique
-    if (startingRouteId) return;
+    // Bloqueio síncrono: dois eventos no mesmo frame não disparam dois check-ins.
+    if (!checkInGateRef.current.tryAcquire()) return;
     setStartingRouteId(route.id);
 
     try {
@@ -882,6 +1103,39 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
     } catch (err: any) {
       console.error('Erro ao iniciar visita:', err);
 
+      if (isAnotherVisitInProgressError(err)) {
+        let ownOpenVisit: Visit | undefined;
+        try {
+          const { data } = await supabase
+            .from('visits')
+            .select(`*, industria:industrias(codigo, nome), loja:lojas(codigo, nome, cidade, uf, endereco), work_schedule:promoter_work_schedules!visits_work_schedule_id_fkey(timezone, hora_inicio, hora_fim), checklist_items:visit_checklist_items(*), photos:visit_photos(*), occurrences:visit_occurrences(*), validity_items:visit_product_validity(*)`)
+            .eq('promotor_matricula', promotorMatricula)
+            .eq('status', 'em_andamento')
+            .order('data_visita', { ascending: false });
+          ownOpenVisit = findOwnOpenVisit((data as Visit[]) || [], promotorMatricula);
+        } catch {
+          // A consulta é opcional; mantém a mensagem segura mesmo se ela falhar.
+        }
+
+        const now = new Date();
+        if (ownOpenVisit && isOpenVisitFromToday(ownOpenVisit, now)) {
+          setActiveVisit(ownOpenVisit);
+          setGeneralObs(ownOpenVisit.observacao_geral || '');
+          setChecklist(createChecklistState(ownOpenVisit.checklist_items));
+        } else if (ownOpenVisit) {
+          setStaleInProgressVisits(current => [
+            ownOpenVisit!,
+            ...current.filter(visit => visit.id !== ownOpenVisit!.id)
+          ]);
+        }
+        onShowToast({
+          title: 'Visita em andamento',
+          message: formatOpenVisitConflictMessage(ownOpenVisit, now),
+          type: 'warning'
+        });
+        return;
+      }
+
       let userMsg = 'Erro ao registrar check-in no servidor.';
       if (err?.message) {
         if (err.message.includes('row-level security') || err.code === '42501') {
@@ -892,7 +1146,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
           userMsg = 'Já existe um registro de visita ativo para esta loja e data.';
         } else {
           // Sanitização de mensagem: evitar expor tokens, senhas ou URLs completas
-          userMsg = err.message.replace(/https?:\/\/[^\s]+/g, '[servidor]').slice(0, 150);
+          userMsg = 'Não foi possível iniciar o atendimento. Tente novamente ou solicite apoio ao suporte.';
         }
       }
 
@@ -903,6 +1157,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
       });
     } finally {
       setStartingRouteId(null);
+      checkInGateRef.current.release();
     }
   };
 
@@ -1374,33 +1629,9 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
         type: 'success'
       });
 
-      // Prepara dados para compartilhamento imediato no WhatsApp (sem forçar nem travar a conclusão)
-      const currentPhotos = activeVisit.photos || [];
-      const shareData: VisitShareData = {
-        visitId: activeVisit.id,
-        promotorNome: activeVisit.promotor?.nome || promoterDetails?.nome,
-        promotorMatricula: activeVisit.promotor_matricula,
-        lojaNome: activeVisit.loja?.nome || activeVisit.loja_codigo,
-        lojaCodigo: activeVisit.loja_codigo,
-        industriaNome: activeVisit.industria?.nome || activeVisit.industria_codigo,
-        industriaCodigo: activeVisit.industria_codigo,
-        dataVisita: activeVisit.data_visita,
-        horaInicio: activeVisit.started_at ? new Date(activeVisit.started_at).toLocaleTimeString('pt-BR') : null,
-        horaFim: new Date().toLocaleTimeString('pt-BR'),
-        status: 'concluida',
-        observacoes: generalObs.trim() || null,
-        resumoAtendimento: `Visita finalizada com ${currentPhotos.length} foto(s) e checklist respondido.`,
-        fotos: currentPhotos.map((p) => ({
-          url: p.signed_url || p.file_url,
-          descricao: p.legenda || p.tipo_foto,
-        })),
-        whatsappGroupLink: (activeVisit.industria as any)?.whatsapp_group_link || null,
-      };
-
       setActiveVisit(null);
       setSharingVisit(completedVisitObj);
       await loadPortalData();
-      setShareModalData(shareData);
     } catch (err: any) {
       console.error('Erro ao finalizar visita:', err);
       onShowToast({
@@ -1819,25 +2050,28 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
   };
 
   return (
-    <div className="w-full px-4 sm:px-6 py-6 max-w-4xl mx-auto space-y-6 font-sans">
+    <div className="w-full px-3 sm:px-6 py-4 sm:py-6 max-w-4xl mx-auto space-y-4 sm:space-y-6 font-sans">
       {/* CABEÇALHO PORTAL MOBILE-FIRST */}
-      <section className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#CFCDC5] pb-5">
+      <section className="flex flex-row items-center justify-between gap-3 border-b border-[#CFCDC5] pb-3 sm:pb-4">
         <div>
           <div className="flex items-center gap-2.5">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-purple-600 to-amber-500 flex items-center justify-center font-bold text-white shadow-[0_0_15px_rgba(245,158,11,0.4)]">
+            <div className="hidden sm:flex w-10 h-10 rounded-xl bg-gradient-to-tr from-purple-600 to-amber-500 items-center justify-center font-bold text-white shadow-[0_0_15px_rgba(245,158,11,0.4)]">
               <span className="material-symbols-outlined text-[22px]">
                 {isAdminUser ? 'manage_accounts' : 'smartphone'}
               </span>
             </div>
             <div>
-              <h1 className="text-2xl font-extrabold text-[#171717] tracking-tight">
-                {isAdminUser ? 'Portal do Promotor — Administração' : 'Portal do Promotor'}
-              </h1>
-              <p className="text-xs text-[#77766F] font-mono">
+              <h1 className="text-lg sm:text-2xl font-extrabold text-[#171717] tracking-tight">
                 {isAdminUser
+                  ? selectedPromoterMatricula ? `${realName} · Consulta administrativa` : 'Portal do Promotor — Administração'
+                  : `Olá, ${realName}!`}
+              </h1>
+              <p className="text-[11px] sm:text-xs text-[#5F5F5F] font-mono">
+                {isAdminUser && !selectedPromoterMatricula
                   ? 'Consulte promotores, suas rotas planejadas e os atendimentos realizados em campo.'
-                  : `${realName} ${realMatricula ? `• Matrícula: ${realMatricula}` : ''}`}
+                  : `${realCidade || 'Cidade não informada'}${realUf ? `/${realUf}` : ''} · ${realMatricula ? `Matrícula ${realMatricula}` : 'Promotor não vinculado'}`}
               </p>
+              {(!isAdminUser || selectedPromoterMatricula) && !loading && <p className={`mt-1 flex items-center gap-1.5 text-xs font-bold ${isImplantacaoMode && !isAuthorized ? 'text-amber-800' : 'text-emerald-800'}`} aria-live="polite"><span aria-hidden="true" className={`h-2 w-2 rounded-full ${isImplantacaoMode && !isAuthorized ? 'bg-amber-600' : 'bg-emerald-600'}`} />{isImplantacaoMode && !isAuthorized ? 'Operação bloqueada · aguardando liberação' : 'Operação liberada'}</p>}
             </div>
           </div>
         </div>
@@ -1845,14 +2079,26 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
         <button
           onClick={loadPortalData}
           disabled={loading}
-          className="px-4 py-2 rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] text-xs font-semibold text-[#171717] hover:text-white flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+          className="shrink-0 px-3 py-2 rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] text-xs font-semibold text-[#171717] hover:bg-[#EAE8E2] flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
         >
           <span className={`material-symbols-outlined text-[18px] ${loading ? 'animate-spin' : ''}`}>
             refresh
           </span>
-          <span>{isAdminUser ? 'Atualizar Dados' : 'Atualizar Minha Rota'}</span>
+          <span>Atualizar</span>
         </button>
       </section>
+
+      {loading && (
+        <div role="status" className="rounded-xl border border-blue-500/30 bg-blue-500/10 p-4 text-sm text-blue-100">
+          Carregando rotas e visitas do portal…
+        </div>
+      )}
+      {loadError && !loading && (
+        <div role="alert" className="rounded-xl border border-rose-500/40 bg-rose-500/10 p-4 text-sm text-rose-100 space-y-2">
+          <p className="font-bold">Não foi possível carregar {loadError}. Os indicadores e listas abaixo podem não refletir os dados atuais; eles não significam que sua agenda esteja vazia.</p>
+          <button type="button" onClick={loadPortalData} className="underline font-semibold">Tentar carregar novamente</button>
+        </div>
+      )}
 
       {/* SELETOR ADMINISTRATIVO DE PROMOTOR (Exclusivo para perfis administrativos) */}
       {isAdminUser && (
@@ -1884,6 +2130,14 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
             </div>
           </div>
 
+          {adminPromotersError ? (
+            <div role="alert" className="text-xs text-rose-200 border border-rose-500/40 bg-rose-500/10 rounded-lg p-3">
+              {adminPromotersError}
+            </div>
+          ) : !loading && adminPromotersList.length === 0 ? (
+            <p className="text-xs text-[#77766F]">Nenhum promotor cadastrado.</p>
+          ) : null}
+
           {!selectedPromoterMatricula && (
             <div className="py-12 px-4 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] text-center space-y-2">
               <span className="material-symbols-outlined text-3xl text-[#77766F]">person_search</span>
@@ -1899,8 +2153,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
       )}
 
       {/* BANNER DE AUTORIZAÇÃO INDIVIDUAL DO PROMOTOR (Etapa 4.1 - Exibido apenas para promotores reais de campo) */}
-      {!isAdminUser && isImplantacaoMode && !loading && (
-        !isAuthorized ? (
+      {!isAdminUser && isImplantacaoMode && !isAuthorized && !loading && (
           <section className="bg-amber-950/30 border border-amber-500/40 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs font-mono shadow-lg">
             <div className="flex items-start gap-3">
               <span className="material-symbols-outlined text-amber-400 text-2xl mt-0.5">lock_clock</span>
@@ -1912,87 +2165,11 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                   <span className="text-[#77766F] text-[11px]">• Aguardando Liberação</span>
                 </div>
                 <p className="text-[#171717] text-xs font-sans leading-relaxed">
-                  Suas rotas cadastradas estão disponíveis para visualização e planejamento. A realização de check-ins em campo está temporariamente bloqueada até que o administrador libere o seu usuário para o teste piloto.
+                  Suas rotas estão disponíveis para consulta. Check-in e execução aguardam liberação administrativa.
                 </p>
               </div>
             </div>
-            <span className="px-3 py-1.5 rounded-xl bg-[#E4E2DB] border border-amber-500/30 text-amber-300 text-[11px] font-bold self-start sm:self-auto shrink-0">
-              Operação Pré-Liberada
-            </span>
           </section>
-        ) : (
-          <section className="bg-emerald-950/25 border border-emerald-500/40 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs font-mono shadow-lg">
-            <div className="flex items-start gap-3">
-              <span className="material-symbols-outlined text-emerald-400 text-2xl mt-0.5">verified_user</span>
-              <div className="space-y-1">
-                <div className="flex items-center gap-2">
-                  <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-bold border border-emerald-500/30 text-[10px] uppercase">
-                    Piloto Liberado
-                  </span>
-                  <span className="text-[#77766F] text-[11px]">• Operação Autorizada</span>
-                </div>
-                <p className="text-[#171717] text-xs font-sans leading-relaxed">
-                  Seu usuário está liberado para executar check-in, checklists e fotos nas suas rotas programadas. Os dados registrados serão auditados pela coordenação.
-                </p>
-              </div>
-            </div>
-            <span className="px-3 py-1.5 rounded-xl bg-[#E4E2DB] border border-emerald-500/30 text-emerald-300 text-[11px] font-bold self-start sm:self-auto shrink-0">
-              🟢 Liberado para Teste
-            </span>
-          </section>
-        )
-      )}
-
-      {/* CARTÃO DE PERFIL DETALHADO DO PROMOTOR (Exibido para promotores reais ou para administradores quando houver promotor selecionado) */}
-      {(!isAdminUser || selectedPromoterMatricula) && (
-        <div className="p-5 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5] shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-          <div className="flex items-center gap-4">
-            <div className="w-14 h-14 rounded-2xl bg-[#222222] flex items-center justify-center font-extrabold text-[#171717] text-lg font-mono border border-[#CFCDC5] shrink-0 shadow-xs">
-              {initials}
-            </div>
-            <div className="space-y-1">
-              <h2 className="text-xl font-extrabold text-[#171717] tracking-tight">
-                {realName}
-              </h2>
-              <div className="flex flex-wrap items-center gap-2 text-xs font-mono">
-                {realMatricula ? (
-                  <span className="px-2.5 py-1 rounded-lg bg-[#E4E2DB] border border-[#CFCDC5] text-[#222222] font-bold">
-                    Matrícula: {realMatricula}
-                  </span>
-                ) : (
-                  !isAdminUser && (
-                    <span className="px-2.5 py-1 rounded-lg bg-[#FDF2F2] border border-[#F8C8C8] text-[#C62828] font-bold flex items-center gap-1">
-                      <span className="material-symbols-outlined text-xs">warning</span>
-                      Promotor não vinculado
-                    </span>
-                  )
-                )}
-
-                {(realCidade || realUf) && (
-                  <span className="text-[#5F5F5F] flex items-center gap-1 bg-[#E4E2DB] px-2.5 py-1 rounded-lg border border-[#CFCDC5]">
-                    <span className="material-symbols-outlined text-xs text-[#286FF5]">location_on</span>
-                    {realCidade}{realUf ? ` - ${realUf}` : ''}
-                  </span>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {(realSupervisor || realEquipe) && (
-            <div className="p-3.5 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5] text-xs font-mono space-y-1.5 w-full sm:w-auto text-left sm:text-right">
-              {realSupervisor && (
-                <div className="text-[#222222]">
-                  <span className="text-[#5F5F5F]">Supervisor:</span> <strong className="text-[#171717]">{realSupervisor}</strong>
-                </div>
-              )}
-              {realEquipe && (
-                <div className="text-[#286FF5]">
-                  <span className="text-[#5F5F5F]">Equipe:</span> <strong className="text-[#286FF5]">{realEquipe}</strong>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
       )}
 
       {/* 1. RESUMO EXECUTIVO DO DIA / RESUMO DO PROMOTOR */}
@@ -2004,38 +2181,38 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
               <span>Resumo do Promotor (Hoje)</span>
             </div>
           )}
-          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5 font-mono">
-            <div className="p-2.5 rounded-xl bg-[#F7F6F2] border border-[#CFCDC5]">
-              <span className="text-[9px] text-[#5F5F5F] block font-bold uppercase">PLANEJADAS</span>
-              <span className="text-xl font-extrabold text-[#171717]">{totalPlanned}</span>
-            </div>
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 font-mono">
+            <button type="button" aria-pressed={statusFilter === 'planejada'} onClick={() => handleMetricSelect('planejada')} className={`text-left p-2 rounded-xl bg-[#F7F6F2] border ${statusFilter === 'planejada' ? 'border-blue-500 ring-2 ring-blue-200' : 'border-[#CFCDC5]'} focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500`}>
+              <span className="text-[11px] text-[#5F5F5F] block font-bold uppercase">Planejadas · hoje</span>
+              <span className="text-lg font-extrabold text-[#171717]">{metricText(todayOperationalVisits.filter(v => v.status === 'planejada').length)}</span>
+            </button>
 
-            <div className="p-2.5 rounded-xl bg-[#F7F6F2] border border-[#FCE19B]">
-              <span className="text-[9px] text-[#986000] block font-bold uppercase">EM ANDAMENTO</span>
-              <span className="text-xl font-extrabold text-[#986000]">{inProgressCount}</span>
-            </div>
+            <button type="button" aria-pressed={statusFilter === 'em_andamento'} onClick={() => handleMetricSelect('em_andamento')} className={`text-left p-2 rounded-xl bg-[#F7F6F2] border ${statusFilter === 'em_andamento' ? 'border-amber-500 ring-2 ring-amber-200' : 'border-[#FCE19B]'} focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500`}>
+              <span className="text-[11px] text-[#986000] block font-bold uppercase">Em andamento · hoje</span>
+              <span className="text-lg font-extrabold text-[#986000]">{metricText(inProgressCount)}</span>
+            </button>
 
-            <div className="p-2.5 rounded-xl bg-[#F7F6F2] border border-[#CFCDC5]">
-              <span className="text-[9px] text-[#5F5F5F] block font-bold uppercase">PENDENTES</span>
-              <span className="text-xl font-extrabold text-[#222222]">{pendingCount}</span>
-            </div>
+            <button type="button" aria-pressed={statusFilter === 'pendente'} onClick={() => handleMetricSelect('pendente')} className={`text-left p-2 rounded-xl bg-[#F7F6F2] border ${statusFilter === 'pendente' ? 'border-rose-500 ring-2 ring-rose-200' : 'border-[#CFCDC5]'} focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500`}>
+              <span className="text-[11px] text-[#5F5F5F] block font-bold uppercase">Pendentes · semana</span>
+              <span className="text-lg font-extrabold text-[#222222]">{metricText(pendingCount)}</span>
+            </button>
 
-            <div className="p-2.5 rounded-xl bg-[#F7F6F2] border border-[#B9E5D0]">
-              <span className="text-[9px] text-[#16794F] block font-bold uppercase">CONCLUÍDAS</span>
-              <span className="text-xl font-extrabold text-[#16794F]">{completedCount}</span>
-            </div>
+            <button type="button" aria-pressed={statusFilter === 'concluida'} onClick={() => handleMetricSelect('concluida')} className={`text-left p-2 rounded-xl bg-[#F7F6F2] border ${statusFilter === 'concluida' ? 'border-emerald-500 ring-2 ring-emerald-200' : 'border-[#B9E5D0]'} focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500`}>
+              <span className="text-[11px] text-[#16794F] block font-bold uppercase">Concluídas · semana</span>
+              <span className="text-lg font-extrabold text-[#16794F]">{metricText(completedCount)}</span>
+            </button>
 
-            <div className="p-2.5 rounded-xl bg-[#F7F6F2] border border-[#F8C8C8] col-span-2 sm:col-span-1">
-              <span className="text-[9px] text-[#C62828] block font-bold uppercase">NÃO REALIZADAS</span>
-              <span className="text-xl font-extrabold text-[#C62828]">{notDoneCount}</span>
-            </div>
+            <button type="button" aria-pressed={statusFilter === 'nao_realizada'} onClick={() => handleMetricSelect('nao_realizada')} className={`text-left p-2 rounded-xl bg-[#F7F6F2] border col-span-2 sm:col-span-1 ${statusFilter === 'nao_realizada' ? 'border-red-500 ring-2 ring-red-200' : 'border-[#F8C8C8]'} focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500`}>
+              <span className="text-[11px] text-[#C62828] block font-bold uppercase">Não realizadas · semana</span>
+              <span className="text-lg font-extrabold text-[#C62828]">{metricText(notDoneCount)}</span>
+            </button>
           </div>
 
           {/* Barra de Progresso de Execução */}
-          <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5] space-y-2">
+          <div className="hidden sm:block p-4 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5] space-y-2">
             <div className="flex justify-between items-center text-xs font-mono">
               <span className="text-[#171717] font-bold">Meta de Atendimento Diário:</span>
-              <span className="text-[#286FF5] font-bold">{completedCount} de {totalPlanned} lojas atendidas</span>
+              <span className="text-[#286FF5] font-bold">{todayCompletedCount} de {totalPlanned} lojas atendidas</span>
             </div>
             <div className="w-full bg-[#E4E2DB] h-3 rounded-full overflow-hidden p-0.5 border border-[#CFCDC5]">
               <div
@@ -2049,8 +2226,39 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
 
 
 
+      {(!isAdminUser || selectedPromoterMatricula) && (
+        <section aria-label="Meus atendimentos" className="space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-sm font-extrabold uppercase tracking-wide text-[#171717]">Meus atendimentos</h2>
+            <span className="text-[10px] text-[#77766F]">{todayStr.split('-').reverse().join('/')}</span>
+          </div>
+          <nav aria-label="Filtrar atendimentos" className="grid grid-cols-4 gap-1 rounded-xl border border-[#CFCDC5] bg-[#EAE8E2] p-1">
+            {([
+              ['today', 'Hoje'],
+              ['pending', `Pendentes (${metricText(pendingCount)})`],
+              ['upcoming', `Próximos (${metricText(upcomingVisits.length)})`],
+              ['history', 'Histórico']
+            ] as const).map(([tab, label]) => (
+              <button key={tab} type="button" aria-pressed={appointmentsTab === tab}
+                onClick={() => {
+                  setAppointmentsTab(tab);
+                  setStatusFilter('all');
+                  if (tab === 'history') {
+                    setIsWeekHistoryOpen(true);
+                    setWeekHistoryFilterMode('all');
+                  }
+                }}
+                className={`min-h-10 rounded-lg px-1.5 py-2 text-[11px] font-bold transition-colors ${appointmentsTab === tab ? 'bg-white text-[#171717] shadow-sm' : 'text-[#5F5F5F] hover:bg-white/60'}`}>
+                {label}
+              </button>
+            ))}
+          </nav>
+        </section>
+      )}
+
       {/* 2. AGENDA DE HOJE / PROGRAMAÇÃO DE VISITAS */}
       {(!isAdminUser || selectedPromoterMatricula) && (
+       appointmentsTab === 'today' && (
         <section className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-5 sm:p-6 shadow-xs space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#CFCDC5] pb-4">
             <div>
@@ -2064,18 +2272,25 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                     : `Agenda de Hoje (${todayStr.split('-').reverse().join('/')})`}
                 </h2>
                 <span className="px-2 py-0.5 rounded-full bg-[#E4E2DB] text-[#222222] text-[10px] font-bold font-mono">
-                  {todayOperationalVisits.length} {todayOperationalVisits.length === 1 ? 'loja' : 'lojas'}
+                  {filteredTodayOperationalVisits.length} {filteredTodayOperationalVisits.length === 1 ? 'loja' : 'lojas'}
                 </span>
               </div>
               <p className="text-xs text-[#77766F] font-mono mt-0.5">
                 {isAdminUser
                   ? 'Rotas programadas e atendimentos registrados para este promotor na data atual.'
-                  : 'Rotas previstas e em atendimento ordenadas para o seu dia de trabalho.'}
+                  : 'Rotas previstas e em atendimento ordenadas para o seu dia de trabalho.'} {statusFilter !== 'all' && <button type="button" onClick={() => setStatusFilter('all')} className="ml-1 font-bold text-[#286FF5] underline">Limpar filtro ({statusFilter})</button>}
               </p>
             </div>
           </div>
 
         {/* ALERTA CONTEXTUAL DE ATENDIMENTO ATIVO (Etapa 1) */}
+        {!isAdminUser && staleInProgressVisits.length > 0 && (
+          <div role="status" className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950">
+            <strong>{getOldOpenVisitsLabel(staleInProgressVisits.length)}</strong>{' '}
+            <span>O servidor bloqueia novos check-ins até a regularização administrativa.</span>
+          </div>
+        )}
+
         {activeVisit && (
           <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/40 font-mono text-xs flex flex-col md:flex-row md:items-center justify-between gap-3 shadow-md animate-fadeIn">
             <div className="space-y-1">
@@ -2104,7 +2319,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                 className="px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-xs flex items-center gap-1.5 cursor-pointer shadow-md transition-colors"
               >
                 <span className="material-symbols-outlined text-sm">edit_note</span>
-                <span>Voltar para atendimento atual</span>
+                <span>Continuar Visita</span>
               </button>
               <button
                 type="button"
@@ -2122,19 +2337,19 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
           </div>
         )}
 
-        {todayOperationalVisits.length === 0 ? (
+        {filteredTodayOperationalVisits.length === 0 ? (
           <div className="py-4 px-3 text-center space-y-1.5 font-mono">
             <div className="w-8 h-8 rounded-full bg-[#EAE8E2] border border-[#CFCDC5] flex items-center justify-center text-[#5F5F5F] mx-auto">
               <span className="material-symbols-outlined text-lg">event_available</span>
             </div>
             <h4 className="text-xs font-bold text-[#171717]">Nenhuma Rota Prevista para Hoje</h4>
             <p className="text-[11px] text-[#77766F] max-w-sm mx-auto">
-              Não há lojas agendadas para a data atual ({todayStr.split('-').reverse().join('/')}). Consulte o histórico semanal ou a escala fixa abaixo.
+                    {loadError ? 'Não foi possível confirmar a agenda porque houve uma falha no carregamento.' : statusFilter === 'all' ? `Não há lojas agendadas para a data atual (${todayStr.split('-').reverse().join('/')}). Consulte o histórico semanal ou a escala fixa abaixo.` : 'Nenhum atendimento encontrado para o filtro selecionado. Clique no indicador novamente para limpar o filtro.'}
             </p>
           </div>
         ) : (
           <div className="space-y-3">
-            {todayOperationalVisits.map((item, idx) => {
+            {filteredTodayOperationalVisits.map((item, idx) => {
               const routeObj = routes.find((r) => r.id === item.routeId) || {
                 id: item.routeId,
                 promotor_matricula: item.promotorMatricula,
@@ -2145,13 +2360,17 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                 industria: { codigo: item.industriaCodigo, nome: item.industriaNome }
               } as RouteItem;
 
-              const isCurrentActive = activeVisit && (activeVisit.id === item.visitObj?.id || (activeVisit.loja_codigo === item.lojaCodigo && activeVisit.data_visita === item.dataStr));
+              const activeScheduledDate = activeVisit?.scheduled_date || activeVisit?.data_visita;
+              const isCurrentActive = !item.visitObj?.regularization_status && activeVisit && (activeVisit.id === item.visitObj?.id || (activeVisit.loja_codigo === item.lojaCodigo && activeScheduledDate === item.dataStr));
+              const regularizationLabel = getRegularizationPresentation(item.visitObj?.regularization_status);
 
               return (
                 <div
                   key={`today_${item.key}_${item.dataStr}`}
-                  className={`p-4 rounded-xl border transition-all flex flex-col md:flex-row md:items-center justify-between gap-4 font-mono ${
-                    isCurrentActive
+                  className={`p-3 rounded-xl border transition-all flex flex-col md:flex-row md:items-center justify-between gap-3 font-mono ${
+                    regularizationLabel
+                      ? 'bg-purple-50 border-purple-300'
+                      : isCurrentActive
                       ? 'bg-amber-950/30 border-2 border-amber-500 shadow-lg'
                       : item.status === 'concluida'
                       ? 'bg-emerald-950/20 border-emerald-500/30'
@@ -2162,14 +2381,16 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                       : 'bg-[#EAE8E2] border-[#CFCDC5]'
                   }`}
                 >
-                  <div className="space-y-1.5 flex-1 min-w-0">
+                  <div className="space-y-1 flex-1 min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="w-5 h-5 rounded-full bg-[#F7F6F2] border border-[#CFCDC5] text-[#7E22CE] font-bold text-[10px] flex items-center justify-center shrink-0">
                         {idx + 1}
                       </span>
                       <span
                         className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase flex items-center gap-1 shrink-0 ${
-                          item.status === 'concluida'
+                          regularizationLabel
+                            ? 'bg-purple-100 text-purple-950 border border-purple-300'
+                            : item.status === 'concluida'
                             ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
                             : item.status === 'em_andamento'
                             ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30 animate-pulse'
@@ -2180,11 +2401,11 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                             : 'bg-slate-800 text-slate-300 border border-[#CFCDC5]'
                         }`}
                       >
-                        {item.status === 'concluida' && '🟢 Concluída'}
-                        {item.status === 'em_andamento' && '🔵 Em andamento'}
-                        {item.status === 'pendente' && '🟡 Pendente'}
-                        {item.status === 'nao_realizada' && '🟠 Não realizada'}
-                        {item.status === 'planejada' && '⚪ Planejada'}
+                        {regularizationLabel || (item.status === 'concluida' && '🟢 Concluída')}
+                        {!regularizationLabel && item.status === 'em_andamento' && '🔵 Em andamento'}
+                        {!regularizationLabel && item.status === 'pendente' && '🔴 Pendente'}
+                        {!regularizationLabel && item.status === 'nao_realizada' && '🟠 Não realizada'}
+                        {!regularizationLabel && item.status === 'planejada' && '⚪ Planejada'}
                       </span>
                     </div>
 
@@ -2192,7 +2413,9 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                       {item.lojaNome}
                     </h4>
 
-                    <p className="text-[11px] text-[#77766F]">
+                    <p className="text-xs font-semibold text-[#3F3F46]">Hoje · {item.dataStr.split('-').reverse().join('/')}</p>
+
+                    <p className="text-xs text-[#5F5F5F]">
                       {item.lojaCidade || '—'}/{item.lojaUf || '-'} • Indústria: <span className="text-[#7E22CE] font-bold">{item.industriaNome}</span>
                     </p>
 
@@ -2232,8 +2455,8 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                           <div className="flex flex-wrap items-center gap-1.5 w-full md:w-auto">
                             <button
                               onClick={() => handleStartVisit(routeObj)}
-                              disabled={Boolean(startingRouteId)}
-                              className="px-3.5 py-2 rounded-xl bg-[#E4E2DB] hover:bg-[#CFCDC5] text-[#222222] border border-[#AAA79E] font-bold text-xs flex items-center justify-center gap-1 cursor-pointer transition-colors shadow-xs"
+                              disabled={Boolean(startingRouteId) || staleInProgressVisits.length > 0}
+                              className="px-3.5 py-2 rounded-xl bg-[#E4E2DB] hover:bg-[#CFCDC5] disabled:bg-[#CFCDC5] disabled:text-[#737373] disabled:cursor-not-allowed text-[#222222] border border-[#AAA79E] font-bold text-xs flex items-center justify-center gap-1 cursor-pointer transition-colors shadow-xs"
                               title="Trocar para esta loja (exige finalizar ou interromper o atendimento atual)"
                             >
                               <span className="material-symbols-outlined text-sm">play_arrow</span>
@@ -2265,9 +2488,9 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                       )
                     )}
 
-                    {!isAdminUser && item.status === 'em_andamento' && (
+                    {!isAdminUser && item.status === 'em_andamento' && !item.visitObj?.regularization_status && (
                       <div className="flex items-center gap-2 w-full md:w-auto">
-                        <button
+        {getPromoterOpenVisitAction(item.visitObj || { status: item.status, data_visita: item.dataStr }, new Date()) === 'continue_today' ? <button
                           onClick={() => {
                             if (item.visitObj) {
                               handleResumeStaleVisit(item.visitObj);
@@ -2276,9 +2499,9 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                           className="flex-1 md:flex-none px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-md transition-colors"
                         >
                           <span className="material-symbols-outlined text-sm">edit_note</span>
-                          <span>{isCurrentActive ? 'Preenchendo Abaixo' : 'Continuar Atendimento'}</span>
-                        </button>
-                        <button
+                          <span>{isCurrentActive ? 'Preenchendo Abaixo' : 'Continuar Visita'}</span>
+                        </button> : <span className="text-xs text-amber-900">Visita antiga: solicite análise e regularização ao administrador ou supervisor.</span>}
+                        {getPromoterOpenVisitAction(item.visitObj || { status: item.status, data_visita: item.dataStr }, new Date()) === 'continue_today' && <button
                           onClick={() => {
                             if (item.visitObj) {
                               setInterruptModalVisit(item.visitObj);
@@ -2290,7 +2513,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                         >
                           <span className="material-symbols-outlined text-sm text-rose-400">close</span>
                           <span className="hidden sm:inline">Interromper</span>
-                        </button>
+                        </button>}
                       </div>
                     )}
 
@@ -2327,188 +2550,83 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
           </div>
         )}
       </section>
+       )
       )}
 
-      {/* 2. PENDÊNCIAS DE DIAS ANTERIORES (VISITAS ANTERIORES NÃO CONCLUÍDAS - VISÍVEL APENAS PARA PROMOTOR OPERACIONAL) */}
-      {!isAdminUser && (staleInProgressVisits.length > 0 || staleNotDoneVisits.length > 0) && (
-        <section className="bg-amber-950/20 border-2 border-amber-500/50 rounded-2xl p-5 sm:p-6 shadow-2xl space-y-6">
-          <div className="flex items-start gap-3 border-b border-amber-500/30 pb-4">
-            <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 shrink-0">
-              <span className="material-symbols-outlined text-2xl">pending_actions</span>
-            </div>
-            <div className="space-y-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="px-2.5 py-0.5 rounded bg-amber-500/30 text-amber-200 font-bold border border-amber-500/40 text-xs font-mono uppercase tracking-wide">
-                  Pendências de dias anteriores
-                </span>
-                <span className="text-xs text-amber-300 font-mono font-bold">
-                  {staleInProgressVisits.length + staleNotDoneVisits.length} {staleInProgressVisits.length + staleNotDoneVisits.length === 1 ? 'visita pendente' : 'visitas pendentes'}
-                </span>
-              </div>
-              <p className="text-[#171717] text-xs leading-relaxed font-mono">
-                Visitas de datas anteriores à data de hoje que não foram concluídas. Não misturadas com os indicadores diários de hoje.
-              </p>
-            </div>
+      {canReviewOldOpenVisits(profile?.role) && (
+        <section aria-label="Resumo de visitas antigas em aberto" className="flex flex-col gap-3 rounded-2xl border border-amber-300 bg-amber-50/60 p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 className="text-sm font-extrabold text-amber-950">Visitas antigas em aberto: {oldOpenAdminVisits.length}</h2>
+            <p className="text-xs text-[#5F5F5F]">A análise e regularização estão centralizadas no Acompanhamento de Visitas.</p>
+            {oldOpenAdminVisitsError && <p role="alert" className="text-xs text-rose-800">{oldOpenAdminVisitsError}</p>}
           </div>
-
-          {/* GRUPO 1: VISITAS EM ANDAMENTO */}
-          {staleInProgressVisits.length > 0 && (
-            <div className="space-y-3">
-              <div className="flex items-center gap-2 font-mono text-xs">
-                <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-ping"></span>
-                <h3 className="font-bold text-amber-300 uppercase tracking-wider flex items-center gap-1.5">
-                  <span className="material-symbols-outlined text-sm">timelapse</span>
-                  Em andamento ({staleInProgressVisits.length})
-                </h3>
-                <span className="text-[11px] text-[#77766F]">
-                  — Visitas iniciadas que ficaram em aberto
-                </span>
-              </div>
-
-              <div className="space-y-3">
-                {staleInProgressVisits.map((stale) => {
-                  const elapsedDesc = (() => {
-                    if (!stale.started_at) return null;
-                    const startMs = new Date(stale.started_at).getTime();
-                    const nowMs = Date.now();
-                    const diffHours = Math.floor((nowMs - startMs) / (1000 * 60 * 60));
-                    const diffDays = Math.floor(diffHours / 24);
-                    if (diffDays > 0) return `Iniciada há ${diffDays}d e ${diffHours % 24}h`;
-                    if (diffHours > 0) return `Iniciada há ${diffHours}h`;
-                    return 'Iniciada há menos de 1h';
-                  })();
-
-                  const isCurrentActive = activeVisit?.id === stale.id;
-
-                  return (
-                    <div
-                      key={`stale_prog_${stale.id}`}
-                      className={`p-4 rounded-xl border transition-all flex flex-col md:flex-row md:items-center justify-between gap-4 font-mono ${
-                        isCurrentActive
-                          ? 'bg-[#FFF8E6] border-2 border-amber-400 shadow-lg'
-                          : 'bg-[#EAE8E2] border-amber-500/40 hover:border-amber-500/70'
-                      }`}
-                    >
-                      <div className="space-y-1.5 flex-1 min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30 uppercase flex items-center gap-1">
-                            <span className="material-symbols-outlined text-xs animate-spin">refresh</span>
-                            Em andamento
-                          </span>
-                          <span className="text-amber-400 text-xs font-bold">
-                            Data: {stale.data_visita.split('-').reverse().join('/')}
-                          </span>
-                          {stale.started_at && (
-                            <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-[#F7F6F2] text-[#171717] border border-[#CFCDC5]">
-                              Início: {new Date(stale.started_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
-                            </span>
-                          )}
-                          {elapsedDesc && (
-                            <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-500/10 text-amber-200 border border-amber-500/30">
-                              {elapsedDesc}
-                            </span>
-                          )}
-                        </div>
-
-                        <h4 className="text-sm font-bold text-[#171717] truncate">
-                          {stale.loja?.nome || stale.loja_codigo}
-                        </h4>
-
-                        <p className="text-[11px] text-[#77766F]">
-                          {stale.loja?.cidade || '—'}/{stale.loja?.uf || '-'} • Indústria: <span className="text-[#7E22CE] font-bold">{stale.industria?.nome || stale.industria_codigo}</span>
-                        </p>
-                      </div>
-
-                      <div className="flex items-center gap-2 shrink-0 pt-2 md:pt-0 border-t md:border-t-0 border-[#CFCDC5]">
-                        <button
-                          onClick={() => handleResumeStaleVisit(stale)}
-                          className="px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-xs flex items-center gap-1.5 cursor-pointer shadow-md transition-colors"
-                        >
-                          <span className="material-symbols-outlined text-sm">play_arrow</span>
-                          <span>{isCurrentActive ? 'Preenchendo Abaixo' : 'Continuar Visita'}</span>
-                        </button>
-                        <button
-                          onClick={() => {
-                            setInterruptModalVisit(stale);
-                            setInterruptReason('');
-                          }}
-                          className="px-3 py-2.5 rounded-xl bg-[#F7F6F2] hover:bg-rose-500/20 text-[#171717] hover:text-rose-300 border border-[#CFCDC5] text-xs font-bold cursor-pointer transition-colors"
-                          title="Interromper atendimento com justificativa obrigatória"
-                        >
-                          <span className="material-symbols-outlined text-sm text-rose-400">close</span>
-                          <span>Interromper Atendimento</span>
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* GRUPO 2: VISITAS NÃO REALIZADAS */}
-          {staleNotDoneVisits.length > 0 && (
-            <div className="space-y-3 pt-2">
-              <div className="flex items-center gap-2 font-mono text-xs">
-                <span className="material-symbols-outlined text-rose-400 text-sm">cancel</span>
-                <h3 className="font-bold text-rose-300 uppercase tracking-wider">
-                  Não realizadas ({staleNotDoneVisits.length})
-                </h3>
-                <span className="text-[11px] text-[#77766F]">
-                  — Registros de dias anteriores com justificativa (somente leitura)
-                </span>
-              </div>
-
-              <div className="space-y-3">
-                {staleNotDoneVisits.map((stale) => (
-                  <div
-                    key={`stale_notdone_${stale.id}`}
-                    className="p-4 rounded-xl bg-[#EAE8E2] border border-rose-500/30 hover:border-rose-500/50 transition-all flex flex-col md:flex-row md:items-center justify-between gap-4 font-mono"
-                  >
-                    <div className="space-y-1.5 flex-1 min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30 uppercase flex items-center gap-1">
-                          <span className="material-symbols-outlined text-xs">cancel</span>
-                          Não realizada
-                        </span>
-                        <span className="text-rose-300 text-xs font-bold">
-                          Data: {stale.data_visita.split('-').reverse().join('/')}
-                        </span>
-                      </div>
-
-                      <h4 className="text-sm font-bold text-[#171717] truncate">
-                        {stale.loja?.nome || stale.loja_codigo}
-                      </h4>
-
-                      <p className="text-[11px] text-[#77766F]">
-                        {stale.loja?.cidade || '—'}/{stale.loja?.uf || '-'} • Indústria: <span className="text-[#7E22CE] font-bold">{stale.industria?.nome || stale.industria_codigo}</span>
-                      </p>
-
-                      <div className="p-2.5 rounded-lg bg-[#F7F6F2] border border-[#CFCDC5] text-xs text-rose-300/90 flex items-start gap-2 mt-1">
-                        <span className="material-symbols-outlined text-sm text-rose-400 shrink-0 mt-0.5">comment</span>
-                        <div>
-                          <span className="text-[#77766F] font-bold">Motivo registrado: </span>
-                          <span className="font-medium text-white">{stale.motivo_nao_realizada || 'Não informado'}</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-2 shrink-0 pt-2 md:pt-0 border-t md:border-t-0 border-[#CFCDC5]">
-                      <button
-                        onClick={() => setRecoverModalVisit(stale)}
-                        className="px-3.5 py-2 rounded-xl bg-[#222222] hover:bg-black text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-md transition-colors"
-                        title="Recuperar esta pendência para execução na data de hoje"
-                      >
-                        <span className="material-symbols-outlined text-sm">replay</span>
-                        <span>Realizar hoje</span>
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+          <button type="button" onClick={() => onNavigate('acompanhamento-visitas')} className="shrink-0 rounded-lg border border-amber-400 bg-white px-4 py-2 text-xs font-bold text-amber-950 hover:bg-amber-100">Abrir central administrativa</button>
         </section>
+      )}
+      {(!isAdminUser || selectedPromoterMatricula) && appointmentsTab === 'upcoming' && (
+        <section aria-labelledby="upcoming-visits-title" className="space-y-3 rounded-2xl border border-blue-200 bg-blue-50/50 p-5">
+          <div className="border-b border-blue-100 pb-3">
+            <h2 id="upcoming-visits-title" className="text-base font-extrabold text-[#14243B]">Próximos atendimentos</h2>
+            <p className="text-sm text-[#5F5F5F]">Programações futuras desta semana.</p>
+          </div>
+          {upcomingVisitGroups.length === 0 ? <p className="text-sm text-[#5F5F5F]">{loadError ? 'Não foi possível confirmar os próximos atendimentos.' : 'Nenhum atendimento programado para os próximos dias desta semana.'}</p> : <div className="space-y-4">
+            {upcomingVisitGroups.map(group => <section key={group.date} aria-label={formatAppointmentDateHeading(group.date)} className="space-y-2">
+              <h3 className="border-b border-blue-200 pb-1 text-sm font-extrabold uppercase tracking-wide text-[#14243B]">{formatAppointmentDateHeading(group.date)}</h3>
+              <ul className="space-y-2 md:grid md:grid-cols-2 md:gap-2 md:space-y-0">
+                {group.appointments.map(item => <li key={`upcoming-${item.key}`} className="rounded-lg border border-blue-100 bg-white p-3">
+                  <h4 className="truncate text-sm font-bold text-[#171717]">{item.lojaNome}</h4>
+                  <p className="text-sm text-[#3F3F46]">Indústria: <strong>{item.industriaNome}</strong></p>
+                  <p className="text-xs text-[#5F5F5F]">Frequência: {item.frequencia} · Prevista: {item.dataStr.split('-').reverse().join('/')} · Planejada</p>
+                </li>)}
+              </ul>
+            </section>)}
+          </div>}
+        </section>
+      )}
+
+      {(!isAdminUser || selectedPromoterMatricula) && appointmentsTab === 'pending' && (
+        <section aria-labelledby="past-due-visits-title" className="bg-[#F7F6F2] border border-rose-300 rounded-2xl p-5 sm:p-6 shadow-xs space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#CFCDC5] pb-3">
+            <div>
+              <h2 id="past-due-visits-title" className="text-base font-extrabold text-rose-800 font-mono">Pendências da Semana ({filteredPastDueVisits.length})</h2>
+              <p className="text-xs text-[#77766F]">Programações vencidas de segunda a domingo desta semana. A data original é preservada.</p>
+            </div>
+            {statusFilter !== 'all' && <button type="button" onClick={() => setStatusFilter('all')} className="rounded-lg border border-[#CFCDC5] px-3 py-1.5 text-xs font-bold">Limpar filtro</button>}
+          </div>
+          <div className="space-y-2">
+            {todayOperationalVisits.filter(item => item.status === 'pendente').map(item => <article key={`today-pending-${item.key}`} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-rose-200 bg-white p-3">
+              <div className="min-w-0"><p className="text-[10px] font-bold uppercase text-rose-700">Pendente hoje</p><h3 className="truncate text-sm font-bold text-[#171717]">{item.lojaNome}</h3><p className="text-xs text-[#5F5F5F]">{item.industriaNome} · {todayStr.split('-').reverse().join('/')}</p></div>
+              <button type="button" onClick={() => { setAppointmentsTab('today'); setStatusFilter('pendente'); }} className="rounded-lg border border-[#AEB9C8] px-3 py-2 text-xs font-bold">Abrir atendimento</button>
+            </article>)}
+            {filteredPastDueVisits.map(item => {
+              const days = getDaysLate(item.dataStr, todayStr);
+              return <article key={`past-due-${item.key}`} className="flex flex-col gap-3 rounded-xl border border-rose-200 bg-rose-50/60 p-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0 space-y-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs font-bold text-rose-800">Pendente há {days} {days === 1 ? 'dia' : 'dias'}</span>
+                    <span className="text-xs text-[#5F5F5F]">Prevista: {item.dataStr.split('-').reverse().join('/')}</span>
+                  </div>
+                  <h3 className="truncate text-sm font-bold text-[#171717]">{item.lojaNome}</h3>
+                  <p className="text-xs text-[#5F5F5F]">Indústria: <strong>{item.industriaNome}</strong> · Promotor: <strong>{item.promotorNome}</strong></p>
+                  <p className="text-xs text-[#5F5F5F]">Frequência: {item.frequencia} · Status: Pendente</p>
+                </div>
+                <button type="button" onClick={() => item.visitObj ? setAdminInspectionVisit(item) : setSelectedOperationalDetails(item)} className="self-start rounded-lg border border-[#AEB9C8] px-3 py-2 text-xs font-bold text-[#14243B] hover:bg-white">Ver detalhes</button>
+              </article>;
+            })}
+            {todayOperationalVisits.filter(item => item.status === 'pendente').length === 0 && filteredPastDueVisits.length === 0 && <p className="text-sm text-[#5F5F5F]">{loadError ? 'Não foi possível confirmar as pendências.' : 'Nenhum atendimento pendente nesta semana.'}</p>}
+          </div>
+        </section>
+      )}
+
+      {selectedOperationalDetails && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onMouseDown={event => { if (event.target === event.currentTarget) setSelectedOperationalDetails(null); }}>
+          <section role="dialog" aria-modal="true" aria-labelledby="operational-detail-title" className="w-full max-w-lg space-y-3 rounded-2xl border border-[#CFCDC5] bg-[#F7F6F2] p-5">
+            <h2 id="operational-detail-title" className="text-lg font-bold text-[#171717]">Programação pendente</h2>
+            <p className="text-sm text-[#5F5F5F]">A programação existe, mas não há execução registrada. A data original não foi alterada.</p>
+            <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm"><dt className="font-semibold">Loja</dt><dd>{selectedOperationalDetails.lojaNome}</dd><dt className="font-semibold">Indústria</dt><dd>{selectedOperationalDetails.industriaNome}</dd><dt className="font-semibold">Promotor</dt><dd>{selectedOperationalDetails.promotorNome}</dd><dt className="font-semibold">Data prevista</dt><dd>{selectedOperationalDetails.dataStr.split('-').reverse().join('/')}</dd><dt className="font-semibold">Frequência</dt><dd>{selectedOperationalDetails.frequencia}</dd><dt className="font-semibold">Atraso</dt><dd>{getDaysLate(selectedOperationalDetails.dataStr, todayStr)} dias</dd></dl>
+            <button type="button" onClick={() => setSelectedOperationalDetails(null)} className="rounded-lg bg-[#171717] px-4 py-2 text-sm font-bold text-white">Fechar</button>
+          </section>
+        </div>
       )}
 
       {/* TELA DE FLUXO DA VISITA EM ANDAMENTO (Apenas para promotores em campo) */}
@@ -3068,32 +3186,28 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
         </section>
       ) : null}
 
-      {/* 3. HISTÓRICO DE ATENDIMENTOS / AGENDA DA SEMANA */}
-      {(!isAdminUser || selectedPromoterMatricula) && (
-        <section className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-5 sm:p-6 shadow-xs space-y-5">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#CFCDC5] pb-4">
-            <div
+      {/* HISTÓRICO DE ATENDIMENTOS */}
+      {(!isAdminUser || selectedPromoterMatricula) && appointmentsTab === 'history' && (
+        <section className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-3 sm:p-5 shadow-xs space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="min-w-0 flex-1">
+             <button
+              type="button"
+              aria-expanded={isWeekHistoryOpen}
               onClick={() => setIsWeekHistoryOpen((prev) => !prev)}
-              className="cursor-pointer select-none flex-1 group"
-            >
-              <div className="flex items-center gap-2">
+              className="w-full cursor-pointer select-none group rounded-lg bg-transparent p-0 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600"
+             >
+              <span className="flex items-center gap-2">
                 <span className="material-symbols-outlined text-[#286FF5]">
                   {isAdminUser ? 'history_toggle_off' : 'calendar_view_week'}
                 </span>
-                <h3 className="text-sm font-bold text-[#171717] uppercase tracking-wider font-mono flex items-center gap-2">
-                  {isAdminUser
-                    ? `Histórico de Atendimentos — Semana (${allWeekOperationalVisits.length} registros)`
-                    : `3. Minha Semana & Histórico (${allWeekOperationalVisits.length} agendadas)`}
-                </h3>
+                <span className="text-sm font-bold text-[#171717] uppercase tracking-wider font-mono">HISTÓRICO DE ATENDIMENTOS ({historicalAttendanceVisits.length})</span>
                 <span className="px-2 py-0.5 rounded bg-[#E4E2DB] border border-[#CFCDC5] text-[#77766F] text-[10px] font-mono group-hover:text-[#171717] transition-colors">
-                  {isWeekHistoryOpen ? 'Recolher ▲' : 'Ver Todos os Dias ▼'}
+                  {isWeekHistoryOpen ? 'Recolher' : 'Abrir histórico'}
                 </span>
-              </div>
-              <p className="text-[11px] text-[#77766F] font-mono mt-0.5">
-                {isAdminUser
-                  ? 'Grade semanal consolidada de visitas, presenças e histórico do promotor.'
-                  : 'Grade semanal completa de rotas planejadas, histórico e pendências de outros dias.'}
-              </p>
+              </span>
+             </button>
+             <p className="text-[11px] text-[#5F5F5F] font-mono">Registros de campo com navegação por semana e por dia.</p>
             </div>
 
           {/* Navegação entre semanas (visível sempre) */}
@@ -3142,7 +3256,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
             {/* Controles de visualização: Seletores dos 7 dias + Alternância Semana / Dia */}
             <div>
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2 font-mono text-xs text-[#5F5F5F]">
-                <span>Selecione um dia da semana ou visualize a grade completa:</span>
+                <span>Filtre o histórico por dia ou visualize todos os atendimentos do período:</span>
                 <div className="flex items-center gap-1.5 self-end sm:self-auto">
                   <button
                     type="button"
@@ -3164,7 +3278,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                         : 'bg-[#EAE8E2] text-[#5F5F5F] hover:text-[#171717] border border-[#CFCDC5]'
                     }`}
                   >
-                    Todos da Semana ({allWeekOperationalVisits.length})
+                    Todos do Período ({filteredHistoricalAttendanceVisits.length})
                   </button>
                 </div>
               </div>
@@ -3174,10 +3288,15 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                 {weekDaysRange.map((day) => {
                   const isTodayDay = day.dateStr === getLocalDateString(new Date());
                   const isSelected = weekHistoryFilterMode === 'day' && day.dateStr === selectedDayDateStr;
-                  const dayVisits = allWeekOperationalVisits.filter((v) => v.dataStr === day.dateStr);
-                  const storeCount = dayVisits.length;
-                  const pendingCount = dayVisits.filter((v) => v.status === 'pendente').length;
+                  const dayVisits = historicalAttendanceVisits.filter((v) => v.dataStr === day.dateStr);
+                  const attendanceCount = dayVisits.length;
+                  const notDoneCount = dayVisits.filter((v) => v.status === 'nao_realizada').length;
                   const completedCount = dayVisits.filter((v) => v.status === 'concluida').length;
+                  const resolutionCounts = getRegularizationCounts(dayVisits.map((visit) => ({
+                    status: visit.status,
+                    regularization_status: visit.visitObj?.regularization_status || null
+                  })));
+                  const inProgressCount = resolutionCounts.inProgress;
 
                   return (
                     <button
@@ -3205,7 +3324,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                           </span>
                         ) : (
                           <span className={`px-1.5 py-0.2 text-[8px] font-bold rounded ${isSelected ? 'bg-white/20 text-white' : 'bg-[#E4E2DB] text-[#5F5F5F]'}`}>
-                            {storeCount} {storeCount === 1 ? 'loja' : 'lojas'}
+                            {attendanceCount} {attendanceCount === 1 ? 'registro' : 'registros'}
                           </span>
                         )}
                       </div>
@@ -3216,15 +3335,18 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                         </span>
                         {isTodayDay && (
                           <span className={`text-[10px] font-semibold ${isSelected ? 'text-slate-300' : 'text-[#5F5F5F]'}`}>
-                            {storeCount} {storeCount === 1 ? 'loja' : 'lojas'}
+                            {attendanceCount} {attendanceCount === 1 ? 'registro' : 'registros'}
                           </span>
                         )}
                       </div>
 
                       <div className={`flex items-center gap-1.5 text-[10px] pt-1 border-t ${isSelected ? 'border-white/20' : 'border-[#CFCDC5]/60'}`}>
-                        {completedCount > 0 && <span className="font-bold text-emerald-600">🟢 {completedCount}</span>}
-                        {pendingCount > 0 && <span className="font-bold text-rose-600">🔴 {pendingCount}</span>}
-                        {storeCount === 0 && <span className={isSelected ? 'text-slate-400' : 'text-[#77766F]'}>Sem visitas</span>}
+                        {completedCount > 0 && <span className="font-bold text-emerald-700">Concluídas {completedCount}</span>}
+                        {notDoneCount > 0 && <span className="font-bold text-rose-700">Não realizadas {notDoneCount}</span>}
+                        {inProgressCount > 0 && <span className="font-bold text-amber-800">Em andamento {inProgressCount}</span>}
+                        {resolutionCounts.administrativelyCompleted > 0 && <span className="font-bold text-purple-800">Concluídas administrativamente {resolutionCounts.administrativelyCompleted}</span>}
+                        {resolutionCounts.closedWithoutProof > 0 && <span className="font-bold text-purple-800">Encerradas sem comprovação {resolutionCounts.closedWithoutProof}</span>}
+                        {attendanceCount === 0 && <span className={isSelected ? 'text-slate-400' : 'text-[#77766F]'}>Sem registros</span>}
                       </div>
                     </button>
                   );
@@ -3237,16 +3359,16 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
               <div className="flex items-center gap-2">
                 <span className="font-mono text-xs font-bold text-[#171717]">
                   {weekHistoryFilterMode === 'all'
-                    ? `Todos os Atendimentos da Semana (${displayedWeekVisits.length} ${displayedWeekVisits.length === 1 ? 'registro' : 'registros'})`
-                    : `Atendimentos de ${selectedDayDateStr.split('-').reverse().join('/')} (${selectedDayOperationalVisits.length} no dia • ${allWeekOperationalVisits.length} na semana)`}
+                    ? `Todos os atendimentos do período (${displayedWeekVisits.length} ${displayedWeekVisits.length === 1 ? 'registro' : 'registros'})`
+                    : `Atendimentos registrados em ${selectedDayDateStr.split('-').reverse().join('/')} (${selectedDayOperationalVisits.length} no dia • ${filteredHistoricalAttendanceVisits.length} no período)`}
                 </span>
-                {weekHistoryFilterMode === 'day' && selectedDayOperationalVisits.length === 0 && allWeekOperationalVisits.length > 0 && (
+                {weekHistoryFilterMode === 'day' && selectedDayOperationalVisits.length === 0 && filteredHistoricalAttendanceVisits.length > 0 && (
                   <button
                     type="button"
                     onClick={() => setWeekHistoryFilterMode('all')}
                     className="text-[11px] font-bold text-[#286FF5] hover:underline cursor-pointer"
                   >
-                    (Ver todos os {allWeekOperationalVisits.length} registros da semana)
+                    (Ver todos os {filteredHistoricalAttendanceVisits.length} atendimentos do período)
                   </button>
                 )}
               </div>
@@ -3265,24 +3387,24 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                 </div>
                 <h4 className="text-xs font-bold text-[#171717]">
                   {weekHistoryFilterMode === 'all'
-                    ? 'Nenhum Atendimento Programado nesta Semana'
-                    : 'Nenhum Atendimento para este Dia'}
+                    ? 'Nenhum atendimento realizado neste período'
+                    : 'Nenhum atendimento registrado neste dia'}
                 </h4>
                 <p className="text-[11px] text-[#77766F] max-w-sm mx-auto">
                   {weekHistoryFilterMode === 'all'
-                    ? 'Não foram encontrados registros para o promotor nesta semana selecionada.'
-                    : allWeekOperationalVisits.length > 0
-                    ? `Não há visitas programadas para ${selectedDayDateStr.split('-').reverse().join('/')}, mas há ${allWeekOperationalVisits.length} atendimentos em outros dias desta semana. Clique nos dias acima ou em "Todos da Semana".`
-                    : `Não há visitas programadas ou registros de campo para ${selectedDayDateStr.split('-').reverse().join('/')}. Selecione outro dia nos botões acima.`}
+                    ? 'Não foram encontrados atendimentos realizados no período selecionado.'
+                    : filteredHistoricalAttendanceVisits.length > 0
+                    ? `Não há atendimento registrado em ${selectedDayDateStr.split('-').reverse().join('/')}, mas há ${filteredHistoricalAttendanceVisits.length} em outros dias do período. Selecione outro dia ou visualize todos.`
+                    : `Não há atendimentos registrados em ${selectedDayDateStr.split('-').reverse().join('/')}. Selecione outro dia ou período.`}
                 </p>
-                {weekHistoryFilterMode === 'day' && allWeekOperationalVisits.length > 0 && (
+                {weekHistoryFilterMode === 'day' && filteredHistoricalAttendanceVisits.length > 0 && (
                   <div className="pt-2">
                     <button
                       type="button"
                       onClick={() => setWeekHistoryFilterMode('all')}
                       className="px-3 py-1.5 rounded-lg bg-[#171717] hover:bg-black text-white text-xs font-bold cursor-pointer transition-colors"
                     >
-                      Exibir Todos os {allWeekOperationalVisits.length} da Semana
+                      Exibir Todos os {filteredHistoricalAttendanceVisits.length} do Período
                     </button>
                   </div>
                 )}
@@ -3291,6 +3413,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
               <div className="space-y-3">
                 {displayedWeekVisits.map((item, idx) => {
                   const isTodayItem = item.dataStr === getLocalDateString(new Date());
+                  const regularizationLabel = getRegularizationPresentation(item.visitObj?.regularization_status);
                   const routeObj = routes.find((r) => r.id === item.routeId) || {
                     id: item.routeId,
                     promotor_matricula: item.promotorMatricula,
@@ -3305,7 +3428,9 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                     <div
                       key={`${item.key}_${item.dataStr}`}
                       className={`p-4 rounded-xl border transition-all flex flex-col md:flex-row md:items-center justify-between gap-4 font-mono ${
-                        item.status === 'concluida'
+                        regularizationLabel
+                          ? 'bg-purple-50 border-purple-300'
+                          : item.status === 'concluida'
                           ? 'bg-emerald-950/20 border-emerald-500/30'
                           : item.status === 'em_andamento'
                           ? 'bg-amber-950/20 border-amber-500/50'
@@ -3326,7 +3451,9 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                           </span>
                           <span
                             className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase flex items-center gap-1 ${
-                              item.status === 'concluida'
+                              regularizationLabel
+                                ? 'bg-purple-100 text-purple-950 border border-purple-300'
+                                : item.status === 'concluida'
                                 ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
                                 : item.status === 'em_andamento'
                                 ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30 animate-pulse'
@@ -3337,8 +3464,8 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                                 : 'bg-slate-800 text-slate-300 border border-[#CFCDC5]'
                             }`}
                           >
-                            {item.status === 'concluida' && '🟢 Concluída'}
-                            {item.status === 'em_andamento' && '🔵 Em andamento'}
+                            {regularizationLabel || (item.status === 'concluida' && '🟢 Concluída')}
+                        {!regularizationLabel && item.status === 'em_andamento' && '🔵 Em andamento'}
                             {item.status === 'pendente' && (item.isPastOverdue ? '🔴 Pendente (Atrasada)' : '🔴 Pendente')}
                             {item.status === 'nao_realizada' && '🟠 Não realizada'}
                             {item.status === 'planejada' && '⚪ Planejada'}
@@ -3352,6 +3479,11 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                         <p className="text-[11px] text-[#77766F]">
                           Cidade/UF: {item.lojaCidade || '—'}/{item.lojaUf || '-'}
                         </p>
+                        {item.visitObj?.scheduled_date && item.visitObj.scheduled_date !== item.visitObj.data_visita && (
+                          <p className="text-[11px] font-bold text-emerald-700">
+                            Executada antecipadamente em {item.visitObj.data_visita.split('-').reverse().join('/')}
+                          </p>
+                        )}
                         <div className="flex flex-wrap items-center gap-3 text-[10px] text-[#5F5F5F]">
                           <span>Indústria: <strong className="text-[#7E22CE] font-bold">{item.industriaNome}</strong></span>
                           <span>Frequência: <strong className="text-[#0E7490] font-bold">{item.frequencia}</strong></span>
@@ -3384,7 +3516,8 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                               ) : activeVisit ? (
                                 <button
                                   onClick={() => handleStartVisit(routeObj)}
-                                  className="px-3 py-1.5 rounded-xl bg-[#EAE8E2] hover:bg-purple-600/30 text-purple-300 border border-purple-500/40 font-bold text-xs flex items-center gap-1 cursor-pointer transition-colors"
+                                  disabled={staleInProgressVisits.length > 0}
+                                  className="px-3 py-1.5 rounded-xl bg-[#EAE8E2] hover:bg-purple-600/30 disabled:bg-[#CFCDC5] disabled:text-[#737373] disabled:cursor-not-allowed text-purple-300 border border-purple-500/40 font-bold text-xs flex items-center gap-1 cursor-pointer transition-colors"
                                   title="Trocar para esta loja (exige finalizar ou interromper o atendimento atual)"
                                 >
                                   <span className="material-symbols-outlined text-sm">play_arrow</span>
@@ -3394,7 +3527,8 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                                 <>
                                   <button
                                     onClick={() => handleStartVisit(routeObj)}
-                                    className="px-4 py-2 rounded-xl bg-[#222222] hover:bg-black text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-md"
+                                    disabled={staleInProgressVisits.length > 0}
+                                    className="px-4 py-2 rounded-xl bg-[#222222] hover:bg-black disabled:bg-[#CFCDC5] disabled:text-[#737373] disabled:cursor-not-allowed text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-md"
                                   >
                                     <span className="material-symbols-outlined text-sm">play_arrow</span>
                                     <span>Iniciar Visita</span>
@@ -3410,13 +3544,14 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                               )
                             )}
 
-                            {item.status === 'pendente' && !isTodayItem && item.isPastOverdue && !activeVisit && (
+                            {item.status === 'pendente' && !isTodayItem && item.isPastOverdue && item.visitObj && !activeVisit && (
                               isImplantacaoMode && !isAuthorized ? (
                                 <span className="text-xs text-[#5F5F5F] font-mono italic">Aguardando Liberação</span>
                               ) : (
                                 <button
                                   onClick={() => handleStartVisit(routeObj)}
-                                  className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-md"
+                                  disabled={staleInProgressVisits.length > 0}
+                                  className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 disabled:bg-[#CFCDC5] disabled:text-[#737373] disabled:cursor-not-allowed text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-md"
                                 >
                                   <span className="material-symbols-outlined text-sm">play_arrow</span>
                                   <span>Regularizar Pendência</span>
@@ -3426,7 +3561,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                           </>
                         )}
 
-                        {item.status === 'em_andamento' && (
+                        {item.status === 'em_andamento' && !item.visitObj?.regularization_status && (
                           <span className="text-xs text-amber-300 font-bold flex items-center gap-1 px-3 py-2 bg-amber-500/10 rounded-xl border border-amber-500/30">
                             <span className="material-symbols-outlined text-sm animate-spin">sync</span>
                             Em Atendimento
@@ -3434,61 +3569,12 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                         )}
 
                         {item.status === 'concluida' && (
-<<<<<<< HEAD
                           <div className="flex items-center gap-1.5">
                             <span className="text-xs text-emerald-400 font-bold flex items-center gap-1 px-3 py-1.5 bg-emerald-500/10 rounded-xl border border-emerald-500/30">
                               <span className="material-symbols-outlined text-sm">check_circle</span>
                               Concluída
                             </span>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const visitObj = item.visitObj;
-                                setShareModalData({
-                                  visitId: visitObj?.id || item.key,
-                                  promotorNome: item.promotorNome || promoterDetails?.nome,
-                                  promotorMatricula: item.promotorMatricula,
-                                  lojaNome: item.lojaNome,
-                                  lojaCodigo: item.lojaCodigo,
-                                  industriaNome: item.industriaNome,
-                                  industriaCodigo: item.industriaCodigo,
-                                  dataVisita: item.dataStr,
-                                  horaInicio: item.startedAt,
-                                  horaFim: item.completedAt,
-                                  status: 'concluida',
-                                  observacoes: visitObj?.observacao_geral || null,
-                                  resumoAtendimento: `Visita concluída com ${visitObj?.photos?.length || 0} foto(s).`,
-                                  fotos: (visitObj?.photos || []).map((p: any) => ({
-                                    url: p.signed_url || p.file_url || p.url,
-                                    descricao: p.legenda || p.tipo_foto || p.tipo,
-                                  })),
-                                  whatsappGroupLink: (visitObj?.industria as any)?.whatsapp_group_link || null,
-                                });
-                              }}
-                              className="px-2.5 py-1.5 rounded-xl bg-emerald-600/20 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-600/30 text-xs font-bold font-mono flex items-center gap-1 cursor-pointer transition-colors"
-                              title="Compartilhar relatório desta visita no WhatsApp"
-                            >
-                              <span className="material-symbols-outlined text-sm">share</span>
-                              <span>WhatsApp</span>
-                            </button>
-=======
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs text-emerald-400 font-bold flex items-center gap-1 px-3 py-2 bg-emerald-500/10 rounded-xl border border-emerald-500/30">
-                              <span className="material-symbols-outlined text-sm">check_circle</span>
-                              Concluída
-                            </span>
-                            {item.visitObj && (
-                              <button
-                                type="button"
-                                onClick={() => setSharingVisit(item.visitObj!)}
-                                className="px-2.5 py-1.5 rounded-xl bg-emerald-600/10 hover:bg-emerald-600/20 text-emerald-700 border border-emerald-600/30 font-bold text-xs flex items-center gap-1 cursor-pointer transition-colors"
-                                title="Compartilhar relatório desta visita via WhatsApp"
-                              >
-                                <span className="material-symbols-outlined text-sm">share</span>
-                                <span>WhatsApp</span>
-                              </button>
-                            )}
->>>>>>> c943d2797aff85d3e3e3468cf3e80fce8aa64f40
+                            {item.visitObj && <button type="button" onClick={() => setSharingVisit(item.visitObj!)} className="px-2.5 py-1.5 rounded-xl bg-emerald-600/10 hover:bg-emerald-600/20 text-emerald-700 border border-emerald-600/30 font-bold text-xs flex items-center gap-1 cursor-pointer transition-colors" title="Compartilhar relatório desta visita via WhatsApp"><span className="material-symbols-outlined text-sm">share</span><span>WhatsApp</span></button>}
                           </div>
                         )}
 
@@ -3552,12 +3638,15 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                   Escala Fixa da Semana ({routes.length} {routes.length === 1 ? 'rota programada' : 'rotas programadas'})
                 </h3>
               </div>
-              <p className="text-[11px] text-[#77766F] font-mono mt-0.5">
-                Grade contratada oficial (segunda a domingo) cadastrada no sistema para este promotor.
-              </p>
+              <p className="text-xs text-[#5F5F5F] font-mono mt-0.5">Grade contratada oficial · segunda a domingo</p>
             </div>
 
-            <div className="flex items-center gap-2 shrink-0 font-mono text-xs">
+            <div className="flex flex-wrap items-center gap-2 shrink-0 font-mono text-xs">
+              <button type="button" aria-expanded={isFixedScaleOpen} onClick={() => setIsFixedScaleOpen(open => !open)} className="min-h-10 rounded-lg border border-[#AEB9C8] bg-white px-3 py-2 font-bold text-[#14243B] hover:bg-[#EAE8E2] focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600">
+                <span className="material-symbols-outlined mr-1 align-middle text-base">{isFixedScaleOpen ? 'expand_less' : 'calendar_view_week'}</span>
+                Minha Escala Semanal
+              </button>
+              {isFixedScaleOpen && <>
               {canManageRoutes && promotorMatricula && (
                 <button
                   type="button"
@@ -3607,10 +3696,11 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                   <span>Editar escala fixa</span>
                 </button>
               )}
+              </>}
             </div>
           </div>
 
-          {routes.length === 0 ? (
+          {isFixedScaleOpen && (routes.length === 0 ? (
             <div className="py-8 text-center space-y-2 font-mono bg-[#EAE8E2] rounded-xl border border-[#CFCDC5]">
               <div className="w-10 h-10 rounded-full bg-[#F7F6F2] border border-[#CFCDC5] flex items-center justify-center text-[#5F5F5F] mx-auto">
                 <span className="material-symbols-outlined text-xl">event_busy</span>
@@ -3839,7 +3929,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                 </div>
               )}
             </div>
-          )}
+          ))}
         </section>
       )}
 
@@ -4775,20 +4865,11 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
         </div>
       )}
 
-      {/* MODAL DE COMPARTILHAMENTO WHATSAPP */}
-<<<<<<< HEAD
-      {shareModalData && (
-        <ShareWhatsAppModal
-          isOpen={Boolean(shareModalData)}
-          onClose={() => setShareModalData(null)}
-          data={shareModalData}
-=======
       {sharingVisit && (
         <ShareWhatsAppModal
           visit={sharingVisit}
           onClose={() => setSharingVisit(null)}
           onShowToast={onShowToast}
->>>>>>> c943d2797aff85d3e3e3468cf3e80fce8aa64f40
         />
       )}
     </div>

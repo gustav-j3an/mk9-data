@@ -134,7 +134,7 @@ describe('Portal do Promotor - Visualizacao Semanal e Escala Fixa', () => {
     assert.strictEqual(visitOnWednesday?.completedAt, `${wednesday.dateStr}T10:00:00Z`);
   });
 
-  it('5. Escala encerrada nao agenda novas visitas e preserva visitas reais', () => {
+  it('5. Escala encerrada preserva dias validos anteriores e nao projeta datas posteriores', () => {
     const wednesday = weekDays.find((d) => d.dayKey === 'quarta')!;
     const completedVisit: Visit = {
       id: 'visit-closed-route',
@@ -164,10 +164,13 @@ describe('Portal do Promotor - Visualizacao Semanal e Escala Fixa', () => {
       todayStr: wednesday.dateStr
     });
 
-    assert.strictEqual(operationalVisits.length, 1, 'a rota encerrada nao deve projetar outros dias');
-    assert.strictEqual(operationalVisits[0].status, 'concluida');
-    assert.strictEqual(operationalVisits[0].isRealExecution, true);
-    assert.strictEqual(operationalVisits[0].visitObj?.photos?.[0]?.id, 'photo-preserved');
+    assert.ok(operationalVisits.length > 1, 'dias programados anteriores ao encerramento continuam no histórico');
+    assert.ok(operationalVisits.every(item => item.dataStr <= wednesday.dateStr), 'a rota encerrada não projeta datas posteriores ao encerramento');
+    const preservedVisit = operationalVisits.find(item => item.visitObj?.id === completedVisit.id);
+    assert.ok(preservedVisit, 'a visita real permanece preservada');
+    assert.strictEqual(preservedVisit?.status, 'concluida');
+    assert.strictEqual(preservedVisit?.isRealExecution, true);
+    assert.strictEqual(preservedVisit?.visitObj?.photos?.[0]?.id, 'photo-preserved');
   });
 
   it('6. Escala Fixa da Semana: agrupa lojas por dia de segunda a domingo', () => {

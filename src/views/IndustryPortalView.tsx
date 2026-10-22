@@ -13,9 +13,6 @@ import {
 import { ExecutiveReportDocument } from '../components/reports/ExecutiveReportDocument';
 import { AuthorSignature } from '../components/AuthorSignature';
 import { ShareWhatsAppModal } from '../components/ShareWhatsAppModal';
-<<<<<<< HEAD
-import type { VisitShareData } from '../utils/whatsappShare';
-=======
 import { isWhatsAppShareableVisit } from '../utils/whatsappShare';
 import { filterOperationalVisits, getChecklistDisplayValue, getIndustryDisplayName, groupIndustryPerformance, paginateOperationalVisits, type OperationalStatusFilter } from '../utils/industryPortalOperational';
 import {
@@ -26,7 +23,6 @@ import {
   getStoreHistorySummary,
   type StoreHistoryStatusFilter
 } from '../utils/industryStoreHistory';
->>>>>>> c943d2797aff85d3e3e3468cf3e80fce8aa64f40
 
 interface IndustryPortalViewProps {
   onShowToast: (toast: Omit<ToastMessage, 'id'>) => void;
@@ -85,7 +81,6 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
   const [selectedVisitItem, setSelectedVisitItem] = useState<OperationalVisitItem | null>(null);
   const [sharingVisit, setSharingVisit] = useState<Visit | null>(null);
   const [loadingDetails, setLoadingDetails] = useState(false);
-  const [shareWhatsAppModalData, setShareWhatsAppModalData] = useState<VisitShareData | null>(null);
 
   // Modal / Drawer de Histórico por Loja
   const [selectedStoreCode, setSelectedStoreCode] = useState<string | null>(null);
@@ -1932,40 +1927,6 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
 
             {/* RODAPÉ DO MODAL */}
             <div className="pt-3 border-t border-[#CFCDC5] flex items-center justify-between">
-<<<<<<< HEAD
-              <button
-                type="button"
-                onClick={() => {
-                  const visitObj = selectedVisitItem.visitObj;
-                  setShareWhatsAppModalData({
-                    visitId: visitObj?.id || selectedVisitItem.key,
-                    promotorNome: selectedVisitItem.promotorNome,
-                    promotorMatricula: selectedVisitItem.promotorMatricula,
-                    lojaNome: selectedVisitItem.lojaNome,
-                    lojaCodigo: selectedVisitItem.lojaCodigo,
-                    industriaNome: selectedVisitItem.industriaNome,
-                    industriaCodigo: selectedVisitItem.industriaCodigo,
-                    dataVisita: selectedVisitItem.dataStr,
-                    horaInicio: selectedVisitItem.startedAt,
-                    horaFim: selectedVisitItem.completedAt,
-                    status: selectedVisitItem.status,
-                    observacoes: visitObj?.observacao_geral || null,
-                    resumoAtendimento: `Visita ${selectedVisitItem.status.toUpperCase()} - Portal da Indústria.`,
-                    fotos: (visitObj?.photos || []).map((p: any) => ({
-                      url: signedPhotoUrls[p.storage_path] || p.file_url || p.signed_url || '',
-                      descricao: p.legenda || p.tipo_foto || p.tipo,
-                    })),
-                    whatsappGroupLink: (visitObj?.industria as any)?.whatsapp_group_link || null,
-                  });
-                }}
-                className="px-4 py-2 rounded-xl bg-emerald-600/20 text-emerald-800 border border-emerald-500/40 text-xs font-bold hover:bg-emerald-600/30 transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs"
-                title="Compartilhar relatório desta visita via WhatsApp"
-              >
-                <span className="material-symbols-outlined text-sm">share</span>
-                <span>Compartilhar WhatsApp</span>
-              </button>
-
-=======
               {selectedVisitItem.visitObj && isWhatsAppShareableVisit(selectedVisitItem.visitObj) ? (
                 <button
                   type="button"
@@ -1976,7 +1937,6 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                   <span>Compartilhar WhatsApp</span>
                 </button>
               ) : <div />}
->>>>>>> c943d2797aff85d3e3e3468cf3e80fce8aa64f40
               <button
                 onClick={closeVisitReport}
                 className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs cursor-pointer transition-all shadow-md"
@@ -1988,26 +1948,6 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
         </div>
       )}
 
-<<<<<<< HEAD
-      {/* 9.1 MODAL DE COMPARTILHAMENTO WHATSAPP */}
-      {shareWhatsAppModalData && (
-        <ShareWhatsAppModal
-          isOpen={Boolean(shareWhatsAppModalData)}
-          onClose={() => setShareWhatsAppModalData(null)}
-          data={shareWhatsAppModalData}
-        />
-      )}
-
-      {/* 10. MODAL / DRAWER DE HISTÓRICO OPERACIONAL DA LOJA SELECIONADA */}
-      {selectedStoreCode && selectedStoreObj && (
-        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-md flex items-center justify-center p-3 sm:p-6 overflow-y-auto font-mono">
-          <div className="bg-[#F7F6F2] border border-indigo-500/40 rounded-2xl w-full max-w-4xl max-h-[92vh] overflow-y-auto shadow-2xl p-5 sm:p-6 space-y-6">
-            {/* CABEÇALHO DA LOJA */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-[#CFCDC5] pb-4 gap-3">
-              <div className="flex items-center gap-3">
-                <div className="w-12 h-12 rounded-xl bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 flex items-center justify-center font-bold text-xl shrink-0">
-                  <span className="material-symbols-outlined text-2xl">storefront</span>
-=======
       {/* Compact store history dialog */}
       {selectedStoreCode && selectedStoreObj && !selectedVisitItem && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-2 backdrop-blur-sm sm:p-5" onMouseDown={(event) => { if (event.target === event.currentTarget) closeStoreHistory(); }}>
@@ -2024,7 +1964,6 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex flex-wrap gap-1" aria-label="Período do histórico">
                   {(['7', '30', '90', 'all'] as const).map((period) => <button key={period} type="button" aria-pressed={historyPeriodFilter === period} onClick={() => handleHistoryPeriodChange(period)} className={`rounded-md border px-3 py-1.5 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-600 ${historyPeriodFilter === period ? 'border-indigo-700 bg-indigo-50 font-semibold text-indigo-900' : 'border-[#C7CFDA] text-[#26364B] hover:bg-white'}`}>{period === 'all' ? 'Todos' : `${period} dias`}</button>)}
->>>>>>> c943d2797aff85d3e3e3468cf3e80fce8aa64f40
                 </div>
                 <label className="flex items-center gap-2 text-sm text-[#526176]">Status
                   <select value={historyStatusFilter} onChange={(event) => setHistoryStatusFilter(event.target.value as StoreHistoryStatusFilter)} className="rounded-md border border-[#C7CFDA] bg-white px-2.5 py-1.5 text-[#14243B] focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-600">

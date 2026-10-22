@@ -1,11 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-<<<<<<< HEAD
-import { ScreenId, ToastMessage } from '../types';
-import { fetchAttendance, saveAttendance, resolveCrmAttendance, fetchAttendanceAudit, attendanceErrorMessage, type AttendanceAuditEntry } from '../lib/attendanceService';
-=======
 import { ScreenId, ToastMessage, RouteItem, Visit } from '../types';
-import { fetchAttendance, saveAttendance, fetchAttendanceAudit, attendanceErrorMessage, type AttendanceAuditEntry } from '../lib/attendanceService';
->>>>>>> c943d2797aff85d3e3e3468cf3e80fce8aa64f40
+import { fetchAttendance, saveAttendance, resolveCrmAttendance, fetchAttendanceAudit, attendanceErrorMessage, type AttendanceAuditEntry } from '../lib/attendanceService';
 import { AttendanceJourneyPanel } from '../components/AttendanceJourneyPanel';
 import type { Promoter } from '../utils/attendanceEngine';
 import { LABELS, filterRoster, exportRows, zoned, type PresenceItem, type OverrideStatus } from '../utils/attendanceEngine';
@@ -35,17 +30,12 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
   // Filtros de Busca e Visualização
   const [search, setSearch] = useState('');
   const [supervisorFilter, setSupervisorFilter] = useState('');
-<<<<<<< HEAD
   const [squadFilter, setSquadFilter] = useState('');
   const [quickFilter, setQuickFilter] = useState<'all' | 'presente' | 'falta' | 'atestado' | 'atestado_pendente' | 'sem_registro' | 'sem_expediente'>('all');
   const [promoters, setPromoters] = useState<Promoter[]>([]);
   const [audit, setAudit] = useState<{ name:string; rows:AttendanceAuditEntry[] } | null>(null);
   const [activityModalItem, setActivityModalItem] = useState<PresenceItem | null>(null);
   const [includeOffSchedule, setIncludeOffSchedule] = useState(false);
-=======
-  const [promoters, setPromoters] = useState<Promoter[]>([]);
-  const [audit, setAudit] = useState<{ name: string; rows: AttendanceAuditEntry[] } | null>(null);
->>>>>>> c943d2797aff85d3e3e3468cf3e80fce8aa64f40
   const [canEdit, setCanEdit] = useState(false);
   const [saving, setSaving] = useState(false);
   const [warnings, setWarnings] = useState<string[]>([]);
@@ -123,6 +113,14 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
     }, 60000);
     return () => { ++requestId.current; window.clearInterval(timer); };
   }, [fetchAttendanceData]);
+
+  const metrics = useMemo(() => filterRoster(items, {
+    search,
+    supervisor: supervisorFilter,
+    squad: squadFilter,
+    quick: quickFilter,
+    offSchedule: includeOffSchedule
+  }), [items, search, supervisorFilter, squadFilter, quickFilter, includeOffSchedule]);
 
   const handleSaveStatus = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -267,9 +265,8 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
               Controle Diário
             </h1>
             <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[#F7F6F2] border border-[#CFCDC5] text-[#171717] font-mono text-[11px]">
-<<<<<<< HEAD
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-              {loading ? 'Consultando…' : syncedAt ? `Consultado às ${zoned(syncedAt, timezone).time} (${timezone})` : 'Não sincronizado'}
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+              {loading ? 'Consultando…' : syncedAt ? `Atualizado às ${zoned(syncedAt, timezone).time}` : 'Pronto'}
             </span>
             <span className="inline-flex items-center px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-800 border border-slate-300 font-mono text-[11px] font-bold">
               {loading ? '...' : `${totalCadastrados} promotores cadastrados`}
@@ -279,10 +276,6 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
             </span>
             <span className="inline-flex items-center px-2.5 py-0.5 rounded-full bg-purple-600/20 text-purple-800 border border-purple-500/30 font-mono text-[11px] font-bold uppercase">
               {loading ? 'Consultando elegibilidade' : error ? 'Dados indisponíveis' : `${metrics.length} elegíveis nos filtros`}
-=======
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-              {loading ? 'Consultando…' : syncedAt ? `Atualizado às ${zoned(syncedAt, timezone).time}` : 'Pronto'}
->>>>>>> c943d2797aff85d3e3e3468cf3e80fce8aa64f40
             </span>
           </div>
           <p className="text-xs sm:text-sm text-[#77766F] mt-0.5">
@@ -315,7 +308,6 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
         </div>
       </div>
 
-<<<<<<< HEAD
       {warnings.map(message => <div key={message} role="status" className="rounded-xl border border-amber-400 bg-amber-50 p-3 text-xs text-amber-950">{message}</div>)}
       {canEdit && <AttendanceJourneyPanel promoters={promoters} onSaved={()=>void fetchAttendanceData()} />}
       {audit && <div role="dialog" aria-modal="true" aria-label="Histórico de ajustes" className="fixed inset-0 z-50 bg-black/70 p-4 flex items-center justify-center"><div className="bg-[#F7F6F2] text-[#171717] p-5 rounded-xl max-w-2xl w-full max-h-[80vh] overflow-auto"><h2 className="font-bold">Histórico de ajustes — {audit.name}</h2><button className="my-3 border rounded px-3 py-2" onClick={()=>setAudit(null)}>Fechar histórico</button>{audit.rows.length===0?<p>Nenhum ajuste manual nesta data.</p>:audit.rows.map(row=><article key={row.id} className="border-t py-3 text-sm"><p>{row.changed_by_name} • {zoned(row.changed_at,timezone).date} {zoned(row.changed_at,timezone).time}</p><p>Anterior: {row.previous_value?.override_status || 'Sem ajuste'} → Novo: {row.new_value?.override_status}</p><p>Justificativa: {row.justification}</p></article>)}</div></div>}
@@ -326,10 +318,6 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
         const faltas = metrics.filter((i) => i.status === 'falta').length;
         const atestados = metrics.filter((i) => i.status === 'atestado').length;
         const semRegistro = metrics.filter((i) => i.status === 'sem_registro').length;
-        const atividadeConfirmada = metrics.filter((i) => i.activity?.status === 'confirmada').length;
-        const emAtividadeCampo = metrics.filter((i) => i.activity?.status === 'em_atividade').length;
-        const semEvidenciaAtendimento = metrics.filter((i) => i.activity?.status === 'sem_evidencia').length;
-
         const pPct = !loading && !error && total > 0 ? ((presentes / total) * 100).toFixed(1) : '0';
         const fPct = !loading && !error && total > 0 ? ((faltas / total) * 100).toFixed(1) : '0';
         const aPct = !loading && !error && total > 0 ? ((atestados / total) * 100).toFixed(1) : '0';
@@ -424,24 +412,6 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
         );
       })()}
 
-      {/* Filter & Search Bar */}
-      <div className="rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] p-4 shadow-md space-y-3">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-12 gap-3 items-center">
-          {/* Date Selector */}
-          <div className="lg:col-span-3 flex items-center bg-[#EAE8E2] border border-[#CFCDC5] px-3 py-2 rounded-lg text-[#171717]">
-            <span className="material-symbols-outlined text-cyan-800 mr-2 text-[18px]">calendar_month</span>
-            <div className="flex flex-col min-w-0 flex-1">
-              <span className="text-[9px] uppercase font-mono font-bold text-[#77766F]">Data Operacional</span>
-              <input
-                type="date"
-                value={dateVal}
-                disabled={saving}
-                aria-label="Data operacional"
-                onInput={(e) => setDateVal(e.currentTarget.value)}
-                onChange={(e) => setDateVal(e.target.value)}
-                className="bg-transparent font-semibold text-xs text-[#171717] focus:outline-none cursor-pointer"
-              />
-=======
       {/* ÁREA DE CONFIGURAÇÕES (RECOLHÍVEL) */}
       {showConfig && (
         <div className="p-5 rounded-2xl bg-[#EAE8E2] border border-[#CFCDC5] space-y-4">
@@ -449,7 +419,6 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
             <div className="flex items-center gap-2">
               <span className="material-symbols-outlined text-purple-700">tune</span>
               <h2 className="font-bold text-sm text-[#171717]">Configurações Operacionais e Administrativas</h2>
->>>>>>> c943d2797aff85d3e3e3468cf3e80fce8aa64f40
             </div>
             <button
               onClick={() => setShowConfig(false)}
@@ -522,55 +491,6 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
             <button onClick={() => setSearch('')} className="text-[#77766F] hover:text-[#171717] p-1">
               ✕
             </button>
-<<<<<<< HEAD
-            <button
-              onClick={() => setQuickFilter('falta')}
-              className={`px-3 py-1 rounded-full text-xs font-semibold transition-all ${
-                quickFilter === 'falta'
-                  ? 'bg-rose-600 text-white font-bold'
-                  : 'bg-[#EAE8E2] text-rose-700 hover:bg-rose-50 border border-[#CFCDC5]'
-              }`}
-            >
-              Somente Faltas ({metrics.filter((i) => i.status === 'falta').length})
-            </button>
-            <button
-              onClick={() => setQuickFilter('atestado')}
-              className={`px-3 py-1 rounded-full text-xs font-semibold transition-all ${
-                quickFilter === 'atestado'
-                  ? 'bg-[#087F9C] text-white font-bold'
-                  : 'bg-[#EAE8E2] text-[#087F9C] hover:bg-cyan-50 border border-[#CFCDC5]'
-              }`}
-            >
-              Atestados ({metrics.filter((i) => i.status === 'atestado').length})
-            </button>
-            <button
-              onClick={() => setQuickFilter('sem_registro')}
-              className={`px-3 py-1 rounded-full text-xs font-semibold transition-all ${
-                quickFilter === 'sem_registro'
-                  ? 'bg-[#5F5F5F] text-white font-bold'
-                  : 'bg-[#EAE8E2] text-[#5F5F5F] hover:bg-[#E4E2DB] border border-[#CFCDC5]'
-              }`}
-            >
-              Sem Registro ({metrics.filter((i) => i.status === 'sem_registro').length})
-            </button>
-            <button
-              onClick={() => setQuickFilter('sem_expediente')}
-              className={`px-3 py-1 rounded-full text-xs font-semibold transition-all ${
-                quickFilter === 'sem_expediente'
-                  ? 'bg-amber-700 text-white font-bold'
-                  : 'bg-[#EAE8E2] text-amber-800 hover:bg-amber-100 border border-[#CFCDC5]'
-              }`}
-            >
-              Sem Expediente ({items.filter((i) => i.operationalStatus === 'sem_expediente').length})
-            </button>
-            <button onClick={()=>setQuickFilter('atestado_pendente')} aria-pressed={quickFilter==='atestado_pendente'} className="px-3 py-1 rounded-full text-xs font-semibold border border-cyan-700 text-cyan-900">Atestados pendentes</button>
-          </div>
-
-          <label className="text-xs text-[#5F5F5F] flex items-center gap-2 cursor-pointer select-none">
-            <input type="checkbox" checked={includeOffSchedule} onChange={e => setIncludeOffSchedule(e.target.checked)} />
-            Incluir folgas e sem expediente (fora dos indicadores)
-          </label>
-=======
           )}
         </div>
 
@@ -591,8 +511,28 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
               ))}
             </select>
           </div>
->>>>>>> c943d2797aff85d3e3e3468cf3e80fce8aa64f40
         </div>
+      </div>
+      <div className="flex flex-wrap items-center gap-2 px-1">
+        <button onClick={() => setQuickFilter('falta')} className={`px-3 py-1 rounded-full text-xs font-semibold transition-all ${quickFilter === 'falta' ? 'bg-rose-600 text-white font-bold' : 'bg-[#EAE8E2] text-rose-700 hover:bg-rose-50 border border-[#CFCDC5]'}`}>
+          Somente Faltas ({metrics.filter((i) => i.status === 'falta').length})
+        </button>
+        <button onClick={() => setQuickFilter('atestado')} className={`px-3 py-1 rounded-full text-xs font-semibold transition-all ${quickFilter === 'atestado' ? 'bg-[#087F9C] text-white font-bold' : 'bg-[#EAE8E2] text-[#087F9C] hover:bg-cyan-50 border border-[#CFCDC5]'}`}>
+          Atestados ({metrics.filter((i) => i.status === 'atestado').length})
+        </button>
+        <button onClick={() => setQuickFilter('sem_registro')} className={`px-3 py-1 rounded-full text-xs font-semibold transition-all ${quickFilter === 'sem_registro' ? 'bg-[#5F5F5F] text-white font-bold' : 'bg-[#EAE8E2] text-[#5F5F5F] hover:bg-[#E4E2DB] border border-[#CFCDC5]'}`}>
+          Sem Registro ({metrics.filter((i) => i.status === 'sem_registro').length})
+        </button>
+        <button onClick={() => setQuickFilter('sem_expediente')} className={`px-3 py-1 rounded-full text-xs font-semibold transition-all ${quickFilter === 'sem_expediente' ? 'bg-amber-700 text-white font-bold' : 'bg-[#EAE8E2] text-amber-800 hover:bg-amber-100 border border-[#CFCDC5]'}`}>
+          Sem Expediente ({items.filter((i) => i.operationalStatus === 'sem_expediente').length})
+        </button>
+        <button onClick={() => setQuickFilter('atestado_pendente')} aria-pressed={quickFilter === 'atestado_pendente'} className="px-3 py-1 rounded-full text-xs font-semibold border border-cyan-700 text-cyan-900">
+          Atestados pendentes
+        </button>
+        <label className="text-xs text-[#5F5F5F] flex items-center gap-2 cursor-pointer select-none">
+          <input type="checkbox" checked={includeOffSchedule} onChange={e => setIncludeOffSchedule(e.target.checked)} />
+          Incluir folgas e sem expediente (fora dos indicadores)
+        </label>
       </div>
 
       {/* 2. QUATRO INDICADORES SIMPLES */}
@@ -683,7 +623,6 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
             <div className="w-14 h-14 rounded-full bg-[#EAE8E2] border border-[#CFCDC5] flex items-center justify-center text-[#77766F]">
               <span className="material-symbols-outlined text-3xl">person_off</span>
             </div>
-<<<<<<< HEAD
             <div className="space-y-1">
               <h3 className="text-base font-bold text-[#171717]">{items.length ? 'Nenhum promotor corresponde aos filtros.' : 'Nenhum promotor disponível nesta data.'}</h3>
               <p className="text-xs text-[#77766F]">
@@ -700,13 +639,9 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                   <span>Ver promotores sem expediente ({semJornada})</span>
                 </button>
               )}
-=======
-            <h3 className="text-base font-bold text-[#171717]">Nenhum promotor encontrado</h3>
-            <p className="text-xs text-[#77766F]">
-              Não foram encontrados promotores para os filtros informados nesta data operacional.
-            </p>
+            </div>
+            <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
             {(search || supervisorFilter) && (
->>>>>>> c943d2797aff85d3e3e3468cf3e80fce8aa64f40
               <button
                 onClick={() => { setSearch(''); setSupervisorFilter(''); }}
                 className="px-3 py-1.5 rounded-lg bg-[#222222] text-white text-xs font-semibold"
@@ -714,6 +649,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                 Limpar filtros
               </button>
             )}
+            </div>
           </div>
         </div>
       ) : (

@@ -5,7 +5,9 @@ import {
   formatDateBR,
   formatTimeBR,
   buildWhatsAppReportText,
-  buildWhatsAppWebUrl
+  buildWhatsAppWebUrl,
+  isValidWhatsAppGroupLink,
+  sanitizeWhatsAppGroupLink
 } from './whatsappShare';
 import type { Visit } from '../types';
 
@@ -15,6 +17,14 @@ describe('Disponibilidade de compartilhamento WhatsApp', () => {
     assert.equal(isWhatsAppShareableVisit({ status: 'pendente' }), false);
     assert.equal(isWhatsAppShareableVisit({ status: 'em_andamento' }), false);
     assert.equal(isWhatsAppShareableVisit({ status: 'nao_realizada' }), false);
+  });
+
+  it('accepts only HTTPS WhatsApp group invite links and removes query parameters', () => {
+    assert.equal(isValidWhatsAppGroupLink('https://chat.whatsapp.com/Abc_123-xyz?mode=invite'), true);
+    assert.equal(sanitizeWhatsAppGroupLink(' https://chat.whatsapp.com/Abc_123-xyz/?mode=invite '), 'https://chat.whatsapp.com/Abc_123-xyz');
+    assert.equal(isValidWhatsAppGroupLink('http://chat.whatsapp.com/Abc123'), false);
+    assert.equal(isValidWhatsAppGroupLink('https://wa.me/5511999999999'), false);
+    assert.equal(isValidWhatsAppGroupLink('https://chat.whatsapp.com.evil.example/Abc123'), false);
   });
 });
 

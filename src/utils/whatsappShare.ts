@@ -1,5 +1,32 @@
 import type { Visit } from '../types';
 
+export function isValidWhatsAppGroupLink(value: string): boolean {
+  try {
+    const url = new URL(value.trim());
+    return url.protocol === 'https:' &&
+      url.hostname === 'chat.whatsapp.com' &&
+      !url.port &&
+      !url.username &&
+      !url.password &&
+      !url.hash &&
+      /^\/[A-Za-z0-9_-]+\/?$/.test(url.pathname);
+  } catch {
+    return false;
+  }
+}
+
+export function sanitizeWhatsAppGroupLink(value: string): string | null {
+  if (!isValidWhatsAppGroupLink(value)) return null;
+  const url = new URL(value.trim());
+  return `https://chat.whatsapp.com/${url.pathname.slice(1).replace(/\/$/, '')}`;
+}
+
+export function openIndustryWhatsAppGroup(value: string | null | undefined): void {
+  if (!value || typeof window === 'undefined') return;
+  const safeUrl = sanitizeWhatsAppGroupLink(value);
+  if (safeUrl) window.open(safeUrl, '_blank', 'noopener,noreferrer');
+}
+
 export function isWhatsAppShareableVisit(visit: Pick<Visit, 'status'>): boolean {
   return visit.status === 'concluida';
 }

@@ -13,7 +13,9 @@ import {
   DayOfWeekDate
 } from '../utils/routePlanner';
 import { ShareWhatsAppModal } from '../components/ShareWhatsAppModal';
-import type { VisitShareData } from '../utils/whatsappShare';
+import { isWhatsAppShareableVisit } from '../utils/whatsappShare';
+import { canManageOldOpenVisits, filterOldOpenVisits, getAdministrativeResolutionLabel, getVisitDurationLabel, getVisitResolutionCounts } from '../utils/oldOpenVisitManagement';
+import { isRegularizationReasonValid, regularizeOldOpenVisit, VISIT_REGULARIZATION_BACKEND_VERIFIED, type VisitRegularizationAction } from '../lib/visitRegularizationService';
 
 interface VisitsTrackingViewProps {
   onNavigate: (screen: ScreenId) => void;
@@ -42,6 +44,7 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
 
   // Entidades Brutas
   const [visits, setVisits] = useState<Visit[]>([]);
+  const [oldOpenVisits, setOldOpenVisits] = useState<Visit[]>([]);
   const [routes, setRoutes] = useState<RouteItem[]>([]);
   const [promotoresList, setPromotoresList] = useState<any[]>([]);
   const [industriasList, setIndustriasList] = useState<any[]>([]);
@@ -71,7 +74,17 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
   const [signedPhotoUrls, setSignedPhotoUrls] = useState<Record<string, string>>({});
   const [loadingPhotos, setLoadingPhotos] = useState(false);
   const [zoomedPhotoUrl, setZoomedPhotoUrl] = useState<string | null>(null);
-  const [shareWhatsAppVisit, setShareWhatsAppVisit] = useState<VisitShareData | null>(null);
+  const [shareWhatsAppVisit, setShareWhatsAppVisit] = useState<Visit | null>(null);
+  const [regularizationVisit, setRegularizationVisit] = useState<Visit | null>(null);
+  const [regularizationAction, setRegularizationAction] = useState<VisitRegularizationAction>('closed_without_execution_proof');
+  const [regularizationReason, setRegularizationReason] = useState('');
+  const [regularizingVisit, setRegularizingVisit] = useState(false);
+  const [visitRegularizationHistory, setVisitRegularizationHistory] = useState<any[]>([]);
+  const [oldFilterPromoter, setOldFilterPromoter] = useState('all');
+  const [oldFilterStore, setOldFilterStore] = useState('all');
+  const [oldFilterIndustry, setOldFilterIndustry] = useState('all');
+  const [oldFilterFrom, setOldFilterFrom] = useState('');
+  const [oldFilterTo, setOldFilterTo] = useState('');
 
   // Controle de concorrência e identificador sequencial de requisição
   const reqSeqRef = useRef<number>(0);
@@ -117,6 +130,24 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
         `)
         .eq('data_visita', selectedDate)
         .order('created_at', { ascending: false });
+
+      // Consulta separada da grade do dia: fila administrativa de visitas antigas ainda abertas.
+      // As políticas RLS continuam determinando quais promotores cada perfil pode consultar.
+      const oldOpenVisitsPromise = canManageOldOpenVisits(role) ? supabase
+        .from('visits')
+        .select(`
+          *,
+          promotor:promotores(matricula, nome, equipe, supervisor),
+          loja:lojas(codigo, nome, cidade, uf),
+          industria:industrias(codigo, nome),
+          checklist_items:visit_checklist_items(*),
+          photos:visit_photos(*),
+          occurrences:visit_occurrences(*),
+          validity_items:visit_product_validity(*)
+        `)
+        .lt('data_visita', getLocalDateString(new Date()))
+        .eq('status', 'em_andamento')
+        .order('data_visita', { ascending: true }) : Promise.resolve({ data: [], error: null });
 
       // rotas: busca com paginação defensiva por lotes de 1.000 registros
       const fetchAllRoutes = async (): Promise<RouteItem[]> => {
@@ -164,6 +195,7 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
 
       const [
         visitsRes,
+        oldOpenVisitsRes,
         allRoutesData,
         promotoresRes,
         industriasRes,
@@ -172,6 +204,7 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
         supervisoresRes
       ] = await Promise.all([
         visitsPromise,
+        oldOpenVisitsPromise,
         fetchAllRoutes(),
         promotoresPromise,
         industriasPromise,
@@ -181,11 +214,13 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
       ]);
 
       if (visitsRes.error) throw visitsRes.error;
+      if (oldOpenVisitsRes.error) throw oldOpenVisitsRes.error;
 
       // Descarta resposta se uma requisição mais recente já foi iniciada
       if (currentSeq !== reqSeqRef.current) return;
 
       setVisits((visitsRes.data as unknown as Visit[]) || []);
+      setOldOpenVisits((oldOpenVisitsRes.data as unknown as Visit[]) || []);
       setRoutes(allRoutesData || []);
       setPromotoresList(promotoresRes.data || []);
       setIndustriasList(industriasRes.data || []);
@@ -208,7 +243,7 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
         setLoading(false);
       }
     }
-  }, [selectedDate]);
+  }, [selectedDate, role]);
 
   // Carga inicial e agendamento de atualização periódica a cada 60 segundos
   useEffect(() => {
@@ -294,6 +329,22 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
       isCancelled = true;
     };
   }, [selectedVisitItem]);
+
+  useEffect(() => {
+    const visitId = selectedVisitItem?.visitObj?.regularization_status
+      ? selectedVisitItem.visitObj.id
+      : null;
+    if (!visitId || !supabase || !canManageOldOpenVisits(role)) {
+      setVisitRegularizationHistory([]);
+      return;
+    }
+    let cancelled = false;
+    supabase.from('visit_regularization_audit').select('*').eq('visit_id', visitId)
+      .order('acted_at', { ascending: false }).then(({ data, error: auditError }) => {
+        if (!cancelled) setVisitRegularizationHistory(auditError ? [] : data || []);
+      });
+    return () => { cancelled = true; };
+  }, [selectedVisitItem, role]);
 
   // 7. Cálculo das Visitas Operacionais do Dia via routePlanner (calculateOperationalVisits)
   // Constrói o daysRange exclusivo para o dia selecionado
@@ -494,6 +545,30 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
     searchQuery
   ]);
 
+  const filteredOldOpenVisits = useMemo(() => filterOldOpenVisits(oldOpenVisits, {
+    promoter: oldFilterPromoter,
+    store: oldFilterStore,
+    industry: oldFilterIndustry,
+    from: oldFilterFrom,
+    to: oldFilterTo,
+    before: getLocalDateString(new Date())
+  }), [oldOpenVisits, oldFilterPromoter, oldFilterStore, oldFilterIndustry, oldFilterFrom, oldFilterTo]);
+
+  const oldVisitFilterOptions = useMemo(() => ({
+    promoters: Array.from(new Map(oldOpenVisits.map((visit) => [
+      visit.promotor_matricula,
+      visit.promotor?.nome || visit.promotor_matricula
+    ])).entries()).sort((a, b) => String(a[1]).localeCompare(String(b[1]))),
+    stores: Array.from(new Map(oldOpenVisits.map((visit) => [
+      visit.loja_codigo,
+      visit.loja?.nome || visit.loja_codigo
+    ])).entries()).sort((a, b) => String(a[1]).localeCompare(String(b[1]))),
+    industries: Array.from(new Map(oldOpenVisits.map((visit) => [
+      visit.industria_codigo,
+      visit.industria?.nome || visit.industria_codigo
+    ])).entries()).sort((a, b) => String(a[1]).localeCompare(String(b[1])))
+  }), [oldOpenVisits]);
+
   const storeMapUrl = selectedVisitItem
     ? buildGoogleMapsDirectionsUrl({
         name:
@@ -511,9 +586,15 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
   const kpis = useMemo(() => {
     // Calculados sobre o universo total previsto do dia (ou sobre a filtragem atual de escopo)
     const baseList = filteredVisits;
+    const resolutionCounts = getVisitResolutionCounts(baseList.map((v) => ({
+      status: v.status,
+      regularization_status: v.visitObj?.regularization_status || null
+    })));
     const totalPrevistas = baseList.length;
-    const emAndamento = baseList.filter((v) => v.status === 'em_andamento').length;
-    const concluidas = baseList.filter((v) => v.status === 'concluida').length;
+    const emAndamento = resolutionCounts.inProgress;
+    const concluidas = resolutionCounts.operationallyCompleted;
+    const concluidasAdministrativamente = resolutionCounts.administrativelyCompleted;
+    const encerradasSemComprovacao = resolutionCounts.closedWithoutProof;
     const naoRealizadas = baseList.filter((v) => v.status === 'nao_realizada').length;
     const pendentes = baseList.filter((v) => v.status === 'pendente' || v.status === 'planejada').length;
     const comOcorrencias = baseList.filter((v) => v.hasOccurrences).length;
@@ -531,6 +612,8 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
       promotoresEscalados: promotoresEscaladosSet.size,
       emAndamento,
       concluidas,
+      concluidasAdministrativamente,
+      encerradasSemComprovacao,
       naoRealizadas,
       pendentes,
       comOcorrencias,
@@ -549,6 +632,8 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
         supervisor: string;
         previstas: number;
         concluidas: number;
+        concluidasAdministrativamente: number;
+        encerradasSemComprovacao: number;
         emAndamento: number;
         naoRealizadas: number;
         pendentes: number;
@@ -564,6 +649,8 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
           supervisor: v.supervisor,
           previstas: 0,
           concluidas: 0,
+          concluidasAdministrativamente: 0,
+          encerradasSemComprovacao: 0,
           emAndamento: 0,
           naoRealizadas: 0,
           pendentes: 0
@@ -572,6 +659,8 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
       const p = map.get(v.promotorMatricula)!;
       p.previstas++;
       if (v.status === 'concluida') p.concluidas++;
+      else if (v.visitObj?.regularization_status === 'administratively_completed_with_proof') p.concluidasAdministrativamente++;
+      else if (v.visitObj?.regularization_status === 'closed_without_execution_proof') p.encerradasSemComprovacao++;
       else if (v.status === 'em_andamento') p.emAndamento++;
       else if (v.status === 'nao_realizada') p.naoRealizadas++;
       else p.pendentes++;
@@ -631,6 +720,21 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
     }
   };
 
+  const handleRegularizationSubmit = async () => {
+    if (!regularizationVisit || regularizingVisit || !VISIT_REGULARIZATION_BACKEND_VERIFIED) return;
+    setRegularizingVisit(true);
+    try {
+      await regularizeOldOpenVisit(regularizationVisit.id, regularizationAction, regularizationReason);
+      setRegularizationVisit(null);
+      onShowToast({ title: 'Regularização registrada', message: 'A decisão foi registrada e auditada.', type: 'success' });
+      await loadTrackingData(false);
+    } catch (error) {
+      onShowToast({ title: 'Não foi possível regularizar', message: error instanceof Error ? error.message : 'O backend recusou a operação.', type: 'error' });
+    } finally {
+      setRegularizingVisit(false);
+    }
+  };
+
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-12">
       {/* 1. Header do Painel */}
@@ -684,7 +788,7 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
       )}
 
       {/* 2. Cards de Indicadores Operacionais (4 Indicadores Prioritários + Apoio) */}
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4">
         {/* 1. Visitas Previstas (Prioritário) */}
         <div className="bg-white p-4 rounded-xl border-2 border-[#E4E2DB] shadow-xs">
           <div className="flex items-center justify-between text-[#73726C] text-xs font-semibold mb-1">
@@ -743,6 +847,18 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
           </div>
           <div className="text-2xl font-bold text-[#D98A00]">{kpis.comOcorrencias}</div>
           <div className="text-[11px] text-[#73726C] mt-1">rupturas ou desvios</div>
+        </div>
+
+        <div className="bg-white p-4 rounded-xl border border-purple-200 shadow-xs bg-purple-50/30">
+          <div className="text-xs font-semibold text-purple-900 mb-1">Conclusões administrativas</div>
+          <div className="text-2xl font-bold text-purple-950">{kpis.concluidasAdministrativamente}</div>
+          <div className="text-[11px] text-purple-900 mt-1">com comprovação; métricas separadas</div>
+        </div>
+
+        <div className="bg-white p-4 rounded-xl border border-amber-200 shadow-xs bg-amber-50/30">
+          <div className="text-xs font-semibold text-amber-900 mb-1">Encerradas sem comprovação</div>
+          <div className="text-2xl font-bold text-amber-950">{kpis.encerradasSemComprovacao}</div>
+          <div className="text-[11px] text-amber-900 mt-1">não entram como concluídas</div>
         </div>
       </div>
 
@@ -1041,7 +1157,11 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
                       </td>
 
                       {/* Status */}
-                      <td className="px-4 py-4">{renderStatusBadge(item.status)}</td>
+                      <td className="px-4 py-4">{item.visitObj?.regularization_status ? (
+                        <span className="inline-flex rounded-full border border-purple-200 bg-purple-50 px-2.5 py-1 text-xs font-semibold text-purple-950">
+                          {getAdministrativeResolutionLabel(item.visitObj.regularization_status)}
+                        </span>
+                      ) : renderStatusBadge(item.status)}</td>
 
                       {/* Ação */}
                       <td className="px-4 py-4 text-right">
@@ -1063,6 +1183,66 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
           </div>
         )}
       </div>
+
+      {canManageOldOpenVisits(role) && (
+        <section className="bg-white rounded-2xl border border-amber-300 shadow-xs overflow-hidden" aria-labelledby="old-open-visits-title">
+          <div className="px-5 py-4 border-b border-amber-200 bg-amber-50 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div>
+              <h2 id="old-open-visits-title" className="text-base font-bold text-[#171717]">VISITAS ANTIGAS EM ABERTO</h2>
+              <p className="mt-1 text-xs text-[#5F5F5F]">Fila administrativa separada da escala diária. Dados limitados pelo escopo autorizado no banco.</p>
+            </div>
+            <span className="text-sm font-bold text-amber-900">{filteredOldOpenVisits.length} registro(s)</span>
+          </div>
+          <div className="p-4 space-y-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2">
+              <label className="text-xs font-semibold text-[#5F5F5F]">Promotor
+                <select value={oldFilterPromoter} onChange={(e) => setOldFilterPromoter(e.target.value)} className="mt-1 w-full bg-[#F7F7F6] border border-[#CFCDC5] rounded-lg px-3 py-2 text-sm text-[#171717]">
+                  <option value="all">Todos</option>{oldVisitFilterOptions.promoters.map(([id, name]) => <option key={id} value={id}>{name} ({id})</option>)}
+                </select>
+              </label>
+              <label className="text-xs font-semibold text-[#5F5F5F]">Loja
+                <select value={oldFilterStore} onChange={(e) => setOldFilterStore(e.target.value)} className="mt-1 w-full bg-[#F7F7F6] border border-[#CFCDC5] rounded-lg px-3 py-2 text-sm text-[#171717]">
+                  <option value="all">Todas</option>{oldVisitFilterOptions.stores.map(([id, name]) => <option key={id} value={id}>{name} ({id})</option>)}
+                </select>
+              </label>
+              <label className="text-xs font-semibold text-[#5F5F5F]">Indústria
+                <select value={oldFilterIndustry} onChange={(e) => setOldFilterIndustry(e.target.value)} className="mt-1 w-full bg-[#F7F7F6] border border-[#CFCDC5] rounded-lg px-3 py-2 text-sm text-[#171717]">
+                  <option value="all">Todas</option>{oldVisitFilterOptions.industries.map(([id, name]) => <option key={id} value={id}>{name} ({id})</option>)}
+                </select>
+              </label>
+              <label className="text-xs font-semibold text-[#5F5F5F]">Desde
+                <input type="date" value={oldFilterFrom} onChange={(e) => setOldFilterFrom(e.target.value)} className="mt-1 w-full bg-[#F7F7F6] border border-[#CFCDC5] rounded-lg px-3 py-2 text-sm text-[#171717]" />
+              </label>
+              <label className="text-xs font-semibold text-[#5F5F5F]">Até
+                <input type="date" value={oldFilterTo} onChange={(e) => setOldFilterTo(e.target.value)} className="mt-1 w-full bg-[#F7F7F6] border border-[#CFCDC5] rounded-lg px-3 py-2 text-sm text-[#171717]" />
+              </label>
+            </div>
+            {filteredOldOpenVisits.length === 0 ? (
+              <p className="rounded-xl border border-[#E4E2DB] bg-[#FCFCFB] p-5 text-center text-sm text-[#5F5F5F]">Nenhuma visita antiga em aberto encontrada com estes filtros.</p>
+            ) : (
+              <div className="space-y-2">
+                {filteredOldOpenVisits.map((visit) => (
+                  <article key={visit.id} className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto] gap-3 rounded-xl border border-[#E4E2DB] bg-[#FCFCFB] p-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-x-4 gap-y-2 text-xs">
+                      <div><div className="text-[#73726C]">Promotor / matrícula</div><div className="font-bold text-[#171717]">{visit.promotor?.nome || 'Promotor não identificado'} <span className="font-normal">({visit.promotor_matricula})</span></div></div>
+                      <div><div className="text-[#73726C]">Loja</div><div className="font-bold text-[#171717]">{visit.loja?.nome || visit.loja_codigo} <span className="font-normal">({visit.loja_codigo})</span></div></div>
+                      <div><div className="text-[#73726C]">Indústria</div><div className="font-bold text-[#171717]">{visit.industria?.nome || visit.industria_codigo} <span className="font-normal">({visit.industria_codigo})</span></div></div>
+                      <div><div className="text-[#73726C]">Data / início / duração</div><div className="font-bold text-[#171717]">{visit.data_visita} · {formatTime(visit.started_at)} · {getVisitDurationLabel(visit.started_at)}</div></div>
+                      <div className="sm:col-span-2 xl:col-span-4 flex flex-wrap gap-2 text-[11px] text-[#5F5F5F]">
+                        <span className="rounded-full bg-blue-50 border border-blue-200 px-2 py-0.5">Em andamento</span>
+                        <span>Checklist: {visit.checklist_items?.length || 0}</span><span>Fotos: {visit.photos?.length || 0}</span>
+                        <span>Ocorrências: {visit.occurrences?.length || 0}</span><span>Validades: {visit.validity_items?.length || 0}</span>
+                      </div>
+                    </div>
+                  <button type="button" onClick={() => { setRegularizationVisit(visit); setRegularizationAction('closed_without_execution_proof'); setRegularizationReason(''); }} className="self-center rounded-lg bg-[#171717] px-4 py-2 text-xs font-bold text-white hover:bg-[#333]">REGULARIZAR VISITA</button>
+                  </article>
+                ))}
+              </div>
+            )}
+            <p className="text-[11px] text-[#73726C]">As ações de regularização permanecem bloqueadas até aprovação e implementação da RPC com auditoria atômica. Nenhum status ou dado histórico é alterado nesta tela.</p>
+          </div>
+        </section>
+      )}
 
       {/* 5. Resumo Operacional por Promotor */}
       <div className="bg-white rounded-2xl border border-[#E4E2DB] shadow-xs p-6">
@@ -1110,23 +1290,13 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
                   </div>
 
                   {/* Detalhes de Contagem */}
-                  <div className="grid grid-cols-4 gap-1 text-center text-[10px]">
-                    <div className="bg-white p-1.5 rounded-lg border border-[#E4E2DB]">
-                      <div className="font-bold text-[#171717]">{p.previstas}</div>
-                      <div className="text-[#73726C]">Prev.</div>
-                    </div>
-                    <div className="bg-white p-1.5 rounded-lg border border-[#E4E2DB]">
-                      <div className="font-bold text-[#286FF5]">{p.emAndamento}</div>
-                      <div className="text-[#73726C]">Andam.</div>
-                    </div>
-                    <div className="bg-white p-1.5 rounded-lg border border-[#E4E2DB]">
-                      <div className="font-bold text-[#16845B]">{p.concluidas}</div>
-                      <div className="text-[#73726C]">Concl.</div>
-                    </div>
-                    <div className="bg-white p-1.5 rounded-lg border border-[#E4E2DB]">
-                      <div className="font-bold text-[#DD3838]">{p.naoRealizadas}</div>
-                      <div className="text-[#73726C]">Não Real.</div>
-                    </div>
+                  <div className="grid grid-cols-3 sm:grid-cols-6 gap-1 text-center text-[10px]">
+                    <div className="bg-white p-1.5 rounded-lg border border-[#E4E2DB]"><div className="font-bold text-[#171717]">{p.previstas}</div><div className="text-[#73726C]">Prev.</div></div>
+                    <div className="bg-white p-1.5 rounded-lg border border-[#E4E2DB]"><div className="font-bold text-[#286FF5]">{p.emAndamento}</div><div className="text-[#73726C]">Andam.</div></div>
+                    <div className="bg-white p-1.5 rounded-lg border border-[#E4E2DB]"><div className="font-bold text-[#16845B]">{p.concluidas}</div><div className="text-[#73726C]">Concl.</div></div>
+                    <div className="bg-white p-1.5 rounded-lg border border-[#E4E2DB]"><div className="font-bold text-[#DD3838]">{p.naoRealizadas}</div><div className="text-[#73726C]">Nao realizadas</div></div>
+                    <div className="bg-purple-50 p-1.5 rounded-lg border border-purple-200"><div className="font-bold text-purple-950">{p.concluidasAdministrativamente}</div><div className="text-purple-900">Conclusao adm.</div></div>
+                    <div className="bg-amber-50 p-1.5 rounded-lg border border-amber-200"><div className="font-bold text-amber-950">{p.encerradasSemComprovacao}</div><div className="text-amber-900">Sem comprovacao</div></div>
                   </div>
                 </div>
               );
@@ -1134,6 +1304,53 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
           </div>
         )}
       </div>
+
+      {regularizationVisit && (
+        <div className="fixed inset-0 z-[55] flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-labelledby="regularization-title">
+          <div className="w-full max-w-lg max-h-[90dvh] overflow-y-auto rounded-2xl bg-white border border-[#E4E2DB] shadow-2xl p-4 sm:p-5 space-y-4">
+            <div className="flex items-start justify-between gap-3">
+              <div><h3 id="regularization-title" className="text-lg font-bold text-[#171717]">Regularizar visita antiga</h3><p className="text-xs text-[#5F5F5F] mt-1">A decisão será registrada com o motivo e a auditoria.</p></div>
+              <button type="button" onClick={() => setRegularizationVisit(null)} aria-label="Fechar" className="rounded-lg px-2 py-1 text-xl text-[#5F5F5F] hover:bg-[#F2F1ED]">×</button>
+            </div>
+            <div className="rounded-xl bg-[#F7F7F6] p-3 text-sm space-y-1">
+              <div><span className="text-[#73726C]">Loja:</span> <strong>{regularizationVisit.loja?.nome || regularizationVisit.loja_codigo}</strong></div>
+              <div><span className="text-[#73726C]">Indústria:</span> <strong>{regularizationVisit.industria?.nome || regularizationVisit.industria_codigo}</strong></div>
+              <div><span className="text-[#73726C]">Promotor:</span> <strong>{regularizationVisit.promotor?.nome || 'Promotor não identificado'} · {regularizationVisit.promotor_matricula}</strong></div>
+              <div><span className="text-[#73726C]">Data e início:</span> <strong>{regularizationVisit.data_visita} · {regularizationVisit.started_at ? new Date(regularizationVisit.started_at).toLocaleString('pt-BR') : 'Não registrado'}</strong></div>
+            </div>
+            <fieldset className="space-y-2 text-sm">
+              <legend className="mb-1 text-xs font-bold text-[#5F5F5F]">Ação administrativa</legend>
+              {([
+                ['closed_without_execution_proof', 'Encerrar sem execução comprovada'],
+                ['administratively_completed_with_proof', 'Concluir administrativamente com comprovação adequada']
+              ] as const).map(([value, label]) => <label key={value} className="flex gap-2 items-start rounded-lg border border-[#E4E2DB] p-3"><input type="radio" name="regularization-action" value={value} checked={regularizationAction === value} onChange={() => setRegularizationAction(value)} className="mt-1" /><span>{label}</span></label>)}
+            </fieldset>
+            {regularizationAction === 'administratively_completed_with_proof' && <p className="rounded-lg bg-purple-50 p-3 text-xs text-purple-950">Critério preparado: pelo menos uma foto existente e um item de checklist respondido. O servidor valida essas evidências.</p>}
+            <label className="block text-xs font-bold text-[#5F5F5F]">Motivo obrigatório
+              <textarea value={regularizationReason} onChange={(e) => setRegularizationReason(e.target.value)} rows={3} maxLength={1000} className="mt-1 w-full rounded-xl border border-[#CFCDC5] bg-white p-3 text-sm font-normal text-[#171717]" placeholder="Registre o motivo da análise administrativa." />
+            </label>
+            <details className="rounded-xl border border-[#E4E2DB] p-3 text-xs">
+              <summary className="cursor-pointer font-bold text-[#171717]">Ver registros existentes (somente leitura)</summary>
+              <div className="mt-3 space-y-2 text-[#5F5F5F]">
+                <p>Checklist ({regularizationVisit.checklist_items?.length || 0})</p>
+                {!!regularizationVisit.checklist_items?.length && <ul className="list-disc pl-5">{regularizationVisit.checklist_items.map((item) => <li key={item.id || item.item_key}>{item.item_label}: {item.checked ? 'marcado' : 'não marcado'}{item.valor_texto ? ` · ${item.valor_texto}` : ''}{item.observacao ? ` — ${item.observacao}` : ''}</li>)}</ul>}
+                <p>Fotos ({regularizationVisit.photos?.length || 0})</p>
+                {!!regularizationVisit.photos?.length && <ul className="list-disc pl-5">{regularizationVisit.photos.map((photo) => <li key={photo.id || photo.storage_path}>{photo.tipo_foto}{photo.legenda ? ` — ${photo.legenda}` : ''}{photo.created_at ? ` · ${new Date(photo.created_at).toLocaleString('pt-BR')}` : ''}</li>)}</ul>}
+                <p>Ocorrências ({regularizationVisit.occurrences?.length || 0})</p>
+                {!!regularizationVisit.occurrences?.length && <ul className="list-disc pl-5">{regularizationVisit.occurrences.map((item) => <li key={item.id}>{item.tipo}: {item.descricao} ({item.resolvido ? 'resolvida' : 'pendente'})</li>)}</ul>}
+                <p>Controle de validade ({regularizationVisit.validity_items?.length || 0})</p>
+                {!!regularizationVisit.validity_items?.length && <ul className="list-disc pl-5">{regularizationVisit.validity_items.map((item) => <li key={item.id}>{item.produto_nome}: {item.quantidade} · vencimento {item.data_vencimento}{item.lote ? ` · lote ${item.lote}` : ''}</li>)}</ul>}
+                <p>Os registros originais não são alterados pela regularização.</p>
+              </div>
+            </details>
+            {!VISIT_REGULARIZATION_BACKEND_VERIFIED && <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-950">Confirmação indisponível até a migration e a RPC serem implantadas e validadas no ambiente.</div>}
+            <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
+              <button type="button" onClick={() => setRegularizationVisit(null)} className="rounded-lg border border-[#CFCDC5] px-4 py-2 text-sm font-semibold">Cancelar</button>
+              <button type="button" onClick={handleRegularizationSubmit} disabled={!VISIT_REGULARIZATION_BACKEND_VERIFIED || regularizingVisit || !isRegularizationReasonValid(regularizationReason)} title={!VISIT_REGULARIZATION_BACKEND_VERIFIED ? 'Aguardando validação do backend' : undefined} className="rounded-lg bg-[#171717] px-4 py-2 text-sm font-bold text-white disabled:opacity-50 disabled:cursor-not-allowed">{regularizingVisit ? 'Registrando…' : 'Confirmar regularização'}</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 6. Modal / Drawer de Detalhes da Visita (Somente Leitura) */}
       {selectedVisitItem && (
@@ -1146,7 +1363,11 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
                   <h3 className="text-lg font-bold text-[#171717]">
                     Detalhes da Visita: {selectedVisitItem.lojaNome}
                   </h3>
-                  {renderStatusBadge(selectedVisitItem.status)}
+                  {selectedVisitItem.visitObj?.regularization_status ? (
+                    <span className="inline-flex rounded-full border border-purple-200 bg-purple-50 px-2.5 py-1 text-xs font-semibold text-purple-950">
+                      {getAdministrativeResolutionLabel(selectedVisitItem.visitObj.regularization_status)}
+                    </span>
+                  ) : renderStatusBadge(selectedVisitItem.status)}
                 </div>
                 <p className="text-xs text-[#73726C] mt-0.5">
                   {selectedVisitItem.industriaNome} ({selectedVisitItem.industriaCodigo}) • Data: {selectedVisitItem.dataStr}
@@ -1195,6 +1416,23 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
                   </div>
                 </div>
               </div>
+
+              {selectedVisitItem.visitObj?.regularization_status && (
+                <section className="rounded-xl border border-purple-200 bg-purple-50 p-4">
+                  <h4 className="font-bold text-purple-950">Histórico da regularização</h4>
+                  <p className="mt-1 text-xs text-purple-900">
+                    {selectedVisitItem.visitObj.regularization_status === 'closed_without_execution_proof'
+                      ? 'Encerrada administrativamente — sem execução comprovada.'
+                      : 'Concluída administrativamente com comprovação. Não altera os horários originais.'}
+                  </p>
+                  {visitRegularizationHistory.map((event) => <div key={event.id} className="mt-2 border-t border-purple-200 pt-2 text-xs text-purple-950">
+                    <div className="font-semibold">{event.action === 'closed_without_execution_proof' ? 'Encerramento sem comprovação' : 'Conclusão administrativa com comprovação'}</div>
+                    <div>{new Date(event.acted_at).toLocaleString('pt-BR')} · Usuário: {event.acted_by}</div>
+                    <div>Motivo: {event.reason}</div>
+                    <div>Referências de evidência registradas: {Array.isArray(event.evidence_refs) ? event.evidence_refs.length : 0}</div>
+                  </div>)}
+                </section>
+              )}
 
               {/* Endereço e Localização da Loja */}
               <div className="p-3.5 bg-[#F7F7F6] rounded-xl border border-[#E4E2DB] flex flex-col sm:flex-row sm:items-center justify-between gap-2">
@@ -1423,38 +1661,17 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
 
             {/* Footer Modal */}
             <div className="px-6 py-3 border-t border-[#E4E2DB] bg-[#FCFCFB] flex items-center justify-between">
-              <button
-                type="button"
-                onClick={() => {
-                  const visitObj = selectedVisitItem.visitObj;
-                  const targetInd = industriasList.find((ind) => ind.codigo === selectedVisitItem.industriaCodigo);
-                  setShareWhatsAppVisit({
-                    visitId: visitObj?.id || selectedVisitItem.key,
-                    promotorNome: selectedVisitItem.promotorNome,
-                    promotorMatricula: selectedVisitItem.promotorMatricula,
-                    lojaNome: selectedVisitItem.lojaNome,
-                    lojaCodigo: selectedVisitItem.lojaCodigo,
-                    industriaNome: selectedVisitItem.industriaNome,
-                    industriaCodigo: selectedVisitItem.industriaCodigo,
-                    dataVisita: selectedVisitItem.dataStr,
-                    horaInicio: selectedVisitItem.startedAt,
-                    horaFim: selectedVisitItem.completedAt,
-                    status: selectedVisitItem.status,
-                    observacoes: visitObj?.observacao_geral || null,
-                    resumoAtendimento: `Visita ${selectedVisitItem.status.toUpperCase()} acompanhada via central de monitoramento.`,
-                    fotos: (visitObj?.photos || []).map((p: any) => ({
-                      url: signedPhotoUrls[p.id || p.storage_path] || p.file_url || p.signed_url || '',
-                      descricao: p.legenda || p.tipo_foto || p.tipo,
-                    })),
-                    whatsappGroupLink: targetInd?.whatsapp_group_link || null,
-                  });
-                }}
-                className="px-4 py-2 bg-emerald-600/20 text-emerald-800 border border-emerald-500/40 rounded-xl text-xs font-bold hover:bg-emerald-600/30 transition-colors flex items-center gap-1.5 cursor-pointer"
-                title="Compartilhar relatório desta visita via WhatsApp"
-              >
-                <span className="material-symbols-outlined text-sm">share</span>
-                <span>Compartilhar WhatsApp</span>
-              </button>
+              {selectedVisitItem.visitObj && isWhatsAppShareableVisit(selectedVisitItem.visitObj) ? (
+                <button
+                  type="button"
+                  onClick={() => setShareWhatsAppVisit(selectedVisitItem.visitObj!)}
+                  className="px-4 py-2 bg-emerald-600/20 text-emerald-800 border border-emerald-500/40 rounded-xl text-xs font-bold hover:bg-emerald-600/30 transition-colors flex items-center gap-1.5 cursor-pointer"
+                  title="Compartilhar relatório desta visita via WhatsApp"
+                >
+                  <span className="material-symbols-outlined text-sm">share</span>
+                  <span>Compartilhar WhatsApp</span>
+                </button>
+              ) : <div />}
 
               <button
                 onClick={() => setSelectedVisitItem(null)}
@@ -1470,9 +1687,9 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
       {/* 6.1 Modal Compartilhar WhatsApp */}
       {shareWhatsAppVisit && (
         <ShareWhatsAppModal
-          isOpen={Boolean(shareWhatsAppVisit)}
+          visit={shareWhatsAppVisit}
           onClose={() => setShareWhatsAppVisit(null)}
-          data={shareWhatsAppVisit}
+          onShowToast={onShowToast}
         />
       )}
 

@@ -3,6 +3,7 @@ import { useAuth } from '../auth/AuthProvider';
 import { supabase } from '../lib/supabase';
 import type { IndustryItem, StoreItem, RouteItem, Visit, ToastMessage, ContratoLoja, PeriodoContratual, CreateContratoLojaDTO } from '../types';
 import { getMonthlyQuinzenalDates } from '../utils/routePlanner';
+import { omitWhatsAppGroupLink, writeWithOptionalWhatsAppGroupLink } from '../utils/industryWhatsAppCompatibility';
 import { isValidWhatsAppGroupLink, sanitizeWhatsAppGroupLink, openIndustryWhatsAppGroup } from '../utils/whatsappShare';
 import { analyzeRotasForContracts, contratosService, parseISODate, classificarParContratual } from '../lib/contratosService';
 import { StatCard, StatusBadge, DataTable, Column } from '../components/ui';
@@ -1275,9 +1276,10 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
     const newStatus = item.status === 'ativo' ? 'inativo' : 'ativo';
 
     try {
-      if (!supabase) throw new Error('Cliente Supabase indisponível.');
+      const db = supabase;
+      if (!db) throw new Error('Cliente Supabase indisponível.');
 
-      const { error: err } = await supabase
+      const { error: err } = await db
         .from('industrias')
         .update({ status: newStatus, updated_at: new Date().toISOString() })
         .eq('id', item.id);
@@ -1328,7 +1330,8 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
     setSaving(true);
 
     try {
-      if (!supabase) throw new Error('Cliente Supabase indisponível.');
+      const db = supabase;
+      if (!db) throw new Error('Cliente Supabase indisponível.');
 
       const payload = {
         codigo: formData.codigo.trim(),
@@ -1342,11 +1345,11 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
       };
 
       if (editingItem) {
-        // Atualizar
-        const { error: updateErr } = await supabase
-          .from('industrias')
-          .update(payload)
-          .eq('id', editingItem.id);
+        const result = await writeWithOptionalWhatsAppGroupLink(
+          () => db.from('industrias').update(payload).eq('id', editingItem.id),
+          () => db.from('industrias').update(omitWhatsAppGroupLink(payload)).eq('id', editingItem.id)
+        );
+        const updateErr = result.error;
 
         if (updateErr) {
           if (updateErr.code === '23505') {
@@ -1356,15 +1359,18 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
         }
 
         onShowToast({
-          title: 'Indústria Atualizada',
-          message: `Cadastro da indústria ${payload.nome} atualizado com sucesso.`,
-          type: 'success'
+          title: result.usedWhatsAppFallback ? 'Cadastro atualizado sem o link WhatsApp' : 'Indústria Atualizada',
+          message: result.usedWhatsAppFallback
+            ? `Cadastro da indústria ${payload.nome} atualizado. O Supabase ainda não possui a coluna do link de WhatsApp, então esse campo não foi salvo.`
+            : `Cadastro da indústria ${payload.nome} atualizado com sucesso.`,
+          type: result.usedWhatsAppFallback ? 'warning' : 'success'
         });
       } else {
-        // Criar
-        const { error: insertErr } = await supabase
-          .from('industrias')
-          .insert([payload]);
+        const result = await writeWithOptionalWhatsAppGroupLink(
+          () => db.from('industrias').insert([payload]),
+          () => db.from('industrias').insert([omitWhatsAppGroupLink(payload)])
+        );
+        const insertErr = result.error;
 
         if (insertErr) {
           if (insertErr.code === '23505') {
@@ -1374,9 +1380,11 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
         }
 
         onShowToast({
-          title: 'Indústria Cadastrada',
-          message: `Indústria ${payload.nome} cadastrada com sucesso.`,
-          type: 'success'
+          title: result.usedWhatsAppFallback ? 'Cadastro realizado sem o link WhatsApp' : 'Indústria Cadastrada',
+          message: result.usedWhatsAppFallback
+            ? `Indústria ${payload.nome} cadastrada. O Supabase ainda não possui a coluna do link de WhatsApp, então esse campo não foi salvo.`
+            : `Indústria ${payload.nome} cadastrada com sucesso.`,
+          type: result.usedWhatsAppFallback ? 'warning' : 'success'
         });
       }
 

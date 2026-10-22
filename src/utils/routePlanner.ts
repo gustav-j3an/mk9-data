@@ -279,7 +279,8 @@ export const calculateOperationalVisits = ({
   // 2. Indexar visitas reais pela chave única: `promotor_matricula|loja_codigo|industria_codigo|data_visita`
   const visitsMap = new Map<string, Visit>();
   visits.forEach((v) => {
-    const k = `${v.promotor_matricula}|${v.loja_codigo}|${v.industria_codigo}|${v.data_visita}`;
+    const scheduledDate = v.scheduled_date || v.data_visita;
+    const k = `${v.promotor_matricula}|${v.loja_codigo}|${v.industria_codigo}|${scheduledDate}`;
     visitsMap.set(k, v);
   });
 
@@ -311,10 +312,10 @@ export const calculateOperationalVisits = ({
 
     // Filtra visitas anteriores a este mês
     const priorVisits = routeVisits
-      .filter((v) => v.data_visita < currentMonthFirstDate && (v.status === 'concluida' || v.status === 'em_andamento' || v.started_at))
-      .sort((a, b) => b.data_visita.localeCompare(a.data_visita));
+      .filter((v) => (v.scheduled_date || v.data_visita) < currentMonthFirstDate && (v.status === 'concluida' || v.status === 'em_andamento' || v.started_at))
+      .sort((a, b) => (b.scheduled_date || b.data_visita).localeCompare(a.scheduled_date || a.data_visita));
 
-    let priorDate: string | null = priorVisits.length > 0 ? priorVisits[0].data_visita : null;
+    let priorDate: string | null = priorVisits.length > 0 ? (priorVisits[0].scheduled_date || priorVisits[0].data_visita) : null;
 
     // Se não houver visita real anterior registrada, mas estamos em um mês subsequente,
     // podemos verificar recursivamente as datas programadas do mês imediatamente anterior
@@ -341,11 +342,13 @@ export const calculateOperationalVisits = ({
 
   // 3. Processar cada rota ativa para os dias solicitados
   routes.forEach((r) => {
-    if (r.encerrada_em) return;
+    const routeClosedDate = r.encerrada_em ? String(r.encerrada_em).slice(0, 10) : null;
 
     const isQuinzenal = (r.frequencia || '').toUpperCase() === 'QUINZENAL';
 
     daysRange.forEach((dayInfo) => {
+      // Preservar ocorrências anteriores ao encerramento; a escala deixa de gerar somente datas posteriores.
+      if (routeClosedDate && dayInfo.dateStr > routeClosedDate) return;
       let isDayActive = Boolean(r[dayInfo.dayKey as keyof RouteItem]);
 
       // Para rota QUINZENAL, verifica se o dia é uma das 2 datas programadas do mês
@@ -502,10 +505,11 @@ export const calculateOperationalVisits = ({
   // 4. Preservar visitas reais avulsas ou fora da grade que estejam no daysRange
   // Garante que NENHUMA visita real é perdida e NENHUMA visita é contada em dobro
   visits.forEach((v) => {
-    const dayInfo = daysRange.find((d) => d.dateStr === v.data_visita);
+    const scheduledDate = v.scheduled_date || v.data_visita;
+    const dayInfo = daysRange.find((d) => d.dateStr === scheduledDate);
     if (!dayInfo) return;
 
-    const key = `${v.promotor_matricula}|${v.loja_codigo}|${v.industria_codigo}|${v.data_visita}`;
+    const key = `${v.promotor_matricula}|${v.loja_codigo}|${v.industria_codigo}|${scheduledDate}`;
     if (matchedVisitKeys.has(key)) return; // Já incluída e combinada com a rota planejada
 
     matchedVisitKeys.add(key);

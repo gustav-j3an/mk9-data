@@ -1,5 +1,4 @@
 import type { AttendanceItem, RouteItem, Visit } from '../types';
-import { computePromoterActivity, type PromoterOperationalActivity } from './visitActivityEngine';
 
 export type OperationalStatus = 'presente' | 'atrasado' | 'aguardando_expediente' | 'sem_registro' | 'falta_confirmada' | 'folga' | 'ferias' | 'afastamento' | 'feriado' | 'sem_expediente' | 'atestado_pendente' | 'atestado_aprovado';
 export type OverrideStatus = 'presente' | 'falta' | 'sem_registro' | 'atestado_pendente' | 'atestado_aprovado';
@@ -15,7 +14,7 @@ export interface Override { promotor_matricula: string; data_operacional: string
 export interface Promoter { id: string; matricula: string; nome: string; equipe: string | null; supervisor: string | null; cidade?: string | null; uf?: string | null; telefone?: string | null; status: string }
 export interface Team { codigo: string; nome: string; status: string; supervisor_id: string | null; supervisor_nome: string | null }
 export interface Supervisor { id: string; nome: string; status: string }
-export interface PresenceItem extends Omit<AttendanceItem, 'type'> { type?: AttendanceItem['type']; operationalStatus: OperationalStatus; eligible: boolean; checkInAt: string | null; medicalStatus?: 'pendente' | 'aprovado' | null; scheduleDetail?: string; activity?: PromoterOperationalActivity }
+export interface PresenceItem extends Omit<AttendanceItem, 'type'> { type?: AttendanceItem['type']; operationalStatus: OperationalStatus; eligible: boolean; checkInAt: string | null; medicalStatus?: 'pendente' | 'aprovado' | null; scheduleDetail?: string }
 export const LABELS: Record<OperationalStatus, string> = {
   presente: 'Presente', atrasado: 'Atrasado', aguardando_expediente: 'Aguardando expediente',
   sem_registro: 'Sem registro', falta_confirmada: 'Falta confirmada', folga: 'Folga', ferias: 'Férias', afastamento: 'Afastamento', feriado: 'Feriado',

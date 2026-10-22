@@ -1,9 +1,6 @@
 export type ScreenId = 
-<<<<<<< HEAD
-=======
   | 'faltas-atestados'
   | 'rh-matriculas'
->>>>>>> c943d2797aff85d3e3e3468cf3e80fce8aa64f40
   | 'rh-ausencias'
   | 'cockpit'
   | 'painel-operacional'
@@ -260,6 +257,8 @@ export interface Visit {
   loja_codigo: string;
   industria_codigo: string;
   data_visita: string;
+  /** Original planned route occurrence; data_visita remains the actual execution date. */
+  scheduled_date?: string | null;
   started_at?: string | null;
   gps_accuracy_meters?: number | null;
   checkout_latitude?: number | null;
@@ -270,6 +269,8 @@ export interface Visit {
   latitude?: number | null;
   longitude?: number | null;
   status: VisitStatus;
+  /** Administrative resolution remains separate from operational checkout status. */
+  regularization_status?: 'closed_without_execution_proof' | 'administratively_completed_with_proof' | null;
   motivo_nao_realizada?: string | null;
   observacao_geral?: string | null;
   created_at?: string;
@@ -280,6 +281,7 @@ export interface Visit {
   loja?: { codigo: string; nome: string; cidade?: string; uf?: string; endereco?: string } | null;
   industria?: { codigo: string; nome: string } | null;
   rota?: RouteItem | null;
+  work_schedule?: { timezone: string; hora_inicio: string; hora_fim: string } | null;
   checklist_items?: VisitChecklistItem[];
   photos?: VisitPhoto[];
   occurrences?: VisitOccurrence[];
