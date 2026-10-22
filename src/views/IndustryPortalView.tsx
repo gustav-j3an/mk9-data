@@ -14,7 +14,7 @@ import { ExecutiveReportDocument } from '../components/reports/ExecutiveReportDo
 import { AuthorSignature } from '../components/AuthorSignature';
 import { ShareWhatsAppModal } from '../components/ShareWhatsAppModal';
 import { isWhatsAppShareableVisit } from '../utils/whatsappShare';
-import { filterOperationalVisits, paginateOperationalVisits, type OperationalStatusFilter } from '../utils/industryPortalOperational';
+import { filterOperationalVisits, getChecklistDisplayValue, getIndustryDisplayName, groupIndustryPerformance, paginateOperationalVisits, type OperationalStatusFilter } from '../utils/industryPortalOperational';
 import {
   canOpenStoreVisitReport,
   filterStoreHistoryItems,
@@ -234,6 +234,8 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
       if (visitsRes.error) throw visitsRes.error;
       if (rotasRes.error) throw rotasRes.error;
       if (promotoresRes.error) throw promotoresRes.error;
+      if (lojasRes.error) throw lojasRes.error;
+      if (settingsData.status !== 'loaded') throw new Error(settingsData.error || 'Não foi possível carregar as configurações operacionais.');
 
       const realVisits = (visitsRes.data as unknown as Visit[]) || [];
       const realRoutes = (rotasRes.data as unknown as RouteItem[]) || [];
@@ -354,6 +356,11 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
     });
     return setLojasRealizadas.size;
   }, [allOperationalVisits]);
+
+  const industriesPerformance = useMemo(
+    () => groupIndustryPerformance(allOperationalVisits, activeIndCode),
+    [allOperationalVisits, activeIndCode]
+  );
 
   // Definição dos indicadores: planejadas = total de itens operacionais previstos no período
   // (denominador da execução); os demais valores contam itens por status persistido/mapeado
@@ -1069,6 +1076,19 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
       wsResumo['!cols'] = [{ wch: 32 }, { wch: 30 }, { wch: 50 }];
       XLSX.utils.book_append_sheet(wb, wsResumo, 'RESUMO_EXECUTIVO');
 
+      const industryPerformanceRows = industriesPerformance.map((industry) => ({
+        'Indústria': industry.nome,
+        'Código': industry.codigo || '—',
+        'Visitas previstas': industry.previstas,
+        'Visitas concluídas': industry.concluidas,
+        'Pendentes': industry.pendentes,
+        'Não realizadas': industry.naoRealizadas,
+        'Execução (%)': industry.taxaExecucao
+      }));
+      const wsIndustryPerformance = XLSX.utils.json_to_sheet(industryPerformanceRows);
+      wsIndustryPerformance['!cols'] = [{ wch: 32 }, { wch: 16 }, { wch: 18 }, { wch: 20 }, { wch: 14 }, { wch: 18 }, { wch: 14 }];
+      XLSX.utils.book_append_sheet(wb, wsIndustryPerformance, 'DESEMPENHO_INDUSTRIA');
+
       // 2. ABA ATENDIMENTOS_DETALHADOS
       const atendimentosData = allOperationalVisits.map((item) => ({
         'Data Prevista': item.dataStr,
@@ -1226,7 +1246,7 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
 
         <div className="flex flex-wrap items-center gap-3 self-end md:self-auto font-mono text-xs">
           <span className="text-[#77766F] bg-[#E4E2DB] border border-[#CFCDC5] px-3 py-2 rounded-xl">
-            Atualizado às: <strong className="text-slate-200">{lastUpdate}</strong>
+            Atualizado às: <strong className="text-[#14243B]">{lastUpdate}</strong>
           </span>
 
           <button
@@ -1343,14 +1363,14 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
           </div>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
             <div><h2 className="text-base font-semibold text-[#14243B]">Atendimentos do período</h2><p className="mt-1 text-[#526176]">{filteredOperationalVisits.length} de {allOperationalVisits.length} visitas previstas</p></div>
-            <label className="block w-full sm:max-w-sm"><span className="mb-1 block text-[#526176]">Buscar loja ou promotor</span><input value={operationalSearch} onChange={(event) => setOperationalSearch(event.target.value)} placeholder="Nome, código, cidade ou promotor" className="w-full border border-[#C7CFDA] bg-white px-3 py-2 text-sm text-[#14243B] placeholder:text-[#65748A] focus:border-indigo-600 focus:outline-none" /></label>
+            <label className="block w-full sm:max-w-sm"><span className="mb-1 block text-[#526176]">Buscar loja, indústria ou promotor</span><input value={operationalSearch} onChange={(event) => setOperationalSearch(event.target.value)} placeholder="Nome, código, cidade, indústria ou promotor" className="w-full border border-[#C7CFDA] bg-white px-3 py-2 text-sm text-[#14243B] placeholder:text-[#65748A] focus:border-indigo-600 focus:outline-none" /></label>
           </div>
           {loading ? <div className="py-12 text-center text-[#526176]" role="status">Carregando atendimentos…</div> : paginatedOperationalVisits.length === 0 ? <div className="border-y border-[#D5DAE2] py-10 text-center text-[#526176]">Nenhum atendimento encontrado para os filtros selecionados.</div> : <div className="divide-y divide-[#D5DAE2] border-y border-[#D5DAE2]">
             {paginatedOperationalVisits.map((item) => {
               const statusLabel = item.status === 'concluida' ? 'Concluída' : item.status === 'em_andamento' ? 'Em andamento' : item.status === 'nao_realizada' ? 'Não realizada' : item.isPastOverdue ? 'Atrasada' : item.status === 'planejada' ? 'Planejada' : 'Pendente';
               const statusTone = item.status === 'concluida' ? 'text-emerald-800' : item.status === 'em_andamento' ? 'text-sky-800' : item.status === 'nao_realizada' ? 'text-orange-800' : item.isPastOverdue ? 'text-rose-800' : 'text-amber-800';
               return <article key={item.key} className="grid gap-3 py-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
-                <div className="min-w-0"><div className="flex flex-wrap items-center gap-x-3 gap-y-1"><strong className="truncate text-sm text-[#14243B]">{item.lojaNome}</strong><span className={`text-xs font-semibold ${statusTone}`}>{statusLabel}</span></div><p className="mt-1 truncate text-[#526176]">{item.lojaCidade || 'Cidade não informada'}{item.lojaUf ? ` / ${item.lojaUf}` : ''} · {item.promotorNome}</p><p className="mt-1 text-[#526176]">{item.dataStr} · {item.dayOfWeekLabel} · {item.frequencia}</p></div>
+                <div className="min-w-0"><div className="flex flex-wrap items-center gap-x-3 gap-y-1"><strong className="truncate text-sm text-[#14243B]">{item.lojaNome}</strong><span className={`text-xs font-semibold ${statusTone}`}>{statusLabel}</span></div><p className="mt-1 truncate text-xs text-[#26364B]"><strong>Indústria:</strong> {getIndustryDisplayName(item.industriaNome, item.industriaCodigo)} <span className="mx-1 text-[#526176]">·</span><strong>Promotor:</strong> {item.promotorNome}</p><p className="mt-1 text-[#526176]">{item.lojaCidade || 'Cidade não informada'}{item.lojaUf ? ` / ${item.lojaUf}` : ''} · {item.dataStr} · {item.frequencia}</p></div>
                 <div className="flex gap-2 sm:justify-end"><button onClick={() => handleOpenStoreHistory(item.lojaCodigo)} className="border border-[#C7CFDA] px-3 py-2 text-[#26364B] hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-600">Histórico</button><button onClick={() => handleOpenVisitDetails(item)} className="border border-[#AEB9C8] px-3 py-2 font-semibold text-[#14243B] hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-600">Detalhes</button></div>
               </article>;
             })}
@@ -1524,8 +1544,8 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                     </div>
 
                     <div className="space-y-1 text-left">
-                      <h4 className="text-xs font-bold text-[#171717] truncate" title={lojaNome}>
-                        {lojaNome}
+                      <h4 className="text-xs font-bold text-[#171717] truncate" title={`${getIndustryDisplayName(visitObj?.industria?.nome, visitObj?.industria_codigo)} · ${lojaNome}`}>
+                        <span className="text-[#26364B]">{getIndustryDisplayName(visitObj?.industria?.nome, visitObj?.industria_codigo)}</span> <span aria-hidden="true">·</span> {lojaNome}
                       </h4>
                       <p className="text-[10px] text-[#526176]">
                         {visitObj?.data_visita || 'Data não informada'}{photoTime ? ` · ${photoTime}` : ''} · <strong className="text-[#0E7490]">{promotorNome}</strong>
@@ -1583,6 +1603,10 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
             <div><span className="text-[#526176]">Taxa de execução</span><p className="mt-1 text-3xl font-semibold tabular-nums text-[#14243B]">{kpis.planejadas ? `${kpis.aderencia}%` : '—'}</p><span className="text-[#526176]">{kpis.pendentes} pendentes · {kpis.emAndamento} em andamento · {kpis.naoRealizadas} não realizadas</span></div>
             <div><span className="text-[#526176]">Lojas visitadas</span><p className="mt-1 text-3xl font-semibold tabular-nums text-[#14243B]">{loading ? '—' : kpis.lojasComVisita}<span className="text-base font-normal text-[#526176]"> / {kpis.lojas}</span></p><span className="text-[#526176]">{kpis.lojas ? Math.round((kpis.lojasComVisita / kpis.lojas) * 100) : 0}% de cobertura</span></div>
           </div>
+          <section className="border-b border-[#D5DAE2] pb-5">
+            <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2"><h3 className="text-sm font-semibold text-[#14243B]">Desempenho por indústria</h3><span className="text-[#526176]">{industriesPerformance.length} indústrias no período</span></div>
+            {industriesPerformance.length === 0 ? <p className="py-3 text-[#526176]">Sem visitas previstas para o período selecionado.</p> : <div className="overflow-x-auto"><table className="w-full min-w-[40rem] border-collapse text-left"><thead><tr className="border-y border-[#D5DAE2] text-[#526176]"><th className="py-2 pr-3 font-medium">Indústria</th><th className="px-2 py-2 text-right font-medium">Previstas</th><th className="px-2 py-2 text-right font-medium">Concluídas</th><th className="px-2 py-2 text-right font-medium">Pendentes</th><th className="px-2 py-2 text-right font-medium">Não realizadas</th><th className="py-2 pl-2 text-right font-medium">Execução</th></tr></thead><tbody className="divide-y divide-[#D5DAE2]">{industriesPerformance.map((industry) => <tr key={industry.codigo || 'unidentified'}><td className="py-2 pr-3 font-semibold text-[#14243B]">{industry.nome}{industry.codigo ? ` (${industry.codigo})` : ''}</td><td className="px-2 py-2 text-right tabular-nums text-[#26364B]">{industry.previstas}</td><td className="px-2 py-2 text-right tabular-nums text-emerald-800">{industry.concluidas}</td><td className="px-2 py-2 text-right tabular-nums text-amber-800">{industry.pendentes}</td><td className="px-2 py-2 text-right tabular-nums text-orange-800">{industry.naoRealizadas}</td><td className="py-2 pl-2 text-right font-semibold tabular-nums text-[#14243B]">{industry.taxaExecucao}%</td></tr>)}</tbody></table></div>}
+          </section>
           <div className="grid gap-8 lg:grid-cols-[1.4fr_1fr]">
             <section><div className="mb-4 flex items-baseline justify-between"><h3 className="text-sm font-semibold text-[#14243B]">Planejadas e concluídas por dia</h3><span className="text-[#526176]">{temporalEvolution.length} dias</span></div><div className="space-y-3">
               {temporalEvolution.slice(-10).map((item) => { const max = Math.max(1, ...temporalEvolution.map((day) => day.planejadas)); return <div key={item.dateStr} className="grid grid-cols-[5rem_minmax(0,1fr)_auto] items-center gap-3"><span className="text-[#526176]">{item.dateStr.slice(5)} · {item.dayShort}</span><div className="space-y-1"><div className="h-2 bg-[#E2E7EE]"><div className="h-full bg-indigo-700" style={{ width: `${(item.planejadas / max) * 100}%` }} /></div><div className="h-2 bg-[#E2E7EE]"><div className="h-full bg-emerald-700" style={{ width: `${(item.realizadas / max) * 100}%` }} /></div></div><span className="w-20 text-right tabular-nums text-[#26364B]">{item.realizadas}/{item.planejadas}</span></div>; })}
@@ -1605,7 +1629,7 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                   {zoomedEvidencia.tipo_foto}
                 </span>
                 <h3 className="text-sm font-bold text-[#171717] mt-1">
-                  {zoomedEvidencia.visit?.loja?.nome || 'PDV'}
+                  {getIndustryDisplayName(zoomedEvidencia.visit?.industria?.nome, zoomedEvidencia.visit?.industria_codigo)} · {zoomedEvidencia.visit?.loja?.nome || zoomedEvidencia.visit?.loja_codigo || 'PDV'}
                 </h3>
               </div>
               <button
@@ -1642,7 +1666,7 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                 Data do Atendimento: <strong className="text-[#171717]">{zoomedEvidencia.visit?.data_visita}</strong>
               </p>
               <p className="text-[#171717]">
-                Promotor: <strong className="text-cyan-300">{zoomedEvidencia.visit?.promotor?.nome || zoomedEvidencia.visit?.promotor_matricula}</strong>
+                Promotor: <strong className="text-[#0E7490]">{zoomedEvidencia.visit?.promotor?.nome || zoomedEvidencia.visit?.promotor_matricula}</strong>
               </p>
               {zoomedEvidencia.legenda && (
                 <p className="text-[#77766F] italic">
@@ -1677,12 +1701,13 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
             {/* CABEÇALHO DO MODAL */}
             <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-4">
               <div>
-                <h3 id="visit-report-title" className="text-lg font-extrabold text-[#171717]">
-                  Relatório da Visita — {selectedVisitItem.lojaNome}
-                </h3>
-                <p className="text-xs text-[#77766F]">
-                  Data Prevista: {selectedVisitItem.dataStr} • Promotor: {selectedVisitItem.promotorNome}
-                </p>
+                <h3 id="visit-report-title" className="text-lg font-extrabold text-[#171717]">RELATÓRIO DE ATENDIMENTO</h3>
+                <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-[#526176] sm:grid-cols-4">
+                  <p><span className="block text-[10px] uppercase tracking-wide">Indústria</span><strong className="text-[#14243B]">{getIndustryDisplayName(selectedVisitItem.industriaNome, selectedVisitItem.industriaCodigo)}</strong></p>
+                  <p><span className="block text-[10px] uppercase tracking-wide">Loja</span><strong className="text-[#14243B]">{selectedVisitItem.lojaNome}</strong></p>
+                  <p><span className="block text-[10px] uppercase tracking-wide">Promotor</span><strong className="text-[#14243B]">{selectedVisitItem.promotorNome}</strong></p>
+                  <p><span className="block text-[10px] uppercase tracking-wide">Data</span><strong className="text-[#14243B]">{selectedVisitItem.dataStr}</strong></p>
+                </div>
               </div>
 
               <button
@@ -1748,13 +1773,13 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                   {selectedVisitItem.visitObj.checklist_items.map((item, idx) => (
                     <div key={idx} className="p-2.5 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5] flex items-center justify-between">
                       <div className="flex items-center gap-2">
-                        <span className={`material-symbols-outlined text-base ${item.checked ? 'text-emerald-400' : 'text-slate-600'}`}>
-                          {item.checked ? 'check_circle' : 'cancel'}
+                        <span className={`material-symbols-outlined text-base ${item.checked === true ? 'text-emerald-700' : item.checked === false ? 'text-rose-700' : 'text-slate-500'}`}>
+                          {item.checked === true ? 'check_circle' : item.checked === false ? 'cancel' : 'help'}
                         </span>
-                        <span className="text-slate-200 font-bold">{item.item_label}</span>
+                        <span className="text-[#26364B] font-bold">{item.item_label}</span>
                       </div>
-                      <span className={`text-[10px] px-2 py-0.5 rounded font-bold uppercase ${item.checked ? 'bg-emerald-500/20 text-emerald-300' : 'bg-slate-800 text-[#77766F]'}`}>
-                        {item.checked ? 'Sim' : 'Não'}
+                      <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${item.checked === true ? 'bg-emerald-100 text-emerald-900' : item.checked === false ? 'bg-rose-100 text-rose-900' : 'bg-slate-200 text-slate-800'}`}>
+                        {getChecklistDisplayValue(item)}
                       </span>
                     </div>
                   ))}
@@ -1970,7 +1995,7 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                       const timeLabel = item.duracaoFormatada || [item.startedAt && new Date(item.startedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }), item.completedAt && new Date(item.completedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })].filter(Boolean).join(' – ') || '—';
                       return <article key={item.key} className="grid gap-2 py-3 md:grid-cols-[7rem_minmax(8rem,1fr)_9rem_10rem_auto] md:items-center md:gap-3 md:py-2.5">
                         <time dateTime={item.dataStr} className="text-sm font-medium tabular-nums text-[#14243B]">{dateLabel}<span className="ml-2 text-xs font-normal text-[#526176] md:hidden">{item.dayOfWeekLabel}</span></time>
-                        <span className="min-w-0 truncate text-sm text-[#26364B]" title={item.promotorNome}>{item.promotorNome}</span>
+                        <span className="min-w-0 truncate text-sm text-[#26364B]" title={`${getIndustryDisplayName(item.industriaNome, item.industriaCodigo)} · ${item.promotorNome}`}><strong className="mr-1 text-[#14243B]">{getIndustryDisplayName(item.industriaNome, item.industriaCodigo)}</strong><span className="text-[#526176]">· {item.promotorNome}</span></span>
                         <span className={`w-fit rounded border px-2 py-0.5 text-xs font-medium ${getStoreHistoryStatusTone(item)}`}>{getStoreHistoryStatusLabel(item)}</span>
                         <span className="text-xs tabular-nums text-[#526176]">{timeLabel}</span>
                         <span className="flex justify-end">
@@ -1998,6 +2023,7 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
         photosSummary={photosSummary}
         temporalEvolution={temporalEvolution}
         topProblematicLojas={topProblematicLojas}
+        industriesPerformance={industriesPerformance}
       />
 
       {sharingVisit && (

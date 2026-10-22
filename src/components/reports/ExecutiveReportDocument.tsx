@@ -70,6 +70,15 @@ export interface ExecutiveReportDocumentProps {
     atrasadas: number;
     aderencia: number;
   }>;
+  industriesPerformance: Array<{
+    codigo: string | null;
+    nome: string;
+    previstas: number;
+    concluidas: number;
+    pendentes: number;
+    naoRealizadas: number;
+    taxaExecucao: number;
+  }>;
 }
 
 export const ExecutiveReportDocument: React.FC<ExecutiveReportDocumentProps> = ({
@@ -87,7 +96,8 @@ export const ExecutiveReportDocument: React.FC<ExecutiveReportDocumentProps> = (
   validitySummary,
   photosSummary,
   promotoresPerformance,
-  topProblematicLojas
+  topProblematicLojas,
+  industriesPerformance
 }) => {
   const finalIndName = activeIndName || indName || 'Indústria';
   const finalIndCode = activeIndCode !== undefined ? activeIndCode : (indCode || '');
@@ -254,6 +264,14 @@ export const ExecutiveReportDocument: React.FC<ExecutiveReportDocumentProps> = (
           <div className="border-b border-slate-300 pb-2 flex justify-between items-center font-mono text-[10px] text-slate-500">
             <span className="font-bold text-slate-900">MK9 TRADE MARKETING — RELATÓRIO EXECUTIVO</span>
             <span>Parceiro: {indName} • Período: {periodLabel}</span>
+          </div>
+
+                    <div className="space-y-1">
+            <h2 className="text-xs font-bold uppercase tracking-wider font-mono text-slate-800 border-b border-slate-200 pb-1">Desempenho por industria</h2>
+            <table className="w-full border-collapse font-mono text-[9px]">
+              <thead><tr className="bg-slate-100 text-slate-700 uppercase"><th className="px-2 py-1 text-left">Industria</th><th className="px-2 py-1 text-center">Previstas</th><th className="px-2 py-1 text-center">Concluidas</th><th className="px-2 py-1 text-center">Pendentes</th><th className="px-2 py-1 text-center">Nao realizadas</th><th className="px-2 py-1 text-center">Execucao</th></tr></thead>
+              <tbody className="divide-y divide-slate-200 text-slate-800">{industriesPerformance.map((industry) => <tr key={industry.codigo || 'unidentified'}><td className="px-2 py-1 font-bold">{industry.nome}{industry.codigo ? ` ({industry.codigo})` : ''}</td><td className="px-2 py-1 text-center">{industry.previstas}</td><td className="px-2 py-1 text-center text-emerald-700">{industry.concluidas}</td><td className="px-2 py-1 text-center text-amber-700">{industry.pendentes}</td><td className="px-2 py-1 text-center text-orange-700">{industry.naoRealizadas}</td><td className="px-2 py-1 text-center font-bold">{industry.taxaExecucao}%</td></tr>)}</tbody>
+            </table>
           </div>
 
           {/* Desempenho da Equipe de Promotores */}

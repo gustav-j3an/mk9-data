@@ -347,7 +347,7 @@ export interface VisitChecklistItem {
   visit_id?: string;
   item_key: string;
   item_label: string;
-  checked: boolean;
+  checked: boolean | null;
   valor_texto?: string | null;
   observacao?: string | null;
 }
