@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useAuth } from '../auth/AuthProvider';
 import { supabase } from '../lib/supabase';
 import * as XLSX from 'xlsx';
@@ -15,6 +15,14 @@ import { AuthorSignature } from '../components/AuthorSignature';
 import { ShareWhatsAppModal } from '../components/ShareWhatsAppModal';
 import { isWhatsAppShareableVisit } from '../utils/whatsappShare';
 import { filterOperationalVisits, paginateOperationalVisits, type OperationalStatusFilter } from '../utils/industryPortalOperational';
+import {
+  canOpenStoreVisitReport,
+  filterStoreHistoryItems,
+  getStoreHistoryStatusLabel,
+  getStoreHistoryStatusTone,
+  getStoreHistorySummary,
+  type StoreHistoryStatusFilter
+} from '../utils/industryStoreHistory';
 
 interface IndustryPortalViewProps {
   onShowToast: (toast: Omit<ToastMessage, 'id'>) => void;
@@ -79,6 +87,14 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
   const [historyPeriodFilter, setHistoryPeriodFilter] = useState<'7' | '30' | '90' | 'all'>('30');
   const [historyVisitsData, setHistoryVisitsData] = useState<Visit[]>([]);
   const [loadingHistory, setLoadingHistory] = useState<boolean>(false);
+  const [historyStatusFilter, setHistoryStatusFilter] = useState<StoreHistoryStatusFilter>('all');
+  const historyDialogRef = useRef<HTMLDivElement>(null);
+  const visitReportDialogRef = useRef<HTMLDivElement>(null);
+  const historyScrollTopRef = useRef(0);
+  const historyReturnFocusRef = useRef<HTMLElement | null>(null);
+  const reportReturnFocusRef = useRef<HTMLElement | null>(null);
+  const historyWasOpenRef = useRef(false);
+  const reportWasOpenRef = useRef(false);
 
   // Estado de Navegação das Abas do Portal ('operacional' | 'evidencias' | 'relatorio')
   const [activeTab, setActiveTab] = useState<'operacional' | 'evidencias' | 'relatorio'>('operacional');
@@ -641,6 +657,9 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
   }, [activeIndCode]);
 
   const handleOpenStoreHistory = (lojaCodigo: string) => {
+    if (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
+      historyReturnFocusRef.current = document.activeElement;
+    }
     setSelectedStoreCode(lojaCodigo);
     fetchStoreHistory(lojaCodigo, historyPeriodFilter);
   };
@@ -723,14 +742,13 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
 
   // Resumo de KPIs do Histórico da Loja
   const storeHistoryKPIs = useMemo(() => {
-    const planejadas = storeHistoryOperationalItems.length;
-    const concluidas = storeHistoryOperationalItems.filter((v) => v.status === 'concluida').length;
-    const pendentes = storeHistoryOperationalItems.filter((v) => v.status === 'pendente').length;
-    const naoRealizadas = storeHistoryOperationalItems.filter((v) => v.status === 'nao_realizada').length;
-    const aderencia = planejadas > 0 ? Math.round((concluidas / planejadas) * 100) : 0;
-
-    return { planejadas, concluidas, pendentes, naoRealizadas, aderencia };
+    return getStoreHistorySummary(storeHistoryOperationalItems);
   }, [storeHistoryOperationalItems]);
+
+  const filteredStoreHistoryItems = useMemo(
+    () => filterStoreHistoryItems(storeHistoryOperationalItems, historyStatusFilter),
+    [storeHistoryOperationalItems, historyStatusFilter]
+  );
 
   // Função de Busca Paginada de Evidências no Supabase (12 fotos por página)
   const fetchEvidencias = useCallback(async () => {
@@ -869,6 +887,10 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
 
   // Carregar detalhes completos (checklist, fotos, ocorrências e validade) sob demanda ao abrir o relatório da visita
   const handleOpenVisitDetails = async (item: OperationalVisitItem) => {
+    if (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
+      reportReturnFocusRef.current = document.activeElement;
+    }
+    if (historyDialogRef.current) historyScrollTopRef.current = historyDialogRef.current.scrollTop;
     setSelectedVisitItem(item);
     setSignedPhotoUrls({});
 
@@ -937,6 +959,73 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
   };
 
   // --- EXPORTAÇÃO EXCEL (3 ABAS: RESUMO_EXECUTIVO, ATENDIMENTOS_DETALHADOS, OCORRENCIAS_E_VALIDADE) ---
+  const closeVisitReport = useCallback(() => setSelectedVisitItem(null), []);
+  const closeStoreHistory = useCallback(() => setSelectedStoreCode(null), []);
+
+  useEffect(() => {
+    if (selectedVisitItem) {
+      reportWasOpenRef.current = true;
+      visitReportDialogRef.current?.focus();
+      return;
+    }
+
+    if (selectedStoreCode && historyDialogRef.current) {
+      historyDialogRef.current.scrollTop = historyScrollTopRef.current;
+      if (reportWasOpenRef.current) {
+        reportWasOpenRef.current = false;
+        reportReturnFocusRef.current?.focus();
+      } else {
+        historyWasOpenRef.current = true;
+        historyDialogRef.current.focus();
+      }
+      return;
+    }
+    if (reportWasOpenRef.current) {
+      reportWasOpenRef.current = false;
+      reportReturnFocusRef.current?.focus();
+    } else if (historyWasOpenRef.current) {
+      historyWasOpenRef.current = false;
+      historyReturnFocusRef.current?.focus();
+    }
+  }, [selectedVisitItem, selectedStoreCode]);
+
+  useEffect(() => {
+    if (!selectedVisitItem && !selectedStoreCode) return;
+
+    const handleDialogKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        if (selectedVisitItem) closeVisitReport();
+        else closeStoreHistory();
+        return;
+      }
+
+      if (event.key !== 'Tab') return;
+      const dialog = selectedVisitItem ? visitReportDialogRef.current : historyDialogRef.current;
+      if (!dialog) return;
+      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      ));
+      if (focusable.length === 0) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && (document.activeElement === first || !dialog.contains(document.activeElement))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (document.activeElement === last || !dialog.contains(document.activeElement))) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener('keydown', handleDialogKeyDown);
+    return () => document.removeEventListener('keydown', handleDialogKeyDown);
+  }, [selectedVisitItem, selectedStoreCode, closeVisitReport, closeStoreHistory]);
+
   const handleExportExcel = () => {
     try {
       const wb = XLSX.utils.book_new();
@@ -1583,12 +1672,12 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
       )}
 
       {selectedVisitItem && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto font-mono">
-          <div className="bg-[#F7F6F2] border border-indigo-500/40 rounded-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto shadow-2xl p-6 space-y-6">
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/55 p-3 backdrop-blur-sm sm:p-5" onMouseDown={(event) => { if (event.target === event.currentTarget) closeVisitReport(); }}>
+          <section ref={visitReportDialogRef} role="dialog" aria-modal="true" aria-labelledby="visit-report-title" tabIndex={-1} className="max-h-[92vh] w-full max-w-3xl space-y-6 overflow-y-auto rounded-xl border border-[#CFCDC5] bg-[#F7F6F2] p-4 text-[#171717] shadow-2xl outline-none sm:p-6">
             {/* CABEÇALHO DO MODAL */}
             <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-4">
               <div>
-                <h3 className="text-lg font-extrabold text-[#171717]">
+                <h3 id="visit-report-title" className="text-lg font-extrabold text-[#171717]">
                   Relatório da Visita — {selectedVisitItem.lojaNome}
                 </h3>
                 <p className="text-xs text-[#77766F]">
@@ -1597,7 +1686,8 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
               </div>
 
               <button
-                onClick={() => setSelectedVisitItem(null)}
+                aria-label="Fechar relatório da visita"
+                onClick={closeVisitReport}
                 className="p-1.5 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5] text-[#77766F] hover:text-[#171717] cursor-pointer"
               >
                 <span className="material-symbols-outlined text-lg">close</span>
@@ -1822,233 +1912,79 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                 </button>
               ) : <div />}
               <button
-                onClick={() => setSelectedVisitItem(null)}
+                onClick={closeVisitReport}
                 className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs cursor-pointer transition-all shadow-md"
               >
                 Fechar Relatório
               </button>
             </div>
-          </div>
+          </section>
         </div>
       )}
 
-      {/* 10. MODAL / DRAWER DE HISTÓRICO OPERACIONAL DA LOJA SELECIONADA */}
-      {selectedStoreCode && selectedStoreObj && (
-        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-md flex items-center justify-center p-3 sm:p-6 overflow-y-auto font-mono">
-          <div className="bg-[#F7F6F2] border border-indigo-500/40 rounded-2xl w-full max-w-4xl max-h-[92vh] overflow-y-auto shadow-2xl p-5 sm:p-6 space-y-6">
-            {/* CABEÇALHO DA LOJA */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-[#CFCDC5] pb-4 gap-3">
-              <div className="flex items-center gap-3">
-                <div className="w-12 h-12 rounded-xl bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 flex items-center justify-center font-bold text-xl shrink-0">
-                  <span className="material-symbols-outlined text-2xl">storefront</span>
+      {/* Compact store history dialog */}
+      {selectedStoreCode && selectedStoreObj && !selectedVisitItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-2 backdrop-blur-sm sm:p-5" onMouseDown={(event) => { if (event.target === event.currentTarget) closeStoreHistory(); }}>
+          <section ref={historyDialogRef} role="dialog" aria-modal="true" aria-labelledby="store-history-title" tabIndex={-1} className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-y-auto rounded-xl border border-[#CFCDC5] bg-[#F7F6F2] text-[#171717] shadow-2xl outline-none">
+            <header className="sticky top-0 z-10 flex flex-wrap items-start justify-between gap-3 border-b border-[#CFCDC5] bg-[#F7F6F2] px-4 py-3 sm:px-5">
+              <div className="min-w-0">
+                <h2 id="store-history-title" className="truncate text-lg font-semibold">{selectedStoreObj.nome}</h2>
+                <p className="mt-0.5 text-sm text-[#526176]">{selectedStoreObj.cidade || 'Cidade não informada'}{selectedStoreObj.uf ? ` / ${selectedStoreObj.uf}` : ''} · {selectedStoreObj.codigo} · Frequência {selectedStoreRoutes[0]?.frequencia || 'semanal'}</p>
+              </div>
+              <button type="button" aria-label="Fechar histórico" onClick={closeStoreHistory} className="rounded-md border border-[#C7CFDA] px-3 py-1.5 text-sm text-[#26364B] hover:bg-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-600">Fechar</button>
+            </header>
+
+            <div className="space-y-4 p-4 sm:p-5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex flex-wrap gap-1" aria-label="Período do histórico">
+                  {(['7', '30', '90', 'all'] as const).map((period) => <button key={period} type="button" aria-pressed={historyPeriodFilter === period} onClick={() => handleHistoryPeriodChange(period)} className={`rounded-md border px-3 py-1.5 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-600 ${historyPeriodFilter === period ? 'border-indigo-700 bg-indigo-50 font-semibold text-indigo-900' : 'border-[#C7CFDA] text-[#26364B] hover:bg-white'}`}>{period === 'all' ? 'Todos' : `${period} dias`}</button>)}
                 </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-base sm:text-lg font-extrabold text-[#171717]">
-                      {selectedStoreObj.nome}
-                    </h3>
-                    <span className="px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 text-[10px] font-bold border border-indigo-500/30 uppercase">
-                      {selectedStoreObj.codigo}
-                    </span>
+                <label className="flex items-center gap-2 text-sm text-[#526176]">Status
+                  <select value={historyStatusFilter} onChange={(event) => setHistoryStatusFilter(event.target.value as StoreHistoryStatusFilter)} className="rounded-md border border-[#C7CFDA] bg-white px-2.5 py-1.5 text-[#14243B] focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-600">
+                    <option value="all">Todos</option><option value="concluida">Concluídas</option><option value="pendente">Pendentes</option><option value="nao_realizada">Não realizadas</option><option value="planejada">Planejadas</option><option value="em_andamento">Em andamento</option>
+                  </select>
+                </label>
+              </div>
+
+              <section aria-label="Resumo do período" className="grid grid-cols-2 gap-y-2 border-y border-[#D5DAE2] py-3 sm:grid-cols-4">
+                {[
+                  { label: 'Planejadas', value: storeHistoryKPIs.planejadas, tone: 'text-[#14243B]' },
+                  { label: 'Concluídas', value: storeHistoryKPIs.concluidas, tone: 'text-emerald-800' },
+                  { label: 'Pendentes', value: storeHistoryKPIs.pendentes, tone: 'text-amber-800' },
+                  { label: 'Não realizadas', value: storeHistoryKPIs.naoRealizadas, tone: 'text-orange-800' }
+                ].map((stat) => <div key={stat.label} className="flex items-baseline gap-2 px-2"><span className={`text-xl font-semibold tabular-nums ${stat.tone}`}>{loadingHistory ? '—' : stat.value}</span><span className="text-xs text-[#526176]">{stat.label}</span></div>)}
+                <p className="col-span-2 px-2 text-xs text-[#526176] sm:col-span-4">
+                  Aderência: <strong className="text-[#26364B]">{loadingHistory || systemSettings.status === 'loading' ? 'Carregando…' : systemSettings.status !== 'loaded' || systemSettings.mode !== 'OPERACAO_OFICIAL' || storeHistoryKPIs.aderencia === null ? 'Não disponível' : `${storeHistoryKPIs.aderencia}%`}</strong>
+                  {systemSettings.status === 'loaded' && systemSettings.mode !== 'OPERACAO_OFICIAL' ? ' · Operação ainda em implantação.' : ''}
+                </p>
+              </section>
+
+              <section aria-labelledby="store-history-timeline-title">
+                <div className="mb-2 flex items-baseline justify-between gap-2"><h3 id="store-history-timeline-title" className="text-sm font-semibold">Atendimentos</h3><span className="text-xs tabular-nums text-[#526176]">{loadingHistory ? '…' : `${filteredStoreHistoryItems.length} de ${storeHistoryOperationalItems.length}`}</span></div>
+                {loadingHistory ? <p role="status" className="border-y border-[#D5DAE2] py-8 text-center text-sm text-[#526176]">Carregando histórico…</p> : filteredStoreHistoryItems.length === 0 ? <p className="border-y border-[#D5DAE2] py-8 text-center text-sm text-[#526176]">Nenhum atendimento corresponde aos filtros selecionados.</p> : <>
+                  <div className="hidden grid-cols-[7rem_minmax(8rem,1fr)_9rem_10rem_auto] gap-3 border-y border-[#D5DAE2] py-2 text-xs font-medium text-[#526176] md:grid"><span>Data</span><span>Promotor</span><span>Status</span><span>Horário / duração</span><span>Ação</span></div>
+                  <div className="divide-y divide-[#D5DAE2] border-b border-[#D5DAE2]">
+                    {filteredStoreHistoryItems.map((item) => {
+                      const reportAvailable = canOpenStoreVisitReport(item);
+                      const dateLabel = new Date(`${item.dataStr}T00:00:00`).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+                      const timeLabel = item.duracaoFormatada || [item.startedAt && new Date(item.startedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }), item.completedAt && new Date(item.completedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })].filter(Boolean).join(' – ') || '—';
+                      return <article key={item.key} className="grid gap-2 py-3 md:grid-cols-[7rem_minmax(8rem,1fr)_9rem_10rem_auto] md:items-center md:gap-3 md:py-2.5">
+                        <time dateTime={item.dataStr} className="text-sm font-medium tabular-nums text-[#14243B]">{dateLabel}<span className="ml-2 text-xs font-normal text-[#526176] md:hidden">{item.dayOfWeekLabel}</span></time>
+                        <span className="min-w-0 truncate text-sm text-[#26364B]" title={item.promotorNome}>{item.promotorNome}</span>
+                        <span className={`w-fit rounded border px-2 py-0.5 text-xs font-medium ${getStoreHistoryStatusTone(item)}`}>{getStoreHistoryStatusLabel(item)}</span>
+                        <span className="text-xs tabular-nums text-[#526176]">{timeLabel}</span>
+                        <span className="flex justify-end">
+                          {reportAvailable ? <button type="button" onClick={() => void handleOpenVisitDetails(item)} className="rounded-md border border-[#AEB9C8] px-3 py-1.5 text-sm font-medium text-[#14243B] hover:bg-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-600">Abrir relatório</button> : <span className="px-3 py-1.5 text-xs text-[#7A8492]">—</span>}
+                        </span>
+                      </article>;
+                    })}
                   </div>
-                  <p className="text-xs text-[#77766F] mt-0.5">
-                    {selectedStoreObj.cidade} / {selectedStoreObj.uf} • Frequência:{' '}
-                    <strong className="text-cyan-400">
-                      {selectedStoreRoutes[0]?.frequencia || 'SEMANAL'}
-                    </strong>
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2 self-end sm:self-auto">
-                <button
-                  onClick={() => setSelectedStoreCode(null)}
-                  className="p-2 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5] text-[#77766F] hover:text-[#171717] cursor-pointer transition-colors"
-                >
-                  <span className="material-symbols-outlined text-xl">close</span>
-                </button>
-              </div>
+                </>}
+              </section>
             </div>
-
-            {/* SELETOR DE PERÍODO E KPIS RESUMO DA LOJA */}
-            <div className="space-y-3">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <span className="text-xs font-bold text-[#171717] uppercase tracking-wider flex items-center gap-1.5">
-                  <span className="material-symbols-outlined text-indigo-400 text-sm">analytics</span>
-                  Resumo Operacional do Período
-                </span>
-
-                {/* FILTROS DE PERÍODO DA LOJA */}
-                <div className="flex items-center gap-1 bg-[#E4E2DB] p-1 rounded-xl border border-[#CFCDC5] self-start sm:self-auto">
-                  {(['7', '30', '90', 'all'] as const).map((p) => (
-                    <button
-                      key={p}
-                      onClick={() => handleHistoryPeriodChange(p)}
-                      className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
-                        historyPeriodFilter === p
-                          ? 'bg-indigo-600 text-white shadow-md'
-                          : 'text-[#77766F] hover:text-slate-200'
-                      }`}
-                    >
-                      {p === 'all' ? 'Todos' : `${p} dias`}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* CARDS KPIS RESUMO DA LOJA */}
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-xs">
-                <div className="p-3 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5]">
-                  <span className="text-[10px] text-purple-400 block font-bold uppercase">PLANEJADOS</span>
-                  <span className="text-xl font-extrabold text-purple-300 mt-0.5 block">{loadingHistory ? '...' : storeHistoryKPIs.planejadas}</span>
-                </div>
-
-                <div className="p-3 rounded-xl bg-[#E4E2DB] border border-emerald-500/30 bg-emerald-950/10">
-                  <span className="text-[10px] text-emerald-400 block font-bold uppercase">CONCLUÍDOS</span>
-                  <span className="text-xl font-extrabold text-emerald-300 mt-0.5 block">{loadingHistory ? '...' : storeHistoryKPIs.concluidas}</span>
-                </div>
-
-                <div className="p-3 rounded-xl bg-[#E4E2DB] border border-rose-500/30 bg-rose-950/10">
-                  <span className="text-[10px] text-rose-400 block font-bold uppercase">PENDENTES</span>
-                  <span className="text-xl font-extrabold text-rose-300 mt-0.5 block">{loadingHistory ? '...' : storeHistoryKPIs.pendentes}</span>
-                </div>
-
-                <div className="p-3 rounded-xl bg-[#E4E2DB] border border-orange-500/30 bg-orange-950/10">
-                  <span className="text-[10px] text-orange-400 block font-bold uppercase">NÃO REALIZADOS</span>
-                  <span className="text-xl font-extrabold text-orange-300 mt-0.5 block">{loadingHistory ? '...' : storeHistoryKPIs.naoRealizadas}</span>
-                </div>
-
-                <div className="p-3 rounded-xl bg-[#E4E2DB] border border-indigo-500/30 bg-indigo-950/10 col-span-2 sm:col-span-1">
-                  <span className="text-[10px] text-indigo-300 block font-bold uppercase">ADERÊNCIA</span>
-                  {loadingHistory || systemSettings.status === 'loading' ? (
-                    <span className="text-xs font-bold text-[#77766F] mt-1 block">Carregando...</span>
-                  ) : systemSettings.mode !== 'OPERACAO_OFICIAL' || systemSettings.status !== 'loaded' ? (
-                    <span className="text-[10px] font-bold text-amber-300 mt-1 block leading-tight">Fase de implantação — SLA não ativo</span>
-                  ) : (
-                    <span className="text-xl font-extrabold text-indigo-200 mt-0.5 block">{`${storeHistoryKPIs.aderencia}%`}</span>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* TIMELINE / LISTA DE HISTÓRICO DE ATENDIMENTOS */}
-            <div className="space-y-3 pt-2 border-t border-[#CFCDC5]">
-              <h4 className="text-xs font-bold text-[#171717] uppercase tracking-wider flex items-center gap-2">
-                <span className="material-symbols-outlined text-indigo-400 text-base">history_edu</span>
-                Linha do Tempo de Atendimentos ({storeHistoryOperationalItems.length})
-              </h4>
-
-              {loadingHistory ? (
-                <div className="py-10 text-center space-y-2">
-                  <span className="material-symbols-outlined text-indigo-400 text-2xl animate-spin">sync</span>
-                  <p className="text-xs text-[#77766F]">Carregando histórico da loja...</p>
-                </div>
-              ) : storeHistoryOperationalItems.length === 0 ? (
-                <div className="py-8 text-center bg-[#E4E2DB]/50 rounded-xl border border-[#CFCDC5] space-y-1">
-                  <span className="material-symbols-outlined text-slate-600 text-2xl">event_busy</span>
-                  <p className="text-xs text-[#171717] font-bold">Nenhum atendimento registrado no período.</p>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {storeHistoryOperationalItems.map((item) => {
-                    const isConcluida = item.status === 'concluida';
-                    const isEmAndamento = item.status === 'em_andamento';
-                    const isNaoRealizada = item.status === 'nao_realizada';
-                    const isAtrasada = item.isPastOverdue;
-                    const photosCount = item.visitObj?.photos?.length || 0;
-
-                    return (
-                      <div
-                        key={item.key}
-                        className={`p-4 rounded-xl border transition-all ${
-                          isConcluida
-                            ? 'bg-[#E4E2DB] border-emerald-500/30 hover:border-emerald-500/60'
-                            : isEmAndamento
-                            ? 'bg-[#E4E2DB] border-blue-500/30 hover:border-blue-500/60'
-                            : isNaoRealizada
-                            ? 'bg-[#E4E2DB] border-orange-500/30 hover:border-orange-500/60'
-                            : isAtrasada
-                            ? 'bg-rose-950/20 border-rose-500/40 hover:border-rose-500/70'
-                            : 'bg-[#E4E2DB] border-[#CFCDC5]'
-                        }`}
-                      >
-                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-[#CFCDC5]">
-                          <div className="flex items-center gap-2">
-                            <span className="font-extrabold text-[#171717] text-sm">{item.dataStr}</span>
-                            <span className="text-[#5F5F5F] text-xs">• {item.dayOfWeekLabel}</span>
-                          </div>
-
-                          <span className={`px-2.5 py-0.5 rounded text-[10px] font-bold border self-start sm:self-auto ${
-                            isConcluida ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' :
-                            isEmAndamento ? 'bg-blue-500/20 text-blue-300 border-blue-500/40' :
-                            isNaoRealizada ? 'bg-orange-500/20 text-orange-300 border-orange-500/40' :
-                            isAtrasada ? 'bg-rose-950 text-rose-300 border-rose-500 animate-pulse' :
-                            'bg-rose-500/20 text-rose-300 border-rose-500/40'
-                          }`}>
-                            {isConcluida ? '🟢 CONCLUÍDA' :
-                             isEmAndamento ? '🔵 EM ANDAMENTO' :
-                             isNaoRealizada ? '🟠 NÃO REALIZADA' :
-                             isAtrasada ? '🚨 ATRASADA' : '🔴 PENDENTE'}
-                          </span>
-                        </div>
-
-                        <div className="pt-3 grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
-                          <div>
-                            <span className="text-[#5F5F5F] block text-[10px]">PROMOTOR RESPONSÁVEL</span>
-                            <span className="font-bold text-cyan-300">{item.promotorNome}</span>
-                          </div>
-
-                          <div>
-                            <span className="text-[#5F5F5F] block text-[10px]">HORÁRIO / DURAÇÃO</span>
-                            <span className="text-slate-200">
-                              {item.startedAt ? new Date(item.startedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—'}
-                              {' → '}
-                              {item.completedAt ? new Date(item.completedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—'}
-                              {item.duracaoFormatada && <strong className="text-amber-300 ml-1">({item.duracaoFormatada})</strong>}
-                            </span>
-                          </div>
-
-                          <div className="flex items-center justify-between sm:justify-end gap-3 pt-2 sm:pt-0 border-t sm:border-t-0 border-[#CFCDC5]">
-                            {photosCount > 0 && (
-                              <span className="text-[11px] text-cyan-300 font-bold bg-cyan-500/10 px-2 py-0.5 rounded border border-cyan-500/30 flex items-center gap-1">
-                                📷 {photosCount} evidência(s)
-                              </span>
-                            )}
-
-                            {item.visitObj ? (
-                              <button
-                                onClick={() => handleOpenVisitDetails(item)}
-                                className="px-3 py-1.5 rounded-lg bg-indigo-600/30 hover:bg-indigo-600 text-indigo-200 hover:text-white border border-indigo-500/40 text-xs font-bold transition-all cursor-pointer"
-                              >
-                                Abrir Relatório
-                              </button>
-                            ) : (
-                              <span className="text-[10px] text-[#5F5F5F] italic">
-                                Atendimento planejado sem execução
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-
-            {/* RODAPÉ DO DRAWER DE HISTÓRICO */}
-            <div className="pt-3 border-t border-[#CFCDC5] flex justify-end">
-              <button
-                onClick={() => setSelectedStoreCode(null)}
-                className="px-5 py-2 rounded-xl bg-[#E4E2DB] hover:bg-[#CFCDC5] text-[#171717] border border-[#CFCDC5] font-bold text-xs cursor-pointer transition-all"
-              >
-                Fechar Histórico
-              </button>
-            </div>
-          </div>
+          </section>
         </div>
       )}
-
       {/* DOCUMENTO EXECUTIVO IMPRESSO A4 (Visível exclusivamente em @media print) */}
       <ExecutiveReportDocument
         activeIndName={activeIndName}
