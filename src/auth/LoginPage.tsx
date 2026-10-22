@@ -102,7 +102,7 @@ export function LoginPage() {
             </span>
           </div>
           <span className="text-[10px] font-bold text-[#737373] tracking-widest uppercase font-mono">
-            TRADE OPS
+            GUSTAVO JEAN
           </span>
         </div>
 
