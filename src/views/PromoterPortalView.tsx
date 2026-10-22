@@ -52,7 +52,7 @@ import {
 } from '../lib/routesService';
 import { isWhatsAppShareableVisit } from '../utils/whatsappShare';
 import { loadRoutesWithClosureFallback } from '../utils/routeClosureCompatibility';
-import { filterHistoricalAttendances, filterPromoterAppointments, formatAppointmentDateHeading, getAppointmentsTabForMetric, getMetricDisplayValue, getRegularizationCounts, getRegularizationPresentation, getWeeklyPromoterMetricCounts, groupAppointmentsByDate, isUnresolvedVisitInProgress } from '../utils/promoterPortalPresentation';
+import { filterHistoricalAttendances, filterPromoterAppointments, formatAppointmentDateHeading, getMetricDisplayValue, getRegularizationCounts, getRegularizationPresentation, getWeeklyPromoterMetricCounts, groupAppointmentsByDate, isUnresolvedVisitInProgress } from '../utils/promoterPortalPresentation';
 import { canReviewOldOpenVisits, createRequestGate, findOwnOpenVisit, formatOpenVisitConflictMessage, getOldOpenVisitCheckInBlockMessage, getOldOpenVisitsLabel, getPromoterOpenVisitAction, isAnotherVisitInProgressError, isOpenVisitFromToday } from '../utils/visitCheckInConflict';
 
 interface PromoterPortalViewProps {
@@ -898,31 +898,12 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
   const realMatricula = promoterDetails?.matricula || profile?.promotor_matricula || null;
   const realCidade = promoterDetails?.cidade || profile?.promotor_cidade;
   const realUf = promoterDetails?.uf || profile?.promotor_uf;
-  // Resumo de execução do dia de HOJE baseado nas visitas previstas para o dia atual
+  // Meta de execução diária baseada nas visitas previstas para hoje.
   const totalPlanned = todayOperationalVisits.filter(v => v.status !== 'nao_realizada' && !v.visitObj?.regularization_status).length;
-  const weeklyMetricCounts = getWeeklyPromoterMetricCounts(currentWeekOperationalVisits);
-  const completedCount = weeklyMetricCounts.completed;
+  const pendingCount = getWeeklyPromoterMetricCounts(currentWeekOperationalVisits).pending;
   const todayCompletedCount = todayOperationalVisits.filter((v) => v.status === 'concluida').length;
-  const todayResolutionCounts = getRegularizationCounts(todayOperationalVisits.map((v) => ({
-    status: v.status,
-    regularization_status: v.visitObj?.regularization_status || null
-  })));
-  const inProgressCount = todayResolutionCounts.inProgress;
-  const notDoneCount = weeklyMetricCounts.notDone;
-  const pendingCount = weeklyMetricCounts.pending;
   const executionPerc = totalPlanned > 0 ? Math.round((todayCompletedCount / totalPlanned) * 100) : 0;
   const metricText = (value: number) => getMetricDisplayValue(value, loading, Boolean(loadError));
-  const handleMetricSelect = (status: 'planejada' | 'em_andamento' | 'pendente' | 'concluida' | 'nao_realizada') => {
-    const targetTab = getAppointmentsTabForMetric(status);
-    setAppointmentsTab(targetTab);
-    setStatusFilter(current => current === status ? 'all' : status);
-    if (targetTab === 'history') {
-      setWeekOffset(0);
-      setSelectedDayDateStr(todayStr);
-      setWeekHistoryFilterMode('all');
-      setIsWeekHistoryOpen(true);
-    }
-  };
 
   // Iniciar Visita
   const handleStartVisit = async (route: RouteItem) => {
@@ -2172,59 +2153,21 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
           </section>
       )}
 
-      {/* 1. RESUMO EXECUTIVO DO DIA / RESUMO DO PROMOTOR */}
+      {/* Meta diária exibida após a seleção do promotor. */}
       {(!isAdminUser || selectedPromoterMatricula) && (
-        <section className="space-y-3">
-          {isAdminUser && (
-            <div className="flex items-center gap-2 font-mono text-xs font-bold text-[#171717]">
-              <span className="material-symbols-outlined text-base text-[#286FF5]">analytics</span>
-              <span>Resumo do Promotor (Hoje)</span>
-            </div>
-          )}
-          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 font-mono">
-            <button type="button" aria-pressed={statusFilter === 'planejada'} onClick={() => handleMetricSelect('planejada')} className={`text-left p-2 rounded-xl bg-[#F7F6F2] border ${statusFilter === 'planejada' ? 'border-blue-500 ring-2 ring-blue-200' : 'border-[#CFCDC5]'} focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500`}>
-              <span className="text-[11px] text-[#5F5F5F] block font-bold uppercase">Planejadas · hoje</span>
-              <span className="text-lg font-extrabold text-[#171717]">{metricText(todayOperationalVisits.filter(v => v.status === 'planejada').length)}</span>
-            </button>
-
-            <button type="button" aria-pressed={statusFilter === 'em_andamento'} onClick={() => handleMetricSelect('em_andamento')} className={`text-left p-2 rounded-xl bg-[#F7F6F2] border ${statusFilter === 'em_andamento' ? 'border-amber-500 ring-2 ring-amber-200' : 'border-[#FCE19B]'} focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500`}>
-              <span className="text-[11px] text-[#986000] block font-bold uppercase">Em andamento · hoje</span>
-              <span className="text-lg font-extrabold text-[#986000]">{metricText(inProgressCount)}</span>
-            </button>
-
-            <button type="button" aria-pressed={statusFilter === 'pendente'} onClick={() => handleMetricSelect('pendente')} className={`text-left p-2 rounded-xl bg-[#F7F6F2] border ${statusFilter === 'pendente' ? 'border-rose-500 ring-2 ring-rose-200' : 'border-[#CFCDC5]'} focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500`}>
-              <span className="text-[11px] text-[#5F5F5F] block font-bold uppercase">Pendentes · semana</span>
-              <span className="text-lg font-extrabold text-[#222222]">{metricText(pendingCount)}</span>
-            </button>
-
-            <button type="button" aria-pressed={statusFilter === 'concluida'} onClick={() => handleMetricSelect('concluida')} className={`text-left p-2 rounded-xl bg-[#F7F6F2] border ${statusFilter === 'concluida' ? 'border-emerald-500 ring-2 ring-emerald-200' : 'border-[#B9E5D0]'} focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500`}>
-              <span className="text-[11px] text-[#16794F] block font-bold uppercase">Concluídas · semana</span>
-              <span className="text-lg font-extrabold text-[#16794F]">{metricText(completedCount)}</span>
-            </button>
-
-            <button type="button" aria-pressed={statusFilter === 'nao_realizada'} onClick={() => handleMetricSelect('nao_realizada')} className={`text-left p-2 rounded-xl bg-[#F7F6F2] border col-span-2 sm:col-span-1 ${statusFilter === 'nao_realizada' ? 'border-red-500 ring-2 ring-red-200' : 'border-[#F8C8C8]'} focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500`}>
-              <span className="text-[11px] text-[#C62828] block font-bold uppercase">Não realizadas · semana</span>
-              <span className="text-lg font-extrabold text-[#C62828]">{metricText(notDoneCount)}</span>
-            </button>
-          </div>
-
-          {/* Barra de Progresso de Execução */}
-          <div className="hidden sm:block p-4 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5] space-y-2">
-            <div className="flex justify-between items-center text-xs font-mono">
+        <section className="space-y-2 rounded-2xl border border-[#CFCDC5] bg-[#F7F6F2] p-4 sm:p-5">
+          <div className="flex justify-between items-center text-xs font-mono">
               <span className="text-[#171717] font-bold">Meta de Atendimento Diário:</span>
               <span className="text-[#286FF5] font-bold">{todayCompletedCount} de {totalPlanned} lojas atendidas</span>
             </div>
-            <div className="w-full bg-[#E4E2DB] h-3 rounded-full overflow-hidden p-0.5 border border-[#CFCDC5]">
-              <div
-                className="bg-gradient-to-r from-amber-500 via-purple-500 to-emerald-500 h-2 rounded-full transition-all duration-500"
-                style={{ width: `${executionPerc}%` }}
-              />
-            </div>
+          <div className="w-full bg-[#E4E2DB] h-3 rounded-full overflow-hidden p-0.5 border border-[#CFCDC5]">
+            <div
+              className="bg-gradient-to-r from-amber-500 via-purple-500 to-emerald-500 h-2 rounded-full transition-all duration-500"
+              style={{ width: `${executionPerc}%` }}
+            />
           </div>
         </section>
       )}
-
-
 
       {(!isAdminUser || selectedPromoterMatricula) && (
         <section aria-label="Meus atendimentos" className="space-y-3">
@@ -2278,7 +2221,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
               <p className="text-xs text-[#77766F] font-mono mt-0.5">
                 {isAdminUser
                   ? 'Rotas programadas e atendimentos registrados para este promotor na data atual.'
-                  : 'Rotas previstas e em atendimento ordenadas para o seu dia de trabalho.'} {statusFilter !== 'all' && <button type="button" onClick={() => setStatusFilter('all')} className="ml-1 font-bold text-[#286FF5] underline">Limpar filtro ({statusFilter})</button>}
+                  : 'Rotas previstas e em atendimento ordenadas para o seu dia de trabalho.'}
               </p>
             </div>
           </div>
@@ -2344,7 +2287,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
             </div>
             <h4 className="text-xs font-bold text-[#171717]">Nenhuma Rota Prevista para Hoje</h4>
             <p className="text-[11px] text-[#77766F] max-w-sm mx-auto">
-                    {loadError ? 'Não foi possível confirmar a agenda porque houve uma falha no carregamento.' : statusFilter === 'all' ? `Não há lojas agendadas para a data atual (${todayStr.split('-').reverse().join('/')}). Consulte o histórico semanal ou a escala fixa abaixo.` : 'Nenhum atendimento encontrado para o filtro selecionado. Clique no indicador novamente para limpar o filtro.'}
+                    {loadError ? 'Não foi possível confirmar a agenda porque houve uma falha no carregamento.' : `Não há lojas agendadas para a data atual (${todayStr.split('-').reverse().join('/')}). Consulte o histórico semanal ou a escala fixa abaixo.`}
             </p>
           </div>
         ) : (
