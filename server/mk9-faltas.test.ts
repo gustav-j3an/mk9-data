@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { rhHandler } from './rh-handler.ts';
+import faltasAtestadosHandler from './faltas-atestados-handler.ts';
 import rhAccessHandler from './rh-access-handler.ts';
 import { normalizeAbsence, queryMk9, queryMk9Window } from './mk9-faltas.ts';
 import { validateAllocations, type RhAllocation, type RhView } from './rh-authorization.ts';
@@ -147,4 +148,63 @@ test('Actual route handlers enforce RH capabilities independently of operational
       assert.deepEqual(JSON.parse(body),{mine:false,team:true,management:false});
     });
   } finally { for(const key of Object.keys(process.env)) if(!(key in savedEnv)) delete process.env[key];Object.assign(process.env,savedEnv); }
+});
+
+test('Independent module GET requires its capability, an approved RH scope, and returns only sanitized external identifiers', async t => {
+  const savedEnv = { ...process.env };
+  process.env.SUPABASE_URL = 'https://module-application.invalid';
+  process.env.SUPABASE_PUBLISHABLE_KEY = 'synthetic-public';
+  process.env.MK9_FALTAS_API_URL = 'https://module-provider.invalid';
+  process.env.MK9_FALTAS_API_KEY = 'synthetic-module-key';
+  let capability = false;
+  let failAuthentication = false;
+  let revokeCapabilityDuringRequest = false;
+  let providerCalls = 0;
+  let scopes = [allocation()];
+  t.mock.method(globalThis, 'fetch', async (input: any, init: RequestInit) => {
+    const url = new URL(String(input));
+    if (url.hostname === 'module-provider.invalid') {
+      providerCalls++;
+      if (revokeCapabilityDuringRequest) capability = false;
+      return Response.json({ ok: true, data: [row()] });
+    }
+    if (url.pathname === '/auth/v1/user') return failAuthentication ? Response.json({}, { status: 401 }) : Response.json({ id: id(999) });
+    if (url.pathname === '/rest/v1/rpc/mk9_faltas_atestados_can_prepare') return Response.json(capability);
+    if (url.pathname === '/rest/v1/rpc/mk9_rh_scope') return Response.json(scopes);
+    throw new Error('Unexpected module request');
+  });
+  async function request(url = '/api/faltas-atestados/ausencias?view=mine&data_inicio=2026-10-01&data_fim=2026-10-19', method = 'GET', authenticated = true) {
+    let body = ''; const headers: Record<string, string> = {};
+    const res = { statusCode: 0, setHeader(k: string, v: string) { headers[k] = v; }, end(v: string) { body = v; } };
+    await faltasAtestadosHandler({ method, headers: authenticated ? { authorization: 'Bearer synthetic-module-session' } : {}, url } as any, res as any);
+    return { status: res.statusCode, headers, body, json: body ? JSON.parse(body) : null };
+  }
+  try {
+    assert.equal((await request(undefined, 'GET', false)).status, 401);
+    failAuthentication = true;
+    assert.equal((await request()).status, 401);
+    failAuthentication = false;
+    assert.equal((await request()).status, 403);
+    assert.equal(providerCalls, 0);
+    capability = true;
+    assert.equal((await request('/api/faltas-atestados/ausencias?view=invalid&data_inicio=2026-10-01&data_fim=2026-10-19')).status, 400);
+    const result = await request();
+    assert.equal(result.status, 200);
+    assert.equal(result.headers['Cache-Control'], 'private, no-store');
+    assert.deepEqual(result.json.data[0].externalIdentity, { recordId: 'KNOWN-1', projectId: GO, matricula: '0000042' });
+    assert.ok(!result.body.includes('PRIVATE_CID'));
+    assert.ok(!result.body.includes('PRIVATE_DOCUMENT'));
+    assert.ok(!result.body.includes('PRIVATE_NOTES'));
+    assert.ok(!result.body.includes('synthetic-module-key'));
+    assert.equal((await request(undefined, 'POST')).status, 405);
+    revokeCapabilityDuringRequest = true;
+    assert.equal((await request('/api/faltas-atestados/ausencias?view=mine&data_inicio=2026-10-02&data_fim=2026-10-19')).status, 403);
+    revokeCapabilityDuringRequest = false;
+    capability = true;
+    scopes = [];
+    assert.equal((await request()).status, 403);
+  } finally {
+    for (const key of Object.keys(process.env)) if (!(key in savedEnv)) delete process.env[key];
+    Object.assign(process.env, savedEnv);
+  }
 });

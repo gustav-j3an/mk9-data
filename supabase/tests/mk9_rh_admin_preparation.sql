@@ -1,4 +1,4 @@
--- Synthetic-only contract test for explicit CRM binding preparation. Roll back all rows.
+﻿-- Synthetic-only contract test for explicit CRM binding preparation. Roll back all rows.
 BEGIN;
 DO $$
 DECLARE admin_id uuid; test_promoter uuid := '40000000-0000-4000-8000-000000000001';

@@ -22,6 +22,7 @@ import {
 } from '../utils/visitExecution';
 import { SearchableSelect, type SearchableSelectOption } from '../components/SearchableSelect';
 import { AuthorSignature } from '../components/AuthorSignature';
+<<<<<<< HEAD
 import { ConfirmRouteCloseModal } from '../components/ConfirmRouteCloseModal';
 import { ShareWhatsAppModal } from '../components/ShareWhatsAppModal';
 import type { VisitShareData } from '../utils/whatsappShare';
@@ -36,6 +37,10 @@ import {
   updateFixedRouteSchedule,
   type RouteFormValues
 } from '../lib/routesService';
+=======
+import { ShareWhatsAppModal } from '../components/ShareWhatsAppModal';
+import { isWhatsAppShareableVisit } from '../utils/whatsappShare';
+>>>>>>> c943d2797aff85d3e3e3468cf3e80fce8aa64f40
 
 interface PromoterPortalViewProps {
   onShowToast: (toast: Omit<ToastMessage, 'id'>) => void;
@@ -157,6 +162,9 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
   const [adminSignedPhotoUrls, setAdminSignedPhotoUrls] = useState<Record<string, string>>({});
   const [loadingInspectionPhotos, setLoadingInspectionPhotos] = useState(false);
   const [adminZoomedPhoto, setAdminZoomedPhoto] = useState<string | null>(null);
+
+  // Estado para Modal de Compartilhamento WhatsApp
+  const [sharingVisit, setSharingVisit] = useState<Visit | null>(null);
 
   const [generalObs, setGeneralObs] = useState('');
   const [completingVisit, setCompletingVisit] = useState(false);
@@ -1352,6 +1360,14 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
 
       if (updateErr) throw updateErr;
 
+      // Preparar objeto de visita completo para compartilhamento opcional
+      const completedVisitObj: Visit = {
+        ...activeVisit,
+        status: 'concluida',
+        completed_at: nowIso,
+        observacao_geral: generalObs.trim() || activeVisit.observacao_geral
+      };
+
       onShowToast({
         title: 'Visita Finalizada com Sucesso! 🎉',
         message: `Check-out concluído na loja ${activeVisit.loja?.nome || activeVisit.loja_codigo}.`,
@@ -1382,6 +1398,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
       };
 
       setActiveVisit(null);
+      setSharingVisit(completedVisitObj);
       await loadPortalData();
       setShareModalData(shareData);
     } catch (err: any) {
@@ -2278,10 +2295,23 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                     )}
 
                     {item.status === 'concluida' && (
-                      <span className="text-xs text-emerald-400 font-bold flex items-center gap-1 px-3 py-2 bg-emerald-500/10 rounded-xl border border-emerald-500/30">
-                        <span className="material-symbols-outlined text-sm">check_circle</span>
-                        Concluída
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-emerald-400 font-bold flex items-center gap-1 px-3 py-2 bg-emerald-500/10 rounded-xl border border-emerald-500/30">
+                          <span className="material-symbols-outlined text-sm">check_circle</span>
+                          Concluída
+                        </span>
+                        {item.visitObj && (
+                          <button
+                            type="button"
+                            onClick={() => setSharingVisit(item.visitObj!)}
+                            className="px-2.5 py-2 rounded-xl bg-emerald-600/10 hover:bg-emerald-600/20 text-emerald-700 border border-emerald-600/30 font-bold text-xs flex items-center gap-1 cursor-pointer transition-colors"
+                            title="Compartilhar relatório desta visita via WhatsApp"
+                          >
+                            <span className="material-symbols-outlined text-sm">share</span>
+                            <span>WhatsApp</span>
+                          </button>
+                        )}
+                      </div>
                     )}
 
                     {item.status === 'nao_realizada' && (
@@ -3404,6 +3434,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                         )}
 
                         {item.status === 'concluida' && (
+<<<<<<< HEAD
                           <div className="flex items-center gap-1.5">
                             <span className="text-xs text-emerald-400 font-bold flex items-center gap-1 px-3 py-1.5 bg-emerald-500/10 rounded-xl border border-emerald-500/30">
                               <span className="material-symbols-outlined text-sm">check_circle</span>
@@ -3440,6 +3471,24 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
                               <span className="material-symbols-outlined text-sm">share</span>
                               <span>WhatsApp</span>
                             </button>
+=======
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-emerald-400 font-bold flex items-center gap-1 px-3 py-2 bg-emerald-500/10 rounded-xl border border-emerald-500/30">
+                              <span className="material-symbols-outlined text-sm">check_circle</span>
+                              Concluída
+                            </span>
+                            {item.visitObj && (
+                              <button
+                                type="button"
+                                onClick={() => setSharingVisit(item.visitObj!)}
+                                className="px-2.5 py-1.5 rounded-xl bg-emerald-600/10 hover:bg-emerald-600/20 text-emerald-700 border border-emerald-600/30 font-bold text-xs flex items-center gap-1 cursor-pointer transition-colors"
+                                title="Compartilhar relatório desta visita via WhatsApp"
+                              >
+                                <span className="material-symbols-outlined text-sm">share</span>
+                                <span>WhatsApp</span>
+                              </button>
+                            )}
+>>>>>>> c943d2797aff85d3e3e3468cf3e80fce8aa64f40
                           </div>
                         )}
 
@@ -4672,7 +4721,17 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
             </div>
 
             {/* Footer Modal */}
-            <div className="px-6 py-3 border-t border-[#CFCDC5] bg-[#EAE8E2] flex justify-end font-mono">
+            <div className="px-6 py-3 border-t border-[#CFCDC5] bg-[#EAE8E2] flex items-center justify-between font-mono">
+              {adminInspectionVisit.visitObj && isWhatsAppShareableVisit(adminInspectionVisit.visitObj) ? (
+                <button
+                  type="button"
+                  onClick={() => setSharingVisit(adminInspectionVisit.visitObj!)}
+                  className="px-3 py-2 bg-emerald-600/10 hover:bg-emerald-600/20 text-emerald-800 border border-emerald-600/30 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-colors"
+                >
+                  <span className="material-symbols-outlined text-sm">share</span>
+                  <span>Compartilhar WhatsApp</span>
+                </button>
+              ) : <div />}
               <button
                 type="button"
                 onClick={() => setAdminInspectionVisit(null)}
@@ -4717,11 +4776,19 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onShowTo
       )}
 
       {/* MODAL DE COMPARTILHAMENTO WHATSAPP */}
+<<<<<<< HEAD
       {shareModalData && (
         <ShareWhatsAppModal
           isOpen={Boolean(shareModalData)}
           onClose={() => setShareModalData(null)}
           data={shareModalData}
+=======
+      {sharingVisit && (
+        <ShareWhatsAppModal
+          visit={sharingVisit}
+          onClose={() => setSharingVisit(null)}
+          onShowToast={onShowToast}
+>>>>>>> c943d2797aff85d3e3e3468cf3e80fce8aa64f40
         />
       )}
     </div>

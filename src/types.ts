@@ -1,4 +1,9 @@
 export type ScreenId = 
+<<<<<<< HEAD
+=======
+  | 'faltas-atestados'
+  | 'rh-matriculas'
+>>>>>>> c943d2797aff85d3e3e3468cf3e80fce8aa64f40
   | 'rh-ausencias'
   | 'cockpit'
   | 'painel-operacional'
@@ -347,7 +352,7 @@ export interface VisitChecklistItem {
   visit_id?: string;
   item_key: string;
   item_label: string;
-  checked: boolean;
+  checked: boolean | null;
   valor_texto?: string | null;
   observacao?: string | null;
 }

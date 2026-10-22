@@ -1,4 +1,4 @@
-# Vínculos exclusivos de RH — implementação para homologação
+﻿# Vínculos exclusivos de RH — implementação para homologação
 
 Branch: `feat/mk9-faltas-integration`. Data: 19/10/2026.
 

@@ -1,2 +1,2 @@
-import { rhHandler } from '../../../server/rh-handler.ts';
+﻿import { rhHandler } from '../../../server/rh-handler.ts';
 export default rhHandler('team');

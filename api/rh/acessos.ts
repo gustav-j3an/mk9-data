@@ -1,1 +1,1 @@
-export { default } from '../../server/rh-access-handler.ts';
+﻿export { default } from '../../server/rh-access-handler.ts';

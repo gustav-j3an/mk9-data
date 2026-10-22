@@ -1,4 +1,4 @@
-# Inventário real para o mapeamento MK9
+﻿# Inventário real para o mapeamento MK9
 
 > Inventário histórico. Os cadastros não foram corrigidos automaticamente. A implementação atual utiliza [identidades e alocações explícitas de RH](MK9_RH_VINCULOS_IMPLEMENTACAO.md), preservando a organização operacional; não configurar estes relacionamentos por inferência.
 

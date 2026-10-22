@@ -18,7 +18,10 @@
     "mk9:homologation:real": "node --import tsx scripts/mk9-homologation.ts --real",
     "rh:local:up": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/mk9-rh-local.ps1 up",
     "rh:local:down": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/mk9-rh-local.ps1 down",
-    "rh:local:verify": "node scripts/mk9-rh-local-verify.mjs"
+    "rh:local:verify": "node scripts/mk9-rh-local-verify.mjs",
+    "test:faltas-atestados": "node --import tsx --test src/lib/faltasAtestados.test.ts src/lib/faltasAtestadosReceived.test.ts src/lib/absenceAttachments.test.ts src/lib/absenceAttachmentService.test.ts",
+    "test:rh-integration": "node --import tsx --test server/mk9-faltas.test.ts src/lib/rhMatriculasReconciliation.test.ts",
+    "security:faltas-atestados": "node tests/faltas-atestados-security.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

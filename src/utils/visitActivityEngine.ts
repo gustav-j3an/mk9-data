@@ -1,117 +1,233 @@
 import type { RouteItem, Visit } from '../types';
-import { zoned } from './attendanceEngine';
+import { zoned, validDate } from './attendanceEngine';
 
-export type ActivityPresenceStatus =
-  | 'confirmada'
-  | 'em_atividade'
-  | 'sem_evidencia';
+export type OperationalPresenceStatus = 'presente' | 'sem_atividade';
 
-export interface PromoterOperationalActivity {
+export type RouteExecutionStatus = 'COMPLETA' | 'PARCIAL' | 'NAO_REALIZADO' | 'EM_ANDAMENTO' | 'SEM_PROGRAMACAO';
+
+export interface PromoterOperationalSummary {
+  promoterId: string;
   matricula: string;
-  dataOperacional: string;
-  status: ActivityPresenceStatus;
-  statusLabel: string;
-  totalProgramadas: number;
-  totalIniciadas: number;
-  totalConcluidas: number;
-  primeiraAtividade: string | null;
-  ultimaAtividade: string | null;
-  origemEvidencia: string;
-  visitas: Visit[];
+  name: string;
+  equipe: string;
+  supervisor: string;
+  presenceStatus: OperationalPresenceStatus;
+  firstActivityTime: string | null;
+  scheduledVisitsCount: number;
+  completedVisitsCount: number;
+  inProgressVisitsCount: number;
+  routeStatus: RouteExecutionStatus;
+  visits: PromoterVisitDetail[];
 }
 
-export const ACTIVITY_LABELS: Record<ActivityPresenceStatus, string> = {
-  confirmada: 'Presença Confirmada por Atendimento',
-  em_atividade: 'Em Atividade em Campo',
-  sem_evidencia: 'Sem Evidência de Atendimento'
-};
-
-const DAYS_MAP = ['domingo', 'segunda', 'terca', 'quarta', 'quinta', 'sexta', 'sabado'] as const;
-
-export function isRouteScheduledForDate(route: RouteItem, dateStr: string): boolean {
-  if (route.encerrada_em) return false;
-  const dayName = DAYS_MAP[new Date(`${dateStr}T12:00:00Z`).getUTCDay()];
-  return Boolean((route as unknown as Record<string, unknown>)[dayName]);
+export interface PromoterVisitDetail {
+  id: string;
+  lojaCodigo: string;
+  lojaNome: string;
+  industriaCodigo: string;
+  industriaNome: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  startedTimeFormatted: string | null;
+  completedTimeFormatted: string | null;
+  status: 'concluida' | 'em_andamento' | 'nao_realizada' | 'pendente';
+  motivoNaoRealizada?: string | null;
+  isScheduled: boolean;
 }
+
+export interface DayActivityInput {
+  date: string;
+  promoters: Array<{
+    id: string;
+    matricula: string;
+    nome: string;
+    equipe?: string | null;
+    supervisor?: string | null;
+    status: string;
+  }>;
+  routes: RouteItem[];
+  visits: Visit[];
+  now?: string;
+  timezone?: string;
+}
+
+const DAY_KEYS = ['domingo', 'segunda', 'terca', 'quarta', 'quinta', 'sexta', 'sabado'] as const;
 
 /**
- * Motor de apuração de atividade operacional a partir das visitas do promotor no dia.
- * Separa a presença operacional por atendimento do controle formal CLT de jornada.
+ * Calcula a Presença Operacional e o Cumprimento de Roteiro do dia para todos os promotores.
+ * 
+ * Regras:
+ * 1. Presença operacional é confirmada ('presente') quando o promotor inicia sua primeira visita válida do dia (started_at ou status 'em_andamento'/'concluida').
+ * 2. Horário da primeira atividade registrado no fuso operacional (padrão 'America/Sao_Paulo').
+ * 3. Uma única confirmação diária por promotor. Visitas de outros promotores não interferem.
+ * 4. Situação do Roteiro:
+ *    - 'SEM_PROGRAMACAO': nenhuma visita programada válida para o dia.
+ *    - 'COMPLETA': todas as visitas programadas foram concluídas (completedVisitsCount >= scheduledVisitsCount && scheduledVisitsCount > 0).
+ *    - 'EM_ANDAMENTO': durante o dia operacional em andamento (date >= today), se nem todas foram concluídas e ainda não finalizou o dia.
+ *    - 'PARCIAL': após o fechamento do dia (ou quando não há mais visitas em andamento e pelo menos 1 foi concluída), concluiu pelo menos 1 mas não todas.
+ *    - 'NAO_REALIZADO': após o fechamento do dia (ou sem visitas em andamento), nenhuma visita programada concluída.
+ * 5. Nenhuma falta CLT é gerada automaticamente.
  */
-export function computePromoterActivity(
-  matricula: string,
-  dateStr: string,
-  visits: Visit[],
-  routes: RouteItem[],
-  timezone = 'America/Sao_Paulo'
-): PromoterOperationalActivity {
-  // Isolar rigorosamente apenas as visitas do promotor na data operacional, excluindo canceladas/não realizadas
-  const promoterVisits = visits.filter(
-    v => v.promotor_matricula === matricula && v.data_visita === dateStr
-  );
-
-  // Visitas com atendimento real (concluídas ou em andamento)
-  const concluidas = promoterVisits.filter(v => v.status === 'concluida');
-
-  // Quantidade de visitas programadas (rotas ativas com flag para o dia)
-  const scheduledRoutes = routes.filter(
-    r => r.promotor_matricula === matricula && isRouteScheduledForDate(r, dateStr)
-  );
-
-  const totalProgramadas = scheduledRoutes.length;
-  const totalIniciadas = promoterVisits.filter(
-    v => v.status === 'em_andamento' || v.status === 'concluida' || Boolean(v.started_at)
-  ).length;
-  const totalConcluidas = concluidas.length;
-
-  // Extrair horários válidos de atividade (started_at ou completed_at)
-  const timestamps: number[] = [];
-  const addTs = (iso?: string | null) => {
-    if (iso && Number.isFinite(Date.parse(iso))) {
-      timestamps.push(Date.parse(iso));
-    }
-  };
-
-  for (const v of promoterVisits) {
-    if (v.status === 'concluida' || v.status === 'em_andamento') {
-      addTs(v.started_at);
-      addTs(v.completed_at);
-    }
+export function calculateOperationalActivity(input: DayActivityInput): PromoterOperationalSummary[] {
+  const { date, promoters, routes, visits, timezone = 'America/Sao_Paulo' } = input;
+  if (!validDate(date)) {
+    throw new Error('Data operacional inválida.');
   }
 
-  timestamps.sort((a, b) => a - b);
+  const nowIso = input.now || new Date().toISOString();
+  const todayDateStr = zoned(nowIso, timezone).date;
+  const isDayClosed = date < todayDateStr;
 
-  const primeiraAtividade = timestamps.length > 0 ? zoned(new Date(timestamps[0]).toISOString(), timezone).time : null;
-  const ultimaAtividade = timestamps.length > 0 ? zoned(new Date(timestamps[timestamps.length - 1]).toISOString(), timezone).time : null;
+  const dayOfWeekIndex = new Date(`${date}T12:00:00Z`).getUTCDay();
+  const dayKey = DAY_KEYS[dayOfWeekIndex];
 
-  // Regras de Classificação Operacional:
-  // Regra 1: Pelo menos uma visita concluída -> Presença confirmada
-  // Regra 2: Pelo menos uma visita iniciada, nenhuma concluída -> Em atividade
-  // Regra 3: Sem visitas válidas -> Sem evidência de atendimento (nunca gera falta)
-  let status: ActivityPresenceStatus = 'sem_evidencia';
-  let origemEvidencia = 'Nenhum atendimento registrado nesta data';
+  // Filtrar apenas promotores ativos
+  const activePromoters = promoters.filter(p => p.status === 'ativo');
 
-  if (totalConcluidas > 0) {
-    status = 'confirmada';
-    origemEvidencia = `${totalConcluidas} visita(s) concluída(s) em campo`;
-  } else if (totalIniciadas > 0) {
-    status = 'em_atividade';
-    origemEvidencia = `${totalIniciadas} visita(s) em andamento (aguardando conclusão)`;
-  } else if (totalProgramadas > 0) {
-    origemEvidencia = `${totalProgramadas} visita(s) programada(s), sem início reportado`;
-  }
+  // Indexar visitas do dia por promotor
+  const visitsByPromoter = new Map<string, Visit[]>();
+  visits.forEach(v => {
+    if (v.data_visita === date) {
+      const list = visitsByPromoter.get(v.promotor_matricula) || [];
+      list.push(v);
+      visitsByPromoter.set(v.promotor_matricula, list);
+    }
+  });
 
-  return {
-    matricula,
-    dataOperacional: dateStr,
-    status,
-    statusLabel: ACTIVITY_LABELS[status],
-    totalProgramadas,
-    totalIniciadas,
-    totalConcluidas,
-    primeiraAtividade,
-    ultimaAtividade,
-    origemEvidencia,
-    visitas: promoterVisits
-  };
+  // Indexar rotas válidas para a data por promotor
+  const routesByPromoter = new Map<string, RouteItem[]>();
+  routes.forEach(r => {
+    // Verificar se a rota está ativa no dia da semana correspondente
+    const isActiveForDay = Boolean(r[dayKey]);
+    if (isActiveForDay) {
+      const list = routesByPromoter.get(r.promotor_matricula) || [];
+      list.push(r);
+      routesByPromoter.set(r.promotor_matricula, list);
+    }
+  });
+
+  return activePromoters.map(p => {
+    const matricula = p.matricula;
+    const promoterRoutes = routesByPromoter.get(matricula) || [];
+    const promoterVisits = visitsByPromoter.get(matricula) || [];
+
+    // Desduplicar rotas da programação por loja e indústria
+    const scheduledKeys = new Set<string>();
+    const deduplicatedRoutes: RouteItem[] = [];
+    promoterRoutes.forEach(r => {
+      const key = `${r.loja_codigo}|${r.industria_codigo}`;
+      if (!scheduledKeys.has(key)) {
+        scheduledKeys.add(key);
+        deduplicatedRoutes.push(r);
+      }
+    });
+
+    const scheduledVisitsCount = deduplicatedRoutes.length;
+
+    // Mapear visitas existentes
+    const visitDetails: PromoterVisitDetail[] = [];
+    const visitedKeys = new Set<string>();
+
+    promoterVisits.forEach(v => {
+      const key = `${v.loja_codigo}|${v.industria_codigo}`;
+      visitedKeys.add(key);
+      const isScheduled = scheduledKeys.has(key);
+
+      const startedFormatted = v.started_at ? zoned(v.started_at, timezone).time : null;
+      const completedFormatted = v.completed_at ? zoned(v.completed_at, timezone).time : null;
+
+      visitDetails.push({
+        id: v.id,
+        lojaCodigo: v.loja_codigo,
+        lojaNome: (v as any).loja?.nome || v.loja_codigo,
+        industriaCodigo: v.industria_codigo,
+        industriaNome: (v as any).industria?.nome || v.industria_codigo,
+        startedAt: v.started_at || null,
+        completedAt: v.completed_at || null,
+        startedTimeFormatted: startedFormatted,
+        completedTimeFormatted: completedFormatted,
+        status: (v.status as any) || 'pendente',
+        motivoNaoRealizada: v.motivo_nao_realizada || null,
+        isScheduled
+      });
+    });
+
+    // Para rotas programadas que ainda não possuem registro de visita no banco, adicionar como 'pendente'
+    deduplicatedRoutes.forEach(r => {
+      const key = `${r.loja_codigo}|${r.industria_codigo}`;
+      if (!visitedKeys.has(key)) {
+        visitDetails.push({
+          id: `planned-${r.id}`,
+          lojaCodigo: r.loja_codigo,
+          lojaNome: (r as any).loja?.nome || r.loja_codigo,
+          industriaCodigo: r.industria_codigo,
+          industriaNome: (r as any).industria?.nome || r.industria_codigo,
+          startedAt: null,
+          completedAt: null,
+          startedTimeFormatted: null,
+          completedTimeFormatted: null,
+          status: 'pendente',
+          isScheduled: true
+        });
+      }
+    });
+
+    // Contagem de visitas programadas concluídas e em andamento
+    const completedScheduled = visitDetails.filter(vd => vd.isScheduled && vd.status === 'concluida').length;
+    const inProgressScheduled = visitDetails.filter(vd => vd.isScheduled && vd.status === 'em_andamento').length;
+
+    // Presença operacional: confirmada se qualquer visita (programada ou avulsa) foi iniciada (started_at ou em_andamento ou concluída)
+    // Visitas canceladas sem started_at ou marcadas como nao_realizada sem ter sido iniciada não contam
+    const validStartedVisits = visitDetails.filter(vd => {
+      if (vd.status === 'nao_realizada' && !vd.startedAt) return false;
+      return Boolean(vd.startedAt) || vd.status === 'concluida' || vd.status === 'em_andamento';
+    });
+
+    const isPresent = validStartedVisits.length > 0;
+    const presenceStatus: OperationalPresenceStatus = isPresent ? 'presente' : 'sem_atividade';
+
+    // Primeiro horário de atividade (menor started_at)
+    let firstActivityTime: string | null = null;
+    const visitsWithStartedAt = validStartedVisits
+      .filter(v => v.startedAt && Number.isFinite(Date.parse(v.startedAt)))
+      .sort((a, b) => Date.parse(a.startedAt!) - Date.parse(b.startedAt!));
+
+    if (visitsWithStartedAt.length > 0) {
+      firstActivityTime = zoned(visitsWithStartedAt[0].startedAt!, timezone).time;
+    }
+
+    // Determinar Situação do Roteiro
+    let routeStatus: RouteExecutionStatus = 'SEM_PROGRAMACAO';
+
+    if (scheduledVisitsCount === 0) {
+      routeStatus = 'SEM_PROGRAMACAO';
+    } else if (completedScheduled >= scheduledVisitsCount) {
+      routeStatus = 'COMPLETA';
+    } else {
+      if (isDayClosed) {
+        if (completedScheduled > 0) {
+          routeStatus = 'PARCIAL';
+        } else {
+          routeStatus = 'NAO_REALIZADO';
+        }
+      } else {
+        routeStatus = 'EM_ANDAMENTO';
+      }
+    }
+
+    return {
+      promoterId: p.id,
+      matricula: p.matricula,
+      name: p.nome,
+      equipe: p.equipe || 'Geral',
+      supervisor: p.supervisor || 'Não atribuído',
+      presenceStatus,
+      firstActivityTime,
+      scheduledVisitsCount,
+      completedVisitsCount: completedScheduled,
+      inProgressVisitsCount: inProgressScheduled,
+      routeStatus,
+      visits: visitDetails
+    };
+  }).sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
 }

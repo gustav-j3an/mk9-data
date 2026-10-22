@@ -11,6 +11,23 @@ export interface Absence {
   retorno: string | null;
   dias: number | null;
   status: AbsenceStatus;
+  externalIdentity?: {
+    recordId: string | null;
+    projectId: string;
+    matricula: string;
+  };
+}
+
+/** Sanitized fields projected from GET /api/integracoes/ausencias on the server. */
+export interface Mk9ApiAbsenceRecord {
+  id?: unknown;
+  protocolo?: unknown;
+  colaborador?: { matricula?: unknown; nome?: unknown };
+  projeto?: { id?: unknown; nome?: unknown };
+  tipo?: { categoria?: unknown };
+  periodo?: { inicio?: unknown; fim?: unknown; retorno?: unknown; dias?: unknown };
+  status?: unknown;
+  status_processamento?: unknown;
 }
 export interface AbsencesResult {
   data: Absence[];

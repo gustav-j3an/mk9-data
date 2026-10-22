@@ -1,4 +1,4 @@
--- Synthetic data only. Entire test transaction is rolled back. No operational data is reassigned.
+﻿-- Synthetic data only. Entire test transaction is rolled back. No operational data is reassigned.
 BEGIN;
 INSERT INTO public.profiles(id,name,role,status) VALUES
  ('10000000-0000-0000-0000-000000000001','Synthetic own','promotor','ativo'),

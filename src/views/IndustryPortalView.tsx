@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useAuth } from '../auth/AuthProvider';
 import { supabase } from '../lib/supabase';
 import * as XLSX from 'xlsx';
@@ -13,7 +13,20 @@ import {
 import { ExecutiveReportDocument } from '../components/reports/ExecutiveReportDocument';
 import { AuthorSignature } from '../components/AuthorSignature';
 import { ShareWhatsAppModal } from '../components/ShareWhatsAppModal';
+<<<<<<< HEAD
 import type { VisitShareData } from '../utils/whatsappShare';
+=======
+import { isWhatsAppShareableVisit } from '../utils/whatsappShare';
+import { filterOperationalVisits, getChecklistDisplayValue, getIndustryDisplayName, groupIndustryPerformance, paginateOperationalVisits, type OperationalStatusFilter } from '../utils/industryPortalOperational';
+import {
+  canOpenStoreVisitReport,
+  filterStoreHistoryItems,
+  getStoreHistoryStatusLabel,
+  getStoreHistoryStatusTone,
+  getStoreHistorySummary,
+  type StoreHistoryStatusFilter
+} from '../utils/industryStoreHistory';
+>>>>>>> c943d2797aff85d3e3e3468cf3e80fce8aa64f40
 
 interface IndustryPortalViewProps {
   onShowToast: (toast: Omit<ToastMessage, 'id'>) => void;
@@ -70,6 +83,7 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
 
   // Modal de Detalhes da Visita (Somente Leitura)
   const [selectedVisitItem, setSelectedVisitItem] = useState<OperationalVisitItem | null>(null);
+  const [sharingVisit, setSharingVisit] = useState<Visit | null>(null);
   const [loadingDetails, setLoadingDetails] = useState(false);
   const [shareWhatsAppModalData, setShareWhatsAppModalData] = useState<VisitShareData | null>(null);
 
@@ -78,9 +92,20 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
   const [historyPeriodFilter, setHistoryPeriodFilter] = useState<'7' | '30' | '90' | 'all'>('30');
   const [historyVisitsData, setHistoryVisitsData] = useState<Visit[]>([]);
   const [loadingHistory, setLoadingHistory] = useState<boolean>(false);
+  const [historyStatusFilter, setHistoryStatusFilter] = useState<StoreHistoryStatusFilter>('all');
+  const historyDialogRef = useRef<HTMLDivElement>(null);
+  const visitReportDialogRef = useRef<HTMLDivElement>(null);
+  const historyScrollTopRef = useRef(0);
+  const historyReturnFocusRef = useRef<HTMLElement | null>(null);
+  const reportReturnFocusRef = useRef<HTMLElement | null>(null);
+  const historyWasOpenRef = useRef(false);
+  const reportWasOpenRef = useRef(false);
 
   // Estado de Navegação das Abas do Portal ('operacional' | 'evidencias' | 'relatorio')
   const [activeTab, setActiveTab] = useState<'operacional' | 'evidencias' | 'relatorio'>('operacional');
+  const [operationalStatusFilter, setOperationalStatusFilter] = useState<OperationalStatusFilter>('all');
+  const [operationalSearch, setOperationalSearch] = useState('');
+  const [operationalPage, setOperationalPage] = useState(1);
 
   // Estados da Central de Evidências
   const [evidenciasPage, setEvidenciasPage] = useState<number>(1);
@@ -99,16 +124,6 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
 
   // Registro de fotos com falha de carregamento (HTTP ou rede) para exibir fallback elegante sem quadro branco
   const [failedPhotoKeys, setFailedPhotoKeys] = useState<Set<string>>(new Set());
-
-  // --- Estado do Relatório Executivo Compacto ---
-  // Tabela de PDV: inicia recolhida, com paginação de 20 e campo de busca
-  const [pdvTableExpanded, setPdvTableExpanded] = useState<boolean>(false);
-  const [pdvPage, setPdvPage] = useState<number>(1);
-  const [pdvSearch, setPdvSearch] = useState<string>('');
-  const PDV_PAGE_SIZE = 20;
-
-  // Tabela de Promotores: inicia recolhida
-  const [promotorTableExpanded, setPromotorTableExpanded] = useState<boolean>(false);
 
   // Função utilitária segura para resolver Signed URL (com sanitização de caminho no bucket visit-photos)
   const resolvePhotoUrl = useCallback(async (rawStoragePath: string): Promise<string> => {
@@ -224,6 +239,8 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
       if (visitsRes.error) throw visitsRes.error;
       if (rotasRes.error) throw rotasRes.error;
       if (promotoresRes.error) throw promotoresRes.error;
+      if (lojasRes.error) throw lojasRes.error;
+      if (settingsData.status !== 'loaded') throw new Error(settingsData.error || 'Não foi possível carregar as configurações operacionais.');
 
       const realVisits = (visitsRes.data as unknown as Visit[]) || [];
       const rawRoutes = (rotasRes.data as unknown as RouteItem[]) || [];
@@ -346,7 +363,14 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
     return setLojasRealizadas.size;
   }, [allOperationalVisits]);
 
-  // KPIs Principais da Indústria
+  const industriesPerformance = useMemo(
+    () => groupIndustryPerformance(allOperationalVisits, activeIndCode),
+    [allOperationalVisits, activeIndCode]
+  );
+
+  // Definição dos indicadores: planejadas = total de itens operacionais previstos no período
+  // (denominador da execução); os demais valores contam itens por status persistido/mapeado
+  // pelo routePlanner e são categorias exclusivas entre si.
   const kpis = useMemo(() => {
     const planejadas = allOperationalVisits.length;
     const concluidas = allOperationalVisits.filter((v) => v.status === 'concluida').length;
@@ -371,10 +395,18 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
     };
   }, [allOperationalVisits, contratadasLojasCount, lojasComVisitaRealizadaCount, todayStr]);
 
-  // Filtrar apenas pendências (Hoje e Atrasadas) para a Seção Destacada
-  const pendenciasList = useMemo(() => {
-    return allOperationalVisits.filter((v) => v.status === 'pendente');
-  }, [allOperationalVisits]);
+  const filteredOperationalVisits = useMemo(() => {
+    return filterOperationalVisits(allOperationalVisits, operationalStatusFilter, operationalSearch);
+  }, [allOperationalVisits, operationalSearch, operationalStatusFilter]);
+  const OPERATIONAL_PAGE_SIZE = 12;
+  const operationalTotalPages = Math.max(1, Math.ceil(filteredOperationalVisits.length / OPERATIONAL_PAGE_SIZE));
+  const paginatedOperationalVisits = useMemo(() => {
+    return paginateOperationalVisits(filteredOperationalVisits, operationalPage, OPERATIONAL_PAGE_SIZE);
+  }, [filteredOperationalVisits, operationalPage, operationalTotalPages]);
+
+  useEffect(() => {
+    setOperationalPage(1);
+  }, [operationalSearch, operationalStatusFilter]);
 
   // --- CÁLCULOS DO RELATÓRIO EXECUTIVO ---
   const hasQuinzenalRoutes = useMemo(() => {
@@ -496,30 +528,6 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
   const topProblematicLojas = useMemo(() => {
     return lojasPerformance.slice(0, 10);
   }, [lojasPerformance]);
-
-  // PDV filtrado pela busca textual (nome, código, cidade, UF)
-  const filteredLojasPerformance = useMemo(() => {
-    if (!pdvSearch.trim()) return lojasPerformance;
-    const term = pdvSearch.toLowerCase().trim();
-    return lojasPerformance.filter((l) =>
-      l.nome.toLowerCase().includes(term) ||
-      l.codigo.toLowerCase().includes(term) ||
-      l.cidade.toLowerCase().includes(term) ||
-      l.uf.toLowerCase().includes(term)
-    );
-  }, [lojasPerformance, pdvSearch]);
-
-  // Paginação real: 20 lojas por página sobre a lista filtrada
-  const pdvTotalPages = Math.max(1, Math.ceil(filteredLojasPerformance.length / PDV_PAGE_SIZE));
-  const paginatedLojas = useMemo(() => {
-    const start = (pdvPage - 1) * PDV_PAGE_SIZE;
-    return filteredLojasPerformance.slice(start, start + PDV_PAGE_SIZE);
-  }, [filteredLojasPerformance, pdvPage]);
-
-  // Reset da paginação ao alterar busca
-  useEffect(() => {
-    setPdvPage(1);
-  }, [pdvSearch]);
 
   const occurrencesSummary = useMemo(() => {
     let rupturas = 0;
@@ -662,6 +670,9 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
   }, [activeIndCode]);
 
   const handleOpenStoreHistory = (lojaCodigo: string) => {
+    if (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
+      historyReturnFocusRef.current = document.activeElement;
+    }
     setSelectedStoreCode(lojaCodigo);
     fetchStoreHistory(lojaCodigo, historyPeriodFilter);
   };
@@ -744,14 +755,13 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
 
   // Resumo de KPIs do Histórico da Loja
   const storeHistoryKPIs = useMemo(() => {
-    const planejadas = storeHistoryOperationalItems.length;
-    const concluidas = storeHistoryOperationalItems.filter((v) => v.status === 'concluida').length;
-    const pendentes = storeHistoryOperationalItems.filter((v) => v.status === 'pendente').length;
-    const naoRealizadas = storeHistoryOperationalItems.filter((v) => v.status === 'nao_realizada').length;
-    const aderencia = planejadas > 0 ? Math.round((concluidas / planejadas) * 100) : 0;
-
-    return { planejadas, concluidas, pendentes, naoRealizadas, aderencia };
+    return getStoreHistorySummary(storeHistoryOperationalItems);
   }, [storeHistoryOperationalItems]);
+
+  const filteredStoreHistoryItems = useMemo(
+    () => filterStoreHistoryItems(storeHistoryOperationalItems, historyStatusFilter),
+    [storeHistoryOperationalItems, historyStatusFilter]
+  );
 
   // Função de Busca Paginada de Evidências no Supabase (12 fotos por página)
   const fetchEvidencias = useCallback(async () => {
@@ -890,6 +900,10 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
 
   // Carregar detalhes completos (checklist, fotos, ocorrências e validade) sob demanda ao abrir o relatório da visita
   const handleOpenVisitDetails = async (item: OperationalVisitItem) => {
+    if (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
+      reportReturnFocusRef.current = document.activeElement;
+    }
+    if (historyDialogRef.current) historyScrollTopRef.current = historyDialogRef.current.scrollTop;
     setSelectedVisitItem(item);
     setSignedPhotoUrls({});
 
@@ -958,6 +972,73 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
   };
 
   // --- EXPORTAÇÃO EXCEL (3 ABAS: RESUMO_EXECUTIVO, ATENDIMENTOS_DETALHADOS, OCORRENCIAS_E_VALIDADE) ---
+  const closeVisitReport = useCallback(() => setSelectedVisitItem(null), []);
+  const closeStoreHistory = useCallback(() => setSelectedStoreCode(null), []);
+
+  useEffect(() => {
+    if (selectedVisitItem) {
+      reportWasOpenRef.current = true;
+      visitReportDialogRef.current?.focus();
+      return;
+    }
+
+    if (selectedStoreCode && historyDialogRef.current) {
+      historyDialogRef.current.scrollTop = historyScrollTopRef.current;
+      if (reportWasOpenRef.current) {
+        reportWasOpenRef.current = false;
+        reportReturnFocusRef.current?.focus();
+      } else {
+        historyWasOpenRef.current = true;
+        historyDialogRef.current.focus();
+      }
+      return;
+    }
+    if (reportWasOpenRef.current) {
+      reportWasOpenRef.current = false;
+      reportReturnFocusRef.current?.focus();
+    } else if (historyWasOpenRef.current) {
+      historyWasOpenRef.current = false;
+      historyReturnFocusRef.current?.focus();
+    }
+  }, [selectedVisitItem, selectedStoreCode]);
+
+  useEffect(() => {
+    if (!selectedVisitItem && !selectedStoreCode) return;
+
+    const handleDialogKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        if (selectedVisitItem) closeVisitReport();
+        else closeStoreHistory();
+        return;
+      }
+
+      if (event.key !== 'Tab') return;
+      const dialog = selectedVisitItem ? visitReportDialogRef.current : historyDialogRef.current;
+      if (!dialog) return;
+      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      ));
+      if (focusable.length === 0) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && (document.activeElement === first || !dialog.contains(document.activeElement))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (document.activeElement === last || !dialog.contains(document.activeElement))) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener('keydown', handleDialogKeyDown);
+    return () => document.removeEventListener('keydown', handleDialogKeyDown);
+  }, [selectedVisitItem, selectedStoreCode, closeVisitReport, closeStoreHistory]);
+
   const handleExportExcel = () => {
     try {
       const wb = XLSX.utils.book_new();
@@ -1000,6 +1081,19 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
       const wsResumo = XLSX.utils.aoa_to_sheet(resumoRows);
       wsResumo['!cols'] = [{ wch: 32 }, { wch: 30 }, { wch: 50 }];
       XLSX.utils.book_append_sheet(wb, wsResumo, 'RESUMO_EXECUTIVO');
+
+      const industryPerformanceRows = industriesPerformance.map((industry) => ({
+        'Indústria': industry.nome,
+        'Código': industry.codigo || '—',
+        'Visitas previstas': industry.previstas,
+        'Visitas concluídas': industry.concluidas,
+        'Pendentes': industry.pendentes,
+        'Não realizadas': industry.naoRealizadas,
+        'Execução (%)': industry.taxaExecucao
+      }));
+      const wsIndustryPerformance = XLSX.utils.json_to_sheet(industryPerformanceRows);
+      wsIndustryPerformance['!cols'] = [{ wch: 32 }, { wch: 16 }, { wch: 18 }, { wch: 20 }, { wch: 14 }, { wch: 18 }, { wch: 14 }];
+      XLSX.utils.book_append_sheet(wb, wsIndustryPerformance, 'DESEMPENHO_INDUSTRIA');
 
       // 2. ABA ATENDIMENTOS_DETALHADOS
       const atendimentosData = allOperationalVisits.map((item) => ({
@@ -1158,7 +1252,7 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
 
         <div className="flex flex-wrap items-center gap-3 self-end md:self-auto font-mono text-xs">
           <span className="text-[#77766F] bg-[#E4E2DB] border border-[#CFCDC5] px-3 py-2 rounded-xl">
-            Atualizado às: <strong className="text-slate-200">{lastUpdate}</strong>
+            Atualizado às: <strong className="text-[#14243B]">{lastUpdate}</strong>
           </span>
 
           <button
@@ -1254,308 +1348,41 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
         )}
       </div>
 
-      {/* RENDERIZAÇÃO DA ABA OPERACIONAL */}
+      {/* Visão operacional consolidada: status e contadores usam allOperationalVisits. */}
       {activeTab === 'operacional' && (
-        <>
-          {/* ESTADO DE ERRO */}
-          {error && (
-            <div className="p-4 rounded-2xl bg-[#FDF2F2] border border-rose-500/50 text-rose-300 font-mono text-xs flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
-                <span className="material-symbols-outlined text-xl text-rose-400">error</span>
-                <span>Não foi possível carregar os dados. Tente novamente. ({error})</span>
-              </div>
-              <button onClick={fetchIndustryData} className="underline font-bold hover:text-white">
-                Tentar novamente
-              </button>
-            </div>
-          )}
-
-          {/* 4. CARDS DE KPIS PRINCIPAIS DA INDÚSTRIA */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3 font-mono text-xs">
-            <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5]">
-              <span className="text-[10px] text-[#77766F] block font-bold uppercase">PDVs CONTRATADOS</span>
-              <span className="text-2xl font-extrabold text-[#171717] mt-1 block">{loading ? '...' : kpis.lojas}</span>
-              <span className="text-[10px] text-[#5F5F5F] block mt-0.5">{loading ? '...' : `${kpis.lojasComVisita} com visita realizada`}</span>
-            </div>
-
-            <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-purple-500/30 bg-purple-950/10">
-              <span className="text-[10px] text-purple-400 block font-bold uppercase">VISITAS PLANEJADAS</span>
-              <span className="text-2xl font-extrabold text-purple-300 mt-1 block">{loading ? '...' : kpis.planejadas}</span>
-              <span className="text-[10px] text-purple-400/70 block mt-0.5">Atendimentos previstos no período</span>
-            </div>
-
-            <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-emerald-500/30 bg-emerald-950/10">
-              <span className="text-[10px] text-emerald-400 block font-bold uppercase">VISITAS CONCLUÍDAS</span>
-              <span className="text-2xl font-extrabold text-emerald-300 mt-1 block">{loading ? '...' : kpis.concluidas}</span>
-              <span className="text-[10px] text-emerald-400/70 block mt-0.5">Check-outs realizados</span>
-            </div>
-
-            <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-rose-500/30 bg-rose-950/10">
-              <span className="text-[10px] text-rose-400 block font-bold uppercase">VISITAS PENDENTES</span>
-              <span className="text-2xl font-extrabold text-rose-300 mt-1 block">{loading ? '...' : kpis.pendentes}</span>
-              <span className="text-[10px] text-rose-400/70 block mt-0.5 truncate">{loading ? '...' : `${kpis.atrasadas} atrasadas • ${kpis.pendentesHoje} para hoje`}</span>
-            </div>
-
-            <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-orange-500/30 bg-orange-950/10">
-              <span className="text-[10px] text-orange-400 block font-bold uppercase">NÃO REALIZADAS</span>
-              <span className="text-2xl font-extrabold text-orange-300 mt-1 block">{loading ? '...' : kpis.naoRealizadas}</span>
-              <span className="text-[10px] text-orange-400/70 block mt-0.5">Visitas não realizadas</span>
-            </div>
-
-            <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-indigo-500/40 bg-indigo-950/20">
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] text-indigo-300 block font-bold uppercase">ADERÊNCIA</span>
-                {systemSettings.mode !== 'OPERACAO_OFICIAL' && (
-                  <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                    IMPLANTAÇÃO
-                  </span>
-                )}
-              </div>
-              {loading ? (
-                <span className="text-sm font-bold text-[#77766F] mt-2 block">Carregando...</span>
-              ) : (
-                <>
-                  <span className="text-2xl font-extrabold text-indigo-200 mt-1 block">
-                    {kpis.planejadas > 0 ? `${kpis.aderencia}%` : '—'}
-                  </span>
-                  <span className="text-[10px] text-indigo-400/70 block mt-0.5">
-                    {systemSettings.mode !== 'OPERACAO_OFICIAL'
-                      ? 'Execução operacional (SLA contratual em implantação)'
-                      : 'Taxa de Execução do Período'}
-                  </span>
-                </>
-              )}
-            </div>
+        <section className="space-y-5 font-mono text-xs" aria-label="Visão operacional">
+          {error && <div role="alert" className="flex flex-wrap items-center justify-between gap-3 border border-rose-300 bg-rose-50 px-4 py-3 text-rose-900"><span>Não foi possível carregar os dados. {error}</span><button onClick={fetchIndustryData} className="font-bold underline">Tentar novamente</button></div>}
+          <div className="grid grid-cols-2 gap-x-5 border-y border-[#CFCDC5] py-4 sm:grid-cols-5">
+            {([
+              { label: 'Previstas', value: kpis.planejadas, status: 'all' as const },
+              { label: 'Concluídas', value: kpis.concluidas, status: 'concluida' as const },
+              { label: 'Em andamento', value: kpis.emAndamento, status: 'em_andamento' as const },
+              { label: 'Pendentes', value: kpis.pendentes, status: 'pendente' as const },
+              { label: 'Não realizadas', value: kpis.naoRealizadas, status: 'nao_realizada' as const }
+            ]).map((item) => {
+              const selected = operationalStatusFilter === item.status;
+              return <button key={item.label} type="button" aria-pressed={selected} onClick={() => setOperationalStatusFilter(item.status)} className={`border-l-2 px-3 py-1 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-600 ${selected ? 'border-indigo-600 bg-indigo-50' : 'border-transparent hover:bg-slate-50'}`}>
+                <span className="block text-[11px] font-semibold text-[#526176]">{item.label}</span>
+                <span className={`mt-1 block text-2xl font-bold tabular-nums ${selected ? 'text-[#14243B]' : 'text-[#26364B]'}`}>{loading ? '—' : item.value}</span>
+              </button>;
+            })}
           </div>
-
-          {/* 8. SEÇÃO DESTACADA: PENDÊNCIAS DE ATENDIMENTO DA INDÚSTRIA */}
-          <section className="bg-[#F7F6F2] border border-rose-500/40 rounded-2xl p-5 shadow-2xl space-y-4 font-mono">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-[#CFCDC5] pb-3 gap-2">
-              <div className="flex items-center gap-2">
-                <span className="material-symbols-outlined text-rose-400 text-xl animate-pulse">warning</span>
-                <div>
-                  <h2 className="text-sm font-bold text-[#171717] uppercase tracking-wider">
-                    PENDÊNCIAS DE ATENDIMENTO ({pendenciasList.length})
-                  </h2>
-                  <p className="text-[11px] text-[#77766F] font-normal">
-                    Atendimentos previstos que ainda precisam de execução no campo.
-                  </p>
-                </div>
-              </div>
-              <span className="text-[11px] text-rose-400 font-bold bg-rose-500/10 px-2.5 py-1 rounded-lg border border-rose-500/30 self-start sm:self-auto">
-                Requer Regularização em Campo
-              </span>
-            </div>
-
-            {pendenciasList.length === 0 ? (
-              <div className="py-8 text-center space-y-1 bg-[#E4E2DB]/50 rounded-xl border border-[#CFCDC5]">
-                <span className="material-symbols-outlined text-emerald-400 text-3xl">check_circle</span>
-                <p className="text-xs text-[#171717] font-bold">Nenhuma pendência encontrada para o período selecionado.</p>
-                <p className="text-[11px] text-[#5F5F5F]">Todos os atendimentos das suas lojas foram executados no prazo.</p>
-              </div>
-            ) : (
-              <div className="overflow-x-auto rounded-xl border border-[#CFCDC5]">
-                <table className="w-full text-left text-xs">
-                  <thead>
-                    <tr className="bg-[#E4E2DB] border-b border-[#CFCDC5] text-[#77766F] text-[10px] uppercase">
-                      <th className="py-2.5 px-3">Data Prevista</th>
-                      <th className="py-2.5 px-3">Loja / PDV</th>
-                      <th className="py-2.5 px-3">Promotor</th>
-                      <th className="py-2.5 px-3">Frequência</th>
-                      <th className="py-2.5 px-3">Situação</th>
-                      <th className="py-2.5 px-3 text-right">Ação</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-[#CFCDC5] text-[#171717]">
-                    {pendenciasList.map((item) => (
-                      <tr key={item.key} className="hover:bg-[#E4E2DB]/80 transition-colors">
-                        <td className="py-2.5 px-3">
-                          <div className="font-bold text-[#171717]">{item.dataStr}</div>
-                          <div className="text-[10px] text-[#5F5F5F]">{item.dayOfWeekLabel}</div>
-                        </td>
-                        <td className="py-2.5 px-3 font-bold text-[#171717]">
-                          {item.lojaNome}
-                          {item.lojaCidade && <span className="text-[10px] text-[#77766F] block font-normal">{item.lojaCidade} - {item.lojaUf}</span>}
-                        </td>
-                        <td className="py-2.5 px-3 font-bold text-cyan-400">{item.promotorNome}</td>
-                        <td className="py-2.5 px-3 text-[#77766F]">{item.frequencia}</td>
-                        <td className="py-2.5 px-3">
-                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
-                            item.isPastOverdue
-                              ? 'bg-rose-950 text-rose-300 border-rose-500 animate-pulse'
-                              : 'bg-rose-500/20 text-rose-300 border-rose-500/40'
-                          }`}>
-                            {item.isPastOverdue ? '🚨 ATRASADA' : '🔴 PENDENTE'}
-                          </span>
-                        </td>
-                        <td className="py-2.5 px-3 text-right">
-                          <button
-                            onClick={() => handleOpenVisitDetails(item)}
-                            className="px-3 py-1 rounded-lg bg-[#E4E2DB] hover:bg-[#CFCDC5] text-indigo-300 border border-indigo-500/30 text-[11px] font-bold transition-all cursor-pointer"
-                          >
-                            Ver Detalhes
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </section>
-
-          {/* 7. CENTRAL DE ACOMPANHAMENTO: STATUS DOS ATENDIMENTOS DA INDÚSTRIA */}
-          <section className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-5 shadow-2xl space-y-4 font-mono">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#CFCDC5] pb-3">
-              <div>
-                <h2 className="text-sm font-bold text-[#171717] uppercase tracking-wider flex items-center gap-2">
-                  <span className="material-symbols-outlined text-indigo-400 text-xl">store</span>
-                  STATUS DOS ATENDIMENTOS DO PERÍODO ({allOperationalVisits.length})
-                </h2>
-                <p className="text-[11px] text-[#77766F] mt-0.5">
-                  Atendimentos previstos no período selecionado e situação de execução em tempo real.
-                </p>
-              </div>
-              <span className="text-[11px] text-[#77766F]">
-                Exibindo <strong>{allOperationalVisits.length}</strong> atendimento(s)
-              </span>
-            </div>
-
-            {loading ? (
-              <div className="py-12 text-center space-y-3">
-                <span className="material-symbols-outlined text-indigo-400 text-3xl animate-spin">sync</span>
-                <p className="text-xs text-[#77766F]">Carregando operação da indústria...</p>
-              </div>
-            ) : allOperationalVisits.length === 0 ? (
-              <div className="py-12 text-center space-y-2 bg-[#E4E2DB]/50 rounded-xl border border-[#CFCDC5]">
-                <span className="material-symbols-outlined text-slate-600 text-3xl">event_busy</span>
-                <p className="text-xs text-[#171717] font-bold">Nenhuma operação encontrada para o período.</p>
-              </div>
-            ) : (
-              <>
-                {/* TABELA DESKTOP */}
-                <div className="hidden md:block overflow-x-auto rounded-xl border border-[#CFCDC5]">
-                  <table className="w-full text-left text-xs">
-                    <thead>
-                      <tr className="bg-[#E4E2DB] border-b border-[#CFCDC5] text-[#77766F] text-[10px] uppercase">
-                        <th className="py-3 px-4">Loja / PDV</th>
-                        <th className="py-3 px-4">Cidade/UF</th>
-                        <th className="py-3 px-4">Frequência</th>
-                        <th className="py-3 px-4">Promotor</th>
-                        <th className="py-3 px-4">Data Prevista</th>
-                        <th className="py-3 px-4">Status</th>
-                        <th className="py-3 px-4 text-right">Detalhes</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-[#CFCDC5] text-[#171717]">
-                      {allOperationalVisits.map((item) => {
-                        let badge = { label: '🔴 PENDENTE', style: 'bg-rose-500/10 text-rose-400 border-rose-500/30' };
-                        if (item.isPastOverdue) {
-                          badge = { label: '🚨 ATRASADA', style: 'bg-rose-950 text-rose-300 border-rose-500 animate-pulse font-bold' };
-                        } else if (item.status === 'em_andamento') {
-                          badge = { label: '🔵 EM ANDAMENTO', style: 'bg-blue-500/10 text-blue-400 border-blue-500/30' };
-                        } else if (item.status === 'nao_realizada') {
-                          badge = { label: '🟠 NÃO REALIZADA', style: 'bg-orange-500/10 text-orange-400 border-orange-500/30' };
-                        } else if (item.status === 'concluida') {
-                          badge = { label: '🟢 CONCLUÍDA', style: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' };
-                        } else if (item.status === 'planejada') {
-                          badge = { label: '⚪ PLANEJADA', style: 'bg-slate-800 text-slate-300 border-[#CFCDC5]' };
-                        }
-
-                        return (
-                          <tr key={item.key} className="hover:bg-[#E4E2DB]/80 transition-colors">
-                            <td className="py-3 px-4 font-bold text-[#171717]">
-                              <button
-                                onClick={() => handleOpenStoreHistory(item.lojaCodigo)}
-                                className="text-left font-bold text-white hover:text-indigo-400 underline decoration-indigo-500/40 cursor-pointer transition-colors flex items-center gap-1.5"
-                              >
-                                <span className="material-symbols-outlined text-xs text-indigo-400">history</span>
-                                <span>{item.lojaNome}</span>
-                              </button>
-                            </td>
-                            <td className="py-3 px-4 text-[#77766F]">{item.lojaCidade || '—'}/{item.lojaUf || '-'}</td>
-                            <td className="py-3 px-4 text-[#77766F]">{item.frequencia}</td>
-                            <td className="py-3 px-4 font-bold text-cyan-400">{item.promotorNome}</td>
-                            <td className="py-3 px-4">
-                              <div className="font-bold text-[#171717]">{item.dataStr}</div>
-                              <div className="text-[10px] text-[#5F5F5F]">{item.dayOfWeekLabel}</div>
-                            </td>
-                            <td className="py-3 px-4">
-                              <span className={`px-2 py-0.5 rounded text-[10px] border ${badge.style}`}>
-                                {badge.label}
-                              </span>
-                            </td>
-                            <td className="py-3 px-4 text-right flex items-center justify-end gap-2">
-                              <button
-                                onClick={() => handleOpenStoreHistory(item.lojaCodigo)}
-                                className="px-2.5 py-1.5 rounded-lg bg-[#E4E2DB] hover:bg-indigo-950/40 text-indigo-300 border border-indigo-500/30 text-xs font-bold transition-all cursor-pointer flex items-center gap-1"
-                                title="Ver Histórico Completo da Loja"
-                              >
-                                <span className="material-symbols-outlined text-sm">history</span>
-                                <span>Histórico</span>
-                              </button>
-                              <button
-                                onClick={() => handleOpenVisitDetails(item)}
-                                className="px-2.5 py-1.5 rounded-lg bg-[#E4E2DB] hover:bg-[#CFCDC5] text-[#171717] border border-[#CFCDC5] text-xs font-bold transition-all cursor-pointer"
-                              >
-                                Relatório
-                              </button>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-
-                {/* CARDS MOBILE (390px / 768px) */}
-                <div className="md:hidden space-y-3">
-                  {allOperationalVisits.map((item) => (
-                    <div key={item.key} className="p-4 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5] space-y-2">
-                      <div className="flex items-center justify-between">
-                        <span className="text-[10px] text-[#77766F]">{item.dataStr} • {item.dayOfWeekLabel}</span>
-                        <span className={`px-2 py-0.5 rounded text-[9px] font-bold border ${
-                          item.status === 'concluida' ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' :
-                          item.status === 'em_andamento' ? 'bg-blue-500/20 text-blue-300 border-blue-500/30' :
-                          item.status === 'nao_realizada' ? 'bg-orange-500/20 text-orange-300 border-orange-500/30' :
-                          item.isPastOverdue ? 'bg-rose-950 text-rose-300 border-rose-500 animate-pulse' :
-                          'bg-rose-500/20 text-rose-300 border-rose-500/30'
-                        }`}>
-                          {item.status.toUpperCase()}
-                        </span>
-                      </div>
-
-                      <h3
-                        onClick={() => handleOpenStoreHistory(item.lojaCodigo)}
-                        className="text-sm font-bold text-white hover:text-indigo-400 cursor-pointer flex items-center gap-1.5"
-                      >
-                        <span className="material-symbols-outlined text-xs text-indigo-400">history</span>
-                        <span>{item.lojaNome}</span>
-                      </h3>
-                      <p className="text-xs text-[#77766F]">Cidade: {item.lojaCidade}/{item.lojaUf} • Promotor: <strong className="text-cyan-300">{item.promotorNome}</strong></p>
-
-                      <div className="pt-2 border-t border-[#CFCDC5] flex justify-end gap-2">
-                        <button
-                          onClick={() => handleOpenStoreHistory(item.lojaCodigo)}
-                          className="px-3 py-1.5 rounded-lg bg-[#F7F6F2] text-indigo-300 border border-indigo-500/30 text-xs font-bold flex items-center gap-1"
-                        >
-                          <span className="material-symbols-outlined text-sm">history</span>
-                          <span>Histórico Loja</span>
-                        </button>
-                        <button
-                          onClick={() => handleOpenVisitDetails(item)}
-                          className="px-3 py-1.5 rounded-lg bg-[#F7F6F2] text-[#171717] border border-[#CFCDC5] text-xs font-bold"
-                        >
-                          Relatório
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </>
-            )}
-          </section>
-        </>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+            <div><h2 className="text-base font-semibold text-[#14243B]">Atendimentos do período</h2><p className="mt-1 text-[#526176]">{filteredOperationalVisits.length} de {allOperationalVisits.length} visitas previstas</p></div>
+            <label className="block w-full sm:max-w-sm"><span className="mb-1 block text-[#526176]">Buscar loja, indústria ou promotor</span><input value={operationalSearch} onChange={(event) => setOperationalSearch(event.target.value)} placeholder="Nome, código, cidade, indústria ou promotor" className="w-full border border-[#C7CFDA] bg-white px-3 py-2 text-sm text-[#14243B] placeholder:text-[#65748A] focus:border-indigo-600 focus:outline-none" /></label>
+          </div>
+          {loading ? <div className="py-12 text-center text-[#526176]" role="status">Carregando atendimentos…</div> : paginatedOperationalVisits.length === 0 ? <div className="border-y border-[#D5DAE2] py-10 text-center text-[#526176]">Nenhum atendimento encontrado para os filtros selecionados.</div> : <div className="divide-y divide-[#D5DAE2] border-y border-[#D5DAE2]">
+            {paginatedOperationalVisits.map((item) => {
+              const statusLabel = item.status === 'concluida' ? 'Concluída' : item.status === 'em_andamento' ? 'Em andamento' : item.status === 'nao_realizada' ? 'Não realizada' : item.isPastOverdue ? 'Atrasada' : item.status === 'planejada' ? 'Planejada' : 'Pendente';
+              const statusTone = item.status === 'concluida' ? 'text-emerald-800' : item.status === 'em_andamento' ? 'text-sky-800' : item.status === 'nao_realizada' ? 'text-orange-800' : item.isPastOverdue ? 'text-rose-800' : 'text-amber-800';
+              return <article key={item.key} className="grid gap-3 py-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+                <div className="min-w-0"><div className="flex flex-wrap items-center gap-x-3 gap-y-1"><strong className="truncate text-sm text-[#14243B]">{item.lojaNome}</strong><span className={`text-xs font-semibold ${statusTone}`}>{statusLabel}</span></div><p className="mt-1 truncate text-xs text-[#26364B]"><strong>Indústria:</strong> {getIndustryDisplayName(item.industriaNome, item.industriaCodigo)} <span className="mx-1 text-[#526176]">·</span><strong>Promotor:</strong> {item.promotorNome}</p><p className="mt-1 text-[#526176]">{item.lojaCidade || 'Cidade não informada'}{item.lojaUf ? ` / ${item.lojaUf}` : ''} · {item.dataStr} · {item.frequencia}</p></div>
+                <div className="flex gap-2 sm:justify-end"><button onClick={() => handleOpenStoreHistory(item.lojaCodigo)} className="border border-[#C7CFDA] px-3 py-2 text-[#26364B] hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-600">Histórico</button><button onClick={() => handleOpenVisitDetails(item)} className="border border-[#AEB9C8] px-3 py-2 font-semibold text-[#14243B] hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-600">Detalhes</button></div>
+              </article>;
+            })}
+          </div>}
+          {!loading && filteredOperationalVisits.length > OPERATIONAL_PAGE_SIZE && <div className="flex items-center justify-between gap-3 text-[#526176]"><span>Página {Math.min(operationalPage, operationalTotalPages)} de {operationalTotalPages}</span><div className="flex gap-2"><button disabled={operationalPage <= 1} onClick={() => setOperationalPage((page) => Math.max(1, page - 1))} className="border border-[#C7CFDA] px-3 py-2 text-[#14243B] disabled:opacity-40">Anterior</button><button disabled={operationalPage >= operationalTotalPages} onClick={() => setOperationalPage((page) => Math.min(operationalTotalPages, page + 1))} className="border border-[#C7CFDA] px-3 py-2 text-[#14243B] disabled:opacity-40">Próxima</button></div></div>}
+        </section>
       )}
 
       {/* RENDERIZAÇÃO DA ABA CENTRAL DE EVIDÊNCIAS */}
@@ -1685,13 +1512,19 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                 const lojaNome = visitObj?.loja?.nome || visitObj?.loja_codigo || 'PDV';
                 const promotorNome = visitObj?.promotor?.nome || visitObj?.promotor_matricula || 'Promotor';
 
-                let tipoLabel = photo.tipo_foto?.toUpperCase() || 'EVIDÊNCIA';
+                const tipoLabel = photo.tipo_foto?.toUpperCase() || 'EVIDÊNCIA';
+                const photoTimestamp = visitObj?.completed_at || visitObj?.started_at;
+                const photoTime = photoTimestamp
+                  ? new Date(photoTimestamp).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+                  : null;
 
                 return (
-                  <div
+                  <button
                     key={photo.id}
+                    type="button"
+                    aria-label={`Abrir evidência ${tipoLabel} da loja ${lojaNome}, ${visitObj?.data_visita || 'data não informada'}${photoTime ? ` às ${photoTime}` : ''}`}
                     onClick={() => setZoomedEvidencia(photo)}
-                    className="p-2.5 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5] hover:border-indigo-500/50 transition-all cursor-pointer flex flex-col justify-between space-y-2 group"
+                    className="p-2.5 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5] hover:border-indigo-700 transition-all cursor-pointer flex flex-col justify-between space-y-2 group text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-700"
                   >
                     <div className="relative aspect-square rounded-lg bg-[#E4E2DB] overflow-hidden border border-[#CFCDC5] flex items-center justify-center">
                       {signedUrl && !failedPhotoKeys.has(photo.id || photo.storage_path) ? (
@@ -1717,11 +1550,11 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                     </div>
 
                     <div className="space-y-1 text-left">
-                      <h4 className="text-xs font-bold text-[#171717] truncate" title={lojaNome}>
-                        {lojaNome}
+                      <h4 className="text-xs font-bold text-[#171717] truncate" title={`${getIndustryDisplayName(visitObj?.industria?.nome, visitObj?.industria_codigo)} · ${lojaNome}`}>
+                        <span className="text-[#26364B]">{getIndustryDisplayName(visitObj?.industria?.nome, visitObj?.industria_codigo)}</span> <span aria-hidden="true">·</span> {lojaNome}
                       </h4>
-                      <p className="text-[10px] text-[#77766F]">
-                        {visitObj?.data_visita} • <strong className="text-cyan-300">{promotorNome}</strong>
+                      <p className="text-[10px] text-[#526176]">
+                        {visitObj?.data_visita || 'Data não informada'}{photoTime ? ` · ${photoTime}` : ''} · <strong className="text-[#0E7490]">{promotorNome}</strong>
                       </p>
                       {photo.legenda && (
                         <p className="text-[10px] text-[#171717] truncate italic" title={photo.legenda}>
@@ -1729,7 +1562,7 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                         </p>
                       )}
                     </div>
-                  </div>
+                  </button>
                 );
               })}
             </div>
@@ -1763,593 +1596,32 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
         </section>
       )}
 
-      {/* 5. RENDERIZAÇÃO DA ABA RELATÓRIO EXECUTIVO */}
+      {/* Relatório executivo compacto com os dados operacionais existentes. */}
       {activeTab === 'relatorio' && (
-        <section className="space-y-6 animate-fadeIn print-executive-report">
-          {/* 1. CABEÇALHO DA SEÇÃO EXECUTIVA */}
-          <div className="bg-[#F7F6F2] border border-indigo-500/30 rounded-2xl p-5 shadow-xl flex flex-col sm:flex-row sm:items-center justify-between gap-4 font-mono">
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="material-symbols-outlined text-indigo-400 text-2xl">assessment</span>
-                <h2 className="text-xl font-extrabold text-[#171717] tracking-tight uppercase">
-                  RELATÓRIO EXECUTIVO
-                </h2>
-              </div>
-              <p className="text-xs text-[#171717] mt-1">
-                Indústria: <strong className="text-indigo-400 font-bold">{activeIndName}</strong> • Período: <span className="text-cyan-300 font-bold uppercase">{periodFilter === 'today' ? 'Hoje' : periodFilter === 'week' ? 'Últimos 7 dias' : 'Últimos 30 dias'}</span>
-              </p>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2 text-xs no-print">
-              <span className="px-3 py-1.5 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5] text-[#77766F]">
-                Atualizado às: <strong className="text-[#171717]">{lastUpdate}</strong>
-              </span>
-
-              <button
-                onClick={handleExportExcel}
-                className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold flex items-center gap-1.5 transition-all shadow-md cursor-pointer"
-                title="Exportar planilha Excel completa com 3 abas"
-              >
-                <span className="material-symbols-outlined text-base">download</span>
-                <span>EXPORTAR EXCEL</span>
-              </button>
-
-              <button
-                onClick={handlePrintPDF}
-                className="px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold flex items-center gap-1.5 transition-all shadow-md cursor-pointer"
-                title="Imprimir ou Salvar em PDF via Navegador"
-              >
-                <span className="material-symbols-outlined text-base">print</span>
-                <span>IMPRIMIR / SALVAR PDF</span>
-              </button>
-            </div>
+        <section className="space-y-6 font-mono text-xs" aria-label="Relatório executivo">
+          <header className="flex flex-col gap-4 border-b border-[#D5DAE2] pb-4 sm:flex-row sm:items-end sm:justify-between">
+            <div><p className="text-[#526176]">{activeIndName} · {periodFilter === 'today' ? 'Hoje' : periodFilter === 'week' ? 'Últimos 7 dias' : 'Últimos 30 dias'}</p><h2 className="mt-1 text-xl font-semibold text-[#14243B]">Execução das visitas</h2><p className="mt-1 text-[#526176]">{kpis.concluidas} de {kpis.planejadas} visitas concluídas no período.</p></div>
+            <div className="flex flex-wrap gap-2 no-print"><button onClick={handleExportExcel} className="border border-[#AEB9C8] px-3 py-2 font-semibold text-[#14243B] hover:bg-slate-50">Exportar Excel</button><button onClick={handlePrintPDF} className="bg-indigo-700 px-3 py-2 font-semibold text-white hover:bg-indigo-800">Imprimir / Salvar PDF</button></div>
+          </header>
+          <div className="grid gap-5 border-b border-[#D5DAE2] pb-5 sm:grid-cols-2 lg:grid-cols-4">
+            <div><span className="text-[#526176]">Visitas planejadas</span><p className="mt-1 text-3xl font-semibold tabular-nums text-[#14243B]">{loading ? '—' : kpis.planejadas}</p></div>
+            <div><span className="text-[#526176]">Visitas concluídas</span><p className="mt-1 text-3xl font-semibold tabular-nums text-emerald-800">{loading ? '—' : kpis.concluidas}</p></div>
+            <div><span className="text-[#526176]">Taxa de execução</span><p className="mt-1 text-3xl font-semibold tabular-nums text-[#14243B]">{kpis.planejadas ? `${kpis.aderencia}%` : '—'}</p><span className="text-[#526176]">{kpis.pendentes} pendentes · {kpis.emAndamento} em andamento · {kpis.naoRealizadas} não realizadas</span></div>
+            <div><span className="text-[#526176]">Lojas visitadas</span><p className="mt-1 text-3xl font-semibold tabular-nums text-[#14243B]">{loading ? '—' : kpis.lojasComVisita}<span className="text-base font-normal text-[#526176]"> / {kpis.lojas}</span></p><span className="text-[#526176]">{kpis.lojas ? Math.round((kpis.lojasComVisita / kpis.lojas) * 100) : 0}% de cobertura</span></div>
           </div>
-
-          {/* 2. KPIS PRINCIPAIS EXECUTIVOS (GRID DE 8 CARDS) */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 font-mono">
-            {/* Card 1: PDVs Contratados */}
-            <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-4 flex flex-col justify-between shadow-lg">
-              <span className="text-[10px] font-bold text-[#77766F] uppercase tracking-wider">PDVs Contratados</span>
-              <div className="flex items-baseline justify-between mt-2">
-                <span className="text-2xl font-black text-[#171717]">{kpis.lojas}</span>
-                <span className="material-symbols-outlined text-indigo-400 text-xl">store</span>
-              </div>
-              <span className="text-[10px] text-[#5F5F5F] mt-1">Lojas ativas na escala</span>
-            </div>
-
-            {/* Card 2: Visitas Planejadas */}
-            <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-4 flex flex-col justify-between shadow-lg">
-              <span className="text-[10px] font-bold text-[#77766F] uppercase tracking-wider">Visitas Planejadas</span>
-              <div className="flex items-baseline justify-between mt-2">
-                <span className="text-2xl font-black text-cyan-300">{kpis.planejadas}</span>
-                <span className="material-symbols-outlined text-cyan-400 text-xl">calendar_month</span>
-              </div>
-              <span className="text-[10px] text-[#5F5F5F] mt-1">Total no período</span>
-            </div>
-
-            {/* Card 3: Visitas Realizadas */}
-            <div className="bg-[#F7F6F2] border border-emerald-500/30 rounded-2xl p-4 flex flex-col justify-between shadow-lg">
-              <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider">Visitas Realizadas</span>
-              <div className="flex items-baseline justify-between mt-2">
-                <span className="text-2xl font-black text-emerald-400">{kpis.concluidas}</span>
-                <span className="material-symbols-outlined text-emerald-400 text-xl">check_circle</span>
-              </div>
-              <span className="text-[10px] text-emerald-500/80 mt-1">Check-out concluído</span>
-            </div>
-
-            {/* Card 4: Visitas Pendentes */}
-            <div className="bg-[#F7F6F2] border border-amber-500/30 rounded-2xl p-4 flex flex-col justify-between shadow-lg">
-              <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wider">Visitas Pendentes</span>
-              <div className="flex items-baseline justify-between mt-2">
-                <span className="text-2xl font-black text-amber-400">{kpis.pendentes}</span>
-                <span className="material-symbols-outlined text-amber-400 text-xl">schedule</span>
-              </div>
-              <span className="text-[10px] text-amber-500/80 mt-1 truncate">
-                {`${kpis.atrasadas} atrasadas • ${kpis.pendentesHoje} para hoje`}
-              </span>
-            </div>
-
-            {/* Card 5: Visitas Atrasadas */}
-            <div className="bg-[#F7F6F2] border border-rose-500/30 rounded-2xl p-4 flex flex-col justify-between shadow-lg">
-              <span className="text-[10px] font-bold text-rose-400 uppercase tracking-wider">Visitas Atrasadas</span>
-              <div className="flex items-baseline justify-between mt-2">
-                <span className="text-2xl font-black text-rose-400">{kpis.atrasadas}</span>
-                <span className="material-symbols-outlined text-rose-400 text-xl">warning</span>
-              </div>
-              <span className="text-[10px] text-rose-500/80 mt-1">Excederam a data limite</span>
-            </div>
-
-            {/* Card 6: Visitas Não Realizadas */}
-            <div className="bg-[#F7F6F2] border border-slate-600 rounded-2xl p-4 flex flex-col justify-between shadow-lg">
-              <span className="text-[10px] font-bold text-[#77766F] uppercase tracking-wider">Não Realizadas</span>
-              <div className="flex items-baseline justify-between mt-2">
-                <span className="text-2xl font-black text-[#171717]">{kpis.naoRealizadas}</span>
-                <span className="material-symbols-outlined text-[#77766F] text-xl">block</span>
-              </div>
-              <span className="text-[10px] text-[#5F5F5F] mt-1">Justificativa informada</span>
-            </div>
-
-            {/* Card 7: Aderência Operacional */}
-            <div className="bg-[#F7F6F2] border border-purple-500/40 rounded-2xl p-4 flex flex-col justify-between shadow-lg">
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] font-bold text-purple-300 uppercase tracking-wider">Aderência Operacional</span>
-                {systemSettings.mode !== 'OPERACAO_OFICIAL' && (
-                  <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                    IMPLANTAÇÃO
-                  </span>
-                )}
-              </div>
-              {loading || systemSettings.status === 'loading' ? (
-                <span className="text-sm font-bold text-[#77766F] mt-2 block">Carregando...</span>
-              ) : (
-                <>
-                  <div className="flex items-baseline justify-between mt-2">
-                    <span className="text-2xl font-black text-purple-300">
-                      {kpis.planejadas > 0 ? `${kpis.aderencia}%` : '—'}
-                    </span>
-                    <span className="material-symbols-outlined text-purple-400 text-xl">speed</span>
-                  </div>
-                  <div className="w-full bg-[#E4E2DB] h-1.5 rounded-full overflow-hidden mt-1.5 border border-[#CFCDC5]">
-                    <div className="bg-purple-500 h-full rounded-full transition-all duration-500" style={{ width: `${Math.min(100, kpis.aderencia)}%` }} />
-                  </div>
-                  <span className="text-[10px] text-[#77766F] mt-1">
-                    {systemSettings.mode !== 'OPERACAO_OFICIAL'
-                      ? 'Execução operacional (SLA em implantação)'
-                      : `${kpis.concluidas} de ${kpis.planejadas} atendimentos`}
-                  </span>
-                </>
-              )}
-            </div>
-
-            {/* Card 8: Cobertura de PDVs */}
-            <div className="bg-[#F7F6F2] border border-indigo-500/40 rounded-2xl p-4 flex flex-col justify-between shadow-lg">
-              <span className="text-[10px] font-bold text-indigo-300 uppercase tracking-wider">Cobertura de PDVs</span>
-              <div className="flex items-baseline justify-between mt-2">
-                <span className="text-2xl font-black text-indigo-300">
-                  {kpis.lojas > 0 ? Math.round((kpis.lojasComVisita / kpis.lojas) * 100) : 0}%
-                </span>
-                <span className="material-symbols-outlined text-indigo-400 text-xl">grid_view</span>
-              </div>
-              <span className="text-[10px] text-indigo-400/80 mt-1">{kpis.lojasComVisita} de {kpis.lojas} PDVs atendidos</span>
-            </div>
+          <section className="border-b border-[#D5DAE2] pb-5">
+            <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2"><h3 className="text-sm font-semibold text-[#14243B]">Desempenho por indústria</h3><span className="text-[#526176]">{industriesPerformance.length} indústrias no período</span></div>
+            {industriesPerformance.length === 0 ? <p className="py-3 text-[#526176]">Sem visitas previstas para o período selecionado.</p> : <div className="overflow-x-auto"><table className="w-full min-w-[40rem] border-collapse text-left"><thead><tr className="border-y border-[#D5DAE2] text-[#526176]"><th className="py-2 pr-3 font-medium">Indústria</th><th className="px-2 py-2 text-right font-medium">Previstas</th><th className="px-2 py-2 text-right font-medium">Concluídas</th><th className="px-2 py-2 text-right font-medium">Pendentes</th><th className="px-2 py-2 text-right font-medium">Não realizadas</th><th className="py-2 pl-2 text-right font-medium">Execução</th></tr></thead><tbody className="divide-y divide-[#D5DAE2]">{industriesPerformance.map((industry) => <tr key={industry.codigo || 'unidentified'}><td className="py-2 pr-3 font-semibold text-[#14243B]">{industry.nome}{industry.codigo ? ` (${industry.codigo})` : ''}</td><td className="px-2 py-2 text-right tabular-nums text-[#26364B]">{industry.previstas}</td><td className="px-2 py-2 text-right tabular-nums text-emerald-800">{industry.concluidas}</td><td className="px-2 py-2 text-right tabular-nums text-amber-800">{industry.pendentes}</td><td className="px-2 py-2 text-right tabular-nums text-orange-800">{industry.naoRealizadas}</td><td className="py-2 pl-2 text-right font-semibold tabular-nums text-[#14243B]">{industry.taxaExecucao}%</td></tr>)}</tbody></table></div>}
+          </section>
+          <div className="grid gap-8 lg:grid-cols-[1.4fr_1fr]">
+            <section><div className="mb-4 flex items-baseline justify-between"><h3 className="text-sm font-semibold text-[#14243B]">Planejadas e concluídas por dia</h3><span className="text-[#526176]">{temporalEvolution.length} dias</span></div><div className="space-y-3">
+              {temporalEvolution.slice(-10).map((item) => { const max = Math.max(1, ...temporalEvolution.map((day) => day.planejadas)); return <div key={item.dateStr} className="grid grid-cols-[5rem_minmax(0,1fr)_auto] items-center gap-3"><span className="text-[#526176]">{item.dateStr.slice(5)} · {item.dayShort}</span><div className="space-y-1"><div className="h-2 bg-[#E2E7EE]"><div className="h-full bg-indigo-700" style={{ width: `${(item.planejadas / max) * 100}%` }} /></div><div className="h-2 bg-[#E2E7EE]"><div className="h-full bg-emerald-700" style={{ width: `${(item.realizadas / max) * 100}%` }} /></div></div><span className="w-20 text-right tabular-nums text-[#26364B]">{item.realizadas}/{item.planejadas}</span></div>; })}
+              {temporalEvolution.length === 0 && <p className="py-6 text-[#B8C4D6]">Sem dados para o período.</p>}
+            </div><div className="mt-4 flex gap-4 text-[#526176]"><span><i className="mr-2 inline-block h-2 w-2 bg-indigo-700" />Planejadas</span><span><i className="mr-2 inline-block h-2 w-2 bg-emerald-700" />Concluídas</span></div></section>
+            <section className="border-t border-[#D5DAE2] pt-4 lg:border-l lg:border-t-0 lg:border-[#D5DAE2] lg:pl-6 lg:pt-0"><h3 className="mb-3 text-sm font-semibold text-[#14243B]">Pontos de atenção</h3><ul className="space-y-3 text-[#26364B]">{kpis.atrasadas > 0 && <li><strong className="text-rose-800">{kpis.atrasadas} visitas atrasadas</strong><p className="mt-1 text-[#526176]">Requerem regularização pela equipe de campo.</p></li>}{kpis.lojas > kpis.lojasComVisita && <li><strong>{kpis.lojas - kpis.lojasComVisita} lojas ainda sem visita concluída</strong></li>}{occurrencesSummary.rupturas > 0 && <li><strong>{occurrencesSummary.rupturas} ocorrências de ruptura</strong></li>}{validitySummary.vencidos > 0 && <li><strong className="text-rose-800">{validitySummary.vencidos} produtos vencidos</strong></li>}{kpis.atrasadas === 0 && kpis.lojas <= kpis.lojasComVisita && occurrencesSummary.rupturas === 0 && validitySummary.vencidos === 0 && <li className="text-emerald-800">Nenhum alerta operacional neste período.</li>}</ul><button onClick={() => setActiveTab('evidencias')} className="mt-5 border border-[#AEB9C8] px-3 py-2 font-semibold text-[#14243B] hover:bg-slate-50">Abrir evidências ({photosSummary.total})</button></section>
           </div>
-
-          {/* RESSALVA DE ROTA QUINZENAL */}
-          {hasQuinzenalRoutes && (
-            <div className="p-3 rounded-xl bg-amber-950/30 border border-amber-500/40 text-amber-300 text-xs font-mono flex items-center gap-2">
-              <span className="material-symbols-outlined text-amber-400 text-base shrink-0">info</span>
-              <span>
-                Observação: a projeção de visitas quinzenais utiliza o modelo operacional atual e ainda não possui distinção de Semana A/B.
-              </span>
-            </div>
-          )}
-
-          {/* 3. EVOLUÇÃO TEMPORAL & STATUS DA OPERAÇÃO (GRID 2 COLUNAS) */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 font-mono">
-            {/* EVOLUÇÃO TEMPORAL */}
-            <div className="lg:col-span-2 bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-5 space-y-4 shadow-xl">
-              <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-3">
-                <h3 className="text-sm font-bold text-[#171717] uppercase tracking-wider flex items-center gap-2">
-                  <span className="material-symbols-outlined text-cyan-400 text-base">show_chart</span>
-                  Evolução Temporal das Visitas
-                </h3>
-                <span className="text-[10px] text-[#77766F]">Total no período ({periodFilter === 'today' ? 'Hoje' : periodFilter === 'week' ? '7d' : '30d'})</span>
-              </div>
-
-              {/* BARRAS SIMPLES DE EVOLUÇÃO TEMPORAL */}
-              <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
-                {temporalEvolution.map((item, idx) => {
-                  const maxVal = Math.max(1, item.planejadas);
-                  const realPct = Math.round((item.realizadas / maxVal) * 100);
-                  const pendPct = Math.round((item.pendentes / maxVal) * 100);
-
-                  return (
-                    <div key={idx} className="space-y-1">
-                      <div className="flex items-center justify-between text-[11px]">
-                        <span className="text-[#171717] font-bold">{item.dateStr} ({item.dayShort})</span>
-                        <div className="flex items-center gap-3 text-[10px]">
-                          <span className="text-emerald-400">Realizadas: {item.realizadas}</span>
-                          <span className="text-amber-400">Pendentes: {item.pendentes}</span>
-                          <span className="text-[#77766F]">Total: {item.planejadas}</span>
-                        </div>
-                      </div>
-
-                      <div className="w-full bg-[#E4E2DB] h-2.5 rounded-full overflow-hidden flex border border-[#CFCDC5]">
-                        <div className="bg-emerald-500 h-full transition-all" style={{ width: `${realPct}%` }} title={`Realizadas: ${item.realizadas}`} />
-                        <div className="bg-amber-500 h-full transition-all" style={{ width: `${pendPct}%` }} title={`Pendentes: ${item.pendentes}`} />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* ALERTAS EXECUTIVOS & STATUS DA OPERAÇÃO */}
-            <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-5 space-y-4 shadow-xl flex flex-col justify-between">
-              <div>
-                <h3 className="text-sm font-bold text-[#171717] uppercase tracking-wider flex items-center gap-2 border-b border-[#CFCDC5] pb-3">
-                  <span className="material-symbols-outlined text-rose-400 text-base">warning</span>
-                  Atenção na Operação
-                </h3>
-
-                <div className="space-y-2.5 mt-3 text-xs">
-                  {kpis.atrasadas > 0 ? (
-                    <div className="p-3 rounded-xl bg-[#FDF2F2] border border-rose-500/40 text-rose-300 flex items-start gap-2">
-                      <span className="material-symbols-outlined text-rose-400 text-base shrink-0 mt-0.5">error</span>
-                      <div>
-                        <strong className="block font-bold">{kpis.atrasadas} visita(s) atrasada(s)</strong>
-                        <span className="text-[11px] text-rose-400/80">Requer atenção imediata da equipe de campo.</span>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="p-3 rounded-xl bg-emerald-950/40 border border-emerald-500/40 text-emerald-300 flex items-center gap-2">
-                      <span className="material-symbols-outlined text-emerald-400 text-base">check_circle</span>
-                      <span>Zero visitas atrasadas na operação!</span>
-                    </div>
-                  )}
-
-                  {kpis.lojas - kpis.lojasComVisita > 0 && (
-                    <div className="p-3 rounded-xl bg-[#FFF8E6] border border-amber-500/40 text-amber-300 flex items-start gap-2">
-                      <span className="material-symbols-outlined text-amber-400 text-base shrink-0 mt-0.5">store</span>
-                      <div>
-                        <strong className="block font-bold">{kpis.lojas - kpis.lojasComVisita} PDV(s) sem atendimento</strong>
-                        <span className="text-[11px] text-amber-400/80">Lojas contratadas que ainda não concluíram visitas no período.</span>
-                      </div>
-                    </div>
-                  )}
-
-                  {occurrencesSummary.rupturas > 0 && (
-                    <div className="p-3 rounded-xl bg-[#FDF2F2] border border-rose-500/40 text-rose-300 flex items-start gap-2">
-                      <span className="material-symbols-outlined text-rose-400 text-base shrink-0 mt-0.5">report</span>
-                      <div>
-                        <strong className="block font-bold">{occurrencesSummary.rupturas} ocorrência(s) de ruptura</strong>
-                        <span className="text-[11px] text-rose-400/80">Falta de produto identificada nas gôndolas.</span>
-                      </div>
-                    </div>
-                  )}
-
-                  {validitySummary.vencidos > 0 && (
-                    <div className="p-3 rounded-xl bg-[#FDF2F2] border border-rose-500/40 text-rose-300 flex items-start gap-2">
-                      <span className="material-symbols-outlined text-rose-400 text-base shrink-0 mt-0.5">event_busy</span>
-                      <div>
-                        <strong className="block font-bold">{validitySummary.vencidos} produto(s) vencido(s)</strong>
-                        <span className="text-[11px] text-rose-400/80">Exigem recolhimento imediato.</span>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* BOTAO PARA VER EVIDENCIAS */}
-              <button
-                onClick={() => setActiveTab('evidencias')}
-                className="w-full py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs flex items-center justify-center gap-2 transition-all shadow-md cursor-pointer mt-4"
-              >
-                <span className="material-symbols-outlined text-base">photo_library</span>
-                <span>Ver Central de Evidências ({photosSummary.total} Fotos)</span>
-              </button>
-            </div>
-          </div>
-
-          {/* 4. MÓDULOS DE RESUMO: OCORRÊNCIAS, VALIDADE & EVIDÊNCIAS (GRID 3 COLUNAS) */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 font-mono text-xs">
-            {/* OCORRÊNCIAS */}
-            <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-5 space-y-3 shadow-xl">
-              <h3 className="text-xs font-bold text-[#171717] uppercase tracking-wider flex items-center gap-2 border-b border-[#CFCDC5] pb-2.5">
-                <span className="material-symbols-outlined text-rose-400 text-base">report</span>
-                Principais Ocorrências ({occurrencesSummary.total})
-              </h3>
-              <div className="space-y-2">
-                <div className="flex items-center justify-between p-2 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5]">
-                  <span className="text-[#171717]">Rupturas de Estoque</span>
-                  <span className="font-bold text-rose-400">{occurrencesSummary.rupturas}</span>
-                </div>
-                <div className="flex items-center justify-between p-2 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5]">
-                  <span className="text-[#171717]">Divergências de Preço</span>
-                  <span className="font-bold text-amber-400">{occurrencesSummary.preco}</span>
-                </div>
-                <div className="flex items-center justify-between p-2 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5]">
-                  <span className="text-[#171717]">Falta de Espaço</span>
-                  <span className="font-bold text-cyan-400">{occurrencesSummary.espaco}</span>
-                </div>
-                <div className="flex items-center justify-between p-2 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5]">
-                  <span className="text-[#171717]">Outras Ocorrências</span>
-                  <span className="font-bold text-[#77766F]">{occurrencesSummary.outros}</span>
-                </div>
-              </div>
-            </div>
-
-            {/* VALIDADE */}
-            <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-5 space-y-3 shadow-xl">
-              <h3 className="text-xs font-bold text-[#171717] uppercase tracking-wider flex items-center gap-2 border-b border-[#CFCDC5] pb-2.5">
-                <span className="material-symbols-outlined text-amber-400 text-base">event</span>
-                Validade de Produtos ({validitySummary.totalAuditados})
-              </h3>
-              <div className="space-y-2">
-                <div className="flex items-center justify-between p-2 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5]">
-                  <span className="text-[#171717]">Produtos Vencidos</span>
-                  <span className={`font-bold ${validitySummary.vencidos > 0 ? 'text-rose-400 animate-pulse' : 'text-emerald-400'}`}>{validitySummary.vencidos}</span>
-                </div>
-                <div className="flex items-center justify-between p-2 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5]">
-                  <span className="text-[#171717]">Vencendo em ≤ 3 dias</span>
-                  <span className="font-bold text-rose-400">{validitySummary.vencendo3d}</span>
-                </div>
-                <div className="flex items-center justify-between p-2 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5]">
-                  <span className="text-[#171717]">Vencendo em 4–7 dias</span>
-                  <span className="font-bold text-amber-400">{validitySummary.vencendo7d}</span>
-                </div>
-                <div className="flex items-center justify-between p-2 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5]">
-                  <span className="text-[#171717]">Vencendo em 8–30 dias</span>
-                  <span className="font-bold text-yellow-400">{validitySummary.vencendo30d}</span>
-                </div>
-              </div>
-            </div>
-
-            {/* EVIDÊNCIAS */}
-            <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-5 space-y-3 shadow-xl">
-              <h3 className="text-xs font-bold text-[#171717] uppercase tracking-wider flex items-center gap-2 border-b border-[#CFCDC5] pb-2.5">
-                <span className="material-symbols-outlined text-cyan-400 text-base">photo_camera</span>
-                Evidências por Tipo ({photosSummary.total})
-              </h3>
-              <div className="space-y-2">
-                <div className="flex items-center justify-between p-2 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5]">
-                  <span className="text-[#171717]">Gôndola / Exposição</span>
-                  <span className="font-bold text-cyan-400">{photosSummary.gondola}</span>
-                </div>
-                <div className="flex items-center justify-between p-2 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5]">
-                  <span className="text-[#171717]">Fachada / Entrada</span>
-                  <span className="font-bold text-indigo-400">{photosSummary.fachada}</span>
-                </div>
-                <div className="flex items-center justify-between p-2 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5]">
-                  <span className="text-[#171717]">Etiqueta de Preço</span>
-                  <span className="font-bold text-amber-400">{photosSummary.preco}</span>
-                </div>
-                <div className="flex items-center justify-between p-2 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5]">
-                  <span className="text-[#171717]">Ponto Extra / Ruptura</span>
-                  <span className="font-bold text-rose-400">{photosSummary.ponto_extra + photosSummary.ruptura}</span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* 5. TABELA DE DESEMPENHO POR LOJA — COMPACTA COM TOGGLE + PAGINAÇÃO */}
-          <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-5 shadow-xl font-mono text-xs">
-            <div
-              className="flex items-center justify-between cursor-pointer select-none"
-              onClick={() => setPdvTableExpanded((v) => !v)}
-            >
-              <div className="flex items-center gap-2">
-                <span className="material-symbols-outlined text-indigo-400 text-base">store</span>
-                <h3 className="text-sm font-bold text-[#171717] uppercase tracking-wider">
-                  Desempenho por PDV / Loja
-                </h3>
-                <span className="px-2 py-0.5 rounded-full bg-indigo-500/15 text-indigo-600 text-[10px] font-bold border border-indigo-500/30">
-                  {lojasPerformance.length} lojas
-                </span>
-              </div>
-              <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-[11px] transition-all shadow-md cursor-pointer no-print">
-                <span className="material-symbols-outlined text-sm" style={{ transition: 'transform 0.2s', transform: pdvTableExpanded ? 'rotate(180deg)' : 'rotate(0deg)' }}>
-                  expand_more
-                </span>
-                {pdvTableExpanded ? 'Recolher lojas' : 'Visualizar lojas'}
-              </button>
-            </div>
-
-            {pdvTableExpanded && (
-              <div className="mt-4 space-y-3 animate-fadeIn">
-                {/* Barra de busca */}
-                <div className="flex items-center gap-2">
-                  <div className="relative flex-1 max-w-sm">
-                    <span className="material-symbols-outlined text-[#77766F] text-base absolute left-2.5 top-1/2 -translate-y-1/2">search</span>
-                    <input
-                      type="text"
-                      placeholder="Buscar loja por nome, código, cidade ou UF..."
-                      value={pdvSearch}
-                      onChange={(e) => setPdvSearch(e.target.value)}
-                      className="w-full pl-8 pr-3 py-2 rounded-xl bg-white border border-[#CFCDC5] text-[#171717] text-xs focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/30 placeholder:text-[#9F9F9F]"
-                    />
-                  </div>
-                  <span className="text-[10px] text-[#77766F]">
-                    {filteredLojasPerformance.length} de {lojasPerformance.length} lojas
-                    {pdvSearch.trim() ? ` • filtro: "${pdvSearch.trim()}"` : ''}
-                  </span>
-                </div>
-
-                {/* Tabela paginada */}
-                <div className="overflow-x-auto rounded-xl border border-[#CFCDC5]">
-                  <table className="w-full text-left">
-                    <thead>
-                      <tr className="bg-[#E4E2DB] text-[#77766F] text-[10px] uppercase border-b border-[#CFCDC5]">
-                        <th className="py-2.5 px-3">PDV / Loja</th>
-                        <th className="py-2.5 px-3 text-center">Planejadas</th>
-                        <th className="py-2.5 px-3 text-center">Realizadas</th>
-                        <th className="py-2.5 px-3 text-center">Pendentes</th>
-                        <th className="py-2.5 px-3 text-center">Atrasadas</th>
-                        <th className="py-2.5 px-3 text-center">Aderência</th>
-                        <th className="py-2.5 px-3 text-center">Ocorrências</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-[#CFCDC5] text-[#171717]">
-                      {paginatedLojas.map((loja) => (
-                        <tr
-                          key={loja.codigo}
-                          onClick={() => handleOpenStoreHistory(loja.codigo)}
-                          className="hover:bg-[#E4E2DB]/70 cursor-pointer transition-colors"
-                        >
-                          <td className="py-2.5 px-3">
-                            <strong className="text-[#171717] block">{loja.nome}</strong>
-                            <span className="text-[10px] text-[#77766F]">{loja.cidade} - {loja.uf} ({loja.codigo})</span>
-                          </td>
-                          <td className="py-2.5 px-3 text-center text-cyan-300 font-bold">{loja.planejadas}</td>
-                          <td className="py-2.5 px-3 text-center text-emerald-400 font-bold">{loja.concluidas}</td>
-                          <td className="py-2.5 px-3 text-center text-amber-400 font-bold">{loja.pendentes}</td>
-                          <td className="py-2.5 px-3 text-center">
-                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${loja.atrasadas > 0 ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40' : 'text-[#5F5F5F]'}`}>
-                              {loja.atrasadas}
-                            </span>
-                          </td>
-                          <td className="py-2.5 px-3 text-center">
-                            {systemSettings.mode !== 'OPERACAO_OFICIAL' || systemSettings.status !== 'loaded' ? (
-                              <span className="text-[10px] text-[#5F5F5F] font-normal">SLA n/a</span>
-                            ) : (
-                              <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                                loja.aderencia >= 80 ? 'bg-emerald-500/20 text-emerald-300' : loja.aderencia >= 50 ? 'bg-amber-500/20 text-amber-300' : 'bg-rose-500/20 text-rose-300'
-                              }`}>
-                                {loja.aderencia}%
-                              </span>
-                            )}
-                          </td>
-                          <td className="py-2.5 px-3 text-center text-[#77766F]">{loja.ocorrencias}</td>
-                        </tr>
-                      ))}
-                      {paginatedLojas.length === 0 && (
-                        <tr>
-                          <td colSpan={7} className="py-6 text-center text-[#77766F]">
-                            {pdvSearch.trim() ? 'Nenhuma loja encontrada para o filtro aplicado.' : 'Nenhuma loja disponível.'}
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-
-                {/* Paginação */}
-                {pdvTotalPages > 1 && (
-                  <div className="flex items-center justify-between pt-2">
-                    <span className="text-[10px] text-[#77766F]">
-                      Página {pdvPage} de {pdvTotalPages} • Exibindo {((pdvPage - 1) * PDV_PAGE_SIZE) + 1}–{Math.min(pdvPage * PDV_PAGE_SIZE, filteredLojasPerformance.length)} de {filteredLojasPerformance.length}
-                    </span>
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        disabled={pdvPage <= 1}
-                        onClick={(e) => { e.stopPropagation(); setPdvPage((p) => Math.max(1, p - 1)); }}
-                        className="px-2.5 py-1 rounded-lg bg-[#E4E2DB] border border-[#CFCDC5] text-[#171717] text-[10px] font-bold hover:bg-[#D8D6CF] disabled:opacity-40 disabled:cursor-not-allowed transition-colors cursor-pointer"
-                      >
-                        ← Anterior
-                      </button>
-                      {Array.from({ length: Math.min(5, pdvTotalPages) }, (_, i) => {
-                        let pageNum: number;
-                        if (pdvTotalPages <= 5) {
-                          pageNum = i + 1;
-                        } else if (pdvPage <= 3) {
-                          pageNum = i + 1;
-                        } else if (pdvPage >= pdvTotalPages - 2) {
-                          pageNum = pdvTotalPages - 4 + i;
-                        } else {
-                          pageNum = pdvPage - 2 + i;
-                        }
-                        return (
-                          <button
-                            key={pageNum}
-                            onClick={(e) => { e.stopPropagation(); setPdvPage(pageNum); }}
-                            className={`w-7 h-7 rounded-lg text-[10px] font-bold transition-colors cursor-pointer ${
-                              pageNum === pdvPage
-                                ? 'bg-indigo-600 text-white border border-indigo-500'
-                                : 'bg-[#E4E2DB] border border-[#CFCDC5] text-[#171717] hover:bg-[#D8D6CF]'
-                            }`}
-                          >
-                            {pageNum}
-                          </button>
-                        );
-                      })}
-                      <button
-                        disabled={pdvPage >= pdvTotalPages}
-                        onClick={(e) => { e.stopPropagation(); setPdvPage((p) => Math.min(pdvTotalPages, p + 1)); }}
-                        className="px-2.5 py-1 rounded-lg bg-[#E4E2DB] border border-[#CFCDC5] text-[#171717] text-[10px] font-bold hover:bg-[#D8D6CF] disabled:opacity-40 disabled:cursor-not-allowed transition-colors cursor-pointer"
-                      >
-                        Próxima →
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                <p className="text-[10px] text-[#77766F] mt-1">Clique em qualquer loja para abrir o histórico operacional detalhado. Ordenado por atrasos e menor aderência.</p>
-              </div>
-            )}
-          </div>
-
-          {/* 6. TABELA DE DESEMPENHO POR PROMOTOR — COMPACTA COM TOGGLE */}
-          <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-5 shadow-xl font-mono text-xs">
-            <div
-              className="flex items-center justify-between cursor-pointer select-none"
-              onClick={() => setPromotorTableExpanded((v) => !v)}
-            >
-              <div className="flex items-center gap-2">
-                <span className="material-symbols-outlined text-purple-400 text-base">badge</span>
-                <h3 className="text-sm font-bold text-[#171717] uppercase tracking-wider">
-                  Desempenho por Promotor
-                </h3>
-                <span className="px-2 py-0.5 rounded-full bg-purple-500/15 text-purple-600 text-[10px] font-bold border border-purple-500/30">
-                  {promotoresPerformance.length} promotores
-                </span>
-              </div>
-              <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-[11px] transition-all shadow-md cursor-pointer no-print">
-                <span className="material-symbols-outlined text-sm" style={{ transition: 'transform 0.2s', transform: promotorTableExpanded ? 'rotate(180deg)' : 'rotate(0deg)' }}>
-                  expand_more
-                </span>
-                {promotorTableExpanded ? 'Recolher' : 'Visualizar equipe'}
-              </button>
-            </div>
-
-            {promotorTableExpanded && (
-              <div className="mt-4 animate-fadeIn">
-                {promotoresPerformance.length === 0 ? (
-                  <div className="py-6 text-center text-[#77766F] border border-[#CFCDC5] rounded-xl bg-[#E4E2DB]/50">
-                    <span className="material-symbols-outlined text-2xl text-[#B0B0A8] block mb-1">person_off</span>
-                    Nenhum promotor com atendimento no período selecionado.
-                  </div>
-                ) : (
-                  <div className="overflow-x-auto rounded-xl border border-[#CFCDC5]">
-                    <table className="w-full text-left">
-                      <thead>
-                        <tr className="bg-[#E4E2DB] text-[#77766F] text-[10px] uppercase border-b border-[#CFCDC5]">
-                          <th className="py-2.5 px-3">Promotor</th>
-                          <th className="py-2.5 px-3 text-center">Planejadas</th>
-                          <th className="py-2.5 px-3 text-center">Realizadas</th>
-                          <th className="py-2.5 px-3 text-center">Pendentes</th>
-                          <th className="py-2.5 px-3 text-center">Atrasadas</th>
-                          <th className="py-2.5 px-3 text-center">Aderência</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-[#CFCDC5] text-[#171717]">
-                        {promotoresPerformance.map((prom) => (
-                          <tr key={prom.matricula} className="hover:bg-[#E4E2DB]/70 transition-colors">
-                            <td className="py-2.5 px-3">
-                              <strong className="text-[#171717] block">{prom.nome}</strong>
-                              <span className="text-[10px] text-[#77766F]">Matrícula: {prom.matricula}</span>
-                            </td>
-                            <td className="py-2.5 px-3 text-center text-cyan-300 font-bold">{prom.planejadas}</td>
-                            <td className="py-2.5 px-3 text-center text-emerald-400 font-bold">{prom.concluidas}</td>
-                            <td className="py-2.5 px-3 text-center text-amber-400 font-bold">{prom.pendentes}</td>
-                            <td className="py-2.5 px-3 text-center font-bold text-rose-400">{prom.atrasadas}</td>
-                            <td className="py-2.5 px-3 text-center">
-                              {systemSettings.mode !== 'OPERACAO_OFICIAL' || systemSettings.status !== 'loaded' ? (
-                                <span className="text-[10px] text-[#5F5F5F] font-normal">SLA n/a</span>
-                              ) : (
-                                <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                                  prom.aderencia >= 80 ? 'bg-emerald-500/20 text-emerald-300' : prom.aderencia >= 50 ? 'bg-amber-500/20 text-amber-300' : 'bg-rose-500/20 text-rose-300'
-                                }`}>
-                                  {prom.aderencia}%
-                                </span>
-                              )}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-                <p className="text-[10px] text-[#77766F] mt-2">Produtividade e aderência da equipe no período.</p>
-              </div>
-            )}
-          </div>
-
-          {/* RODAPÉ DO RELATÓRIO IMPRESSO */}
-          <div className="hidden print:flex items-center justify-between border-t border-slate-300 pt-3 text-[10px] text-[#5F5F5F] font-mono mt-6">
-            <span>MK9 Trade Marketing • Relatório Executivo Operacional</span>
-            <span>Parceiro: {activeIndName}</span>
-            <span>Página Gerada em {new Date().toLocaleDateString('pt-BR')}</span>
-          </div>
+          <section className="border-t border-[#D5DAE2] pt-4"><div className="mb-3 flex flex-wrap items-baseline justify-between gap-2"><h3 className="text-sm font-semibold text-[#14243B]">Lojas que precisam de acompanhamento</h3><span className="text-[#526176]">{lojasPerformance.length} lojas no período</span></div>{lojasPerformance.length === 0 ? <p className="py-4 text-[#526176]">Sem lojas no período selecionado.</p> : <div className="divide-y divide-[#D5DAE2]">{lojasPerformance.slice(0, 5).map((loja) => <button key={loja.codigo} onClick={() => handleOpenStoreHistory(loja.codigo)} className="grid w-full grid-cols-[minmax(0,1fr)_auto] gap-3 py-3 text-left hover:bg-slate-50 sm:grid-cols-[minmax(0,1fr)_5rem_5rem_6rem]"><span className="min-w-0"><strong className="block truncate text-[#14243B]">{loja.nome}</strong><small className="text-[#526176]">{loja.cidade}{loja.uf ? ` / ${loja.uf}` : ''}</small></span><span className="text-[#26364B]">{loja.concluidas}/{loja.planejadas} concluídas</span><span className="text-amber-800">{loja.pendentes} pendentes</span><span className="text-rose-800">{loja.atrasadas} atrasadas</span></button>)}</div>}<button onClick={() => setActiveTab('operacional')} className="mt-3 font-semibold text-indigo-800 underline underline-offset-4">Ver todos os atendimentos</button></section>
+          <p className="text-[#526176]">Atualizado às {lastUpdate}</p>
         </section>
       )}
 
@@ -2363,7 +1635,7 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                   {zoomedEvidencia.tipo_foto}
                 </span>
                 <h3 className="text-sm font-bold text-[#171717] mt-1">
-                  {zoomedEvidencia.visit?.loja?.nome || 'PDV'}
+                  {getIndustryDisplayName(zoomedEvidencia.visit?.industria?.nome, zoomedEvidencia.visit?.industria_codigo)} · {zoomedEvidencia.visit?.loja?.nome || zoomedEvidencia.visit?.loja_codigo || 'PDV'}
                 </h3>
               </div>
               <button
@@ -2400,7 +1672,7 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                 Data do Atendimento: <strong className="text-[#171717]">{zoomedEvidencia.visit?.data_visita}</strong>
               </p>
               <p className="text-[#171717]">
-                Promotor: <strong className="text-cyan-300">{zoomedEvidencia.visit?.promotor?.nome || zoomedEvidencia.visit?.promotor_matricula}</strong>
+                Promotor: <strong className="text-[#0E7490]">{zoomedEvidencia.visit?.promotor?.nome || zoomedEvidencia.visit?.promotor_matricula}</strong>
               </p>
               {zoomedEvidencia.legenda && (
                 <p className="text-[#77766F] italic">
@@ -2429,316 +1701,24 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
         </div>
       )}
 
-      {/* ESTADO DE ERRO */}
-      {error && (
-        <div className="p-4 rounded-2xl bg-[#FDF2F2] border border-rose-500/50 text-rose-300 font-mono text-xs flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <span className="material-symbols-outlined text-xl text-rose-400">error</span>
-            <span>Não foi possível carregar os dados. Tente novamente. ({error})</span>
-          </div>
-          <button onClick={fetchIndustryData} className="underline font-bold hover:text-white">
-            Tentar novamente
-          </button>
-        </div>
-      )}
-
-      {/* 4. CARDS DE KPIS PRINCIPAIS DA INDÚSTRIA */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3 font-mono text-xs">
-        <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-[#CFCDC5]">
-          <span className="text-[10px] text-[#77766F] block font-bold uppercase">PDVs CONTRATADOS</span>
-          <span className="text-2xl font-extrabold text-[#171717] mt-1 block">{loading ? '...' : kpis.lojas}</span>
-          <span className="text-[10px] text-[#5F5F5F] block mt-0.5">{loading ? '...' : `${kpis.lojasComVisita} com visita realizada`}</span>
-        </div>
-
-        <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-purple-500/30 bg-purple-950/10">
-          <span className="text-[10px] text-purple-400 block font-bold uppercase">VISITAS PLANEJADAS</span>
-          <span className="text-2xl font-extrabold text-purple-300 mt-1 block">{loading ? '...' : kpis.planejadas}</span>
-          <span className="text-[10px] text-purple-400/70 block mt-0.5">Ocorrências Rota</span>
-        </div>
-
-        <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-emerald-500/30 bg-emerald-950/10">
-          <span className="text-[10px] text-emerald-400 block font-bold uppercase">VISITAS CONCLUÍDAS</span>
-          <span className="text-2xl font-extrabold text-emerald-300 mt-1 block">{loading ? '...' : kpis.concluidas}</span>
-          <span className="text-[10px] text-emerald-400/70 block mt-0.5">Check-outs Ok</span>
-        </div>
-
-        <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-rose-500/30 bg-rose-950/10">
-          <span className="text-[10px] text-rose-400 block font-bold uppercase">VISITAS PENDENTES</span>
-          <span className="text-2xl font-extrabold text-rose-300 mt-1 block">{loading ? '...' : kpis.pendentes}</span>
-          <span className="text-[10px] text-rose-400/70 block mt-0.5 truncate">{loading ? '...' : `${kpis.atrasadas} atrasadas • ${kpis.pendentesHoje} para hoje`}</span>
-        </div>
-
-        <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-orange-500/30 bg-orange-950/10">
-          <span className="text-[10px] text-orange-400 block font-bold uppercase">NÃO REALIZADAS</span>
-          <span className="text-2xl font-extrabold text-orange-300 mt-1 block">{loading ? '...' : kpis.naoRealizadas}</span>
-          <span className="text-[10px] text-orange-400/70 block mt-0.5">Com Motivo</span>
-        </div>
-
-        <div className="p-4 rounded-2xl bg-[#F7F6F2] border border-indigo-500/40 bg-indigo-950/20">
-          <span className="text-[10px] text-indigo-300 block font-bold uppercase">ADERÊNCIA</span>
-          {loading || systemSettings.status === 'loading' ? (
-            <span className="text-sm font-bold text-[#77766F] mt-2 block">Carregando...</span>
-          ) : systemSettings.mode !== 'OPERACAO_OFICIAL' || systemSettings.status !== 'loaded' ? (
-            <div className="mt-1">
-              <span className="text-xs font-bold text-amber-300 block leading-tight">Fase de implantação — SLA não ativo</span>
-              <span className="text-[9px] text-[#77766F] block mt-0.5">Indicador oficial desativado</span>
-            </div>
-          ) : (
-            <span className="text-2xl font-extrabold text-indigo-200 mt-1 block">{loading ? '...' : `${kpis.aderencia}%`}</span>
-          )}
-          <span className="text-[10px] text-indigo-400/70 block mt-0.5">Taxa de Execução</span>
-        </div>
-      </div>
-
-      {/* 8. SEÇÃO DESTACADA: PENDÊNCIAS DE ATENDIMENTO DA INDÚSTRIA */}
-      <section className="bg-[#F7F6F2] border border-rose-500/40 rounded-2xl p-5 shadow-2xl space-y-4 font-mono">
-        <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-3">
-          <div className="flex items-center gap-2">
-            <span className="material-symbols-outlined text-rose-400 text-xl animate-pulse">warning</span>
-            <h2 className="text-sm font-bold text-[#171717] uppercase tracking-wider">
-              Pendências de Atendimento ({pendenciasList.length})
-            </h2>
-          </div>
-          <span className="text-[11px] text-rose-400 font-bold bg-rose-500/10 px-2.5 py-1 rounded-lg border border-rose-500/30">
-            Requer Regularização em Campo
-          </span>
-        </div>
-
-        {pendenciasList.length === 0 ? (
-          <div className="py-8 text-center space-y-1 bg-[#E4E2DB]/50 rounded-xl border border-[#CFCDC5]">
-            <span className="material-symbols-outlined text-emerald-400 text-3xl">check_circle</span>
-            <p className="text-xs text-[#171717] font-bold">Nenhuma pendência encontrada para o período selecionado.</p>
-            <p className="text-[11px] text-[#5F5F5F]">Todos os atendimentos das suas lojas foram executados no prazo.</p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto rounded-xl border border-[#CFCDC5]">
-            <table className="w-full text-left text-xs">
-              <thead>
-                <tr className="bg-[#E4E2DB] border-b border-[#CFCDC5] text-[#77766F] text-[10px] uppercase">
-                  <th className="py-2.5 px-3">Data Prevista</th>
-                  <th className="py-2.5 px-3">Loja / PDV</th>
-                  <th className="py-2.5 px-3">Promotor</th>
-                  <th className="py-2.5 px-3">Frequência</th>
-                  <th className="py-2.5 px-3">Situação</th>
-                  <th className="py-2.5 px-3 text-right">Ação</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#CFCDC5] text-[#171717]">
-                {pendenciasList.map((item) => (
-                  <tr key={item.key} className="hover:bg-[#E4E2DB]/80 transition-colors">
-                    <td className="py-2.5 px-3">
-                      <div className="font-bold text-[#171717]">{item.dataStr}</div>
-                      <div className="text-[10px] text-[#5F5F5F]">{item.dayOfWeekLabel}</div>
-                    </td>
-                    <td className="py-2.5 px-3 font-bold text-[#171717]">
-                      {item.lojaNome}
-                      {item.lojaCidade && <span className="text-[10px] text-[#77766F] block font-normal">{item.lojaCidade} - {item.lojaUf}</span>}
-                    </td>
-                    <td className="py-2.5 px-3 font-bold text-cyan-400">{item.promotorNome}</td>
-                    <td className="py-2.5 px-3 text-[#77766F]">{item.frequencia}</td>
-                    <td className="py-2.5 px-3">
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
-                        item.isPastOverdue
-                          ? 'bg-rose-950 text-rose-300 border-rose-500 animate-pulse'
-                          : 'bg-rose-500/20 text-rose-300 border-rose-500/40'
-                      }`}>
-                        {item.isPastOverdue ? '🚨 ATRASADA' : '🔴 PENDENTE'}
-                      </span>
-                    </td>
-                    <td className="py-2.5 px-3 text-right">
-                      <button
-                        onClick={() => handleOpenVisitDetails(item)}
-                        className="px-3 py-1 rounded-lg bg-[#E4E2DB] hover:bg-[#CFCDC5] text-indigo-300 border border-indigo-500/30 text-[11px] font-bold transition-all cursor-pointer"
-                      >
-                        Ver Detalhes
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-
-      {/* 7. CENTRAL DE ACOMPANHAMENTO: STATUS DAS LOJAS DA INDÚSTRIA */}
-      <section className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-5 shadow-2xl space-y-4 font-mono">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#CFCDC5] pb-3">
-          <div>
-            <h2 className="text-sm font-bold text-[#171717] uppercase tracking-wider flex items-center gap-2">
-              <span className="material-symbols-outlined text-indigo-400 text-xl">store</span>
-              Status de Atendimento das Lojas ({allOperationalVisits.length})
-            </h2>
-            <p className="text-[11px] text-[#77766F] mt-0.5">
-              Listagem operacional em tempo real de todas as lojas contratadas no período.
-            </p>
-          </div>
-          <span className="text-[11px] text-[#77766F]">
-            Exibindo <strong>{allOperationalVisits.length}</strong> loja(s)
-          </span>
-        </div>
-
-        {loading ? (
-          <div className="py-12 text-center space-y-3">
-            <span className="material-symbols-outlined text-indigo-400 text-3xl animate-spin">sync</span>
-            <p className="text-xs text-[#77766F]">Carregando operação da indústria...</p>
-          </div>
-        ) : allOperationalVisits.length === 0 ? (
-          <div className="py-12 text-center space-y-2 bg-[#E4E2DB]/50 rounded-xl border border-[#CFCDC5]">
-            <span className="material-symbols-outlined text-slate-600 text-3xl">event_busy</span>
-            <p className="text-xs text-[#171717] font-bold">Nenhuma operação encontrada para o período.</p>
-          </div>
-        ) : (
-          <>
-            {/* TABELA DESKTOP */}
-            <div className="hidden md:block overflow-x-auto rounded-xl border border-[#CFCDC5]">
-              <table className="w-full text-left text-xs">
-                <thead>
-                  <tr className="bg-[#E4E2DB] border-b border-[#CFCDC5] text-[#77766F] text-[10px] uppercase">
-                    <th className="py-3 px-4">Loja / PDV</th>
-                    <th className="py-3 px-4">Cidade/UF</th>
-                    <th className="py-3 px-4">Frequência</th>
-                    <th className="py-3 px-4">Promotor</th>
-                    <th className="py-3 px-4">Data Prevista</th>
-                    <th className="py-3 px-4">Status</th>
-                    <th className="py-3 px-4 text-right">Detalhes</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[#CFCDC5] text-[#171717]">
-                  {allOperationalVisits.map((item) => {
-                    let badge = { label: '🔴 PENDENTE', style: 'bg-rose-500/10 text-rose-400 border-rose-500/30' };
-                    if (item.isPastOverdue) {
-                      badge = { label: '🚨 ATRASADA', style: 'bg-rose-950 text-rose-300 border-rose-500 animate-pulse font-bold' };
-                    } else if (item.status === 'em_andamento') {
-                      badge = { label: '🔵 EM ANDAMENTO', style: 'bg-blue-500/10 text-blue-400 border-blue-500/30' };
-                    } else if (item.status === 'nao_realizada') {
-                      badge = { label: '🟠 NÃO REALIZADA', style: 'bg-orange-500/10 text-orange-400 border-orange-500/30' };
-                    } else if (item.status === 'concluida') {
-                      badge = { label: '🟢 CONCLUÍDA', style: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' };
-                    } else if (item.status === 'planejada') {
-                      badge = { label: '⚪ PLANEJADA', style: 'bg-slate-800 text-slate-300 border-[#CFCDC5]' };
-                    }
-
-                    return (
-                      <tr key={item.key} className="hover:bg-[#E4E2DB]/80 transition-colors">
-                        <td className="py-3 px-4 font-bold text-[#171717]">
-                          <button
-                            onClick={() => handleOpenStoreHistory(item.lojaCodigo)}
-                            className="text-left font-bold text-white hover:text-indigo-400 underline decoration-indigo-500/40 cursor-pointer transition-colors flex items-center gap-1.5"
-                          >
-                            <span className="material-symbols-outlined text-xs text-indigo-400">history</span>
-                            <span>{item.lojaNome}</span>
-                          </button>
-                        </td>
-                        <td className="py-3 px-4 text-[#77766F]">{item.lojaCidade || '—'}/{item.lojaUf || '-'}</td>
-                        <td className="py-3 px-4 text-[#77766F]">{item.frequencia}</td>
-                        <td className="py-3 px-4 font-bold text-cyan-400">{item.promotorNome}</td>
-                        <td className="py-3 px-4">
-                          <div className="font-bold text-[#171717]">{item.dataStr}</div>
-                          <div className="text-[10px] text-[#5F5F5F]">{item.dayOfWeekLabel}</div>
-                        </td>
-                        <td className="py-3 px-4">
-                          <span className={`px-2 py-0.5 rounded text-[10px] border ${badge.style}`}>
-                            {badge.label}
-                          </span>
-                        </td>
-                        <td className="py-3 px-4 text-right flex items-center justify-end gap-2">
-                          <button
-                            onClick={() => handleOpenStoreHistory(item.lojaCodigo)}
-                            className="px-2.5 py-1.5 rounded-lg bg-[#E4E2DB] hover:bg-indigo-950/40 text-indigo-300 border border-indigo-500/30 text-xs font-bold transition-all cursor-pointer flex items-center gap-1"
-                            title="Ver Histórico Completo da Loja"
-                          >
-                            <span className="material-symbols-outlined text-sm">history</span>
-                            <span>Histórico</span>
-                          </button>
-                          <button
-                            onClick={() => handleOpenVisitDetails(item)}
-                            className="px-2.5 py-1.5 rounded-lg bg-[#E4E2DB] hover:bg-[#CFCDC5] text-[#171717] border border-[#CFCDC5] text-xs font-bold transition-all cursor-pointer"
-                          >
-                            Relatório
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-
-            {/* CARDS MOBILE (390px / 768px) */}
-            <div className="md:hidden space-y-3">
-              {allOperationalVisits.map((item) => (
-                <div key={item.key} className="p-4 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5] space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] text-[#77766F]">{item.dataStr} • {item.dayOfWeekLabel}</span>
-                    <span className={`px-2 py-0.5 rounded text-[9px] font-bold border ${
-                      item.status === 'concluida' ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' :
-                      item.status === 'em_andamento' ? 'bg-blue-500/20 text-blue-300 border-blue-500/30' :
-                      item.status === 'nao_realizada' ? 'bg-orange-500/20 text-orange-300 border-orange-500/30' :
-                      item.isPastOverdue ? 'bg-rose-950 text-rose-300 border-rose-500 animate-pulse' :
-                      'bg-rose-500/20 text-rose-300 border-rose-500/30'
-                    }`}>
-                      {item.status.toUpperCase()}
-                    </span>
-                  </div>
-
-                  <h3
-                    onClick={() => handleOpenStoreHistory(item.lojaCodigo)}
-                    className="text-sm font-bold text-white hover:text-indigo-400 cursor-pointer flex items-center gap-1.5"
-                  >
-                    <span className="material-symbols-outlined text-xs text-indigo-400">history</span>
-                    <span>{item.lojaNome}</span>
-                  </h3>
-                  <p className="text-xs text-[#77766F]">Cidade: {item.lojaCidade}/{item.lojaUf} • Promotor: <strong className="text-cyan-300">{item.promotorNome}</strong></p>
-
-                  <div className="pt-2 border-t border-[#CFCDC5] flex justify-end gap-2">
-                    <button
-                      onClick={() => handleOpenStoreHistory(item.lojaCodigo)}
-                      className="px-3 py-1.5 rounded-lg bg-[#F7F6F2] text-indigo-300 border border-indigo-500/30 text-xs font-bold flex items-center gap-1"
-                    >
-                      <span className="material-symbols-outlined text-sm">history</span>
-                      <span>Histórico Loja</span>
-                    </button>
-                    <button
-                      onClick={() => handleOpenVisitDetails(item)}
-                      className="px-3 py-1.5 rounded-lg bg-[#F7F6F2] text-[#171717] border border-[#CFCDC5] text-xs font-bold"
-                    >
-                      Relatório
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </>
-        )}
-      </section>
-
-      {/* RODAPÉ DISCRETO DO PORTAL DA INDÚSTRIA */}
-      <footer className="pt-6 pb-2 border-t border-[#CFCDC5]/60 flex flex-col sm:flex-row items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <span className="flex h-2 w-2 rounded-full bg-[#286FF5]" />
-          <span className="font-mono text-[11px] text-[#737373]">MK9 Date • Portal da Indústria</span>
-        </div>
-        <AuthorSignature variant="muted" />
-      </footer>
-
-      {/* 9. MODAL / DRAWER DE DETALHES DA VISITA (SOMENTE LEITURA) */}
       {selectedVisitItem && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto font-mono">
-          <div className="bg-[#F7F6F2] border border-indigo-500/40 rounded-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto shadow-2xl p-6 space-y-6">
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/55 p-3 backdrop-blur-sm sm:p-5" onMouseDown={(event) => { if (event.target === event.currentTarget) closeVisitReport(); }}>
+          <section ref={visitReportDialogRef} role="dialog" aria-modal="true" aria-labelledby="visit-report-title" tabIndex={-1} className="max-h-[92vh] w-full max-w-3xl space-y-6 overflow-y-auto rounded-xl border border-[#CFCDC5] bg-[#F7F6F2] p-4 text-[#171717] shadow-2xl outline-none sm:p-6">
             {/* CABEÇALHO DO MODAL */}
             <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-4">
               <div>
-                <h3 className="text-lg font-extrabold text-[#171717]">
-                  Relatório da Visita — {selectedVisitItem.lojaNome}
-                </h3>
-                <p className="text-xs text-[#77766F]">
-                  Data Prevista: {selectedVisitItem.dataStr} • Promotor: {selectedVisitItem.promotorNome}
-                </p>
+                <h3 id="visit-report-title" className="text-lg font-extrabold text-[#171717]">RELATÓRIO DE ATENDIMENTO</h3>
+                <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-[#526176] sm:grid-cols-4">
+                  <p><span className="block text-[10px] uppercase tracking-wide">Indústria</span><strong className="text-[#14243B]">{getIndustryDisplayName(selectedVisitItem.industriaNome, selectedVisitItem.industriaCodigo)}</strong></p>
+                  <p><span className="block text-[10px] uppercase tracking-wide">Loja</span><strong className="text-[#14243B]">{selectedVisitItem.lojaNome}</strong></p>
+                  <p><span className="block text-[10px] uppercase tracking-wide">Promotor</span><strong className="text-[#14243B]">{selectedVisitItem.promotorNome}</strong></p>
+                  <p><span className="block text-[10px] uppercase tracking-wide">Data</span><strong className="text-[#14243B]">{selectedVisitItem.dataStr}</strong></p>
+                </div>
               </div>
 
               <button
-                onClick={() => setSelectedVisitItem(null)}
+                aria-label="Fechar relatório da visita"
+                onClick={closeVisitReport}
                 className="p-1.5 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5] text-[#77766F] hover:text-[#171717] cursor-pointer"
               >
                 <span className="material-symbols-outlined text-lg">close</span>
@@ -2799,13 +1779,13 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                   {selectedVisitItem.visitObj.checklist_items.map((item, idx) => (
                     <div key={idx} className="p-2.5 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5] flex items-center justify-between">
                       <div className="flex items-center gap-2">
-                        <span className={`material-symbols-outlined text-base ${item.checked ? 'text-emerald-400' : 'text-slate-600'}`}>
-                          {item.checked ? 'check_circle' : 'cancel'}
+                        <span className={`material-symbols-outlined text-base ${item.checked === true ? 'text-emerald-700' : item.checked === false ? 'text-rose-700' : 'text-slate-500'}`}>
+                          {item.checked === true ? 'check_circle' : item.checked === false ? 'cancel' : 'help'}
                         </span>
-                        <span className="text-slate-200 font-bold">{item.item_label}</span>
+                        <span className="text-[#26364B] font-bold">{item.item_label}</span>
                       </div>
-                      <span className={`text-[10px] px-2 py-0.5 rounded font-bold uppercase ${item.checked ? 'bg-emerald-500/20 text-emerald-300' : 'bg-slate-800 text-[#77766F]'}`}>
-                        {item.checked ? 'Sim' : 'Não'}
+                      <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${item.checked === true ? 'bg-emerald-100 text-emerald-900' : item.checked === false ? 'bg-rose-100 text-rose-900' : 'bg-slate-200 text-slate-800'}`}>
+                        {getChecklistDisplayValue(item)}
                       </span>
                     </div>
                   ))}
@@ -2952,6 +1932,7 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
 
             {/* RODAPÉ DO MODAL */}
             <div className="pt-3 border-t border-[#CFCDC5] flex items-center justify-between">
+<<<<<<< HEAD
               <button
                 type="button"
                 onClick={() => {
@@ -2984,17 +1965,30 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
                 <span>Compartilhar WhatsApp</span>
               </button>
 
+=======
+              {selectedVisitItem.visitObj && isWhatsAppShareableVisit(selectedVisitItem.visitObj) ? (
+                <button
+                  type="button"
+                  onClick={() => setSharingVisit(selectedVisitItem.visitObj!)}
+                  className="px-3.5 py-2 bg-emerald-600/10 hover:bg-emerald-600/20 text-emerald-800 border border-emerald-600/30 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-colors"
+                >
+                  <span className="material-symbols-outlined text-sm">share</span>
+                  <span>Compartilhar WhatsApp</span>
+                </button>
+              ) : <div />}
+>>>>>>> c943d2797aff85d3e3e3468cf3e80fce8aa64f40
               <button
-                onClick={() => setSelectedVisitItem(null)}
+                onClick={closeVisitReport}
                 className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs cursor-pointer transition-all shadow-md"
               >
                 Fechar Relatório
               </button>
             </div>
-          </div>
+          </section>
         </div>
       )}
 
+<<<<<<< HEAD
       {/* 9.1 MODAL DE COMPARTILHAMENTO WHATSAPP */}
       {shareWhatsAppModalData && (
         <ShareWhatsAppModal
@@ -3013,214 +2007,71 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
               <div className="flex items-center gap-3">
                 <div className="w-12 h-12 rounded-xl bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 flex items-center justify-center font-bold text-xl shrink-0">
                   <span className="material-symbols-outlined text-2xl">storefront</span>
+=======
+      {/* Compact store history dialog */}
+      {selectedStoreCode && selectedStoreObj && !selectedVisitItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-2 backdrop-blur-sm sm:p-5" onMouseDown={(event) => { if (event.target === event.currentTarget) closeStoreHistory(); }}>
+          <section ref={historyDialogRef} role="dialog" aria-modal="true" aria-labelledby="store-history-title" tabIndex={-1} className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-y-auto rounded-xl border border-[#CFCDC5] bg-[#F7F6F2] text-[#171717] shadow-2xl outline-none">
+            <header className="sticky top-0 z-10 flex flex-wrap items-start justify-between gap-3 border-b border-[#CFCDC5] bg-[#F7F6F2] px-4 py-3 sm:px-5">
+              <div className="min-w-0">
+                <h2 id="store-history-title" className="truncate text-lg font-semibold">{selectedStoreObj.nome}</h2>
+                <p className="mt-0.5 text-sm text-[#526176]">{selectedStoreObj.cidade || 'Cidade não informada'}{selectedStoreObj.uf ? ` / ${selectedStoreObj.uf}` : ''} · {selectedStoreObj.codigo} · Frequência {selectedStoreRoutes[0]?.frequencia || 'semanal'}</p>
+              </div>
+              <button type="button" aria-label="Fechar histórico" onClick={closeStoreHistory} className="rounded-md border border-[#C7CFDA] px-3 py-1.5 text-sm text-[#26364B] hover:bg-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-600">Fechar</button>
+            </header>
+
+            <div className="space-y-4 p-4 sm:p-5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex flex-wrap gap-1" aria-label="Período do histórico">
+                  {(['7', '30', '90', 'all'] as const).map((period) => <button key={period} type="button" aria-pressed={historyPeriodFilter === period} onClick={() => handleHistoryPeriodChange(period)} className={`rounded-md border px-3 py-1.5 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-600 ${historyPeriodFilter === period ? 'border-indigo-700 bg-indigo-50 font-semibold text-indigo-900' : 'border-[#C7CFDA] text-[#26364B] hover:bg-white'}`}>{period === 'all' ? 'Todos' : `${period} dias`}</button>)}
+>>>>>>> c943d2797aff85d3e3e3468cf3e80fce8aa64f40
                 </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-base sm:text-lg font-extrabold text-[#171717]">
-                      {selectedStoreObj.nome}
-                    </h3>
-                    <span className="px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 text-[10px] font-bold border border-indigo-500/30 uppercase">
-                      {selectedStoreObj.codigo}
-                    </span>
+                <label className="flex items-center gap-2 text-sm text-[#526176]">Status
+                  <select value={historyStatusFilter} onChange={(event) => setHistoryStatusFilter(event.target.value as StoreHistoryStatusFilter)} className="rounded-md border border-[#C7CFDA] bg-white px-2.5 py-1.5 text-[#14243B] focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-600">
+                    <option value="all">Todos</option><option value="concluida">Concluídas</option><option value="pendente">Pendentes</option><option value="nao_realizada">Não realizadas</option><option value="planejada">Planejadas</option><option value="em_andamento">Em andamento</option>
+                  </select>
+                </label>
+              </div>
+
+              <section aria-label="Resumo do período" className="grid grid-cols-2 gap-y-2 border-y border-[#D5DAE2] py-3 sm:grid-cols-4">
+                {[
+                  { label: 'Planejadas', value: storeHistoryKPIs.planejadas, tone: 'text-[#14243B]' },
+                  { label: 'Concluídas', value: storeHistoryKPIs.concluidas, tone: 'text-emerald-800' },
+                  { label: 'Pendentes', value: storeHistoryKPIs.pendentes, tone: 'text-amber-800' },
+                  { label: 'Não realizadas', value: storeHistoryKPIs.naoRealizadas, tone: 'text-orange-800' }
+                ].map((stat) => <div key={stat.label} className="flex items-baseline gap-2 px-2"><span className={`text-xl font-semibold tabular-nums ${stat.tone}`}>{loadingHistory ? '—' : stat.value}</span><span className="text-xs text-[#526176]">{stat.label}</span></div>)}
+                <p className="col-span-2 px-2 text-xs text-[#526176] sm:col-span-4">
+                  Aderência: <strong className="text-[#26364B]">{loadingHistory || systemSettings.status === 'loading' ? 'Carregando…' : systemSettings.status !== 'loaded' || systemSettings.mode !== 'OPERACAO_OFICIAL' || storeHistoryKPIs.aderencia === null ? 'Não disponível' : `${storeHistoryKPIs.aderencia}%`}</strong>
+                  {systemSettings.status === 'loaded' && systemSettings.mode !== 'OPERACAO_OFICIAL' ? ' · Operação ainda em implantação.' : ''}
+                </p>
+              </section>
+
+              <section aria-labelledby="store-history-timeline-title">
+                <div className="mb-2 flex items-baseline justify-between gap-2"><h3 id="store-history-timeline-title" className="text-sm font-semibold">Atendimentos</h3><span className="text-xs tabular-nums text-[#526176]">{loadingHistory ? '…' : `${filteredStoreHistoryItems.length} de ${storeHistoryOperationalItems.length}`}</span></div>
+                {loadingHistory ? <p role="status" className="border-y border-[#D5DAE2] py-8 text-center text-sm text-[#526176]">Carregando histórico…</p> : filteredStoreHistoryItems.length === 0 ? <p className="border-y border-[#D5DAE2] py-8 text-center text-sm text-[#526176]">Nenhum atendimento corresponde aos filtros selecionados.</p> : <>
+                  <div className="hidden grid-cols-[7rem_minmax(8rem,1fr)_9rem_10rem_auto] gap-3 border-y border-[#D5DAE2] py-2 text-xs font-medium text-[#526176] md:grid"><span>Data</span><span>Promotor</span><span>Status</span><span>Horário / duração</span><span>Ação</span></div>
+                  <div className="divide-y divide-[#D5DAE2] border-b border-[#D5DAE2]">
+                    {filteredStoreHistoryItems.map((item) => {
+                      const reportAvailable = canOpenStoreVisitReport(item);
+                      const dateLabel = new Date(`${item.dataStr}T00:00:00`).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+                      const timeLabel = item.duracaoFormatada || [item.startedAt && new Date(item.startedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }), item.completedAt && new Date(item.completedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })].filter(Boolean).join(' – ') || '—';
+                      return <article key={item.key} className="grid gap-2 py-3 md:grid-cols-[7rem_minmax(8rem,1fr)_9rem_10rem_auto] md:items-center md:gap-3 md:py-2.5">
+                        <time dateTime={item.dataStr} className="text-sm font-medium tabular-nums text-[#14243B]">{dateLabel}<span className="ml-2 text-xs font-normal text-[#526176] md:hidden">{item.dayOfWeekLabel}</span></time>
+                        <span className="min-w-0 truncate text-sm text-[#26364B]" title={`${getIndustryDisplayName(item.industriaNome, item.industriaCodigo)} · ${item.promotorNome}`}><strong className="mr-1 text-[#14243B]">{getIndustryDisplayName(item.industriaNome, item.industriaCodigo)}</strong><span className="text-[#526176]">· {item.promotorNome}</span></span>
+                        <span className={`w-fit rounded border px-2 py-0.5 text-xs font-medium ${getStoreHistoryStatusTone(item)}`}>{getStoreHistoryStatusLabel(item)}</span>
+                        <span className="text-xs tabular-nums text-[#526176]">{timeLabel}</span>
+                        <span className="flex justify-end">
+                          {reportAvailable ? <button type="button" onClick={() => void handleOpenVisitDetails(item)} className="rounded-md border border-[#AEB9C8] px-3 py-1.5 text-sm font-medium text-[#14243B] hover:bg-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-600">Abrir relatório</button> : <span className="px-3 py-1.5 text-xs text-[#7A8492]">—</span>}
+                        </span>
+                      </article>;
+                    })}
                   </div>
-                  <p className="text-xs text-[#77766F] mt-0.5">
-                    {selectedStoreObj.cidade} / {selectedStoreObj.uf} • Frequência:{' '}
-                    <strong className="text-cyan-400">
-                      {selectedStoreRoutes[0]?.frequencia || 'SEMANAL'}
-                    </strong>
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2 self-end sm:self-auto">
-                <button
-                  onClick={() => setSelectedStoreCode(null)}
-                  className="p-2 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5] text-[#77766F] hover:text-[#171717] cursor-pointer transition-colors"
-                >
-                  <span className="material-symbols-outlined text-xl">close</span>
-                </button>
-              </div>
+                </>}
+              </section>
             </div>
-
-            {/* SELETOR DE PERÍODO E KPIS RESUMO DA LOJA */}
-            <div className="space-y-3">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <span className="text-xs font-bold text-[#171717] uppercase tracking-wider flex items-center gap-1.5">
-                  <span className="material-symbols-outlined text-indigo-400 text-sm">analytics</span>
-                  Resumo Operacional do Período
-                </span>
-
-                {/* FILTROS DE PERÍODO DA LOJA */}
-                <div className="flex items-center gap-1 bg-[#E4E2DB] p-1 rounded-xl border border-[#CFCDC5] self-start sm:self-auto">
-                  {(['7', '30', '90', 'all'] as const).map((p) => (
-                    <button
-                      key={p}
-                      onClick={() => handleHistoryPeriodChange(p)}
-                      className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
-                        historyPeriodFilter === p
-                          ? 'bg-indigo-600 text-white shadow-md'
-                          : 'text-[#77766F] hover:text-slate-200'
-                      }`}
-                    >
-                      {p === 'all' ? 'Todos' : `${p} dias`}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* CARDS KPIS RESUMO DA LOJA */}
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-xs">
-                <div className="p-3 rounded-xl bg-[#E4E2DB] border border-[#CFCDC5]">
-                  <span className="text-[10px] text-purple-400 block font-bold uppercase">PLANEJADOS</span>
-                  <span className="text-xl font-extrabold text-purple-300 mt-0.5 block">{loadingHistory ? '...' : storeHistoryKPIs.planejadas}</span>
-                </div>
-
-                <div className="p-3 rounded-xl bg-[#E4E2DB] border border-emerald-500/30 bg-emerald-950/10">
-                  <span className="text-[10px] text-emerald-400 block font-bold uppercase">CONCLUÍDOS</span>
-                  <span className="text-xl font-extrabold text-emerald-300 mt-0.5 block">{loadingHistory ? '...' : storeHistoryKPIs.concluidas}</span>
-                </div>
-
-                <div className="p-3 rounded-xl bg-[#E4E2DB] border border-rose-500/30 bg-rose-950/10">
-                  <span className="text-[10px] text-rose-400 block font-bold uppercase">PENDENTES</span>
-                  <span className="text-xl font-extrabold text-rose-300 mt-0.5 block">{loadingHistory ? '...' : storeHistoryKPIs.pendentes}</span>
-                </div>
-
-                <div className="p-3 rounded-xl bg-[#E4E2DB] border border-orange-500/30 bg-orange-950/10">
-                  <span className="text-[10px] text-orange-400 block font-bold uppercase">NÃO REALIZADOS</span>
-                  <span className="text-xl font-extrabold text-orange-300 mt-0.5 block">{loadingHistory ? '...' : storeHistoryKPIs.naoRealizadas}</span>
-                </div>
-
-                <div className="p-3 rounded-xl bg-[#E4E2DB] border border-indigo-500/30 bg-indigo-950/10 col-span-2 sm:col-span-1">
-                  <span className="text-[10px] text-indigo-300 block font-bold uppercase">ADERÊNCIA</span>
-                  {loadingHistory || systemSettings.status === 'loading' ? (
-                    <span className="text-xs font-bold text-[#77766F] mt-1 block">Carregando...</span>
-                  ) : systemSettings.mode !== 'OPERACAO_OFICIAL' || systemSettings.status !== 'loaded' ? (
-                    <span className="text-[10px] font-bold text-amber-300 mt-1 block leading-tight">Fase de implantação — SLA não ativo</span>
-                  ) : (
-                    <span className="text-xl font-extrabold text-indigo-200 mt-0.5 block">{`${storeHistoryKPIs.aderencia}%`}</span>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* TIMELINE / LISTA DE HISTÓRICO DE ATENDIMENTOS */}
-            <div className="space-y-3 pt-2 border-t border-[#CFCDC5]">
-              <h4 className="text-xs font-bold text-[#171717] uppercase tracking-wider flex items-center gap-2">
-                <span className="material-symbols-outlined text-indigo-400 text-base">history_edu</span>
-                Linha do Tempo de Atendimentos ({storeHistoryOperationalItems.length})
-              </h4>
-
-              {loadingHistory ? (
-                <div className="py-10 text-center space-y-2">
-                  <span className="material-symbols-outlined text-indigo-400 text-2xl animate-spin">sync</span>
-                  <p className="text-xs text-[#77766F]">Carregando histórico da loja...</p>
-                </div>
-              ) : storeHistoryOperationalItems.length === 0 ? (
-                <div className="py-8 text-center bg-[#E4E2DB]/50 rounded-xl border border-[#CFCDC5] space-y-1">
-                  <span className="material-symbols-outlined text-slate-600 text-2xl">event_busy</span>
-                  <p className="text-xs text-[#171717] font-bold">Nenhum atendimento registrado no período.</p>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {storeHistoryOperationalItems.map((item) => {
-                    const isConcluida = item.status === 'concluida';
-                    const isEmAndamento = item.status === 'em_andamento';
-                    const isNaoRealizada = item.status === 'nao_realizada';
-                    const isAtrasada = item.isPastOverdue;
-                    const photosCount = item.visitObj?.photos?.length || 0;
-
-                    return (
-                      <div
-                        key={item.key}
-                        className={`p-4 rounded-xl border transition-all ${
-                          isConcluida
-                            ? 'bg-[#E4E2DB] border-emerald-500/30 hover:border-emerald-500/60'
-                            : isEmAndamento
-                            ? 'bg-[#E4E2DB] border-blue-500/30 hover:border-blue-500/60'
-                            : isNaoRealizada
-                            ? 'bg-[#E4E2DB] border-orange-500/30 hover:border-orange-500/60'
-                            : isAtrasada
-                            ? 'bg-rose-950/20 border-rose-500/40 hover:border-rose-500/70'
-                            : 'bg-[#E4E2DB] border-[#CFCDC5]'
-                        }`}
-                      >
-                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-[#CFCDC5]">
-                          <div className="flex items-center gap-2">
-                            <span className="font-extrabold text-[#171717] text-sm">{item.dataStr}</span>
-                            <span className="text-[#5F5F5F] text-xs">• {item.dayOfWeekLabel}</span>
-                          </div>
-
-                          <span className={`px-2.5 py-0.5 rounded text-[10px] font-bold border self-start sm:self-auto ${
-                            isConcluida ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' :
-                            isEmAndamento ? 'bg-blue-500/20 text-blue-300 border-blue-500/40' :
-                            isNaoRealizada ? 'bg-orange-500/20 text-orange-300 border-orange-500/40' :
-                            isAtrasada ? 'bg-rose-950 text-rose-300 border-rose-500 animate-pulse' :
-                            'bg-rose-500/20 text-rose-300 border-rose-500/40'
-                          }`}>
-                            {isConcluida ? '🟢 CONCLUÍDA' :
-                             isEmAndamento ? '🔵 EM ANDAMENTO' :
-                             isNaoRealizada ? '🟠 NÃO REALIZADA' :
-                             isAtrasada ? '🚨 ATRASADA' : '🔴 PENDENTE'}
-                          </span>
-                        </div>
-
-                        <div className="pt-3 grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
-                          <div>
-                            <span className="text-[#5F5F5F] block text-[10px]">PROMOTOR RESPONSÁVEL</span>
-                            <span className="font-bold text-cyan-300">{item.promotorNome}</span>
-                          </div>
-
-                          <div>
-                            <span className="text-[#5F5F5F] block text-[10px]">HORÁRIO / DURAÇÃO</span>
-                            <span className="text-slate-200">
-                              {item.startedAt ? new Date(item.startedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—'}
-                              {' → '}
-                              {item.completedAt ? new Date(item.completedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—'}
-                              {item.duracaoFormatada && <strong className="text-amber-300 ml-1">({item.duracaoFormatada})</strong>}
-                            </span>
-                          </div>
-
-                          <div className="flex items-center justify-between sm:justify-end gap-3 pt-2 sm:pt-0 border-t sm:border-t-0 border-[#CFCDC5]">
-                            {photosCount > 0 && (
-                              <span className="text-[11px] text-cyan-300 font-bold bg-cyan-500/10 px-2 py-0.5 rounded border border-cyan-500/30 flex items-center gap-1">
-                                📷 {photosCount} evidência(s)
-                              </span>
-                            )}
-
-                            {item.visitObj ? (
-                              <button
-                                onClick={() => handleOpenVisitDetails(item)}
-                                className="px-3 py-1.5 rounded-lg bg-indigo-600/30 hover:bg-indigo-600 text-indigo-200 hover:text-white border border-indigo-500/40 text-xs font-bold transition-all cursor-pointer"
-                              >
-                                Abrir Relatório
-                              </button>
-                            ) : (
-                              <span className="text-[10px] text-[#5F5F5F] italic">
-                                Atendimento planejado sem execução
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-
-            {/* RODAPÉ DO DRAWER DE HISTÓRICO */}
-            <div className="pt-3 border-t border-[#CFCDC5] flex justify-end">
-              <button
-                onClick={() => setSelectedStoreCode(null)}
-                className="px-5 py-2 rounded-xl bg-[#E4E2DB] hover:bg-[#CFCDC5] text-[#171717] border border-[#CFCDC5] font-bold text-xs cursor-pointer transition-all"
-              >
-                Fechar Histórico
-              </button>
-            </div>
-          </div>
+          </section>
         </div>
       )}
-
       {/* DOCUMENTO EXECUTIVO IMPRESSO A4 (Visível exclusivamente em @media print) */}
       <ExecutiveReportDocument
         activeIndName={activeIndName}
@@ -3234,7 +2085,16 @@ export const IndustryPortalView: React.FC<IndustryPortalViewProps> = ({ onShowTo
         photosSummary={photosSummary}
         temporalEvolution={temporalEvolution}
         topProblematicLojas={topProblematicLojas}
+        industriesPerformance={industriesPerformance}
       />
+
+      {sharingVisit && (
+        <ShareWhatsAppModal
+          visit={sharingVisit}
+          onClose={() => setSharingVisit(null)}
+          onShowToast={onShowToast}
+        />
+      )}
     </div>
   );
 };

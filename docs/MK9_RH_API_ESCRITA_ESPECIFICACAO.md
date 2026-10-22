@@ -1,4 +1,4 @@
-# Especificação proposta: envio de ausências ao CRM MK9
+﻿# Especificação proposta: envio de ausências ao CRM MK9
 
 **Estado:** proposta para discussão com o responsável pelo CRM. Os endpoints e o contrato abaixo não estão confirmados no repositório e não devem ser tratados como API disponível.
 

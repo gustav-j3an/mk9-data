@@ -1,4 +1,4 @@
--- Template only. Do not execute against production without separate approval.
+﻿-- Template only. Do not execute against production without separate approval.
 -- A database owner/administrator must verify the account UUID and active admin role,
 -- then explicitly grant the separate CRM binding-management permission.
 -- This permission does NOT approve any identity, allocation, supervisor access,

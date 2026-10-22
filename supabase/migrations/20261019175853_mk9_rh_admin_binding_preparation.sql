@@ -1,4 +1,4 @@
--- Local preparation only: this adds no outbound API calls and never approves a binding.
+﻿-- Local preparation only: this adds no outbound API calls and never approves a binding.
 BEGIN;
 
 CREATE TABLE IF NOT EXISTS mk9_rh_private.admin_permissions (

@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { IntegrationError, queryMk9Window } from './mk9-faltas.ts';
 import { AccessError, SessionError, authenticatedClient, loadScope, validDate, type RhView } from './rh-authorization.ts';
 import type { AbsencesResult } from '../shared/mk9.ts';
-export function rhHandler(view: RhView) {
+export function rhHandler(view: RhView, options: { requirePreparePermission?: boolean; includeExternalIdentity?: boolean } = {}) {
   return async (req: IncomingMessage, res: ServerResponse) => {
     res.setHeader('Cache-Control', 'private, no-store');
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
@@ -10,6 +10,11 @@ export function rhHandler(view: RhView) {
     if (req.method !== 'GET') { res.setHeader('Allow', 'GET'); return send(405, { message: 'Consulta disponível somente para leitura.' }); }
     try {
       const client = await authenticatedClient(req.headers.authorization);
+      if (options.requirePreparePermission) {
+        const { data, error } = await client.rpc('mk9_faltas_atestados_can_prepare').abortSignal(AbortSignal.timeout(8000));
+        if (error) throw new IntegrationError('upstream');
+        if (data !== true) throw new AccessError();
+      }
       const params = new URL(req.url || '/', 'http://localhost').searchParams;
       for (const k of params.keys()) if (!['data_inicio', 'data_fim'].includes(k) || params.getAll(k).length !== 1) return send(400, { message: 'Use apenas os filtros de período disponíveis na tela.' });
       const start = params.get('data_inicio'); const end = params.get('data_fim');
@@ -37,9 +42,15 @@ export function rhHandler(view: RhView) {
               const finish = item.fim || (item.dias === 1 ? item.inicio : null);
               if (!finish) continue; // An unknown multi-day end cannot prove history authorization.
               if (item.inicio < a.ocorrencias_desde || (a.ocorrencias_ate && finish > a.ocorrencias_ate) || finish < from || item.inicio > to) continue;
-              const { projectId: _, recordKey: __, ...safe } = item;
-              projectNames.set(a.projeto_id, safe.projeto);
-              collected.push({ ...safe, matricula: a.matricula_local, nome: a.nome_local || safe.nome, supervisor: view === 'mine' ? '' : a.supervisor_nome });
+              const { projectId, recordKey, externalMatricula, externalIdentity: _identity, ...safe } = item;
+              projectNames.set(projectId, safe.projeto);
+              collected.push({
+                ...safe,
+                ...(options.includeExternalIdentity ? { externalIdentity: { recordId: _identity?.recordId ?? null, projectId, matricula: externalMatricula } } : {}),
+                matricula: a.matricula_local,
+                nome: a.nome_local || safe.nome,
+                supervisor: view === 'mine' ? '' : a.supervisor_nome
+              });
             }
           } catch (e) { failure = e; }
         }
@@ -49,6 +60,11 @@ export function rhHandler(view: RhView) {
       const refreshed = await loadScope(client, view);
       const latest = new Map(refreshed.map(a => [a.alocacao_id, JSON.stringify(a)]));
       if (scope.some(a => latest.get(a.alocacao_id) !== JSON.stringify(a))) throw new AccessError();
+      if (options.requirePreparePermission) {
+        const { data, error } = await client.rpc('mk9_faltas_atestados_can_prepare').abortSignal(AbortSignal.timeout(8000));
+        if (error) throw new IntegrationError('upstream');
+        if (data !== true) throw new AccessError();
+      }
       const projectIds = [...new Set(scope.map(a => a.projeto_id))];
       const projects = projectIds.map((id, i) => ({ nome: projectNames.get(id) || `Projeto autorizado ${i + 1}`, activePromoters: new Set(scope.filter(a => a.projeto_id === id && a.promotor_ativo).map(a => a.promotor_id)).size }));
       return send(200, { data: collected, projects, activePromoters: new Set(scope.filter(a => a.promotor_ativo).map(a => a.promotor_id)).size, updatedAt } satisfies AbsencesResult);

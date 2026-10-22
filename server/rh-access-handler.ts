@@ -1,4 +1,4 @@
-import type { IncomingMessage, ServerResponse } from 'node:http';
+﻿import type { IncomingMessage, ServerResponse } from 'node:http';
 import { authenticatedClient, loadScope, SessionError, type RhView } from './rh-authorization.ts';
 export default async function rhAccessHandler(req: IncomingMessage, res: ServerResponse) {
   res.setHeader('Cache-Control', 'private, no-store');

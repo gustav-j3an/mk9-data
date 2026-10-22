@@ -1,4 +1,4 @@
--- PREPARED ONLY. Apply to an isolated local database for validation; never remotely without approval.
+﻿-- PREPARED ONLY. Apply to an isolated local database for validation; never remotely without approval.
 -- Verified source key types: public.promotores.id uuid, public.profiles.id uuid.
 BEGIN;
 CREATE SCHEMA IF NOT EXISTS mk9_rh_private;

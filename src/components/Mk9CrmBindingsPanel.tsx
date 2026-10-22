@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+﻿import React, { useCallback, useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 
 interface PromoterIdentity { id: string; matricula: string; name: string }

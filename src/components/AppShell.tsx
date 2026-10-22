@@ -6,6 +6,11 @@ import { supabase } from '../lib/supabase';
 import { PWAInstallPrompt } from './PWAInstallPrompt';
 import { AuthorSignature } from './AuthorSignature';
 import { useRhAccess } from '../lib/rhAccess';
+<<<<<<< HEAD
+=======
+import { useFaltasAtestadosAccess } from '../lib/faltasAtestadosAccess';
+import { useRhMatriculasAccess } from '../lib/rhMatriculasAccess';
+>>>>>>> c943d2797aff85d3e3e3468cf3e80fce8aa64f40
 
 interface AppShellProps {
   currentScreen: ScreenId;
@@ -24,6 +29,11 @@ export const AppShell: React.FC<AppShellProps> = ({
 }) => {
   const { session, profile, role, signOut, hasPermission } = useAuth();
   const rh = useRhAccess();
+<<<<<<< HEAD
+=======
+  const faltasAtestados = useFaltasAtestadosAccess();
+  const rhMatriculas = useRhMatriculasAccess();
+>>>>>>> c943d2797aff85d3e3e3468cf3e80fce8aa64f40
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [globalSearch, setGlobalSearch] = useState('');
   const [searchFocused, setSearchFocused] = useState(false);
@@ -311,8 +321,20 @@ export const AppShell: React.FC<AppShellProps> = ({
 
   const navItems = [
     {
+<<<<<<< HEAD
       group: role === 'promotor' ? 'Meu RH' : role === 'admin' ? 'Gestão RH' : 'Equipe RH',
       items: [{ id: 'rh-ausencias' as ScreenId, label: role === 'promotor' ? 'Minhas Ausências' : 'Faltas e Atestados', icon: 'event_busy', roles: ['admin', 'gestor', 'promotor'] as UserRole[] }]
+=======
+      group: 'CRM MK9',
+      items: [{ id: 'faltas-atestados' as ScreenId, label: 'Faltas e Atestados', icon: 'event_note', roles: ['admin', 'gestor'] as UserRole[] }]
+    },
+    {
+      group: role === 'promotor' ? 'Meu RH' : role === 'admin' ? 'Gestão RH' : 'Equipe RH',
+      items: [
+        { id: 'rh-ausencias' as ScreenId, label: role === 'promotor' ? 'Minhas Ausências' : 'Faltas e Atestados', icon: 'event_busy', roles: ['admin', 'gestor', 'promotor'] as UserRole[] },
+        { id: 'rh-matriculas' as ScreenId, label: 'Conciliação de Matrículas RH', icon: 'badge', roles: ['admin'] as UserRole[] }
+      ]
+>>>>>>> c943d2797aff85d3e3e3468cf3e80fce8aa64f40
     },
     {
       group: 'Visão Geral',
@@ -455,7 +477,11 @@ export const AppShell: React.FC<AppShellProps> = ({
           {/* Navigation Links */}
           <div className="py-4 px-2.5 space-y-4">
             {navItems.map((section) => {
+<<<<<<< HEAD
               const visibleItems = section.items.filter((item) => item.id === 'rh-ausencias' ? (rh.mine || rh.team || rh.management) : !item.roles || hasPermission(item.roles));
+=======
+              const visibleItems = section.items.filter((item) => item.id === 'rh-ausencias' ? (rh.mine || rh.team || rh.management) : item.id === 'faltas-atestados' ? faltasAtestados.allowed : item.id === 'rh-matriculas' ? rhMatriculas.allowed && role === 'admin' : !item.roles || hasPermission(item.roles));
+>>>>>>> c943d2797aff85d3e3e3468cf3e80fce8aa64f40
               if (visibleItems.length === 0) return null;
 
               return (

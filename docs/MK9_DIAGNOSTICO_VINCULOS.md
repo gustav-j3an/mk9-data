@@ -1,4 +1,4 @@
-# Diagnóstico de vínculos e plano para aprovação
+﻿# Diagnóstico de vínculos e plano para aprovação
 
 Data: 19/10/2026. Branch: `feat/mk9-faltas-integration`.
 
@@ -207,4 +207,3 @@ Rotas, PDVs e indústrias são os vínculos atuais por matrícula, não evidênc
 - Funções implantadas `attendance_private.staff_can_access` e `can_read_visit`: definição consultada por SELECT; nenhuma execução com efeitos de escrita.
 
 Estado: **diagnóstico concluído; correções e alterações técnicas aguardam aprovação explícita.**
-

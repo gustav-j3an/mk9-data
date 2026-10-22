@@ -1,4 +1,4 @@
--- MODEL ONLY. No real values and no automatic load. Requires a separate explicit approval.
+﻿-- MODEL ONLY. No real values and no automatic load. Requires a separate explicit approval.
 -- Run by a database administrator ONLY in the separately approved environment.
 -- Use psql -v ON_ERROR_STOP=1, passing each value as a quoted psql variable.
 \if :{?MK9_RH_APPROVAL_CONFIRMED}

@@ -1,4 +1,4 @@
-# Ambiente isolado de homologação RH
+﻿# Ambiente isolado de homologação RH
 
 Preparado em 19/10/2026 na branch `feat/mk9-faltas-integration`. Esta entrega prepara o ambiente; **não executa a homologação real**.
 

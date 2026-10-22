@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+﻿import React, { createContext, useContext, useEffect, useState } from 'react';
 import { useAuth } from '../auth/AuthProvider';
 export type RhView = 'mine' | 'team' | 'management';
 interface RhAccess { mine: boolean; team: boolean; management: boolean }

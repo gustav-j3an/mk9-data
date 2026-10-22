@@ -1,4 +1,4 @@
-# Validação da integração MK9 — 19/10/2026
+﻿# Validação da integração MK9 — 19/10/2026
 
 > Evidências da implementação inicial. A entrega posterior de vínculos individuais e seus testes estão em [MK9_RH_VINCULOS_IMPLEMENTACAO.md](MK9_RH_VINCULOS_IMPLEMENTACAO.md). Não representa homologação real da versão atual.
 

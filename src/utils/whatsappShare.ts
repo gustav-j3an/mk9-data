@@ -1,242 +1,201 @@
-/**
- * MK9 Date - Utilitário de Compartilhamento WhatsApp
- * Reconstrução sem dependência de API paga e sem envio automático.
- * Suporta navigator.share, fallback para texto e download de fotos.
- */
+import type { Visit } from '../types';
 
-export interface VisitShareData {
-  visitId: string;
-  promotorNome?: string;
-  promotorMatricula?: string;
-  lojaNome?: string;
-  lojaCodigo?: string;
-  industriaNome?: string;
-  industriaCodigo?: string;
-  dataVisita: string;
-  horaInicio?: string | null;
-  horaFim?: string | null;
-  status: string;
-  observacoes?: string | null;
-  resumoAtendimento?: string | null;
-  fotos?: Array<{
-    id?: string;
-    url: string;
-    tipo?: string;
-    descricao?: string;
-  }>;
-  whatsappGroupLink?: string | null;
-}
-
-export interface ShareResult {
-  success: boolean;
-  action: 'native_share' | 'whatsapp_link' | 'clipboard_fallback' | 'canceled' | 'error';
-  message?: string;
+export function isWhatsAppShareableVisit(visit: Pick<Visit, 'status'>): boolean {
+  return visit.status === 'concluida';
 }
 
 /**
- * Valida se um link é estritamente um link de convite oficial de grupo de WhatsApp.
- * Formato aceito: https://chat.whatsapp.com/[A-Za-z0-9_-]+
- * Rejeita: wa.me, whatsapp://, outros domínios ou links malformados.
+ * Formata a data ISO YYYY-MM-DD para DD/MM/YYYY
  */
-export function isValidWhatsAppGroupLink(url: string | null | undefined): boolean {
-  if (!url || typeof url !== 'string') return false;
-  const trimmed = url.trim();
-  const pattern = /^https:\/\/chat\.whatsapp\.com\/[A-Za-z0-9_-]+$/;
-  return pattern.test(trimmed);
+export function formatDateBR(dateStr?: string | null): string {
+  if (!dateStr) return '—';
+  const clean = dateStr.slice(0, 10);
+  const parts = clean.split('-');
+  if (parts.length === 3) {
+    return `${parts[2]}/${parts[1]}/${parts[0]}`;
+  }
+  return dateStr;
 }
 
 /**
- * Sanitiza e valida o link de grupo, retornando a string limpa ou null se inválida.
+ * Formata um timestamp ISO para o formato de hora HH:mm
  */
-export function sanitizeWhatsAppGroupLink(url: string | null | undefined): string | null {
-  if (!url || typeof url !== 'string') return null;
-  const trimmed = url.trim();
-  return isValidWhatsAppGroupLink(trimmed) ? trimmed : null;
-}
-
-/**
- * Formata os dados da visita em mensagem de texto estruturada para WhatsApp.
- */
-export function formatVisitReportText(data: VisitShareData): string {
-  const parts: string[] = [];
-
-  parts.push('*📋 RELATÓRIO DE VISITA — MK9 DATE*');
-  parts.push('──────────────────────');
-
-  if (data.industriaNome) {
-    parts.push(`*Indústria:* ${data.industriaNome}${data.industriaCodigo ? ` (${data.industriaCodigo})` : ''}`);
-  }
-  if (data.lojaNome) {
-    parts.push(`*Loja:* ${data.lojaNome}${data.lojaCodigo ? ` (${data.lojaCodigo})` : ''}`);
-  }
-  if (data.promotorNome) {
-    parts.push(`*Promotor:* ${data.promotorNome}${data.promotorMatricula ? ` [${data.promotorMatricula}]` : ''}`);
-  }
-
-  // Data e Horário
-  const dataFormatada = data.dataVisita ? data.dataVisita.split('-').reverse().join('/') : 'Não informada';
-  parts.push(`*Data:* ${dataFormatada}`);
-
-  if (data.horaInicio || data.horaFim) {
-    const inicio = data.horaInicio ? data.horaInicio.slice(0, 5) : '--:--';
-    const fim = data.horaFim ? data.horaFim.slice(0, 5) : '--:--';
-    parts.push(`*Horário:* ${inicio} às ${fim}`);
-  }
-
-  parts.push(`*Status:* ${data.status ? data.status.toUpperCase() : 'CONCLUÍDA'}`);
-
-  if (data.resumoAtendimento && data.resumoAtendimento.trim()) {
-    parts.push('');
-    parts.push('*Resumo do Atendimento:*');
-    parts.push(data.resumoAtendimento.trim());
-  }
-
-  if (data.observacoes && data.observacoes.trim()) {
-    parts.push('');
-    parts.push('*Observações:*');
-    parts.push(data.observacoes.trim());
-  }
-
-  const qtdFotos = data.fotos ? data.fotos.length : 0;
-  if (qtdFotos > 0) {
-    parts.push('');
-    parts.push(`*Fotos registradas:* ${qtdFotos} foto(s) anexada(s)`);
-  }
-
-  parts.push('');
-  parts.push('_Relatório gerado via MK9 Date Operacional_');
-
-  return parts.join('\n');
-}
-
-/**
- * Faz download de uma foto via URL (blob seguro/mecanismo existente) e a converte em File.
- */
-export async function fetchImageAsFile(url: string, filename: string): Promise<File> {
-  const response = await fetch(url, { credentials: 'omit' });
-  if (!response.ok) {
-    throw new Error(`Falha ao obter imagem (${response.status})`);
-  }
-  const blob = await response.blob();
-  const mimeType = blob.type || 'image/jpeg';
-  return new File([blob], filename, { type: mimeType });
-}
-
-/**
- * Prepara a lista de arquivos de fotos a partir dos URLs autorizados.
- */
-export async function preparePhotoFiles(
-  fotos: Array<{ url: string; descricao?: string; id?: string }>
-): Promise<File[]> {
-  const files: File[] = [];
-  for (let i = 0; i < fotos.length; i++) {
-    const item = fotos[i];
-    if (!item.url) continue;
-    try {
-      const ext = item.url.includes('.png') ? 'png' : 'jpg';
-      const filename = `visita_foto_${i + 1}_${item.id || Date.now()}.${ext}`;
-      const file = await fetchImageAsFile(item.url, filename);
-      files.push(file);
-    } catch (err) {
-      console.warn(`[whatsappShare] Não foi possível carregar a imagem ${i + 1}:`, err);
-    }
-  }
-  return files;
-}
-
-/**
- * Executa o compartilhamento da visita.
- * 1. Tenta navigator.share com arquivos (se suportado e houver fotos).
- * 2. Tenta navigator.share apenas com texto (se suportado).
- * 3. Fallback: abre api.whatsapp.com/send com o texto codificado.
- * Nunca considera a abertura do WhatsApp como confirmação de envio.
- */
-export async function shareVisitReport(
-  data: VisitShareData,
-  options?: { photoFiles?: File[] }
-): Promise<ShareResult> {
-  const text = formatVisitReportText(data);
-  const title = `Relatório de Visita - ${data.lojaNome || 'MK9 Date'}`;
-
-  // 1. Tenta compartilhamento nativo com fotos
-  if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
-    const files = options?.photoFiles;
-    if (files && files.length > 0 && typeof navigator.canShare === 'function') {
-      const shareDataWithFiles: ShareData = {
-        title,
-        text,
-        files,
-      };
-
-      if (navigator.canShare(shareDataWithFiles)) {
-        try {
-          await navigator.share(shareDataWithFiles);
-          return {
-            success: true,
-            action: 'native_share',
-            message: 'Compartilhamento nativo aberto com sucesso.',
-          };
-        } catch (err: unknown) {
-          if (err instanceof Error && err.name === 'AbortError') {
-            return {
-              success: false,
-              action: 'canceled',
-              message: 'Compartilhamento cancelado pelo usuário.',
-            };
-          }
-          // Caso falhe por arquivos não aceitos, tenta o fallback sem arquivos abaixo
-          console.warn('[whatsappShare] navigator.share com fotos falhou, tentando apenas texto:', err);
-        }
-      }
-    }
-
-    // 2. Tenta navigator.share apenas texto
-    try {
-      await navigator.share({ title, text });
-      return {
-        success: true,
-        action: 'native_share',
-        message: 'Compartilhamento nativo de texto aberto.',
-      };
-    } catch (err: unknown) {
-      if (err instanceof Error && err.name === 'AbortError') {
-        return {
-          success: false,
-          action: 'canceled',
-          message: 'Compartilhamento cancelado pelo usuário.',
-        };
-      }
-      console.warn('[whatsappShare] navigator.share de texto falhou:', err);
-    }
-  }
-
-  // 3. Fallback para abertura direta via link web do WhatsApp
+export function formatTimeBR(isoStr?: string | null): string {
+  if (!isoStr) return '—';
   try {
-    const encodedText = encodeURIComponent(text);
-    const whatsappWebUrl = `https://api.whatsapp.com/send?text=${encodedText}`;
-    window.open(whatsappWebUrl, '_blank', 'noopener,noreferrer');
-    return {
-      success: true,
-      action: 'whatsapp_link',
-      message: 'WhatsApp aberto no navegador. Cole o relatório na conversa desejada.',
-    };
-  } catch (err) {
-    return {
-      success: false,
-      action: 'error',
-      message: 'Não foi possível abrir o WhatsApp automaticamente.',
-    };
+    const d = new Date(isoStr);
+    if (isNaN(d.getTime())) return '—';
+    return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  } catch {
+    return '—';
   }
 }
 
 /**
- * Abre o link do grupo da indústria no navegador.
- * Apenas abre a conversa/convite; não promete anexar automaticamente o relatório.
+ * Monta o texto limpo, enxuto e profissional para compartilhamento via WhatsApp
+ * NUNCA inventa dados e NÃO insere links assinados no corpo da mensagem.
  */
-export function openIndustryWhatsAppGroup(groupLink: string | null | undefined): boolean {
-  if (!isValidWhatsAppGroupLink(groupLink)) {
+export function buildWhatsAppReportText(visit: Visit): string {
+  const lines: string[] = [];
+
+  // Cabeçalho
+  lines.push('📋 *RELATÓRIO DE VISITA — MK9 DATE*');
+  lines.push('');
+
+  // Dados Principais
+  const industriaNome = visit.industria?.nome || visit.industria_codigo || 'Não informada';
+  const lojaNome = visit.loja?.nome || visit.loja_codigo || 'Não informada';
+  const promotorNome = visit.promotor?.nome || visit.promotor_matricula || 'Não informado';
+  const dataVisita = formatDateBR(visit.data_visita);
+  const entrada = formatTimeBR(visit.started_at);
+  const saida = formatTimeBR(visit.completed_at);
+
+  lines.push(`🏭 *Indústria:* ${industriaNome}`);
+  lines.push(`🏪 *Loja:* ${lojaNome}`);
+  lines.push(`📅 *Data:* ${dataVisita}`);
+  lines.push(`👤 *Promotor:* ${promotorNome}`);
+  lines.push(`⏰ *Horário:* ${entrada} às ${saida}`);
+
+  // Status
+  const statusFormatado =
+    visit.status === 'concluida'
+      ? '✅ Concluída'
+      : visit.status === 'em_andamento'
+      ? '⏳ Em andamento'
+      : visit.status === 'nao_realizada'
+      ? '❌ Não realizada'
+      : '⚪ Pendente';
+  lines.push(`📌 *Status:* ${statusFormatado}`);
+
+  if (visit.status === 'nao_realizada' && visit.motivo_nao_realizada) {
+    lines.push(`⚠️ *Motivo:* ${visit.motivo_nao_realizada}`);
+  }
+
+  // Resumo do Checklist
+  if (visit.checklist_items && visit.checklist_items.length > 0) {
+    lines.push('');
+    lines.push('📦 *Checklist Operacional:*');
+    visit.checklist_items.forEach((item) => {
+      const valor = item.valor_texto !== null && item.valor_texto !== undefined && item.valor_texto.trim() !== ''
+        ? `${item.valor_texto} un.`
+        : item.checked ? 'Sim' : 'Não';
+      lines.push(`  • ${item.item_label || item.item_key}: ${valor}`);
+    });
+  }
+
+  // Ocorrências e Rupturas
+  if (visit.occurrences && visit.occurrences.length > 0) {
+    lines.push('');
+    lines.push(`🚨 *Ocorrências / Rupturas (${visit.occurrences.length}):*`);
+    visit.occurrences.forEach((occ) => {
+      const tipo = occ.tipo.replace('_', ' ').toUpperCase();
+      const status = occ.resolvido ? 'Resolvido' : 'Pendente';
+      lines.push(`  • [${tipo}] ${occ.descricao} (${status})`);
+    });
+  }
+
+  // Controle de Validades
+  if (visit.validity_items && visit.validity_items.length > 0) {
+    lines.push('');
+    lines.push(`⏳ *Controle de Validades (${visit.validity_items.length}):*`);
+    visit.validity_items.forEach((val) => {
+      const dataVenc = formatDateBR(val.data_vencimento);
+      lines.push(`  • ${val.produto_nome}: ${val.quantidade} un. — Vence: ${dataVenc}`);
+    });
+  }
+
+  // Fotos disponíveis
+  if (visit.photos && visit.photos.length > 0) {
+    lines.push('');
+    lines.push(`📸 *Evidências Fotográficas:* ${visit.photos.length} foto(s) anexada(s)`);
+  }
+
+  // Observações Gerais
+  if (visit.observacao_geral && visit.observacao_geral.trim()) {
+    lines.push('');
+    lines.push(`📝 *Observações:* ${visit.observacao_geral.trim()}`);
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * Converte o texto do relatório em link wa.me para abertura web/app direta
+ */
+export function buildWhatsAppWebUrl(text: string, phone?: string | null): string {
+  const encodedText = encodeURIComponent(text);
+  const cleanPhone = phone ? phone.replace(/\D/g, '') : '';
+  if (cleanPhone) {
+    return `https://wa.me/${cleanPhone}?text=${encodedText}`;
+  }
+  return `https://wa.me/?text=${encodedText}`;
+}
+
+/**
+ * Validação de suporte da Web Share API no ambiente atual
+ */
+export function canShareFiles(files: File[]): boolean {
+  if (typeof navigator === 'undefined' || !navigator.share) {
     return false;
   }
-  window.open(groupLink!.trim(), '_blank', 'noopener,noreferrer');
-  return true;
+  if (!navigator.canShare) {
+    return false;
+  }
+  try {
+    return navigator.canShare({ files });
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Executa o compartilhamento nativo através da Web Share API
+ * Retorna:
+ * - 'shared': sucesso
+ * - 'canceled': cancelado pelo usuário
+ * - 'unsupported': API ou compartilhamento de arquivo não suportado
+ * - 'error': falha de execução
+ */
+export async function shareViaWebShare(
+  data: { title: string; text: string; files?: File[] }
+): Promise<'shared' | 'canceled' | 'unsupported' | 'error'> {
+  if (typeof navigator === 'undefined' || !navigator.share) {
+    return 'unsupported';
+  }
+
+  // Se houver arquivos, valida suporte prévio
+  if (data.files && data.files.length > 0) {
+    if (!navigator.canShare || !navigator.canShare({ files: data.files })) {
+      return 'unsupported';
+    }
+  }
+
+  try {
+    await navigator.share({
+      title: data.title,
+      text: data.text,
+      files: data.files && data.files.length > 0 ? data.files : undefined
+    });
+    return 'shared';
+  } catch (err: any) {
+    if (err?.name === 'AbortError') {
+      return 'canceled';
+    }
+    console.warn('Erro ao invocar navigator.share:', err);
+    return 'error';
+  }
+}
+
+/**
+ * Baixa um arquivo File gerando download direto no navegador
+ */
+export function triggerFileDownload(file: File): void {
+  const url = URL.createObjectURL(file);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = file.name;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
 }

@@ -1121,9 +1121,15 @@ export const PromotersView: React.FC<PromotersViewProps> = ({
                 </button>
               </div>
             </form>
+<<<<<<< HEAD
             {editingPromoter && role === 'admin' && (
               <Mk9CrmBindingsPanel promoter={{ id: editingPromoter.id, matricula: editingPromoter.matricula, name: editingPromoter.name }} />
             )}
+=======
+              {editingPromoter && role === 'admin' && (
+                <Mk9CrmBindingsPanel promoter={{ id: editingPromoter.id, matricula: editingPromoter.matricula, name: editingPromoter.name }} />
+              )}
+>>>>>>> c943d2797aff85d3e3e3468cf3e80fce8aa64f40
           </div>
         </div>
       )}

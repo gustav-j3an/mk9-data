@@ -1,5 +1,9 @@
 import { supabase } from './supabase';
 import { buildRoster, parseRules, validDate, type OverrideStatus, type Promoter, type Team, type Supervisor, type Override, type Schedule, type Absence, type AttendanceHoliday } from '../utils/attendanceEngine';
+<<<<<<< HEAD
+=======
+import { calculateOperationalActivity, type PromoterOperationalSummary } from '../utils/visitActivityEngine';
+>>>>>>> c943d2797aff85d3e3e3468cf3e80fce8aa64f40
 import type { RouteItem, Visit } from '../types';
 import type { PostgrestError } from '@supabase/supabase-js';
 import { automaticAbsenceApproved } from './attendanceAdministration';
@@ -39,11 +43,19 @@ export async function fetchAttendance(date: string) {
     }
   };
   const visitsForDate = async () => {
+<<<<<<< HEAD
     try { return await page<Visit>('visits', 'id,promotor_matricula,loja_codigo,industria_codigo,data_visita,status,started_at,completed_at,latitude,longitude,gps_accuracy_meters,work_schedule_id', q => q.eq('data_visita', date)); }
     catch (error) {
       if ((error as PostgrestError).code !== '42703') throw error;
       missing.push('telemetry');
       return page<Visit>('visits', 'id,promotor_matricula,loja_codigo,industria_codigo,data_visita,status,started_at,completed_at,latitude,longitude', q => q.eq('data_visita', date));
+=======
+    try { return await page<Visit>('visits', 'id,promotor_matricula,loja_codigo,industria_codigo,data_visita,status,started_at,completed_at,motivo_nao_realizada,latitude,longitude,gps_accuracy_meters,work_schedule_id,loja:lojas(codigo,nome),industria:industrias(codigo,nome)', q => q.eq('data_visita', date)); }
+    catch (error) {
+      if ((error as PostgrestError).code !== '42703') throw error;
+      missing.push('telemetry');
+      return page<Visit>('visits', 'id,promotor_matricula,loja_codigo,industria_codigo,data_visita,status,started_at,completed_at,motivo_nao_realizada,latitude,longitude,loja:lojas(codigo,nome),industria:industrias(codigo,nome)', q => q.eq('data_visita', date));
+>>>>>>> c943d2797aff85d3e3e3468cf3e80fce8aa64f40
     }
   };
   const results = await Promise.allSettled([
@@ -54,9 +66,15 @@ export async function fetchAttendance(date: string) {
     optional<Override>('attendance_override_summary', 'id,promotor_matricula,data_operacional,override_status,medical_days', q => q.eq('data_operacional', date)),
     optional<Schedule>('promoter_work_schedules', 'id,promotor_matricula,dia_semana,hora_inicio,hora_fim,ativo,valid_from,valid_to,interval_minutes,tolerance_minutes,timezone,modalidade,is_exception,work_uf,work_city', q => q.eq('ativo', true)),
     optional<Absence>('promoter_absences', 'id,promotor_matricula,tipo,data_inicio,data_fim,data_aprovacao', q => q.lte('data_inicio', date).gte('data_fim', date)),
+<<<<<<< HEAD
     db.from('system_settings').select('key,value').in('key', ['attendance_rules', 'operation_mode', 'official_start_date'])
     ,optional<AttendanceHoliday>('attendance_holidays','id,data,nome,uf,cidade,behavior',q=>q.eq('data',date)),
     optional<RouteItem>('rotas', 'id,codigo_rota,promotor_matricula,loja_codigo,industria_codigo,frequencia,segunda,terca,quarta,quinta,sexta,sabado,domingo,encerrada_em')
+=======
+    db.from('system_settings').select('key,value').in('key', ['attendance_rules', 'operation_mode', 'official_start_date']),
+    optional<AttendanceHoliday>('attendance_holidays','id,data,nome,uf,cidade,behavior',q=>q.eq('data',date)),
+    page<RouteItem>('rotas', 'id,promotor_matricula,loja_codigo,industria_codigo,frequencia,domingo,segunda,terca,quarta,quinta,sexta,sabado,loja:lojas(codigo,nome),industria:industrias(codigo,nome)')
+>>>>>>> c943d2797aff85d3e3e3468cf3e80fce8aa64f40
   ] as const);
   for (const result of results) if (result.status === 'rejected') throw result.reason;
   const fulfilled = <T,>(result: PromiseSettledResult<T>): T => { if(result.status==='rejected') throw result.reason; return result.value; };
@@ -74,7 +92,22 @@ export async function fetchAttendance(date: string) {
   const officialStart = settings.get('official_start_date') || null;
   if (officialStart != null && (typeof officialStart !== 'string' || !validDate(officialStart))) throw new Error('Data de início oficial inválida.');
   const approvedRules = automaticAbsenceApproved(settings.get('attendance_rules'));
+<<<<<<< HEAD
   const items = buildRoster({ promoters, routes: routes || [], visits, teams, supervisors, overrides, schedules, absences, holidays, date, now, rules, official: official && approvedRules && missing.length === 0, officialStart });
+=======
+  const items = buildRoster({ promoters, routes: [], visits, teams, supervisors, overrides, schedules, absences, holidays, date, now, rules, official: official && approvedRules && missing.length === 0, officialStart });
+  
+  // Calcular atividades operacionais por atendimento
+  const operationalSummary = calculateOperationalActivity({
+    date,
+    promoters,
+    routes,
+    visits,
+    now,
+    timezone: rules.timezone
+  });
+
+>>>>>>> c943d2797aff85d3e3e3468cf3e80fce8aa64f40
   const warnings = [];
   if (missing.length) warnings.push(`Estruturas indisponíveis: ${missing.join(', ')}. Verifique as migrations deste ambiente. Ausência de tabela não comprova ausência de jornadas; cadastros e ajustes desabilitados.`);
   if (!rules.close || rules.tolerance == null || !official || !officialStart) warnings.push('Faltas automáticas desabilitadas: fechamento, tolerância ou início da operação oficial não configurados.');
@@ -83,7 +116,7 @@ export async function fetchAttendance(date: string) {
   const noJourney = missing.includes('promoter_work_schedules') ? 0 : items.filter(i=>i.operationalStatus==='sem_expediente').length;
   if (noJourney) warnings.push(`${noJourney} promotor(es) sem jornada cadastrada nesta data, fora dos indicadores. Programação de visitas não substitui jornada.`);
   if (!approvedRules) warnings.push('Faltas automáticas desabilitadas: aprovação administrativa das regras ainda pendente.');
-  return { items, fetchedAt: now, timezone: rules.timezone, warnings, promoters, missingDependencies: missing, canEdit: !missing.length && ['admin', 'gestor'].includes(profile.role) };
+  return { items, operationalSummary, routes, visits, fetchedAt: now, timezone: rules.timezone, warnings, promoters, missingDependencies: missing, canEdit: !missing.length && ['admin', 'gestor'].includes(profile.role) };
 }
 export async function fetchAttendanceAudit(matricula: string,date: string) {
   if (!supabase) throw new Error('Cliente não configurado.');

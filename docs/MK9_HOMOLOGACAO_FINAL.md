@@ -1,4 +1,4 @@
-# Homologação real: configuração e pendências
+﻿# Homologação real: configuração e pendências
 
 > Roteiro histórico do modelo projeto/equipe. Para a implementação aprovada de identidades, alocações e acessos individuais, seguir [MK9_RH_VINCULOS_IMPLEMENTACAO.md](MK9_RH_VINCULOS_IMPLEMENTACAO.md). Não alterar equipes, supervisores ou matrículas para habilitar RH; o JSON de equipes não autoriza mais as consultas.
 

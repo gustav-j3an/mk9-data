@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+﻿import React, { useEffect, useState } from 'react';
 import { useAuth } from '../auth/AuthProvider';
 import { useRhAccess, type RhView } from '../lib/rhAccess';
 import type { Absence, AbsencesResult } from '../../shared/mk9';

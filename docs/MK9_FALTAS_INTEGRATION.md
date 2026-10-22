@@ -1,4 +1,4 @@
-# Consulta MK9 Faltas e Atestados
+﻿# Consulta MK9 Faltas e Atestados
 
 > Arquitetura inicial, substituída na resolução de identidade/escopo por [vínculos exclusivos de RH](MK9_RH_VINCULOS_IMPLEMENTACAO.md). Não usar projeto/equipe como fallback. A nova migration está preparada e validada somente no Docker local, sem implantação remota.
 
