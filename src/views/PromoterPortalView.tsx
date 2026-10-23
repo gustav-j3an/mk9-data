@@ -53,12 +53,21 @@ import {
 import { isWhatsAppShareableVisit } from '../utils/whatsappShare';
 import { loadRoutesWithClosureFallback } from '../utils/routeClosureCompatibility';
 import { filterPromoterAppointments, getMetricDisplayValue, getRegularizationCounts, getRegularizationPresentation, getWeeklyPromoterMetricCounts, isUnresolvedVisitInProgress, PROMOTER_APPOINTMENT_TABS, type PromoterAppointmentsTab } from '../utils/promoterPortalPresentation';
+import { getPromoterPortalViewStateKey, readPromoterPortalViewState, writePromoterPortalViewState } from '../utils/promoterPortalViewState';
 import { getScheduledVisitAction, isScheduledVisitActionRpcReady, type ScheduledVisitAction } from '../utils/scheduledVisitActions';
 import { canReviewOldOpenVisits, createRequestGate, findOwnOpenVisit, formatOpenVisitConflictMessage, getOldOpenVisitCheckInBlockMessage, getOldOpenVisitsLabel, getPromoterOpenVisitAction, isAnotherVisitInProgressError, isOpenVisitFromToday } from '../utils/visitCheckInConflict';
 
 interface PromoterPortalViewProps {
   onNavigate: (screen: ScreenId) => void;
   onShowToast: (toast: Omit<ToastMessage, 'id'>) => void;
+}
+
+function getSessionViewStateStorage() {
+  try {
+    return typeof window !== 'undefined' ? window.sessionStorage : null;
+  } catch {
+    return null;
+  }
 }
 
 export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNavigate, onShowToast }) => {
@@ -75,6 +84,10 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
   const promotorMatricula = isAdminUser 
     ? (selectedPromoterMatricula || null)
     : profile?.promotor_matricula;
+  const portalViewStateKey = getPromoterPortalViewStateKey(profile?.id);
+  const portalViewStateStorage = getSessionViewStateStorage();
+  const [initialPortalViewState] = useState(() => readPromoterPortalViewState(portalViewStateStorage, portalViewStateKey));
+  const [activePortalViewStateKey, setActivePortalViewStateKey] = useState(portalViewStateKey);
 
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -111,15 +124,15 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
   const [scheduledActionRpcStatus, setScheduledActionRpcStatus] = useState<'checking' | 'ready' | 'unavailable'>('checking');
 
   // Controle de colapso do Histórico da Semana (Fechado por padrão no mobile)
-  const [isWeekHistoryOpen, setIsWeekHistoryOpen] = useState<boolean>(false);
+  const [isWeekHistoryOpen, setIsWeekHistoryOpen] = useState<boolean>(initialPortalViewState.isWeekHistoryOpen);
 
   // Estado para Agenda Semanal "MINHA SEMANA" (Etapa 7.2)
-  const [weekOffset, setWeekOffset] = useState<number>(0);
+  const [weekOffset, setWeekOffset] = useState<number>(initialPortalViewState.weekOffset);
   const [weekVisits, setWeekVisits] = useState<Visit[]>([]);
-  const [selectedDayDateStr, setSelectedDayDateStr] = useState<string>(getLocalDateString(new Date()));
-  const [weekHistoryFilterMode, setWeekHistoryFilterMode] = useState<'day' | 'all'>('day');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'planejada' | 'em_andamento' | 'pendente' | 'concluida' | 'nao_realizada'>('all');
-  const [appointmentsTab, setAppointmentsTab] = useState<PromoterAppointmentsTab>('today');
+  const [selectedDayDateStr, setSelectedDayDateStr] = useState<string>(initialPortalViewState.selectedDayDateStr || getLocalDateString(new Date()));
+  const [weekHistoryFilterMode, setWeekHistoryFilterMode] = useState<'day' | 'all'>(initialPortalViewState.weekHistoryFilterMode);
+  const [statusFilter, setStatusFilter] = useState<'all' | 'planejada' | 'em_andamento' | 'pendente' | 'concluida' | 'nao_realizada'>(initialPortalViewState.statusFilter);
+  const [appointmentsTab, setAppointmentsTab] = useState<PromoterAppointmentsTab>(initialPortalViewState.appointmentsTab);
   const [operationMode, setOperationMode] = useState<OperationMode | 'DESCONHECIDO'>('DESCONHECIDO');
   const [officialStartDate, setOfficialStartDate] = useState<string | null>(null);
   const onShowToastRef = useRef(onShowToast);
@@ -127,6 +140,25 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
   const warnedLegacyRouteSchemaRef = useRef(false);
   const checkInGateRef = useRef(createRequestGate());
   onShowToastRef.current = onShowToast;
+
+  useEffect(() => {
+    if (activePortalViewStateKey === portalViewStateKey) return;
+    const saved = readPromoterPortalViewState(portalViewStateStorage, portalViewStateKey);
+    setAppointmentsTab(saved.appointmentsTab);
+    setIsWeekHistoryOpen(saved.isWeekHistoryOpen);
+    setWeekOffset(saved.weekOffset);
+    setSelectedDayDateStr(saved.selectedDayDateStr || getLocalDateString(new Date()));
+    setWeekHistoryFilterMode(saved.weekHistoryFilterMode);
+    setStatusFilter(saved.statusFilter);
+    setActivePortalViewStateKey(portalViewStateKey);
+  }, [activePortalViewStateKey, portalViewStateKey, portalViewStateStorage]);
+
+  useEffect(() => {
+    if (activePortalViewStateKey !== portalViewStateKey) return;
+    writePromoterPortalViewState(portalViewStateStorage, portalViewStateKey, {
+      appointmentsTab, isWeekHistoryOpen, weekOffset, selectedDayDateStr, weekHistoryFilterMode, statusFilter
+    });
+  }, [activePortalViewStateKey, portalViewStateKey, portalViewStateStorage, appointmentsTab, isWeekHistoryOpen, weekOffset, selectedDayDateStr, weekHistoryFilterMode, statusFilter]);
 
   // Visualização da Escala Fixa Semanal e Modal de Edição (Item 3 e 4)
   const [scaleViewMode, setScaleViewMode] = useState<'semana' | 'dia'>('semana');
@@ -849,6 +881,12 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
   const currentWeekEndStr = currentWeekBounds.end;
   const currentWeekDaysRange = useMemo(() => getWeekDaysRange(new Date(), 0), []);
   const weekDaysRange = useMemo(() => getWeekDaysRange(new Date(), weekOffset), [weekOffset]);
+
+  useEffect(() => {
+    if (!weekDaysRange.some(day => day.dateStr === selectedDayDateStr)) {
+      setSelectedDayDateStr(weekDaysRange[0]?.dateStr || getLocalDateString(new Date()));
+    }
+  }, [weekDaysRange, selectedDayDateStr]);
 
   const weekOperationalVisits = useMemo(() => {
     return calculateOperationalVisits({
@@ -2966,7 +3004,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
       {/* HISTÓRICO DE ATENDIMENTOS */}
       {(!isAdminUser || selectedPromoterMatricula) && appointmentsTab === 'history' && (
         <section className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-3 sm:p-5 shadow-xs space-y-3">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-3">
             <div className="min-w-0 flex-1">
              <button
               type="button"
@@ -2985,19 +3023,18 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
               </span>
              </button>
              <p className="text-[11px] text-[#5F5F5F] font-mono">Registros de campo com navegação por semana e por dia.</p>
-             {!isAdminUser && scheduledActionRpcStatus !== 'ready' && <p role="status" className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-950">{scheduledActionRpcStatus === 'checking' ? 'Verificando disponibilidade das ações no servidor…' : 'Recuperação indisponível: o servidor ainda não confirmou a atualização necessária.'}</p>}
             </div>
 
           {/* Navegação entre semanas (visível sempre) */}
-          <div className="flex flex-wrap items-center gap-2 shrink-0 font-mono text-xs">
+          <div aria-label="Navegação semanal" className="grid w-full grid-cols-3 items-center gap-2 shrink-0 font-mono text-xs lg:w-auto">
             <button
               type="button"
               onClick={() => changeHistoryWeek(weekOffset - 1)}
-              className="p-1.5 rounded-lg bg-[#EAE8E2] hover:bg-[#CFCDC5] border border-[#CFCDC5] text-[#171717] cursor-pointer flex items-center gap-1 transition-colors"
+              className="min-h-10 justify-center rounded-lg bg-[#EAE8E2] hover:bg-[#CFCDC5] border border-[#CFCDC5] px-2 text-[#171717] cursor-pointer flex items-center gap-1 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600"
               title="Semana anterior"
             >
               <span className="material-symbols-outlined text-sm">chevron_left</span>
-              <span className="hidden md:inline">Anterior</span>
+              <span className="hidden lg:inline">Anterior</span>
             </button>
 
             <button
@@ -3007,7 +3044,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                 setSelectedDayDateStr(getLocalDateString(new Date()));
                 setWeekHistoryFilterMode('all');
               }}
-              className={`px-3 py-1.5 rounded-lg border text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+              className={`min-h-10 justify-center px-2 sm:px-3 py-1.5 rounded-lg border text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600 ${
                 weekOffset === 0
                   ? 'bg-[#3B0764] hover:bg-[#2E0854] text-white border-[#2E0854] shadow-sm ring-1 ring-purple-900/50'
                   : 'bg-[#EAE8E2] text-[#171717] border-[#CFCDC5] hover:bg-[#CFCDC5]'
@@ -3020,22 +3057,23 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
             <button
               type="button"
               onClick={() => changeHistoryWeek(weekOffset + 1)}
-              className="p-1.5 rounded-lg bg-[#EAE8E2] hover:bg-[#CFCDC5] border border-[#CFCDC5] text-[#171717] cursor-pointer flex items-center gap-1 transition-colors"
+              className="min-h-10 justify-center rounded-lg bg-[#EAE8E2] hover:bg-[#CFCDC5] border border-[#CFCDC5] px-2 text-[#171717] cursor-pointer flex items-center gap-1 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600"
               title="Próxima semana"
             >
-              <span className="hidden md:inline">Próxima</span>
+              <span className="hidden lg:inline">Próxima</span>
               <span className="material-symbols-outlined text-sm">chevron_right</span>
             </button>
           </div>
         </div>
 
         <p className="text-xs font-semibold text-[#5F5F5F]">Semana de {weekDaysRange[0]?.dateStr.split('-').reverse().join('/')} a {weekDaysRange[6]?.dateStr.split('-').reverse().join('/')}</p>
-        <div aria-label="Indicadores semanais" className="grid grid-cols-2 gap-2 sm:grid-cols-2 lg:grid-cols-4">
+        <div aria-label="Indicadores semanais" className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
           {[
-            { label: 'Programadas', value: weeklyMetrics.scheduled, color: 'text-[#171717]', filter: 'planejada' as const },
+            { label: 'Total previsto', value: weekOperationalVisits.length, color: 'text-[#171717]', filter: 'all' as const },
             { label: 'Concluídas', value: weeklyMetrics.completed, color: 'text-emerald-700', filter: 'concluida' as const },
             { label: 'Em andamento', value: weeklyMetrics.inProgress, color: 'text-amber-800', filter: 'em_andamento' as const },
-            { label: 'Não realizadas', value: weeklyMetrics.notDone, color: 'text-rose-700', filter: 'nao_realizada' as const }
+            { label: 'Não realizadas', value: weeklyMetrics.notDone, color: 'text-rose-700', filter: 'nao_realizada' as const },
+            { label: 'Programadas restantes', value: weeklyMetrics.scheduled, color: 'text-[#171717]', filter: 'planejada' as const }
           ].map(({ label, value, color, filter }) => (
             <button key={label} type="button" aria-pressed={statusFilter === filter}
               onClick={() => {
@@ -3043,7 +3081,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                 setWeekHistoryFilterMode('all');
                 setIsWeekHistoryOpen(true);
               }}
-              className={`rounded-xl border px-3 py-2 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600 ${statusFilter === filter ? 'border-[#286FF5] bg-blue-50 ring-1 ring-[#286FF5]' : 'border-[#CFCDC5] bg-white hover:border-[#286FF5]'}`}>
+              className={`min-h-[68px] rounded-xl border px-3 py-2 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600 ${statusFilter === filter && filter !== 'all' ? 'border-[#286FF5] bg-blue-50 ring-1 ring-[#286FF5]' : 'border-[#CFCDC5] bg-white hover:border-[#286FF5]'}`}>
               <span className="block text-[10px] font-bold uppercase tracking-wide text-[#5F5F5F]">{label}</span>
               <span className={`block text-lg font-extrabold ${color}`}>{metricText(value)}</span>
             </button>
@@ -3066,33 +3104,22 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                     <option value="concluida">Concluídas</option>
                     <option value="nao_realizada">Não realizadas</option>
                   </select>
-                  <button
-                    type="button"
-                    onClick={() => setWeekHistoryFilterMode('day')}
-                    className={`px-2.5 py-1 rounded-lg font-bold text-xs transition-colors cursor-pointer ${
-                      weekHistoryFilterMode === 'day'
-                        ? 'bg-[#171717] text-white shadow-xs'
-                        : 'bg-[#EAE8E2] text-[#5F5F5F] hover:text-[#171717] border border-[#CFCDC5]'
-                    }`}
-                  >
-                    Por Dia
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setWeekHistoryFilterMode('all')}
-                    className={`px-2.5 py-1 rounded-lg font-bold text-xs transition-colors cursor-pointer ${
-                      weekHistoryFilterMode === 'all'
-                        ? 'bg-[#171717] text-white shadow-xs'
-                        : 'bg-[#EAE8E2] text-[#5F5F5F] hover:text-[#171717] border border-[#CFCDC5]'
-                    }`}
-                  >
-                    Todos do Período ({filteredHistoricalAttendanceVisits.length})
-                  </button>
+                  <div role="group" aria-label="Escopo do histórico" className="inline-flex rounded-lg border border-[#CFCDC5] bg-[#EAE8E2] p-0.5">
+                    <button type="button" aria-pressed={weekHistoryFilterMode === 'all'} onClick={() => setWeekHistoryFilterMode('all')}
+                      className={`min-h-8 rounded-md px-2 py-1 text-xs font-bold focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600 ${weekHistoryFilterMode === 'all' ? 'bg-[#171717] text-white' : 'text-[#5F5F5F] hover:text-[#171717]'}`}>
+                      Todos os dias ({filteredHistoricalAttendanceVisits.length})
+                    </button>
+                    <button type="button" aria-pressed={weekHistoryFilterMode === 'day'} onClick={() => setWeekHistoryFilterMode('day')}
+                      className={`min-h-8 rounded-md px-2 py-1 text-xs font-bold focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600 ${weekHistoryFilterMode === 'day' ? 'bg-[#171717] text-white' : 'text-[#5F5F5F] hover:text-[#171717]'}`}>
+                      Dia selecionado
+                    </button>
+                  </div>
                 </div>
               </div>
 
               {/* Grade com os 7 botões de dias */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2 font-mono">
+              <p className="mb-1 text-[10px] text-[#5F5F5F] sm:hidden">Deslize para consultar os outros dias da semana →</p>
+              <div aria-label="Seletor dos dias da semana" className="flex gap-2 overflow-x-auto overscroll-x-contain pb-2 font-mono snap-x snap-mandatory sm:grid sm:grid-cols-4 sm:overflow-visible lg:grid-cols-7">
                 {weekDaysRange.map((day) => {
                   const isTodayDay = day.dateStr === getLocalDateString(new Date());
                   const isSelected = weekHistoryFilterMode === 'day' && day.dateStr === selectedDayDateStr;
@@ -3114,7 +3141,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                         setSelectedDayDateStr(day.dateStr);
                         setWeekHistoryFilterMode('day');
                       }}
-                      className={`p-2.5 rounded-xl border text-left flex flex-col justify-between space-y-1.5 transition-all cursor-pointer ${
+                      className={`min-w-[132px] min-h-[132px] snap-start p-3 rounded-xl border text-left flex flex-col justify-start gap-2 transition-all cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600 ${
                         isSelected
                           ? 'bg-[#171717] text-white border-[#171717] shadow-sm ring-2 ring-[#3B0764]/40'
                           : isTodayDay
@@ -3122,7 +3149,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                           : 'bg-[#EAE8E2] border-[#CFCDC5] text-[#171717] hover:bg-[#E4E2DB]'
                       }`}
                     >
-                      <div className="flex items-center justify-between w-full">
+                      <div className="flex items-center justify-between gap-2 w-full">
                         <span className={`text-[10px] font-bold uppercase ${isSelected ? 'text-amber-400' : 'text-[#77766F]'}`}>
                           {day.dayShort}
                         </span>
@@ -3137,7 +3164,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                         )}
                       </div>
 
-                      <div className="flex items-baseline justify-between w-full">
+                      <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1 w-full">
                         <span className={`text-xs font-bold ${isSelected ? 'text-white' : 'text-[#171717]'}`}>
                           {day.dateStr.split('-').reverse().slice(0, 2).join('/')}
                         </span>
@@ -3149,11 +3176,11 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                       </div>
 
                       <div className={`flex flex-wrap items-center gap-1.5 text-[10px] pt-1 border-t ${isSelected ? 'border-white/20' : 'border-[#CFCDC5]/60'}`}>
-                        {completedCount > 0 && <span className="font-bold text-emerald-700">Concluídas {completedCount}</span>}
-                        {notDoneCount > 0 && <span className="font-bold text-rose-700">Não realizadas {notDoneCount}</span>}
-                        {inProgressCount > 0 && <span className="font-bold text-amber-800">Em andamento {inProgressCount}</span>}
-                        {resolutionCounts.administrativelyCompleted > 0 && <span className="font-bold text-purple-800">Concluídas administrativamente {resolutionCounts.administrativelyCompleted}</span>}
-                        {resolutionCounts.closedWithoutProof > 0 && <span className="font-bold text-purple-800">Encerradas sem comprovação {resolutionCounts.closedWithoutProof}</span>}
+                        {completedCount > 0 && <span className={`font-bold ${isSelected ? 'text-emerald-300' : 'text-emerald-700'}`}>Concluídas {completedCount}</span>}
+                        {notDoneCount > 0 && <span className={`font-bold ${isSelected ? 'text-rose-300' : 'text-rose-700'}`}>Não realizadas {notDoneCount}</span>}
+                        {inProgressCount > 0 && <span className={`font-bold ${isSelected ? 'text-amber-300' : 'text-amber-800'}`}>Em andamento {inProgressCount}</span>}
+                        {resolutionCounts.administrativelyCompleted > 0 && <span className={`font-bold ${isSelected ? 'text-purple-200' : 'text-purple-800'}`}>Concluídas administrativamente {resolutionCounts.administrativelyCompleted}</span>}
+                        {resolutionCounts.closedWithoutProof > 0 && <span className={`font-bold ${isSelected ? 'text-purple-200' : 'text-purple-800'}`}>Encerradas sem comprovação {resolutionCounts.closedWithoutProof}</span>}
                         {attendanceCount === 0 && <span className={isSelected ? 'text-slate-400' : 'text-[#77766F]'}>Sem registros</span>}
                       </div>
                     </button>
@@ -3362,10 +3389,21 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                               )
                             )}
 
-                            {(item.status === 'pendente' || item.status === 'nao_realizada') && !isTodayItem && actionDecision.allowed && (
-                              <button type="button" onClick={() => scheduledActionRpcStatus === 'ready' && setScheduledAction({ item, action: 'recover' })} disabled={savingScheduledAction || scheduledActionRpcStatus !== 'ready'} title={scheduledActionRpcStatus !== 'ready' ? 'Ação indisponível até o servidor confirmar que a RPC está instalada.' : undefined} className="min-h-10 rounded-xl bg-[#222222] px-4 py-2 text-xs font-bold text-white shadow-md hover:bg-black disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600">
-                                <span className="material-symbols-outlined mr-1 align-middle text-sm">replay</span>{scheduledActionRpcStatus === 'ready' ? 'Realizar hoje' : scheduledActionRpcStatus === 'checking' ? 'Verificando…' : 'Indisponível'}
-                              </button>
+                            {actionDecision.allowed && (actionDecision.action === 'recover' || actionDecision.action === 'advance') && (
+                              <div className="flex flex-col items-start gap-1">
+                                <button type="button"
+                                  onClick={() => scheduledActionRpcStatus === 'ready' && setScheduledAction({ item, action: actionDecision.action! })}
+                                  disabled={savingScheduledAction || scheduledActionRpcStatus !== 'ready'}
+                                  aria-describedby={scheduledActionRpcStatus !== 'ready' ? `scheduled-action-help-${item.key}-${item.dataStr}` : undefined}
+                                  title={scheduledActionRpcStatus !== 'ready' ? 'Ação aguardando confirmação da RPC no servidor.' : undefined}
+                                  className="min-h-10 rounded-xl bg-[#222222] px-4 py-2 text-xs font-bold text-white shadow-md hover:bg-black focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-700">
+                                  <span className="material-symbols-outlined mr-1 align-middle text-sm">{actionDecision.action === 'advance' ? 'event_upcoming' : 'replay'}</span>
+                                  {scheduledActionRpcStatus === 'ready'
+                                    ? actionDecision.action === 'advance' ? 'Antecipar visita' : 'Realizar hoje'
+                                    : scheduledActionRpcStatus === 'checking' ? 'Verificando disponibilidade…' : actionDecision.action === 'advance' ? 'Antecipar visita — Indisponível' : 'Realizar hoje — Indisponível'}
+                                </button>
+                                {scheduledActionRpcStatus !== 'ready' && <span id={`scheduled-action-help-${item.key}-${item.dataStr}`} className="max-w-60 text-[11px] leading-snug text-[#5F5F5F]">Funcionalidade aguardando atualização do servidor.</span>}
+                              </div>
                             )}
                           </>
                         )}
