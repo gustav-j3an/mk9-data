@@ -5,6 +5,7 @@ import { AttendanceJourneyPanel } from '../components/AttendanceJourneyPanel';
 import type { Promoter } from '../utils/attendanceEngine';
 import { LABELS, filterRoster, exportRows, zoned, type PresenceItem, type OverrideStatus } from '../utils/attendanceEngine';
 import { type PromoterOperationalSummary, type PromoterVisitDetail, type RouteExecutionStatus } from '../utils/visitActivityEngine';
+import { calculateOperationalMetrics, filterPromoterSummaries, type RouteStatusFilter } from '../utils/attendanceFilters';
 import * as XLSX from 'xlsx';
 
 interface AttendanceControlViewProps {
@@ -30,6 +31,8 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
   // Filtros de Busca e Visualização
   const [search, setSearch] = useState('');
   const [supervisorFilter, setSupervisorFilter] = useState('');
+  const [scopeFilter, setScopeFilter] = useState<'com_roteiro' | 'todos' | 'sem_programacao'>('com_roteiro');
+  const [statusFilter, setStatusFilter] = useState<RouteStatusFilter>('ALL');
   const [squadFilter, setSquadFilter] = useState('');
   const [quickFilter, setQuickFilter] = useState<'all' | 'presente' | 'falta' | 'atestado' | 'atestado_pendente' | 'sem_registro' | 'sem_expediente'>('all');
   const [promoters, setPromoters] = useState<Promoter[]>([]);
@@ -147,16 +150,12 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
   };
 
   // Filtragem dos Promotores da Visão Operacional Simplificada
-  const filteredSummaries = useMemo(() => {
-    const term = search.trim().toLowerCase();
-    return operationalSummaries.filter(summary => {
-      const matchSearch = !term ||
-        summary.name.toLowerCase().includes(term) ||
-        summary.matricula.toLowerCase().includes(term);
-      const matchSupervisor = !supervisorFilter || summary.supervisor === supervisorFilter;
-      return matchSearch && matchSupervisor;
-    });
-  }, [operationalSummaries, search, supervisorFilter]);
+  const filteredSummaries = useMemo(() => filterPromoterSummaries(operationalSummaries, {
+    search, supervisorFilter, scopeFilter, statusFilter
+  }), [operationalSummaries, search, supervisorFilter, scopeFilter, statusFilter]);
+  const baseSummaries = useMemo(() => filterPromoterSummaries(operationalSummaries, {
+    search, supervisorFilter, scopeFilter, statusFilter: 'ALL'
+  }), [operationalSummaries, search, supervisorFilter, scopeFilter]);
 
   // Lista única de supervisores para o filtro
   const availableSupervisors = useMemo(() => {
@@ -171,20 +170,8 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
 
   // Quatro Indicadores Centrais
   const kpiMetrics = useMemo(() => {
-    let completas = 0;
-    let parciais = 0;
-    let naoRealizadas = 0;
-    let emAndamento = 0;
-
-    filteredSummaries.forEach(s => {
-      if (s.routeStatus === 'COMPLETA') completas++;
-      else if (s.routeStatus === 'PARCIAL') parciais++;
-      else if (s.routeStatus === 'NAO_REALIZADO') naoRealizadas++;
-      else if (s.routeStatus === 'EM_ANDAMENTO') emAndamento++;
-    });
-
-    return { completas, parciais, naoRealizadas, emAndamento };
-  }, [filteredSummaries]);
+    return calculateOperationalMetrics(baseSummaries);
+  }, [baseSummaries]);
 
   const handleExport = () => {
     try {
@@ -212,7 +199,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
   // Badge para Situação do Roteiro
   const renderRouteBadge = (status: RouteExecutionStatus) => {
     switch (status) {
-      case 'COMPLETA':
+      case 'COMPLETO':
         return (
           <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-800 border border-emerald-300">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-600" />
@@ -233,7 +220,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
             NÃO REALIZADO
           </span>
         );
-      case 'EM_ANDAMENTO':
+      case 'EM_ATIVIDADE':
         return (
           <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-blue-50 text-blue-800 border border-blue-300">
             <span className="w-1.5 h-1.5 rounded-full bg-blue-600 animate-pulse" />
@@ -306,6 +293,15 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
             <span>Configurações</span>
           </button>
         </div>
+      </div>
+      <div className="flex flex-wrap items-center gap-3 px-1">
+        <label className="flex items-center gap-2 text-xs text-[#5F5F5F]">
+          Escopo do roteiro
+          <select aria-label="Escopo do roteiro" value={scopeFilter} onChange={e => setScopeFilter(e.target.value as typeof scopeFilter)} className="rounded-lg border border-[#CFCDC5] bg-[#F7F6F2] px-2 py-1 text-[#171717]">
+            <option value="com_roteiro">Com roteiro</option><option value="todos">Todos</option><option value="sem_programacao">Sem programação</option>
+          </select>
+        </label>
+        {statusFilter !== 'ALL' && <button onClick={() => setStatusFilter('ALL')} className="rounded-full border border-[#CFCDC5] px-3 py-1 text-xs text-[#171717]">Limpar filtro de roteiro</button>}
       </div>
 
       {warnings.map(message => <div key={message} role="status" className="rounded-xl border border-amber-400 bg-amber-50 p-3 text-xs text-amber-950">{message}</div>)}
@@ -538,21 +534,21 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
       {/* 2. QUATRO INDICADORES SIMPLES */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         {/* Completas */}
-        <div className="p-4 rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] flex items-center justify-between shadow-xs">
+        <button aria-pressed={statusFilter === 'COMPLETO'} onClick={() => setStatusFilter(statusFilter === 'COMPLETO' ? 'ALL' : 'COMPLETO')} className="text-left p-4 rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] flex items-center justify-between shadow-xs">
           <div>
             <span className="text-[11px] font-bold text-[#77766F] uppercase tracking-wider font-mono">Completas</span>
             <div className="text-2xl font-extrabold text-emerald-700 font-mono mt-0.5">
-              {loading ? '—' : kpiMetrics.completas}
+              {loading ? '—' : kpiMetrics.completos}
             </div>
             <p className="text-[10px] text-[#77766F] mt-1">Todas visitas realizadas</p>
           </div>
           <div className="p-2.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200">
             <span className="material-symbols-outlined text-2xl">task_alt</span>
           </div>
-        </div>
+        </button>
 
         {/* Parciais */}
-        <div className="p-4 rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] flex items-center justify-between shadow-xs">
+        <button aria-pressed={statusFilter === 'PARCIAL'} onClick={() => setStatusFilter(statusFilter === 'PARCIAL' ? 'ALL' : 'PARCIAL')} className="text-left p-4 rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] flex items-center justify-between shadow-xs">
           <div>
             <span className="text-[11px] font-bold text-[#77766F] uppercase tracking-wider font-mono">Parciais</span>
             <div className="text-2xl font-extrabold text-amber-700 font-mono mt-0.5">
@@ -563,35 +559,35 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
           <div className="p-2.5 rounded-lg bg-amber-50 text-amber-700 border border-amber-200">
             <span className="material-symbols-outlined text-2xl">timelapse</span>
           </div>
-        </div>
+        </button>
 
         {/* Não realizadas */}
-        <div className="p-4 rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] flex items-center justify-between shadow-xs">
+        <button aria-pressed={statusFilter === 'NAO_REALIZADO'} onClick={() => setStatusFilter(statusFilter === 'NAO_REALIZADO' ? 'ALL' : 'NAO_REALIZADO')} className="text-left p-4 rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] flex items-center justify-between shadow-xs">
           <div>
             <span className="text-[11px] font-bold text-[#77766F] uppercase tracking-wider font-mono">Não Realizadas</span>
             <div className="text-2xl font-extrabold text-rose-700 font-mono mt-0.5">
-              {loading ? '—' : kpiMetrics.naoRealizadas}
+            {loading ? '—' : kpiMetrics.naoRealizados}
             </div>
             <p className="text-[10px] text-[#77766F] mt-1">Nenhuma concluída</p>
           </div>
           <div className="p-2.5 rounded-lg bg-rose-50 text-rose-700 border border-rose-200">
             <span className="material-symbols-outlined text-2xl">cancel</span>
           </div>
-        </div>
+        </button>
 
         {/* Em andamento */}
-        <div className="p-4 rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] flex items-center justify-between shadow-xs">
+        <button aria-pressed={statusFilter === 'EM_ATIVIDADE'} onClick={() => setStatusFilter(statusFilter === 'EM_ATIVIDADE' ? 'ALL' : 'EM_ATIVIDADE')} className="text-left p-4 rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] flex items-center justify-between shadow-xs">
           <div>
             <span className="text-[11px] font-bold text-[#77766F] uppercase tracking-wider font-mono">Em Andamento</span>
             <div className="text-2xl font-extrabold text-blue-700 font-mono mt-0.5">
-              {loading ? '—' : kpiMetrics.emAndamento}
+              {loading ? '—' : kpiMetrics.emAtividade}
             </div>
             <p className="text-[10px] text-[#77766F] mt-1">Dia atual em campo</p>
           </div>
           <div className="p-2.5 rounded-lg bg-blue-50 text-blue-700 border border-blue-200">
             <span className="material-symbols-outlined text-2xl">pending_actions</span>
           </div>
-        </div>
+        </button>
       </div>
 
       {/* 3. TABELA PRINCIPAL SIMPLES */}

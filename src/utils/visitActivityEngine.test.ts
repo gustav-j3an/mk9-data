@@ -15,7 +15,7 @@ const rotaL3: RouteItem = { id: 'r3', promotor_matricula: '001', loja_codigo: 'L
 // 2026-10-19 é uma segunda-feira
 const baseDate = '2026-10-19';
 
-test('1. Três visitas programadas e três concluídas gera presença e COMPLETA', () => {
+test('1. Três visitas programadas e três concluídas gera presença e COMPLETO', () => {
   const visits: Visit[] = [
     { id: 'v1', promotor_matricula: '001', loja_codigo: 'L01', industria_codigo: 'IND1', data_visita: baseDate, status: 'concluida', started_at: '2026-10-19T11:00:00Z', completed_at: '2026-10-19T12:00:00Z' } as Visit,
     { id: 'v2', promotor_matricula: '001', loja_codigo: 'L02', industria_codigo: 'IND1', data_visita: baseDate, status: 'concluida', started_at: '2026-10-19T12:30:00Z', completed_at: '2026-10-19T13:30:00Z' } as Visit,
@@ -35,11 +35,12 @@ test('1. Três visitas programadas e três concluídas gera presença e COMPLETA
   assert.equal(item.presenceStatus, 'presente');
   assert.equal(item.scheduledVisitsCount, 3);
   assert.equal(item.completedVisitsCount, 3);
-  assert.equal(item.routeStatus, 'COMPLETA');
+  assert.equal(item.pendingVisitsCount, 0);
+  assert.equal(item.routeStatus, 'COMPLETO');
   assert.equal(item.firstActivityTime, '08:00'); // 11:00 UTC em America/Sao_Paulo (UTC-3)
 });
 
-test('2. Três programadas e duas concluídas após o dia encerrado gera PARCIAL', () => {
+test('2. Três programadas e duas concluídas após o dia encerrado gera PARCIAL com 1 pendência', () => {
   const visits: Visit[] = [
     { id: 'v1', promotor_matricula: '001', loja_codigo: 'L01', industria_codigo: 'IND1', data_visita: baseDate, status: 'concluida', started_at: '2026-10-19T11:00:00Z', completed_at: '2026-10-19T12:00:00Z' } as Visit,
     { id: 'v2', promotor_matricula: '001', loja_codigo: 'L02', industria_codigo: 'IND1', data_visita: baseDate, status: 'concluida', started_at: '2026-10-19T12:30:00Z', completed_at: '2026-10-19T13:30:00Z' } as Visit,
@@ -57,6 +58,7 @@ test('2. Três programadas e duas concluídas após o dia encerrado gera PARCIAL
   assert.equal(item.presenceStatus, 'presente');
   assert.equal(item.scheduledVisitsCount, 3);
   assert.equal(item.completedVisitsCount, 2);
+  assert.equal(item.pendingVisitsCount, 1);
   assert.equal(item.routeStatus, 'PARCIAL');
 });
 
@@ -73,10 +75,11 @@ test('3. Três programadas e nenhuma concluída após fechamento gera NAO_REALIZ
   assert.equal(item.presenceStatus, 'sem_atividade');
   assert.equal(item.scheduledVisitsCount, 3);
   assert.equal(item.completedVisitsCount, 0);
+  assert.equal(item.pendingVisitsCount, 3);
   assert.equal(item.routeStatus, 'NAO_REALIZADO');
 });
 
-test('4. Primeira visita iniciada sem conclusão confirma presença operacional e EM_ANDAMENTO', () => {
+test('4. Primeira visita iniciada sem conclusão durante o dia confirma presença e EM_ATIVIDADE', () => {
   const visits: Visit[] = [
     { id: 'v1', promotor_matricula: '001', loja_codigo: 'L01', industria_codigo: 'IND1', data_visita: baseDate, status: 'em_andamento', started_at: '2026-10-19T11:15:00Z' } as Visit
   ];
@@ -95,7 +98,25 @@ test('4. Primeira visita iniciada sem conclusão confirma presença operacional 
   assert.equal(item.scheduledVisitsCount, 3);
   assert.equal(item.completedVisitsCount, 0);
   assert.equal(item.inProgressVisitsCount, 1);
-  assert.equal(item.routeStatus, 'EM_ANDAMENTO');
+  assert.equal(item.pendingVisitsCount, 3);
+  assert.equal(item.routeStatus, 'EM_ATIVIDADE');
+});
+
+test('4b. Possui visitas programadas para hoje mas nenhuma iniciada resulta em AGUARDANDO_INICIO', () => {
+  const result = calculateOperationalActivity({
+    date: baseDate,
+    promoters: [promotorA],
+    routes: [rotaL1, rotaL2],
+    visits: [],
+    now: '2026-10-19T10:00:00Z' // dia de hoje em curso, sem visita iniciada
+  });
+
+  const item = result[0];
+  assert.equal(item.presenceStatus, 'sem_atividade');
+  assert.equal(item.scheduledVisitsCount, 2);
+  assert.equal(item.completedVisitsCount, 0);
+  assert.equal(item.pendingVisitsCount, 2);
+  assert.equal(item.routeStatus, 'AGUARDANDO_INICIO');
 });
 
 test('5. Sem programação cadastrada resulta em SEM_PROGRAMACAO e não gera falta', () => {
@@ -110,6 +131,7 @@ test('5. Sem programação cadastrada resulta em SEM_PROGRAMACAO e não gera fal
   const item = result[0];
   assert.equal(item.presenceStatus, 'sem_atividade');
   assert.equal(item.scheduledVisitsCount, 0);
+  assert.equal(item.pendingVisitsCount, 0);
   assert.equal(item.routeStatus, 'SEM_PROGRAMACAO');
 });
 
@@ -175,7 +197,7 @@ test('8. Visitas de outros promotores não interferem no resultado', () => {
   assert.equal(itemA.routeStatus, 'NAO_REALIZADO');
 
   assert.equal(itemB.presenceStatus, 'presente');
-  assert.equal(itemB.routeStatus, 'COMPLETA');
+  assert.equal(itemB.routeStatus, 'COMPLETO');
 });
 
 test('9. Rotas encerradas (não ativas no dia da semana) não entram na programação da data', () => {
@@ -211,10 +233,10 @@ test('10. Desduplicação de rotas com mesma loja e indústria na mesma data', (
 });
 
 test('11. Cenário do exemplo do usuário: Lucas, Breno, Franklin e Alexandre', () => {
-  // Lucas | Presente | 3/3 | COMPLETA
+  // Lucas | Presente | 3/3 | COMPLETO
   // Breno | Presente | 2/3 | PARCIAL (dia fechado)
   // Franklin | Sem atividade | 0/4 | NÃO REALIZADO
-  // Alexandre | Presente | 1/3 | EM ANDAMENTO (dia atual)
+  // Alexandre | Presente | 1/3 | EM ATIVIDADE (dia atual)
 
   const routes: RouteItem[] = [
     // Lucas 3 rotas
@@ -264,17 +286,20 @@ test('11. Cenário do exemplo do usuário: Lucas, Breno, Franklin e Alexandre', 
 
   assert.equal(lucas.presenceStatus, 'presente');
   assert.equal(`${lucas.completedVisitsCount}/${lucas.scheduledVisitsCount}`, '3/3');
-  assert.equal(lucas.routeStatus, 'COMPLETA');
+  assert.equal(lucas.pendingVisitsCount, 0);
+  assert.equal(lucas.routeStatus, 'COMPLETO');
 
   assert.equal(breno.presenceStatus, 'presente');
   assert.equal(`${breno.completedVisitsCount}/${breno.scheduledVisitsCount}`, '2/3');
+  assert.equal(breno.pendingVisitsCount, 1);
   assert.equal(breno.routeStatus, 'PARCIAL');
 
   assert.equal(franklin.presenceStatus, 'sem_atividade');
   assert.equal(`${franklin.completedVisitsCount}/${franklin.scheduledVisitsCount}`, '0/4');
+  assert.equal(franklin.pendingVisitsCount, 4);
   assert.equal(franklin.routeStatus, 'NAO_REALIZADO');
 
-  // Caso B: Alexandre no dia atual em andamento (fica EM_ANDAMENTO)
+  // Caso B: Alexandre no dia atual em andamento (fica EM_ATIVIDADE)
   const resToday = calculateOperationalActivity({
     date: baseDate,
     promoters: [promotorD],
@@ -286,7 +311,8 @@ test('11. Cenário do exemplo do usuário: Lucas, Breno, Franklin e Alexandre', 
   const alexandre = resToday.find(p => p.matricula === '004')!;
   assert.equal(alexandre.presenceStatus, 'presente');
   assert.equal(`${alexandre.completedVisitsCount}/${alexandre.scheduledVisitsCount}`, '1/3');
-  assert.equal(alexandre.routeStatus, 'EM_ANDAMENTO');
+  assert.equal(alexandre.pendingVisitsCount, 2);
+  assert.equal(alexandre.routeStatus, 'EM_ATIVIDADE');
 });
 
 test('12. Rejeição com erro para formato de data inválido', () => {

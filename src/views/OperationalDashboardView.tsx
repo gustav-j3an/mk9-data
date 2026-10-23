@@ -3638,46 +3638,6 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
               </div>
             </div>
 
-            {/* Rota Google Maps */}
-            <div className="p-2.5 rounded-xl bg-white border border-[#CFCDC5] flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
-              <div className="space-y-0.5">
-                <span className="text-[#77766F] text-[10px] font-bold uppercase block">Destino da Loja:</span>
-                <span className="text-[#171717] font-semibold">
-                  {selectedVisit.loja?.nome || selectedVisit.loja_codigo}
-                  {selectedVisit.loja?.endereco ? ` — ${selectedVisit.loja.endereco}` : ''}
-                  {selectedVisit.loja?.cidade ? ` (${selectedVisit.loja.cidade}${selectedVisit.loja?.uf ? ` - ${selectedVisit.loja.uf}` : ''})` : ''}
-                </span>
-              </div>
-              <div>
-                {(() => {
-                  const directionsUrl = buildGoogleMapsDirectionsUrl({
-                    name: selectedVisit.loja?.nome || (selectedVisit.loja_codigo ? `Loja ${selectedVisit.loja_codigo}` : null),
-                    address: selectedVisit.loja?.endereco,
-                    city: selectedVisit.loja?.cidade,
-                    uf: selectedVisit.loja?.uf
-                  });
-
-                  if (directionsUrl) {
-                    return (
-                      <a
-                        href={directionsUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-700 hover:bg-purple-800 text-white font-bold text-xs shadow-xs transition-all active:scale-95 shrink-0"
-                      >
-                        <span className="material-symbols-outlined text-sm">directions</span>
-                        Google Maps
-                      </a>
-                    );
-                  }
-
-                  return (
-                    <span className="text-[10px] text-[#77766F] italic">Endereço indisponível</span>
-                  );
-                })()}
-              </div>
-            </div>
-
             {/* Checklist */}
             {(() => {
               const items = selectedVisit.checklist_items || [];
@@ -3778,30 +3738,6 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
                     </span>
                   </div>
                 ))}
-              </div>
-            )}
-
-            {/* Fotos */}
-            {selectedVisit.photos && selectedVisit.photos.length > 0 && (
-              <div className="space-y-1.5 text-xs">
-                <span className="text-cyan-800 font-bold uppercase block">Galeria de Fotos ({selectedVisit.photos.length}):</span>
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                  {selectedVisit.photos.map((p, idx) => (
-                    <div key={idx} className="p-2 rounded bg-white border border-[#CFCDC5] space-y-1">
-                      <span className="px-1.5 py-0.5 rounded bg-cyan-50 text-cyan-800 text-[9px] font-bold block uppercase border border-cyan-200">
-                        {p.tipo_foto}
-                      </span>
-                      <a
-                        href={p.file_url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-purple-700 text-[10px] underline block truncate font-bold"
-                      >
-                        Abrir Foto Privada
-                      </a>
-                    </div>
-                  ))}
-                </div>
               </div>
             )}
 

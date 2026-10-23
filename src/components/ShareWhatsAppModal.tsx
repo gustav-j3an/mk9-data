@@ -1,21 +1,24 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import type { Visit, ToastMessage } from '../types';
+import type { Visit, ToastMessage, IndustryItem } from '../types';
 import { supabase } from '../lib/supabase';
 import {
   buildWhatsAppReportText,
   buildWhatsAppWebUrl,
+  isValidWhatsAppGroupLink,
   shareViaWebShare,
   triggerFileDownload
 } from '../utils/whatsappShare';
 
 export interface ShareWhatsAppModalProps {
   visit: Visit;
+  industry?: IndustryItem | null;
   onClose: () => void;
   onShowToast: (toast: Omit<ToastMessage, 'id'>) => void;
 }
 
 export const ShareWhatsAppModal: React.FC<ShareWhatsAppModalProps> = ({
   visit,
+  industry,
   onClose,
   onShowToast
 }) => {
@@ -39,6 +42,27 @@ export const ShareWhatsAppModal: React.FC<ShareWhatsAppModalProps> = ({
   const [preparingPhotos, setPreparingPhotos] = useState(false);
   const [photoErrors, setPhotoErrors] = useState<Record<string, string>>({});
   const [signedUrls, setSignedUrls] = useState<Record<string, string>>({});
+
+  const [dynamicGroupLink, setDynamicGroupLink] = useState<string | null>(industry?.whatsapp_group_link || null);
+  useEffect(() => {
+    let isCancelled = false;
+    if (industry?.whatsapp_group_link !== undefined) {
+      setDynamicGroupLink(industry.whatsapp_group_link || null);
+      return;
+    }
+    const industryCode = industry?.codigo || visit.industria_codigo || visit.industria?.codigo;
+    if (industryCode && supabase) {
+      void (async () => {
+        try {
+          const { data, error } = await supabase.from('industrias').select('whatsapp_group_link').eq('codigo', industryCode).maybeSingle();
+          if (!isCancelled && !error && data) setDynamicGroupLink(data.whatsapp_group_link || null);
+        } catch { /* Compatibilidade com schema antigo. */ }
+      })();
+    }
+    return () => { isCancelled = true; };
+  }, [industry, visit.industria_codigo, visit.industria?.codigo]);
+  const groupLink = dynamicGroupLink;
+  const isGroupValid = Boolean(groupLink && isValidWhatsAppGroupLink(groupLink));
 
   // Fotos da visita
   const photos = visit.photos || [];
@@ -247,6 +271,15 @@ export const ShareWhatsAppModal: React.FC<ShareWhatsAppModalProps> = ({
 
         {/* Corpo com Scroll */}
         <div className="p-4 sm:p-5 space-y-4 overflow-y-auto text-xs flex-1">
+          {groupLink && (
+            <div className={`p-3 rounded-xl border flex items-center justify-between gap-3 ${isGroupValid ? 'bg-emerald-500/10 border-emerald-500/30' : 'bg-amber-500/10 border-amber-500/30'}`}>
+              <div className="min-w-0">
+                <span className="text-[10px] uppercase font-bold text-[#5F5F5F] block">Grupo WhatsApp da Indústria</span>
+                <span className="text-xs font-bold text-[#171717]">{isGroupValid ? 'Grupo Oficial Cadastrado' : 'Link de Grupo Inválido'}</span>
+              </div>
+              {isGroupValid && <a href={groupLink} target="_blank" rel="noopener noreferrer" className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px]">Abrir Grupo</a>}
+            </div>
+          )}
           {/* Galeria de Fotos Anexadas */}
           <div>
             <div className="flex items-center justify-between mb-2">

@@ -10,3 +10,4 @@ coverage/
 /scratch/attendance-homologation/
 supabase/backups/
 *.dump
+.playwright-cli/
