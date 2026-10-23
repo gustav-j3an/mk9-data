@@ -11,7 +11,8 @@ import {
   createFixedRoute,
   hasAnyScheduledDay,
   isDuplicateActiveRoute,
-  updateFixedRouteSchedule
+  updateFixedRouteSchedule,
+  validateFixedRouteEdit
 } from '../lib/routesService';
 import { calculateRouteIndicators } from '../utils/routeIndicators';
 import { loadRoutesWithClosureFallback } from '../utils/routeClosureCompatibility';
@@ -77,6 +78,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
   const [viewingRoute, setViewingRoute] = useState<RouteItem | null>(null);
   const [editingRoute, setEditingRoute] = useState<RouteItem | null>(null);
   const [closingRoute, setClosingRoute] = useState<RouteItem | null>(null);
+  const editRouteInFlight = useRef(false);
   const closeRouteInFlight = useRef(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -391,23 +393,28 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
 
   // Salvar Edição
   const handleSaveEdit = async () => {
-    if (!editingRoute) return;
-
-    const { segunda, terca, quarta, quinta, sexta, sabado, domingo } = editingRoute;
-    if (!segunda && !terca && !quarta && !quinta && !sexta && !sabado && !domingo) {
-      onShowToast({
-        title: 'Sem Dias Marcados',
-        message: 'Atenção: A rota continuará salva, porém está sem nenhum dia de visita marcado.',
-        type: 'warning'
-      });
+    if (!editingRoute || saving || editRouteInFlight.current) return;
+    if (editingRoute.encerrada_em) {
+      onShowToast({ title: 'Escala encerrada', message: 'Escalas encerradas não podem ser editadas.', type: 'warning' });
+      setEditingRoute(null);
+      return;
+    }
+    const validationError = validateFixedRouteEdit(routes, editingRoute.id, editingRoute);
+    if (validationError) {
+      onShowToast({ title: 'Revise a escala', message: validationError, type: 'warning' });
+      return;
     }
 
+    editRouteInFlight.current = true;
     setSaving(true);
 
     try {
       if (!supabase) throw new Error('Cliente Supabase não inicializado.');
 
       await updateFixedRouteSchedule(editingRoute.id, {
+        promotor_matricula: editingRoute.promotor_matricula,
+        loja_codigo: editingRoute.loja_codigo,
+        industria_codigo: editingRoute.industria_codigo,
         frequencia: editingRoute.frequencia,
         segunda: editingRoute.segunda,
         terca: editingRoute.terca,
@@ -419,14 +426,23 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
         observacao: editingRoute.observacao || null
       });
 
-      onShowToast({
-        title: 'Rota Salva',
-        message: `Escala da rota ${editingRoute.codigo_rota} atualizada no Supabase!`,
-        type: 'success'
-      });
-
+      const updatedRoute: RouteItem = {
+        ...editingRoute,
+        industria: industriasList.find((item) => item.codigo === editingRoute.industria_codigo) || editingRoute.industria,
+        loja: (() => {
+          const store = lojasList.find((item) => item.codigo === editingRoute.loja_codigo);
+          return store ? { codigo: store.codigo, nome: store.nome, cidade: store.cidade || undefined, uf: store.uf || undefined, rede: store.rede || undefined, endereco: store.endereco || undefined } : editingRoute.loja;
+        })(),
+        promotor: promotoresList.find((item) => item.matricula === editingRoute.promotor_matricula) || editingRoute.promotor
+      };
+      setRoutes((current) => current.map((route) => route.id === editingRoute.id ? updatedRoute : route));
       setEditingRoute(null);
       await fetchRoutes();
+      onShowToast({
+        title: 'Rota Salva',
+        message: `Escala da rota ${editingRoute.codigo_rota} atualizada com sucesso.`,
+        type: 'success'
+      });
     } catch (err: any) {
       console.error('Erro ao atualizar rota:', err);
       onShowToast({
@@ -435,6 +451,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
         type: 'error'
       });
     } finally {
+      editRouteInFlight.current = false;
       setSaving(false);
     }
   };
@@ -509,6 +526,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
     setClosing(true);
     try {
       await closeFixedRoute(closingRoute.id);
+      setRoutes((current) => current.filter((route) => route.id !== closingRoute.id));
       onShowToast({
         title: 'Escala Encerrada',
         message: 'A rota foi removida das escalas ativas. Os registros operacionais foram preservados.',
@@ -1133,8 +1151,9 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
                                           <button
                                             type="button"
                                             onClick={() => setEditingRoute({ ...r })}
-                                            className="p-1 rounded-md bg-amber-500/10 hover:bg-amber-500/20 text-amber-800 border border-amber-500/30 cursor-pointer transition-colors"
-                                            title="Editar Escala"
+                                            disabled={Boolean(r.encerrada_em)}
+                                            className="p-1 rounded-md bg-amber-500/10 hover:bg-amber-500/20 text-amber-800 border border-amber-500/30 cursor-pointer transition-colors disabled:cursor-not-allowed disabled:opacity-40"
+                                            title={r.encerrada_em ? 'Escala encerrada não pode ser editada' : 'Editar Escala'}
                                             aria-label="Editar escala da rota"
                                           >
                                             <span className="material-symbols-outlined text-[15px]">edit</span>
@@ -1209,8 +1228,9 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
                                       <button
                                         type="button"
                                         onClick={() => setEditingRoute({ ...r })}
-                                        className="p-1 rounded bg-amber-500/10 border border-amber-500/30 text-amber-800 cursor-pointer"
-                                        title="Editar"
+                                        disabled={Boolean(r.encerrada_em)}
+                                        className="p-1 rounded bg-amber-500/10 border border-amber-500/30 text-amber-800 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
+                                        title={r.encerrada_em ? 'Escala encerrada não pode ser editada' : 'Editar'}
                                         aria-label="Editar escala da rota"
                                       >
                                         <span className="material-symbols-outlined text-[16px]">edit</span>
@@ -1306,7 +1326,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
       {/* MODAL DETALHES DA ROTA */}
       {viewingRoute && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl max-w-xl w-full p-6 shadow-2xl space-y-6">
+          <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl max-w-xl w-full max-h-[calc(100dvh-2rem)] overflow-y-auto p-6 shadow-2xl space-y-6">
             <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-4">
               <div className="flex items-center gap-2">
                 <span className="material-symbols-outlined text-amber-700 text-xl">alt_route</span>
@@ -1326,7 +1346,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
               </button>
             </div>
 
-            <div className="grid grid-cols-2 gap-4 text-xs font-mono">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs font-mono">
               <div className="p-3 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] space-y-1">
                 <span className="text-[#5F5F5F] block text-[10px] font-bold uppercase">INDÚSTRIA</span>
                 <span className="text-[#171717] font-bold block">{viewingRoute.industria?.nome || viewingRoute.industria_codigo}</span>
@@ -1336,7 +1356,8 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
               <div className="p-3 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] space-y-1">
                 <span className="text-[#5F5F5F] block text-[10px] font-bold uppercase">LOJA / PDV</span>
                 <span className="text-[#171717] font-bold block">{viewingRoute.loja?.nome || viewingRoute.loja_codigo}</span>
-                <span className="text-cyan-800 block text-[10px]">Código: {viewingRoute.loja_codigo} • UF: {viewingRoute.uf || viewingRoute.loja?.uf || '-'}</span>
+                <span className="text-cyan-800 block text-[10px]">Código da loja: {viewingRoute.loja_codigo}</span>
+                {(viewingRoute.loja?.cidade || viewingRoute.uf || viewingRoute.loja?.uf) && <span className="text-cyan-800 block text-[10px]">{viewingRoute.loja?.cidade}{viewingRoute.loja?.cidade && (viewingRoute.uf || viewingRoute.loja?.uf) ? ' • ' : ''}{viewingRoute.uf || viewingRoute.loja?.uf}</span>}
               </div>
 
               <div className="p-3 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] space-y-1">
@@ -1357,12 +1378,25 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
               </div>
             </div>
 
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs font-mono">
+              <div className="p-3 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5]">
+                <span className="block text-[10px] font-bold uppercase text-[#5F5F5F]">Situação da rota</span>
+                <span className={`mt-1 block font-bold ${closureSupported === false || closureSupported === null ? 'text-amber-900' : viewingRoute.encerrada_em ? 'text-rose-800' : 'text-emerald-800'}`}>
+                  {closureSupported === false ? 'Não disponível no banco' : closureSupported === null ? 'Verificando suporte' : viewingRoute.encerrada_em ? 'Encerrada' : 'Ativa'}
+                </span>
+              </div>
+              {viewingRoute.encerrada_em && <div className="p-3 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5]">
+                <span className="block text-[10px] font-bold uppercase text-[#5F5F5F]">Data de encerramento</span>
+                <time className="mt-1 block font-bold text-[#171717]" dateTime={viewingRoute.encerrada_em}>{new Date(viewingRoute.encerrada_em).toLocaleString('pt-BR')}</time>
+              </div>}
+            </div>
+
             {/* Escala semanal em 7 blocos */}
             <div className="space-y-2 font-mono">
               <span className="text-xs font-bold text-[#171717] uppercase tracking-wider block">
                 Escala Semanal de Visitas:
               </span>
-              <div className="grid grid-cols-7 gap-1.5 text-center">
+              <div className="grid grid-cols-4 sm:grid-cols-7 gap-1.5 text-center">
                 {[
                   { key: 'segunda', label: 'Seg' },
                   { key: 'terca', label: 'Ter' },
@@ -1415,7 +1449,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
       {/* MODAL EDITAR ESCALA DA ROTA */}
       {editingRoute && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-6">
+          <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl max-w-lg w-full max-h-[calc(100dvh-2rem)] overflow-y-auto p-6 shadow-2xl space-y-6">
             <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-4">
               <div className="flex items-center gap-2">
                 <span className="material-symbols-outlined text-amber-700 text-xl">edit</span>
@@ -1436,20 +1470,31 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
             </div>
 
             <div className="space-y-4 text-xs font-mono">
-              <div className="p-3 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] text-[#171717] space-y-1">
-                <div><span className="text-[#5F5F5F]">Indústria:</span> <strong className="text-[#171717]">{editingRoute.industria?.nome || editingRoute.industria_codigo}</strong></div>
-                <div><span className="text-[#5F5F5F]">Loja:</span> <strong className="text-[#171717]">{editingRoute.loja?.nome || editingRoute.loja_codigo}</strong></div>
-                <div><span className="text-[#5F5F5F]">Promotor:</span> <strong className="text-amber-800">{editingRoute.promotor?.nome || editingRoute.promotor_matricula}</strong></div>
-              </div>
+              {editingRoute.encerrada_em ? (
+                <div role="status" className="rounded-xl border border-amber-400/50 bg-amber-50 p-3 text-amber-950">Escalas encerradas permanecem disponíveis para consulta, mas não podem ser editadas.</div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <label className="text-[#171717] font-bold">INDÚSTRIA
+                    <div className="mt-1"><SearchableSelect id="route-edit-industry" value={editingRoute.industria_codigo} options={routeIndustryFilterOptions} placeholder="Selecionar indústria" onChange={(value) => setEditingRoute({ ...editingRoute, industria_codigo: value })} /></div>
+                  </label>
+                  <label className="text-[#171717] font-bold">LOJA
+                    <div className="mt-1"><SearchableSelect id="route-edit-store" value={editingRoute.loja_codigo} options={routeStoreFilterOptions} placeholder="Selecionar loja" onChange={(value) => setEditingRoute({ ...editingRoute, loja_codigo: value })} /></div>
+                  </label>
+                  <label className="text-[#171717] font-bold sm:col-span-2">PROMOTOR RESPONSÁVEL
+                    <div className="mt-1"><SearchableSelect id="route-edit-promoter" value={editingRoute.promotor_matricula} options={routePromoterFilterOptions} placeholder="Selecionar promotor" onChange={(value) => setEditingRoute({ ...editingRoute, promotor_matricula: value })} /></div>
+                  </label>
+                </div>
+              )}
 
               <div>
                 <label className="text-[#171717] block mb-1 font-bold">FREQUÊNCIA DE VISITA</label>
                 <select
+                  disabled={Boolean(editingRoute.encerrada_em)}
                   value={editingRoute.frequencia}
                   onChange={(e) =>
                     setEditingRoute({ ...editingRoute, frequencia: e.target.value as RouteItem['frequencia'] })
                   }
-                  className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-600 cursor-pointer"
+                  className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-600 cursor-pointer disabled:opacity-50"
                 >
                   <option value="SEMANAL">SEMANAL</option>
                   <option value="QUINZENAL">QUINZENAL</option>
@@ -1483,6 +1528,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
                       >
                         <input
                           type="checkbox"
+                          disabled={Boolean(editingRoute.encerrada_em)}
                           checked={checked}
                           onChange={(e) =>
                             setEditingRoute({ ...editingRoute, [day.key]: e.target.checked })
@@ -1500,6 +1546,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
                 <label className="text-[#171717] block mb-1 font-bold">OBSERVAÇÕES DA ESCALA</label>
                 <textarea
                   value={editingRoute.observacao || ''}
+                  disabled={Boolean(editingRoute.encerrada_em)}
                   onChange={(e) => setEditingRoute({ ...editingRoute, observacao: e.target.value })}
                   placeholder="Observações da rota..."
                   className="w-full p-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-600 h-20 resize-none"
@@ -1518,7 +1565,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
               <button
                 type="button"
                 onClick={handleSaveEdit}
-                disabled={saving}
+                disabled={saving || Boolean(editingRoute.encerrada_em)}
                 className="px-5 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs flex items-center gap-2 cursor-pointer disabled:opacity-50 transition-colors shadow-xs"
               >
                 {saving ? (

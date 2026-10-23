@@ -9,6 +9,7 @@ import {
   hasAnyScheduledDay,
   isDuplicateActiveRoute,
   updateFixedRouteSchedule,
+  validateFixedRouteEdit,
   type FixedRouteGateway,
   type RouteFormValues
 } from './routesService';
@@ -80,6 +81,19 @@ describe('fixed route management', () => {
     assert.equal(isDuplicateActiveRoute([route()], { ...candidate, industria_codigo: 'IND02' }), false);
   });
 
+  it('validates required assignment fields, attendance days, duplicate schedules, and rejects closed edits', () => {
+    const values = {
+      promotor_matricula: 'ANA01', loja_codigo: 'LOJA01', industria_codigo: 'IND01',
+      frequencia: 'SEMANAL' as const, segunda: true, terca: false, quarta: false,
+      quinta: false, sexta: false, sabado: false, domingo: false, observacao: null
+    };
+    assert.equal(validateFixedRouteEdit([route()], 'route-1', values), null);
+    assert.match(validateFixedRouteEdit([route()], 'route-1', { ...values, industria_codigo: '' }) || '', /obrigatórios/);
+    assert.match(validateFixedRouteEdit([route()], 'route-1', { ...values, segunda: false }) || '', /pelo menos um dia/);
+    assert.match(validateFixedRouteEdit([route(), route({ id: 'route-2' })], 'route-1', values) || '', /escala ativa/);
+    assert.match(validateFixedRouteEdit([route({ encerrada_em: '2026-10-18T10:00:00Z' })], 'route-1', values) || '', /encerradas não podem ser editadas/);
+  });
+
   it('requires at least one service day when creating a route', () => {
     assert.equal(hasAnyScheduledDay(form), true);
     assert.equal(hasAnyScheduledDay({
@@ -110,6 +124,9 @@ describe('fixed route management', () => {
 
     await createFixedRoute(form, gateway);
     await updateFixedRouteSchedule('route-1', {
+      promotor_matricula: 'ANA01',
+      loja_codigo: 'LOJA01',
+      industria_codigo: 'IND01',
       frequencia: 'SEMANAL',
       segunda: true,
       terca: false,
@@ -135,6 +152,9 @@ describe('fixed route management', () => {
     };
     await assert.rejects(createFixedRoute(form, failingGateway), /Falha ao inserir/);
     await assert.rejects(updateFixedRouteSchedule('route-1', {
+      promotor_matricula: 'ANA01',
+      loja_codigo: 'LOJA01',
+      industria_codigo: 'IND01',
       frequencia: 'SEMANAL',
       segunda: true,
       terca: false,

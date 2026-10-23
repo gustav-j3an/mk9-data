@@ -31,6 +31,23 @@ export interface RouteFormValues {
   observacao?: string | null;
 }
 
+export type FixedRouteUpdateValues = Pick<RouteFormValues, 'frequencia' | RouteDayKey | 'observacao'> &
+  Partial<Pick<RouteFormValues, 'promotor_matricula' | 'loja_codigo' | 'industria_codigo'>>;
+export type FixedRouteEditValues = FixedRouteUpdateValues &
+  Required<Pick<RouteFormValues, 'promotor_matricula' | 'loja_codigo' | 'industria_codigo'>>;
+
+export const validateFixedRouteEdit = (routes: RouteItem[], routeId: string, values: FixedRouteEditValues): string | null => {
+  const route = routes.find((item) => item.id === routeId);
+  if (!route) return 'A escala não foi encontrada.';
+  if (!isActiveFixedRoute(route)) return 'Escalas encerradas não podem ser editadas.';
+  if (!values.industria_codigo || !values.loja_codigo || !values.promotor_matricula) {
+    return 'Indústria, loja e promotor são campos obrigatórios.';
+  }
+  if (!hasAnyScheduledDay(values)) return 'Marque pelo menos um dia de atendimento.';
+  if (isDuplicateActiveRoute(routes, values, routeId)) return 'Já existe uma escala ativa para este promotor, loja e indústria.';
+  return null;
+};
+
 export const canManageFixedRoutes = (role: UserRole | null | undefined): boolean =>
   role === 'admin' || role === 'gestor';
 
@@ -75,7 +92,7 @@ export interface FixedRouteGateway {
   create: (payload: ReturnType<typeof buildRoutePayload>) => Promise<void>;
   updateSchedule: (
     routeId: string,
-    schedule: Pick<RouteFormValues, 'frequencia' | RouteDayKey | 'observacao'>
+    schedule: FixedRouteUpdateValues
   ) => Promise<void>;
   close: (routeId: string, closedAt: string) => Promise<void>;
 }
@@ -91,7 +108,21 @@ export const supabaseFixedRouteGateway: FixedRouteGateway = {
     if (error) throw error;
   },
   async updateSchedule(routeId, schedule) {
-    const updatePayload = { ...schedule, updated_at: new Date().toISOString() };
+    const updatePayload = {
+      ...(schedule.promotor_matricula ? { promotor_matricula: schedule.promotor_matricula } : {}),
+      ...(schedule.loja_codigo ? { loja_codigo: schedule.loja_codigo } : {}),
+      ...(schedule.industria_codigo ? { industria_codigo: schedule.industria_codigo } : {}),
+      frequencia: schedule.frequencia,
+      segunda: schedule.segunda,
+      terca: schedule.terca,
+      quarta: schedule.quarta,
+      quinta: schedule.quinta,
+      sexta: schedule.sexta,
+      sabado: schedule.sabado,
+      domingo: schedule.domingo,
+      observacao: schedule.observacao,
+      updated_at: new Date().toISOString()
+    };
     const { data, error } = await requireSupabase()
       .from('rotas')
       .update(updatePayload)
@@ -129,7 +160,7 @@ export const createFixedRoute = (
 
 export const updateFixedRouteSchedule = (
   routeId: string,
-  schedule: Pick<RouteFormValues, 'frequencia' | RouteDayKey | 'observacao'>,
+  schedule: FixedRouteUpdateValues,
   gateway: FixedRouteGateway = supabaseFixedRouteGateway
 ): Promise<void> => gateway.updateSchedule(routeId, schedule);
 
