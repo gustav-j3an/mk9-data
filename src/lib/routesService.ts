@@ -113,7 +113,7 @@ export const supabaseFixedRouteGateway: FixedRouteGateway = {
       // Se a coluna encerrada_em ainda não existe no banco (migration pendente)
       if (isMissingRouteClosureColumn(error)) {
         throw new Error(
-          'A coluna "encerrada_em" ainda não existe no banco de dados. Aplique a migração 20261018235500_soft_delete_fixed_routes.sql no Supabase para habilitar o encerramento lógico de rotas.'
+          'Não foi possível encerrar esta escala. A funcionalidade de encerramento ainda precisa ser habilitada no sistema.'
         );
       }
       throw error;

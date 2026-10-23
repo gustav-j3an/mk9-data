@@ -241,7 +241,7 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
             setQuery('');
           }}
           onKeyDown={handleKeyDown}
-          className="w-full h-10 px-3 pr-9 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-500"
+          className="w-full min-w-0 h-10 px-3 pr-9 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-600 focus-visible:ring-offset-1 focus-visible:border-amber-600"
         />
         {value ? (
           <button

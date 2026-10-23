@@ -19,10 +19,10 @@ export const ConfirmRouteCloseModal: React.FC<ConfirmRouteCloseModalProps> = ({
       role="alertdialog"
       aria-modal="true"
       aria-labelledby="close-route-title"
-      className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-5"
+      className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl max-w-lg w-full max-h-[calc(100dvh-2rem)] overflow-y-auto p-6 shadow-2xl space-y-5"
     >
       <div className="flex items-center gap-3 border-b border-[#CFCDC5] pb-4">
-        <span className="material-symbols-outlined text-rose-700 text-2xl">delete</span>
+        <span className="material-symbols-outlined text-rose-700 text-2xl">event_busy</span>
         <div>
           <h3 id="close-route-title" className="text-base font-bold text-[#171717]">
             Encerrar escala fixa?
@@ -59,7 +59,7 @@ export const ConfirmRouteCloseModal: React.FC<ConfirmRouteCloseModalProps> = ({
           className="px-4 py-2 rounded-xl bg-rose-700 hover:bg-rose-600 text-white text-xs font-bold flex items-center gap-2 disabled:opacity-50"
         >
           <span className="material-symbols-outlined text-sm">delete</span>
-          {saving ? 'Encerrando...' : 'Confirmar exclusão'}
+          {saving ? 'Encerrando...' : 'Confirmar encerramento'}
         </button>
       </div>
     </section>

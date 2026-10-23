@@ -58,7 +58,7 @@ describe('route closure confirmation modal', () => {
     const elements = collectElements(modal);
     const buttons = elements.filter((element) => element.type === 'button');
     const cancelButton = buttons.find((button) => getText(button.props.children).includes('Cancelar'));
-    const confirmButton = buttons.find((button) => getText(button.props.children).includes('Confirmar exclusão'));
+    const confirmButton = buttons.find((button) => getText(button.props.children).includes('Confirmar encerramento'));
 
     assert.ok(getText(modal.props.children).includes('Indústria Alfa'));
     assert.ok(getText(modal.props.children).includes('Loja Central'));

@@ -14,6 +14,8 @@ import {
   updateFixedRouteSchedule
 } from '../lib/routesService';
 import { calculateRouteIndicators } from '../utils/routeIndicators';
+import { loadRoutesWithClosureFallback } from '../utils/routeClosureCompatibility';
+import { clearFixedRouteFilters, filterFixedRoutes, type RouteStatusFilter } from '../utils/fixedRouteFilters';
 
 interface RoutesViewProps {
   onNavigate?: (screen: any) => void;
@@ -59,6 +61,8 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
   const [selectedIndustria, setSelectedIndustria] = useState<string>('TODAS');
   const [selectedLoja, setSelectedLoja] = useState<string>('TODAS');
   const [selectedPromotor, setSelectedPromotor] = useState<string>('TODOS');
+  const [routeStatus, setRouteStatus] = useState<RouteStatusFilter>('active');
+  const [closureSupported, setClosureSupported] = useState<boolean | null>(null);
 
   // Agrupamento & Ordenação
   const [groupBy, setGroupBy] = useState<GroupByOption>('none');
@@ -99,7 +103,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
   // Opções para select na criação
   const [industriasList, setIndustriasList] = useState<{ codigo: string; nome: string }[]>([]);
   const [lojasList, setLojasList] = useState<
-    { codigo: string; nome: string; cidade: string | null; uf: string | null }[]
+    { codigo: string; nome: string; cidade: string | null; uf: string | null; rede?: string | null; endereco?: string | null }[]
   >([]);
   const [promotoresList, setPromotoresList] = useState<{ matricula: string; nome: string }[]>([]);
 
@@ -117,15 +121,17 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
 
     try {
       const [rotasRes, industrias, lojas, promotores] = await Promise.all([
-        client
-          .from('rotas')
-          .select(`
-            *,
-            industria:industrias(codigo, nome),
-            loja:lojas(codigo, nome, cidade, uf),
-            promotor:promotores(matricula, nome, supervisor, equipe)
-          `)
-          .order('created_at', { ascending: false }),
+        loadRoutesWithClosureFallback(async (filterByClosure) => {
+          const columns = [
+            'id,codigo_rota,data,promotor_matricula,loja_codigo,industria_codigo,sequencia,observacao,created_at,updated_at,segunda,terca,quarta,quinta,sexta,sabado,domingo,frequencia,uf',
+            ...(filterByClosure ? ['encerrada_em'] : []),
+            'industria:industrias(codigo,nome)',
+            'loja:lojas(codigo,nome,cidade,uf,rede,endereco)',
+            'promotor:promotores(matricula,nome,supervisor,equipe)'
+          ].join(',');
+          const result = await client.from('rotas').select(columns).order('created_at', { ascending: false });
+          return { data: (result.data as unknown as RouteItem[]) || [], error: result.error };
+        }),
         fetchAllPages((from, to) =>
           client
             .from('industrias')
@@ -137,7 +143,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
         fetchAllPages((from, to) =>
           client
             .from('lojas')
-            .select('codigo, nome, cidade, uf')
+            .select('codigo, nome, cidade, uf, rede, endereco')
             .eq('status', 'ativo')
             .order('nome')
             .range(from, to)
@@ -154,8 +160,10 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
 
       if (rotasRes.error) throw rotasRes.error;
 
-      const rawRoutes = (rotasRes.data as unknown as RouteItem[]) || [];
-      setRoutes(rawRoutes.filter((r) => !r.encerrada_em));
+      const rawRoutes = rotasRes.data || [];
+      setClosureSupported(!rotasRes.usedClosureFallback);
+      if (rotasRes.usedClosureFallback) setRouteStatus('all');
+      setRoutes(rawRoutes);
       setIndustriasList(industrias);
       setLojasList(lojas);
       setPromotoresList(promotores);
@@ -196,8 +204,8 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
       lojasList.map((store) => ({
         value: store.codigo,
         label: `${store.nome} (${store.codigo})`,
-        detail: [store.cidade, store.uf].filter(Boolean).join(' - '),
-        searchText: `${store.nome} ${store.codigo} ${store.cidade || ''} ${store.uf || ''}`
+        detail: [store.rede, store.cidade, store.uf].filter(Boolean).join(' - '),
+        searchText: `${store.nome} ${store.codigo} ${store.rede || ''} ${store.cidade || ''} ${store.uf || ''} ${store.endereco || ''}`
       })),
     [lojasList]
   );
@@ -212,25 +220,41 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
     [promotoresList]
   );
 
-  const availableIndustrias = useMemo(() => {
-    const map = new Map<string, string>();
-    routes.forEach((r) => {
-      if (r.industria_codigo) {
-        map.set(r.industria_codigo, r.industria?.nome || r.industria_codigo);
-      }
+  const routeIndustryFilterOptions = useMemo<SearchableSelectOption[]>(() => {
+    const options = new Map(industriasList.map((item) => [item.codigo, { value: item.codigo, label: `${item.nome} (${item.codigo})`, searchText: `${item.nome} ${item.codigo}` }]));
+    routes.forEach((route) => {
+      const code = route.industria_codigo;
+      if (code && !options.has(code)) options.set(code, { value: code, label: `${route.industria?.nome || code} (${code})`, searchText: `${route.industria?.nome || ''} ${code}` });
     });
-    return Array.from(map.entries()).sort((a, b) => a[1].localeCompare(b[1]));
-  }, [routes]);
+    return Array.from(options.values()).sort((a, b) => a.label.localeCompare(b.label));
+  }, [industriasList, routes]);
 
-  const availableLojas = useMemo(() => {
-    const map = new Map<string, string>();
-    routes.forEach((r) => {
-      if (r.loja_codigo) {
-        map.set(r.loja_codigo, r.loja?.nome || r.loja_codigo);
-      }
+  const routeStoreFilterOptions = useMemo<SearchableSelectOption[]>(() => {
+    const options = new Map(lojasList.map((item) => [item.codigo, {
+      value: item.codigo, label: `${item.nome} (${item.codigo})`,
+      detail: [item.rede, item.cidade, item.uf].filter(Boolean).join(' - '),
+      searchText: `${item.nome} ${item.codigo} ${item.rede || ''} ${item.cidade || ''} ${item.uf || ''} ${item.endereco || ''}`
+    }]));
+    routes.forEach((route) => {
+      const store = route.loja;
+      const code = route.loja_codigo;
+      if (code && !options.has(code)) options.set(code, {
+        value: code, label: `${store?.nome || code} (${code})`,
+        detail: [store?.rede, store?.cidade, store?.uf].filter(Boolean).join(' - '),
+        searchText: `${store?.nome || ''} ${code} ${store?.rede || ''} ${store?.cidade || ''} ${store?.uf || ''} ${store?.endereco || ''} ${store?.bairro || ''}`
+      });
     });
-    return Array.from(map.entries()).sort((a, b) => a[1].localeCompare(b[1]));
-  }, [routes]);
+    return Array.from(options.values()).sort((a, b) => a.label.localeCompare(b.label));
+  }, [lojasList, routes]);
+
+  const routePromoterFilterOptions = useMemo<SearchableSelectOption[]>(() => {
+    const options = new Map(promotoresList.map((item) => [item.matricula, { value: item.matricula, label: `${item.nome} (${item.matricula})`, searchText: `${item.nome} ${item.matricula}` }]));
+    routes.forEach((route) => {
+      const code = route.promotor_matricula;
+      if (code && !options.has(code)) options.set(code, { value: code, label: `${route.promotor?.nome || code} (${code})`, searchText: `${route.promotor?.nome || ''} ${code}` });
+    });
+    return Array.from(options.values()).sort((a, b) => a.label.localeCompare(b.label));
+  }, [promotoresList, routes]);
 
   const availablePromotores = useMemo(() => {
     const map = new Map<string, string>();
@@ -244,48 +268,10 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
 
   // Filtragem e Ordenação
   const filteredAndSortedRoutes = useMemo(() => {
-    let result = routes.filter((r) => {
-      const term = searchTerm.toLowerCase().trim();
-      if (term) {
-        const indName = (r.industria?.nome || '').toLowerCase();
-        const indCode = (r.industria_codigo || '').toLowerCase();
-        const lojName = (r.loja?.nome || '').toLowerCase();
-        const lojCode = (r.loja_codigo || '').toLowerCase();
-        const prmName = (r.promotor?.nome || '').toLowerCase();
-        const prmCode = (r.promotor_matricula || '').toLowerCase();
-        const rCode = (r.codigo_rota || '').toLowerCase();
-
-        const matchesSearch =
-          indName.includes(term) ||
-          indCode.includes(term) ||
-          lojName.includes(term) ||
-          lojCode.includes(term) ||
-          prmName.includes(term) ||
-          prmCode.includes(term) ||
-          rCode.includes(term);
-
-        if (!matchesSearch) return false;
-      }
-
-      if (selectedFrequencia !== 'TODAS' && r.frequencia !== selectedFrequencia) return false;
-      if (selectedIndustria !== 'TODAS' && r.industria_codigo !== selectedIndustria) return false;
-      if (selectedLoja !== 'TODAS' && r.loja_codigo !== selectedLoja) return false;
-      if (selectedPromotor !== 'TODOS' && r.promotor_matricula !== selectedPromotor) return false;
-
-      if (selectedDay !== 'TODOS') {
-        const dayKey = selectedDay as keyof Pick<
-          RouteItem,
-          'segunda' | 'terca' | 'quarta' | 'quinta' | 'sexta' | 'sabado' | 'domingo'
-        >;
-        if (!r[dayKey]) return false;
-      }
-
-      if (selectedUF !== 'TODAS') {
-        const routeUf = r.uf || r.loja?.uf || '';
-        if (routeUf.toUpperCase() !== selectedUF) return false;
-      }
-
-      return true;
+    const result = filterFixedRoutes(routes, {
+      search: searchTerm, industry: selectedIndustria, store: selectedLoja,
+      promoter: selectedPromotor, uf: selectedUF, frequency: selectedFrequencia,
+      day: selectedDay, status: closureSupported ? routeStatus : 'all'
     });
 
     // Ordenação
@@ -312,7 +298,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
     });
 
     return result;
-  }, [routes, searchTerm, selectedFrequencia, selectedDay, selectedUF, selectedIndustria, selectedLoja, selectedPromotor, sortBy]);
+  }, [routes, searchTerm, selectedFrequencia, selectedDay, selectedUF, selectedIndustria, selectedLoja, selectedPromotor, sortBy, routeStatus, closureSupported]);
 
   // Resumo de métricas no topo (Geral vs Individual por Promotor selecionado)
   const metrics = useMemo(() => {
@@ -513,6 +499,11 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
 
   const handleCloseRoute = async () => {
     if (!closingRoute || closeRouteInFlight.current) return;
+    if (closureSupported !== true) {
+      onShowToast({ title: 'Encerramento indisponível', message: 'Não foi possível encerrar esta escala. A funcionalidade de encerramento ainda precisa ser habilitada no sistema.', type: 'error' });
+      setClosingRoute(null);
+      return;
+    }
 
     closeRouteInFlight.current = true;
     setClosing(true);
@@ -674,9 +665,10 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
 
       {/* PAINEL DE CONTROLES: FILTROS COMBINÁVEIS, BUSCA, AGRUPAMENTO & ORDENAÇÃO */}
       <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-5 shadow-2xl space-y-4">
+        {closureSupported === false && <div role="status" className="rounded-xl border border-amber-400/50 bg-amber-50 px-4 py-3 text-sm text-amber-950">Não foi possível encerrar escalas: a funcionalidade ainda precisa ser habilitada no banco. Os registros estão preservados e não há exclusão física.</div>}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3 text-xs font-mono">
           {/* Busca Rápida */}
-          <div className="lg:col-span-4 relative">
+          <div className="lg:col-span-3 relative">
             <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-[#77766F] text-base">
               search
             </span>
@@ -687,7 +679,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
                 setSearchTerm(e.target.value);
                 setCurrentPage(1);
               }}
-              placeholder="Buscar rota, indústria, loja ou promotor..."
+              placeholder="Buscar indústria, loja, rede, cidade, UF, promotor ou código..."
               className="w-full h-9 pl-9 pr-8 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] placeholder:text-[#5F5F5F] focus:outline-none focus:border-amber-600 focus:bg-[#F7F6F2] transition-colors"
             />
             {searchTerm && (
@@ -707,53 +699,26 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
 
           {/* Filtro Indústria */}
           <div className="lg:col-span-2">
-            <select
-              value={selectedIndustria}
-              onChange={(e) => {
-                setSelectedIndustria(e.target.value);
-                setCurrentPage(1);
-              }}
-              className="w-full h-9 px-2 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-600 cursor-pointer"
-            >
-              <option value="TODAS">Indústria: Todas</option>
-              {availableIndustrias.map(([code, name]) => (
-                <option key={code} value={code}>{name}</option>
-              ))}
-            </select>
+            <label htmlFor="route-filter-industry" className="sr-only">Indústria</label>
+            <SearchableSelect id="route-filter-industry" value={selectedIndustria}
+              options={[{ value: 'TODAS', label: 'Indústria: Todas', searchText: 'todas industria' }, ...routeIndustryFilterOptions]}
+              placeholder="Indústria: Todas" onChange={(value) => { setSelectedIndustria(value || 'TODAS'); setCurrentPage(1); }} />
           </div>
 
           {/* Filtro Loja */}
-          <div className="lg:col-span-2">
-            <select
-              value={selectedLoja}
-              onChange={(e) => {
-                setSelectedLoja(e.target.value);
-                setCurrentPage(1);
-              }}
-              className="w-full h-9 px-2 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-600 cursor-pointer"
-            >
-              <option value="TODAS">Loja: Todas</option>
-              {availableLojas.map(([code, name]) => (
-                <option key={code} value={code}>{name}</option>
-              ))}
-            </select>
+          <div className="lg:col-span-3">
+            <label htmlFor="route-filter-store" className="sr-only">Loja</label>
+            <SearchableSelect id="route-filter-store" value={selectedLoja}
+              options={[{ value: 'TODAS', label: 'Loja: Todas', searchText: 'todas loja' }, ...routeStoreFilterOptions]}
+              placeholder="Loja: Todas" onChange={(value) => { setSelectedLoja(value || 'TODAS'); setCurrentPage(1); }} />
           </div>
 
           {/* Filtro Promotor */}
           <div className="lg:col-span-2">
-            <select
-              value={selectedPromotor}
-              onChange={(e) => {
-                setSelectedPromotor(e.target.value);
-                setCurrentPage(1);
-              }}
-              className="w-full h-9 px-2 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-600 cursor-pointer"
-            >
-              <option value="TODOS">Promotor: Todos</option>
-              {availablePromotores.map(([mat, name]) => (
-                <option key={mat} value={mat}>{name}</option>
-              ))}
-            </select>
+            <label htmlFor="route-filter-promoter" className="sr-only">Promotor</label>
+            <SearchableSelect id="route-filter-promoter" value={selectedPromotor}
+              options={[{ value: 'TODOS', label: 'Promotor: Todos', searchText: 'todos promotor' }, ...routePromoterFilterOptions]}
+              placeholder="Promotor: Todos" onChange={(value) => { setSelectedPromotor(value || 'TODOS'); setCurrentPage(1); }} />
           </div>
 
           {/* Filtro UF */}
@@ -772,6 +737,27 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
               ))}
             </select>
           </div>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[#CFCDC5] pt-3 text-xs">
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="font-semibold text-[#171717]">{filteredAndSortedRoutes.length} rotas encontradas</span>
+            {closureSupported && (
+              <select aria-label="Status das rotas" value={routeStatus} onChange={(e) => { setRouteStatus(e.target.value as RouteStatusFilter); setCurrentPage(1); }}
+                className="h-9 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-600">
+                <option value="active">Ativas</option><option value="closed">Encerradas</option><option value="all">Todas</option>
+              </select>
+            )}
+          </div>
+          <button type="button" onClick={() => {
+            const defaults = clearFixedRouteFilters();
+            setSearchTerm(defaults.search); setSelectedIndustria(defaults.industry); setSelectedLoja(defaults.store);
+            setSelectedPromotor(defaults.promoter); setSelectedUF(defaults.uf); setSelectedFrequencia(defaults.frequency);
+            setSelectedDay(defaults.day); setRouteStatus(closureSupported ? defaults.status : 'all');
+            setGroupBy('none'); setSortBy('promotor'); setCollapsedGroups({}); setCurrentPage(1);
+          }} className="px-3 py-2 rounded-lg border border-[#CFCDC5] text-[#171717] hover:bg-[#EAE8E2] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-600">
+            Limpar filtros
+          </button>
         </div>
 
         {/* Segunda Linha de Controles: Frequência, Dia, Agrupamento & Ordenação */}
@@ -853,7 +839,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <h3 className="text-sm font-bold text-[#171717] uppercase tracking-wider font-mono flex items-center gap-2">
             <span className="material-symbols-outlined text-amber-400">grid_on</span>
-            Grade Semanal de Rotas ({filteredAndSortedRoutes.length} filtradas)
+            Grade Semanal de Rotas ({filteredAndSortedRoutes.length} encontradas)
           </h3>
 
           <div className="flex items-center gap-3 text-xs font-mono text-[#77766F]">
@@ -869,6 +855,17 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
         </div>
 
         {/* LOADING */}
+        {!loading && !error && filteredAndSortedRoutes.length === 0 && (
+          <div className="py-12 text-center space-y-3" role="status">
+            <p className="text-sm font-semibold text-[#171717]">Nenhuma rota encontrada para os filtros selecionados.</p>
+            <button type="button" onClick={() => {
+              setSearchTerm(''); setSelectedIndustria('TODAS'); setSelectedLoja('TODAS'); setSelectedPromotor('TODOS');
+              setSelectedUF('TODAS'); setSelectedFrequencia('TODAS'); setSelectedDay('TODOS');
+              setRouteStatus(closureSupported ? 'active' : 'all'); setGroupBy('none'); setSortBy('promotor'); setCurrentPage(1);
+            }} className="px-3 py-2 rounded-lg border border-[#CFCDC5] text-[#171717] hover:bg-[#EAE8E2] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-600">Limpar filtros</button>
+          </div>
+        )}
+
         {loading && (
           <div className="py-16 text-center space-y-3">
             <div className="w-10 h-10 border-4 border-amber-500/20 border-t-amber-500 rounded-full animate-spin mx-auto"></div>
@@ -888,19 +885,6 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
             >
               Tentar Novamente
             </button>
-          </div>
-        )}
-
-        {/* VAZIO */}
-        {!loading && !error && filteredAndSortedRoutes.length === 0 && (
-          <div className="py-16 text-center space-y-3">
-            <div className="w-14 h-14 rounded-full bg-[#EAE8E2] border border-[#CFCDC5] flex items-center justify-center text-[#5F5F5F] mx-auto">
-              <span className="material-symbols-outlined text-3xl">search_off</span>
-            </div>
-            <h4 className="text-sm font-bold text-[#171717]">Nenhuma Rota Encontrada</h4>
-            <p className="text-xs text-[#77766F] max-w-sm mx-auto">
-              Não há rotas cadastradas correspondentes aos critérios selecionados.
-            </p>
           </div>
         )}
 
@@ -1158,11 +1142,12 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
                                           <button
                                             type="button"
                                             onClick={() => setClosingRoute(r)}
-                                            className="p-1 rounded-md bg-rose-500/10 hover:bg-rose-500/20 text-rose-700 border border-rose-500/30 cursor-pointer transition-colors"
-                                            title="Excluir Rota"
-                                            aria-label="Excluir rota fixa"
+                                            disabled={closureSupported !== true || Boolean(r.encerrada_em)}
+                                            className="p-1 rounded-md bg-rose-500/10 hover:bg-rose-500/20 text-rose-700 border border-rose-500/30 cursor-pointer transition-colors disabled:cursor-not-allowed disabled:opacity-40"
+                                            title={closureSupported === false ? 'Encerramento ainda não habilitado no banco' : 'Encerrar escala fixa'}
+                                            aria-label="Encerrar escala fixa"
                                           >
-                                            <span className="material-symbols-outlined text-[15px]">delete</span>
+                                            <span className="material-symbols-outlined text-[15px]">event_busy</span>
                                           </button>
                                         </>
                                       )}
@@ -1233,11 +1218,12 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
                                       <button
                                         type="button"
                                         onClick={() => setClosingRoute(r)}
-                                        className="p-1 rounded bg-rose-500/10 border border-rose-500/30 text-rose-700 cursor-pointer"
-                                        title="Excluir"
-                                        aria-label="Excluir rota fixa"
+                                        disabled={closureSupported !== true || Boolean(r.encerrada_em)}
+                                        className="p-1 rounded bg-rose-500/10 border border-rose-500/30 text-rose-700 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
+                                        title={closureSupported === false ? 'Encerramento ainda não habilitado no banco' : 'Encerrar escala fixa'}
+                                        aria-label="Encerrar escala fixa"
                                       >
-                                        <span className="material-symbols-outlined text-[16px]">delete</span>
+                                        <span className="material-symbols-outlined text-[16px]">event_busy</span>
                                       </button>
                                     </>
                                   )}
@@ -1549,7 +1535,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
         </div>
       )}
 
-      {closingRoute && (
+      {closingRoute && closureSupported === true && (
         <ConfirmRouteCloseModal
           route={closingRoute}
           saving={closing}
