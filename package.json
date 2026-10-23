@@ -1,11 +1,12 @@
 {
   "name": "react-example",
   "private": true,
-  "version": "0.0.0",
+  "version": "2.6.1",
   "type": "module",
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
     "build": "vite build",
+    "publication:check": "node scripts/check-publication.mjs",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",

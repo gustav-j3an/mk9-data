@@ -543,7 +543,13 @@ export const AppShell: React.FC<AppShellProps> = ({
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <span className="flex h-2 w-2 rounded-full bg-[#16845B]" />
-                  <span className="font-mono text-[11px] text-[#737373] font-medium">v2.6.0 GridCraft</span>
+                  <span
+                    className="font-mono text-[10px] leading-4 text-[#737373] font-medium"
+                    title={`Versão ${__MK9_BUILD_INFO__.version} • commit ${__MK9_BUILD_INFO__.commit} • ${__MK9_BUILD_INFO__.ref}`}
+                    aria-label={`Versão ${__MK9_BUILD_INFO__.version}, commit ${__MK9_BUILD_INFO__.commit}`}
+                  >
+                    v{__MK9_BUILD_INFO__.version} • {__MK9_BUILD_INFO__.commit}
+                  </span>
                 </div>
                 <button
                   onClick={toggleSidebarCollapse}
@@ -559,6 +565,13 @@ export const AppShell: React.FC<AppShellProps> = ({
             </>
           ) : (
             <div className="flex flex-col items-center gap-2">
+              <span
+                className="font-mono text-[9px] text-[#737373]"
+                title={`MK9 Date v${__MK9_BUILD_INFO__.version} • commit ${__MK9_BUILD_INFO__.commit} • ${__MK9_BUILD_INFO__.ref}`}
+                aria-label={`Build ${__MK9_BUILD_INFO__.commit}`}
+              >
+                {__MK9_BUILD_INFO__.commit.slice(0, 4)}
+              </span>
               <span className="flex h-2 w-2 rounded-full bg-[#16845B]" title="Operação Ativa" />
               <button
                 onClick={toggleSidebarCollapse}

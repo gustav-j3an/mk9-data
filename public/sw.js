@@ -2,7 +2,7 @@
 // Cache estático exclusivo para o Shell da aplicação e assets compilados.
 // NENHUMA API PRIVADA OU DADO OPERACIONAL DO SUPABASE É CACHEADO.
 
-const CACHE_NAME = 'mk9-date-shell-v3';
+const CACHE_NAME = 'mk9-date-shell-v4';
 
 // Assets estáticos imutáveis / estáticos não-HTML
 const STATIC_ASSETS = [
