@@ -16,6 +16,7 @@ import { ShareWhatsAppModal } from '../components/ShareWhatsAppModal';
 import { isWhatsAppShareableVisit } from '../utils/whatsappShare';
 import { canManageOldOpenVisits, filterOldOpenVisits, getAdministrativeResolutionLabel, getVisitDurationLabel, getVisitResolutionCounts } from '../utils/oldOpenVisitManagement';
 import { isRegularizationReasonValid, regularizeOldOpenVisit, VISIT_REGULARIZATION_BACKEND_VERIFIED, type VisitRegularizationAction } from '../lib/visitRegularizationService';
+import { filterPromoterDailySummaries, paginateVisits, sortVisitsForDisplay, type VisitPageSize } from '../utils/visitsTrackingPresentation';
 
 interface VisitsTrackingViewProps {
   onNavigate: (screen: ScreenId) => void;
@@ -68,6 +69,10 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
   const [filterStatus, setFilterStatus] = useState<string>('all'); // 'all' | 'em_andamento' | 'concluida' | 'nao_realizada' | 'pendente'
   const [filterOcorrencia, setFilterOcorrencia] = useState<string>('all'); // 'all' | 'com_ocorrencia' | 'sem_ocorrencia'
   const [searchQuery, setSearchQuery] = useState('');
+  const [visitPage, setVisitPage] = useState(1);
+  const [visitPageSize, setVisitPageSize] = useState<VisitPageSize>(15);
+  const [summarySearch, setSummarySearch] = useState('');
+  const [summaryOnlyPending, setSummaryOnlyPending] = useState(false);
 
   // 4. Modal / Drawer de Detalhes da Visita (Somente Leitura)
   const [selectedVisitItem, setSelectedVisitItem] = useState<OperationalVisitItem | null>(null);
@@ -514,7 +519,10 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
       }
       // Filtro Status
       if (filterStatus !== 'all') {
-        if (item.status !== filterStatus) return false;
+        if (filterStatus === 'administratively_completed' && item.visitObj?.regularization_status !== 'administratively_completed_with_proof') return false;
+        else if (filterStatus === 'closed_without_proof' && item.visitObj?.regularization_status !== 'closed_without_execution_proof') return false;
+        else if (filterStatus === 'pendente' && item.status !== 'pendente' && item.status !== 'planejada') return false;
+        else if (!['administratively_completed', 'closed_without_proof', 'pendente'].includes(filterStatus) && item.status !== filterStatus) return false;
       }
       // Filtro Ocorrências
       if (filterOcorrencia === 'com_ocorrencia' && !item.hasOccurrences) return false;
@@ -544,6 +552,19 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
     filterOcorrencia,
     searchQuery
   ]);
+
+  useEffect(() => setVisitPage(1), [
+    selectedDate, filterSupervisor, filterEquipe, filterPromotor, filterLoja,
+    filterIndustria, filterStatus, filterOcorrencia, searchQuery, visitPageSize
+  ]);
+  const orderedFilteredVisits = useMemo(() => sortVisitsForDisplay(filteredVisits), [filteredVisits]);
+  const totalVisitPages = Math.max(1, Math.ceil(orderedFilteredVisits.length / visitPageSize));
+  const visibleVisits = useMemo(() => paginateVisits(orderedFilteredVisits, visitPage, visitPageSize), [orderedFilteredVisits, visitPage, visitPageSize]);
+  const toggleStatusIndicator = (status: string) => {
+    if (status === 'all') setFilterOcorrencia('all');
+    setFilterStatus((current) => current === status ? 'all' : status);
+  };
+  const toggleOccurrenceIndicator = () => setFilterOcorrencia((current) => current === 'com_ocorrencia' ? 'all' : 'com_ocorrencia');
 
   const filteredOldOpenVisits = useMemo(() => filterOldOpenVisits(oldOpenVisits, {
     promoter: oldFilterPromoter,
@@ -672,6 +693,10 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
       return aProg - bProg; // Promotores com menor progresso aparecem primeiro
     });
   }, [filteredVisits]);
+  const visiblePromoterSummaries = useMemo(
+    () => filterPromoterDailySummaries(promotoresSummary, summarySearch, summaryOnlyPending),
+    [promotoresSummary, summarySearch, summaryOnlyPending]
+  );
 
   // Helper de badges de status
   const renderStatusBadge = (status: string) => {
@@ -788,9 +813,9 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
       )}
 
       {/* 2. Cards de Indicadores Operacionais (4 Indicadores Prioritários + Apoio) */}
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2 sm:gap-3">
         {/* 1. Visitas Previstas (Prioritário) */}
-        <div className="bg-white p-4 rounded-xl border-2 border-[#E4E2DB] shadow-xs">
+        <div role="button" tabIndex={0} onClick={() => toggleStatusIndicator('all')} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggleStatusIndicator('all'); } }} aria-pressed={filterStatus === 'all'} className="bg-white p-3 rounded-xl border-2 border-[#E4E2DB] shadow-xs cursor-pointer hover:border-blue-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600">
           <div className="flex items-center justify-between text-[#73726C] text-xs font-semibold mb-1">
             <span>Visitas Previstas</span>
             <span className="material-symbols-outlined text-base text-[#171717]">event</span>
@@ -800,7 +825,7 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
         </div>
 
         {/* 2. Em Andamento (Prioritário) */}
-        <div className="bg-white p-4 rounded-xl border-2 border-[#C3D9FD] shadow-xs bg-[#EBF2FE]/20">
+        <div role="button" tabIndex={0} onClick={() => toggleStatusIndicator('em_andamento')} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggleStatusIndicator('em_andamento'); } }} aria-pressed={filterStatus === 'em_andamento'} className="bg-white p-3 rounded-xl border-2 border-[#C3D9FD] shadow-xs bg-[#EBF2FE]/20 cursor-pointer hover:border-blue-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600">
           <div className="flex items-center justify-between text-[#286FF5] text-xs font-semibold mb-1">
             <span>Em Andamento</span>
             <span className="material-symbols-outlined text-base">timelapse</span>
@@ -810,7 +835,7 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
         </div>
 
         {/* 3. Concluídas (Prioritário) */}
-        <div className="bg-white p-4 rounded-xl border-2 border-[#B9E5D0] shadow-xs bg-[#E8F5EE]/20">
+        <div role="button" tabIndex={0} onClick={() => toggleStatusIndicator('concluida')} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggleStatusIndicator('concluida'); } }} aria-pressed={filterStatus === 'concluida'} className="bg-white p-3 rounded-xl border-2 border-[#B9E5D0] shadow-xs bg-[#E8F5EE]/20 cursor-pointer hover:border-emerald-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600">
           <div className="flex items-center justify-between text-[#16845B] text-xs font-semibold mb-1">
             <span>Concluídas</span>
             <span className="material-symbols-outlined text-base">task_alt</span>
@@ -820,7 +845,7 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
         </div>
 
         {/* 4. Pendentes (Prioritário) */}
-        <div className="bg-white p-4 rounded-xl border-2 border-[#E4E2DB] shadow-xs">
+        <div role="button" tabIndex={0} onClick={() => toggleStatusIndicator('pendente')} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggleStatusIndicator('pendente'); } }} aria-pressed={filterStatus === 'pendente'} className="bg-white p-3 rounded-xl border-2 border-[#E4E2DB] shadow-xs cursor-pointer hover:border-slate-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600">
           <div className="flex items-center justify-between text-[#73726C] text-xs font-semibold mb-1">
             <span>Pendentes</span>
             <span className="material-symbols-outlined text-base text-[#A09E96]">schedule</span>
@@ -830,7 +855,7 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
         </div>
 
         {/* 5. Não Realizadas */}
-        <div className="bg-white p-4 rounded-xl border border-[#F9BCBC] shadow-xs bg-[#FDEEEE]/15">
+        <div role="button" tabIndex={0} onClick={() => toggleStatusIndicator('nao_realizada')} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggleStatusIndicator('nao_realizada'); } }} aria-pressed={filterStatus === 'nao_realizada'} className="bg-white p-3 rounded-xl border border-[#F9BCBC] shadow-xs bg-[#FDEEEE]/15 cursor-pointer hover:border-rose-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600">
           <div className="flex items-center justify-between text-[#DD3838] text-xs font-medium mb-1">
             <span>Não Realizadas</span>
             <span className="material-symbols-outlined text-base">cancel</span>
@@ -840,7 +865,7 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
         </div>
 
         {/* 6. Com Ocorrências */}
-        <div className="bg-white p-4 rounded-xl border border-[#FCE19B] shadow-xs bg-[#FFF8E6]/15">
+        <div role="button" tabIndex={0} onClick={toggleOccurrenceIndicator} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggleOccurrenceIndicator(); } }} aria-pressed={filterOcorrencia === 'com_ocorrencia'} className="bg-white p-3 rounded-xl border border-[#FCE19B] shadow-xs bg-[#FFF8E6]/15 cursor-pointer hover:border-amber-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600">
           <div className="flex items-center justify-between text-[#D98A00] text-xs font-medium mb-1">
             <span>Ocorrências</span>
             <span className="material-symbols-outlined text-base">warning</span>
@@ -849,13 +874,13 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
           <div className="text-[11px] text-[#73726C] mt-1">rupturas ou desvios</div>
         </div>
 
-        <div className="bg-white p-4 rounded-xl border border-purple-200 shadow-xs bg-purple-50/30">
+        <div role="button" tabIndex={0} onClick={() => toggleStatusIndicator('administratively_completed')} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggleStatusIndicator('administratively_completed'); } }} aria-pressed={filterStatus === 'administratively_completed'} className="bg-white p-3 rounded-xl border border-purple-200 shadow-xs bg-purple-50/30 cursor-pointer hover:border-purple-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600">
           <div className="text-xs font-semibold text-purple-900 mb-1">Conclusões administrativas</div>
           <div className="text-2xl font-bold text-purple-950">{kpis.concluidasAdministrativamente}</div>
           <div className="text-[11px] text-purple-900 mt-1">com comprovação; métricas separadas</div>
         </div>
 
-        <div className="bg-white p-4 rounded-xl border border-amber-200 shadow-xs bg-amber-50/30">
+        <div role="button" tabIndex={0} onClick={() => toggleStatusIndicator('closed_without_proof')} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggleStatusIndicator('closed_without_proof'); } }} aria-pressed={filterStatus === 'closed_without_proof'} className="bg-white p-3 rounded-xl border border-amber-200 shadow-xs bg-amber-50/30 cursor-pointer hover:border-amber-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600">
           <div className="text-xs font-semibold text-amber-900 mb-1">Encerradas sem comprovação</div>
           <div className="text-2xl font-bold text-amber-950">{kpis.encerradasSemComprovacao}</div>
           <div className="text-[11px] text-amber-900 mt-1">não entram como concluídas</div>
@@ -1026,7 +1051,7 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
 
       {/* 4. Tabela de Visitas */}
       <div className="bg-white rounded-2xl border border-[#E4E2DB] shadow-xs overflow-hidden">
-        <div className="px-6 py-4 border-b border-[#E4E2DB] flex items-center justify-between bg-[#FCFCFB]">
+        <div className="px-4 sm:px-6 py-3 border-b border-[#E4E2DB] flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-[#FCFCFB]">
           <h2 className="text-base font-bold text-[#171717] flex items-center gap-2">
             <span>Registro de Visitas da Grade</span>
             <span className="text-xs px-2 py-0.5 rounded-full bg-[#F7F7F6] border border-[#E4E2DB] font-normal text-[#73726C]">
@@ -1050,8 +1075,17 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
             </p>
           </div>
         ) : (
+          <>
+          <div className="px-4 py-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#E4E2DB] bg-[#FCFCFB] text-xs text-[#5F5F5F]">
+            <span aria-live="polite">{filteredVisits.length} resultados filtrados · página {visitPage} de {totalVisitPages}</span>
+            <label className="flex items-center gap-2">Por página
+              <select aria-label="Visitas por página" value={visitPageSize} onChange={(event) => setVisitPageSize(Number(event.target.value) as VisitPageSize)} className="rounded-lg border border-[#CFCDC5] bg-white px-2 py-1 text-[#171717] focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600">
+                <option value={15}>15</option><option value={25}>25</option><option value={50}>50</option>
+              </select>
+            </label>
+          </div>
           <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
+            <table className="w-full min-w-[900px] text-left border-collapse">
               <thead>
                 <tr className="bg-[#F7F7F6] text-[11px] font-bold text-[#73726C] uppercase tracking-wider border-b border-[#E4E2DB]">
                   <th className="px-6 py-3">Loja / PDV</th>
@@ -1065,7 +1099,7 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#E4E2DB] text-xs">
-                {filteredVisits.map((item) => {
+                {visibleVisits.map((item) => {
                   const v = item.visitObj;
                   const photoCount = v?.photos?.length || 0;
                   const checkCount = v?.checklist_items?.filter((c) => c.checked)?.length || 0;
@@ -1181,18 +1215,26 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
               </tbody>
             </table>
           </div>
+          <nav aria-label="Paginação das visitas" className="px-4 py-3 border-t border-[#E4E2DB] flex flex-col sm:flex-row items-center justify-between gap-3 bg-[#FCFCFB]">
+            <span className="text-xs text-[#5F5F5F]">Página {visitPage} de {totalVisitPages} · {filteredVisits.length} resultados</span>
+            <div className="flex gap-2">
+              <button type="button" onClick={() => setVisitPage((page) => Math.max(1, page - 1))} disabled={visitPage === 1} className="rounded-lg border border-[#CFCDC5] px-3 py-2 text-xs font-semibold text-[#171717] disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600">Anterior</button>
+              <button type="button" onClick={() => setVisitPage((page) => Math.min(totalVisitPages, page + 1))} disabled={visitPage === totalVisitPages} className="rounded-lg border border-[#CFCDC5] px-3 py-2 text-xs font-semibold text-[#171717] disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600">Próxima</button>
+            </div>
+          </nav>
+          </>
         )}
       </div>
 
       {canManageOldOpenVisits(role) && (
-        <section className="bg-white rounded-2xl border border-amber-300 shadow-xs overflow-hidden" aria-labelledby="old-open-visits-title">
-          <div className="px-5 py-4 border-b border-amber-200 bg-amber-50 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+        <details className="bg-white rounded-2xl border border-amber-300 shadow-xs overflow-hidden">
+          <summary className="cursor-pointer list-none px-5 py-4 border-b border-amber-200 bg-amber-50 flex flex-col sm:flex-row sm:items-center justify-between gap-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-700">
             <div>
               <h2 id="old-open-visits-title" className="text-base font-bold text-[#171717]">VISITAS ANTIGAS EM ABERTO</h2>
               <p className="mt-1 text-xs text-[#5F5F5F]">Fila administrativa separada da escala diária. Dados limitados pelo escopo autorizado no banco.</p>
             </div>
             <span className="text-sm font-bold text-amber-900">{filteredOldOpenVisits.length} registro(s)</span>
-          </div>
+          </summary>
           <div className="p-4 space-y-3">
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2">
               <label className="text-xs font-semibold text-[#5F5F5F]">Promotor
@@ -1241,28 +1283,25 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
             )}
             <p className="text-[11px] text-[#73726C]">As ações de regularização permanecem bloqueadas até aprovação e implementação da RPC com auditoria atômica. Nenhum status ou dado histórico é alterado nesta tela.</p>
           </div>
-        </section>
+        </details>
       )}
 
       {/* 5. Resumo Operacional por Promotor */}
-      <div className="bg-white rounded-2xl border border-[#E4E2DB] shadow-xs p-6">
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h2 className="text-base font-bold text-[#171717]">Resumo Diário por Promotor</h2>
-            <p className="text-xs text-[#73726C]">
-              Progresso individual de visitas concluídas em relação à grade prevista no dia.
-            </p>
-          </div>
-          <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-[#F7F7F6] text-[#73726C] border border-[#E4E2DB]">
-            {promotoresSummary.length} promotores na escala
-          </span>
+      <details className="bg-white rounded-2xl border border-[#E4E2DB] shadow-xs overflow-hidden">
+        <summary className="cursor-pointer list-none p-4 flex items-center justify-between gap-3 bg-[#FCFCFB] focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600">
+          <strong className="text-base text-[#171717]">Resumo Diário por Promotor</strong>
+          <span className="rounded-full border border-[#CFCDC5] px-2.5 py-1 text-xs font-semibold text-[#171717]">{promotoresSummary.length} promotores</span>
+        </summary>
+      <div className="bg-white p-4 sm:p-6">
+        <div className="mb-4 flex flex-col sm:flex-row gap-3 sm:items-center">
+          <label className="flex-1"><span className="sr-only">Buscar promotor no resumo</span><input type="search" value={summarySearch} onChange={(event) => setSummarySearch(event.target.value)} placeholder="Buscar promotor pelo nome" className="w-full rounded-lg border border-[#CFCDC5] bg-white px-3 py-2 text-sm text-[#171717] placeholder:text-[#5F5F5F] focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600" /></label>
+          <label className="flex items-center gap-2 text-sm text-[#171717]"><input type="checkbox" checked={summaryOnlyPending} onChange={(event) => setSummaryOnlyPending(event.target.checked)} className="size-4 accent-blue-700" />Somente com pendências</label>
         </div>
-
-        {promotoresSummary.length === 0 ? (
+        {visiblePromoterSummaries.length === 0 ? (
           <div className="text-center py-6 text-xs text-[#73726C]">Nenhum promotor escalado no filtro atual.</div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {promotoresSummary.map((p) => {
+            {visiblePromoterSummaries.map((p) => {
               const perc = p.previstas > 0 ? Math.round((p.concluidas / p.previstas) * 100) : 0;
               return (
                 <div
@@ -1304,6 +1343,7 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
           </div>
         )}
       </div>
+      </details>
 
       {regularizationVisit && (
         <div className="fixed inset-0 z-[55] flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-labelledby="regularization-title">
