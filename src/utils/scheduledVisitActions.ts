@@ -8,6 +8,10 @@ export interface ScheduledActionDecision {
   reason?: string;
 }
 
+export function isScheduledVisitActionRpcReady(error: { code?: unknown; message?: unknown } | null | undefined): boolean {
+  return error?.code === '22023' && error.message === 'Invalid scheduled visit action';
+}
+
 export function getScheduledVisitAction(input: {
   item: Pick<OperationalVisitItem, 'routeId' | 'dataStr' | 'status' | 'frequencia' | 'visitObj'>;
   today: string;

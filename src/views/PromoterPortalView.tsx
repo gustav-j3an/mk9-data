@@ -53,7 +53,7 @@ import {
 import { isWhatsAppShareableVisit } from '../utils/whatsappShare';
 import { loadRoutesWithClosureFallback } from '../utils/routeClosureCompatibility';
 import { filterPromoterAppointments, formatAppointmentDateHeading, getMetricDisplayValue, getRegularizationCounts, getRegularizationPresentation, groupAppointmentsByDate, isUnresolvedVisitInProgress } from '../utils/promoterPortalPresentation';
-import { getScheduledVisitAction, type ScheduledVisitAction } from '../utils/scheduledVisitActions';
+import { getScheduledVisitAction, isScheduledVisitActionRpcReady, type ScheduledVisitAction } from '../utils/scheduledVisitActions';
 import { canReviewOldOpenVisits, createRequestGate, findOwnOpenVisit, formatOpenVisitConflictMessage, getOldOpenVisitCheckInBlockMessage, getOldOpenVisitsLabel, getPromoterOpenVisitAction, isAnotherVisitInProgressError, isOpenVisitFromToday } from '../utils/visitCheckInConflict';
 
 interface PromoterPortalViewProps {
@@ -108,6 +108,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
   // Estado para Recuperação de Visita Não Realizada / Pendente ("Realizar hoje" - Etapa 2)
   const [scheduledAction, setScheduledAction] = useState<{ item: OperationalVisitItem; action: ScheduledVisitAction } | null>(null);
   const [savingScheduledAction, setSavingScheduledAction] = useState(false);
+  const [scheduledActionRpcStatus, setScheduledActionRpcStatus] = useState<'checking' | 'ready' | 'unavailable'>('checking');
 
   // Controle de colapso do Histórico da Semana (Fechado por padrão no mobile)
   const [isWeekHistoryOpen, setIsWeekHistoryOpen] = useState<boolean>(false);
@@ -568,6 +569,35 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
   useEffect(() => {
     loadPortalData();
   }, [loadPortalData]);
+
+  useEffect(() => {
+    let isCurrent = true;
+    setScheduledActionRpcStatus('checking');
+    if (isAdminUser || role !== 'promotor' || !profile?.id || !supabase) {
+      setScheduledActionRpcStatus('unavailable');
+      return () => { isCurrent = false; };
+    }
+
+    // A deliberately invalid action reaches only the RPC's input validation and
+    // cannot create a visit. Fail closed unless that exact server response is seen.
+    void (async () => {
+      try {
+        const { error } = await supabase.rpc('attendance_start_scheduled_occurrence', {
+          p_route: null,
+          p_scheduled_date: null,
+          p_action: '__mk9_capability_probe__',
+          p_lat: null,
+          p_lng: null,
+          p_accuracy: null
+        });
+        if (isCurrent) setScheduledActionRpcStatus(isScheduledVisitActionRpcReady(error) ? 'ready' : 'unavailable');
+      } catch {
+        if (isCurrent) setScheduledActionRpcStatus('unavailable');
+      }
+    })();
+
+    return () => { isCurrent = false; };
+  }, [isAdminUser, profile?.id, role]);
 
   const routeIndustryOptions = useMemo<SearchableSelectOption[]>(
     () => routeIndustries.map((industry) => ({
@@ -2043,7 +2073,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
             <h2 className="text-sm font-extrabold uppercase tracking-wide text-[#171717]">Meus atendimentos</h2>
             <span className="text-[10px] text-[#77766F]">{todayStr.split('-').reverse().join('/')}</span>
           </div>
-          <nav aria-label="Filtrar atendimentos" className="grid grid-cols-4 gap-1 rounded-xl border border-[#CFCDC5] bg-[#EAE8E2] p-1">
+          <nav aria-label="Filtrar atendimentos" className="grid grid-cols-3 gap-1 rounded-xl border border-[#CFCDC5] bg-[#EAE8E2] p-1">
             {([
               ['today', 'Hoje'],
               ['upcoming', `Próximos (${metricText(upcomingVisits.length)})`],
@@ -2106,10 +2136,10 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
             <div className="space-y-1">
               <div className="flex items-center gap-2">
                 <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-ping shrink-0" />
-                <span className="text-amber-300 font-extrabold uppercase tracking-wide">
+                <span className="text-amber-900 font-extrabold uppercase tracking-wide">
                   Atendimento em Andamento
                 </span>
-                <span className="text-[10px] px-2 py-0.5 rounded bg-amber-500/20 text-amber-200 border border-amber-500/30 font-bold">
+                <span className="text-[10px] px-2 py-0.5 rounded bg-amber-100 text-amber-950 border border-amber-300 font-bold">
                   {activeVisit.data_visita.split('-').reverse().join('/')}
                 </span>
               </div>
@@ -2137,7 +2167,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                   setInterruptModalVisit(activeVisit);
                   setInterruptReason('');
                 }}
-                className="px-3 py-2 rounded-xl bg-[#EAE8E2] hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-colors"
+                className="px-3 py-2 rounded-xl bg-white hover:bg-rose-50 text-rose-800 border border-rose-300 font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-colors"
                 title="Interromper atendimento com justificativa obrigatória"
               >
                 <span className="material-symbols-outlined text-sm">close</span>
@@ -2181,13 +2211,13 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                     regularizationLabel
                       ? 'bg-purple-50 border-purple-300'
                       : isCurrentActive
-                      ? 'bg-amber-950/30 border-2 border-amber-500 shadow-lg'
+                      ? 'bg-amber-50 border-2 border-amber-300 shadow-sm'
                       : item.status === 'concluida'
-                      ? 'bg-emerald-950/20 border-emerald-500/30'
+                      ? 'bg-emerald-50 border-emerald-200'
                       : item.status === 'em_andamento'
-                      ? 'bg-amber-950/20 border-amber-500/50'
+                      ? 'bg-amber-50 border-amber-200'
                       : item.status === 'nao_realizada'
-                      ? 'bg-rose-950/20 border-rose-500/30'
+                      ? 'bg-rose-50 border-rose-200'
                       : 'bg-[#EAE8E2] border-[#CFCDC5]'
                   }`}
                 >
@@ -2201,14 +2231,14 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                           regularizationLabel
                             ? 'bg-purple-100 text-purple-950 border border-purple-300'
                             : item.status === 'concluida'
-                            ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                            ? 'bg-emerald-100 text-emerald-900 border border-emerald-300'
                             : item.status === 'em_andamento'
-                            ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30 animate-pulse'
+                            ? 'bg-amber-100 text-amber-950 border border-amber-300 animate-pulse'
                             : item.status === 'nao_realizada'
-                            ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                            ? 'bg-rose-100 text-rose-900 border border-rose-300'
                             : item.status === 'pendente'
-                            ? 'bg-amber-500/15 text-amber-300 border border-amber-500/40'
-                            : 'bg-slate-800 text-slate-300 border border-[#CFCDC5]'
+                            ? 'bg-amber-100 text-amber-950 border border-amber-300'
+                            : 'bg-slate-100 text-slate-800 border border-slate-300'
                         }`}
                       >
                         {regularizationLabel || (item.status === 'concluida' && '🟢 Concluída')}
@@ -2231,13 +2261,13 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
 
                     <div className="flex flex-wrap items-center gap-3 text-[10px] text-[#5F5F5F]">
                       {item.startedAt && (
-                        <span>Check-in: <strong className="text-amber-300">{new Date(item.startedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</strong></span>
+                        <span>Check-in: <strong className="text-amber-900">{new Date(item.startedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</strong></span>
                       )}
                       {item.completedAt && (
-                        <span>Concluído: <strong className="text-emerald-300">{new Date(item.completedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</strong></span>
+                        <span>Concluído: <strong className="text-emerald-900">{new Date(item.completedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</strong></span>
                       )}
                       {item.motivoNaoRealizada && (
-                        <span className="text-rose-400">Motivo: <strong>{item.motivoNaoRealizada}</strong></span>
+                        <span className="text-rose-700">Motivo: <strong>{item.motivoNaoRealizada}</strong></span>
                       )}
                     </div>
                   </div>
@@ -2378,6 +2408,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
           <div className="border-b border-blue-100 pb-3">
             <h2 id="upcoming-visits-title" className="text-base font-extrabold text-[#14243B]">Próximos atendimentos</h2>
             <p className="text-sm text-[#5F5F5F]">Programações futuras desta semana.</p>
+            {!isAdminUser && scheduledActionRpcStatus !== 'ready' && <p role="status" className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-950">{scheduledActionRpcStatus === 'checking' ? 'Verificando disponibilidade das ações no servidor…' : 'Antecipação indisponível: o servidor ainda não confirmou a atualização necessária.'}</p>}
           </div>
           {upcomingVisitGroups.length === 0 ? <p className="text-sm text-[#5F5F5F]">{loadError ? 'Não foi possível confirmar os próximos atendimentos.' : 'Nenhum atendimento programado para os próximos dias desta semana.'}</p> : <div className="space-y-4">
             {upcomingVisitGroups.map(group => <section key={group.date} aria-label={formatAppointmentDateHeading(group.date)} className="space-y-2">
@@ -2392,7 +2423,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                       <p className="text-xs font-semibold text-[#14243B]">{item.dataStr.split('-').reverse().join('/')} · {item.dayOfWeekLabel}</p>
                       <p className="text-xs text-[#5F5F5F]">Frequência: {item.frequencia} · Situação: Programada</p>
                     </div>
-                    {!isAdminUser && <button type="button" disabled={!decision.allowed || savingScheduledAction} title={decision.reason} onClick={() => decision.allowed && decision.action && setScheduledAction({ item, action: decision.action })} className="min-h-10 shrink-0 rounded-lg bg-[#286FF5] px-4 py-2 text-xs font-bold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600">Antecipar visita</button>}
+                    {!isAdminUser && <button type="button" disabled={!decision.allowed || savingScheduledAction || scheduledActionRpcStatus !== 'ready'} title={scheduledActionRpcStatus !== 'ready' ? 'Ação indisponível até o servidor confirmar que a RPC está instalada.' : decision.reason} onClick={() => decision.allowed && scheduledActionRpcStatus === 'ready' && decision.action && setScheduledAction({ item, action: decision.action })} className="min-h-10 shrink-0 rounded-lg bg-[#286FF5] px-4 py-2 text-xs font-bold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600">{scheduledActionRpcStatus === 'ready' ? 'Antecipar visita' : scheduledActionRpcStatus === 'checking' ? 'Verificando…' : 'Indisponível'}</button>}
                   </li>;
                 })}
               </ul>
@@ -2991,10 +3022,11 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
               </span>
              </button>
              <p className="text-[11px] text-[#5F5F5F] font-mono">Registros de campo com navegação por semana e por dia.</p>
+             {!isAdminUser && scheduledActionRpcStatus !== 'ready' && <p role="status" className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-950">{scheduledActionRpcStatus === 'checking' ? 'Verificando disponibilidade das ações no servidor…' : 'Recuperação indisponível: o servidor ainda não confirmou a atualização necessária.'}</p>}
             </div>
 
           {/* Navegação entre semanas (visível sempre) */}
-          <div className="flex items-center gap-2 shrink-0 font-mono text-xs">
+          <div className="flex flex-wrap items-center gap-2 shrink-0 font-mono text-xs">
             <button
               type="button"
               onClick={() => changeHistoryWeek(weekOffset - 1)}
@@ -3148,7 +3180,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                         )}
                       </div>
 
-                      <div className={`flex items-center gap-1.5 text-[10px] pt-1 border-t ${isSelected ? 'border-white/20' : 'border-[#CFCDC5]/60'}`}>
+                      <div className={`flex flex-wrap items-center gap-1.5 text-[10px] pt-1 border-t ${isSelected ? 'border-white/20' : 'border-[#CFCDC5]/60'}`}>
                         {completedCount > 0 && <span className="font-bold text-emerald-700">Concluídas {completedCount}</span>}
                         {notDoneCount > 0 && <span className="font-bold text-rose-700">Não realizadas {notDoneCount}</span>}
                         {inProgressCount > 0 && <span className="font-bold text-amber-800">Em andamento {inProgressCount}</span>}
@@ -3240,17 +3272,17 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                         regularizationLabel
                           ? 'bg-purple-50 border-purple-300'
                           : item.status === 'concluida'
-                          ? 'bg-emerald-950/20 border-emerald-500/30'
+                          ? 'bg-emerald-50 border-emerald-200'
                           : item.status === 'em_andamento'
-                          ? 'bg-amber-950/20 border-amber-500/50'
+                          ? 'bg-amber-50 border-amber-200'
                           : item.status === 'nao_realizada'
-                          ? 'bg-rose-950/20 border-rose-500/30'
+                          ? 'bg-rose-50 border-rose-200'
                           : item.status === 'pendente'
-                          ? 'bg-rose-950/15 border-rose-500/30'
+                          ? 'bg-rose-50 border-rose-200'
                           : 'bg-[#EAE8E2] border-[#CFCDC5]'
                       }`}
                     >
-                      <div className="space-y-1.5">
+                      <div className="min-w-0 flex-1 space-y-1.5">
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="w-5 h-5 rounded-full bg-[#F7F6F2] border border-[#CFCDC5] text-[#7E22CE] font-bold text-[10px] flex items-center justify-center">
                             {idx + 1}
@@ -3263,14 +3295,14 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                               regularizationLabel
                                 ? 'bg-purple-100 text-purple-950 border border-purple-300'
                                 : item.status === 'concluida'
-                                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                                ? 'bg-emerald-100 text-emerald-900 border border-emerald-300'
                                 : item.status === 'em_andamento'
-                                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30 animate-pulse'
+                                ? 'bg-amber-100 text-amber-950 border border-amber-300 animate-pulse'
                                 : item.status === 'nao_realizada'
-                                ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                                ? 'bg-rose-100 text-rose-900 border border-rose-300'
                                 : item.status === 'pendente'
-                                ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
-                                : 'bg-slate-800 text-slate-300 border border-[#CFCDC5]'
+                                ? 'bg-rose-100 text-rose-900 border border-rose-300'
+                                : 'bg-slate-100 text-slate-800 border border-slate-300'
                             }`}
                           >
                             {regularizationLabel || (item.status === 'concluida' && '🟢 Concluída')}
@@ -3281,7 +3313,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                           </span>
                         </div>
 
-                        <h4 className="text-sm font-bold text-[#171717]">
+                        <h4 className="truncate text-sm font-bold text-[#171717]">
                           {item.lojaNome}
                         </h4>
 
@@ -3303,7 +3335,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                       </div>
 
                       {/* Ações */}
-                      <div className="flex items-center gap-2 shrink-0 pt-2 md:pt-0 border-t md:border-t-0 border-[#CFCDC5]">
+                      <div className="flex flex-wrap items-center justify-end gap-2 shrink-0 pt-2 md:pt-0 border-t md:border-t-0 border-[#CFCDC5]">
                         {isAdminUser ? (
                           <button
                             type="button"
@@ -3354,8 +3386,8 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                             )}
 
                             {(item.status === 'pendente' || item.status === 'nao_realizada') && !isTodayItem && actionDecision.allowed && (
-                              <button type="button" onClick={() => setScheduledAction({ item, action: 'recover' })} disabled={savingScheduledAction} className="min-h-10 rounded-xl bg-[#222222] px-4 py-2 text-xs font-bold text-white shadow-md hover:bg-black disabled:opacity-50">
-                                <span className="material-symbols-outlined mr-1 align-middle text-sm">replay</span>Realizar hoje
+                              <button type="button" onClick={() => scheduledActionRpcStatus === 'ready' && setScheduledAction({ item, action: 'recover' })} disabled={savingScheduledAction || scheduledActionRpcStatus !== 'ready'} title={scheduledActionRpcStatus !== 'ready' ? 'Ação indisponível até o servidor confirmar que a RPC está instalada.' : undefined} className="min-h-10 rounded-xl bg-[#222222] px-4 py-2 text-xs font-bold text-white shadow-md hover:bg-black disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600">
+                                <span className="material-symbols-outlined mr-1 align-middle text-sm">replay</span>{scheduledActionRpcStatus === 'ready' ? 'Realizar hoje' : scheduledActionRpcStatus === 'checking' ? 'Verificando…' : 'Indisponível'}
                               </button>
                             )}
                           </>

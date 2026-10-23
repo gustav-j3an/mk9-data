@@ -6,6 +6,13 @@ SET LOCAL statement_timeout = '60s';
 ALTER TABLE public.visits
   ADD COLUMN IF NOT EXISTS scheduled_date date;
 
+-- The action guard reads this status. The preceding regularization migration
+-- normally creates it, but some linked databases have the rest of that schema
+-- without the migration record or this column.
+ALTER TABLE public.visits
+  ADD COLUMN IF NOT EXISTS regularization_status text
+  CHECK (regularization_status IN ('closed_without_execution_proof', 'administratively_completed_with_proof'));
+
 CREATE UNIQUE INDEX IF NOT EXISTS visits_promoter_route_scheduled_date_unique
   ON public.visits (promotor_matricula, rota_id, scheduled_date)
   WHERE scheduled_date IS NOT NULL AND rota_id IS NOT NULL;
@@ -45,8 +52,10 @@ DECLARE
   v_week_start date;
   v_week_end date;
   v_route public.rotas;
+  v_work_schedule public.promoter_work_schedules;
   v_existing public.visits;
   v_result public.visits;
+  v_effective_date date;
   v_route_day_active boolean;
   v_operation_mode text;
   v_official_start_date text;
@@ -59,6 +68,7 @@ BEGIN
   END IF;
 
   v_today := (clock_timestamp() AT TIME ZONE 'America/Sao_Paulo')::date;
+  v_effective_date := v_today;
   v_week_start := v_today - (extract(isodow FROM v_today)::integer - 1);
   v_week_end := v_week_start + 6;
   IF p_action IS NULL OR p_action NOT IN ('advance', 'recover') THEN
@@ -70,6 +80,34 @@ BEGIN
   IF (p_action = 'advance' AND (p_scheduled_date <= v_today OR p_scheduled_date > v_week_end))
      OR (p_action = 'recover' AND (p_scheduled_date < v_week_start OR p_scheduled_date >= v_today)) THEN
     RAISE EXCEPTION 'Scheduled date is outside the recoverable current week' USING ERRCODE = '22023';
+  END IF;
+
+  -- Match attendance_check_in's effective operational date, including the
+  -- promoter's captured timezone and overnight schedule handling.
+  SELECT s.* INTO v_work_schedule
+  FROM public.promoter_work_schedules s
+  CROSS JOIN LATERAL (
+    SELECT (clock_timestamp() AT TIME ZONE s.timezone)::date
+      - CASE
+          WHEN s.hora_fim < s.hora_inicio
+           AND (clock_timestamp() AT TIME ZONE s.timezone)::time < s.hora_fim THEN 1
+          ELSE 0
+        END AS operational_date
+  ) local_day
+  WHERE s.promotor_matricula = v_matricula
+    AND s.ativo
+    AND (s.valid_from IS NULL OR s.valid_from <= local_day.operational_date)
+    AND (s.valid_to IS NULL OR s.valid_to >= local_day.operational_date)
+    AND s.dia_semana = (ARRAY['domingo','segunda','terca','quarta','quinta','sexta','sabado'])[extract(dow FROM local_day.operational_date)::integer + 1]
+  ORDER BY s.is_exception DESC, s.valid_from DESC NULLS LAST
+  LIMIT 1;
+  IF v_work_schedule.id IS NOT NULL THEN
+    v_effective_date := (clock_timestamp() AT TIME ZONE v_work_schedule.timezone)::date
+      - CASE
+          WHEN v_work_schedule.hora_fim < v_work_schedule.hora_inicio
+           AND (clock_timestamp() AT TIME ZONE v_work_schedule.timezone)::time < v_work_schedule.hora_fim THEN 1
+          ELSE 0
+        END;
   END IF;
 
   PERFORM pg_advisory_xact_lock(hashtextextended(v_matricula, 1));
@@ -134,14 +172,25 @@ BEGIN
     RAISE EXCEPTION 'Only a missed occurrence can be recovered' USING ERRCODE = '22023';
   END IF;
 
+  -- attendance_check_in upserts by promoter/store/industry/effective date, not by
+  -- route. Lock and reject that same key here so a different route at the same
+  -- store cannot reuse the row and attach this occurrence to the wrong audit.
   SELECT v.* INTO v_existing FROM public.visits v
-  WHERE v.promotor_matricula = v_matricula AND v.rota_id = p_route AND v.data_visita = v_today
+  WHERE v.promotor_matricula = v_matricula
+    AND v.loja_codigo = v_route.loja_codigo
+    AND v.industria_codigo = v_route.industria_codigo
+    AND v.data_visita = v_effective_date
   FOR UPDATE;
-  IF FOUND AND v_existing.scheduled_date IS DISTINCT FROM p_scheduled_date THEN
-    RAISE EXCEPTION 'A visit for this route already exists today' USING ERRCODE = '23505';
+  IF FOUND THEN
+    RAISE EXCEPTION 'A visit for this store and industry already exists today' USING ERRCODE = '23505';
   END IF;
 
   v_result := public.attendance_check_in(v_route.loja_codigo, v_route.industria_codigo, p_route, p_lat, p_lng, p_accuracy);
+  IF v_result.promotor_matricula IS DISTINCT FROM v_matricula
+     OR v_result.rota_id IS DISTINCT FROM p_route
+     OR v_result.data_visita IS DISTINCT FROM v_effective_date THEN
+    RAISE EXCEPTION 'Check-in did not create the expected route occurrence' USING ERRCODE = '23505';
+  END IF;
   UPDATE public.visits SET scheduled_date = p_scheduled_date
   WHERE id = v_result.id RETURNING * INTO v_result;
 

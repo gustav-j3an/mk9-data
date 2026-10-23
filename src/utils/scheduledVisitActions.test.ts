@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { getScheduledVisitAction } from './scheduledVisitActions';
+import { getScheduledVisitAction, isScheduledVisitActionRpcReady } from './scheduledVisitActions';
 import type { OperationalVisitItem } from './routePlanner';
 
 const base = {
@@ -38,4 +38,12 @@ test('concluída, em andamento, escala quinzenal, operação sem permissão e co
 test('duplicidade é evitada por ocorrência única e nunca abre uma segunda ação para concluída', () => {
   const completed = { ...base, visitObj: { status: 'concluida', started_at: '2026-10-22T10:00:00Z' } } as typeof base;
   assert.match(getScheduledVisitAction({ item: completed, ...common }).reason || '', /iniciado ou concluído/);
+});
+
+test('ações de agenda só são habilitadas quando a RPC responde com a validação esperada', () => {
+  assert.equal(isScheduledVisitActionRpcReady({ code: '22023', message: 'Invalid scheduled visit action' }), true);
+  assert.equal(isScheduledVisitActionRpcReady({ code: 'PGRST202', message: 'Function not found' }), false);
+  assert.equal(isScheduledVisitActionRpcReady({ code: '42501', message: 'Promoter identity required' }), false);
+  assert.equal(isScheduledVisitActionRpcReady({ code: '08006', message: 'Network error' }), false);
+  assert.equal(isScheduledVisitActionRpcReady(null), false);
 });
