@@ -4,6 +4,7 @@ import { useAuth } from '../auth/AuthProvider';
 import { notificationService } from '../lib/notificationService';
 import { supabase } from '../lib/supabase';
 import { PWAInstallPrompt } from './PWAInstallPrompt';
+import { getToastPresentation } from '../utils/toastPresentation';
 import { AuthorSignature } from './AuthorSignature';
 import { useRhAccess } from '../lib/rhAccess';
 import { useFaltasAtestadosAccess } from '../lib/faltasAtestadosAccess';
@@ -1029,8 +1030,8 @@ export const AppShell: React.FC<AppShellProps> = ({
             key={toast.id}
             className="pointer-events-auto bg-[#F7F6F2] border border-[#CFCDC5] px-4 py-3 rounded-xl shadow-xl flex items-center gap-3 transition-all duration-300 w-full min-w-0 max-w-md"
           >
-            <div className="w-8 h-8 rounded-full bg-[#E8F5EE] text-[#16845B] border border-[#B9E5D0] flex items-center justify-center shrink-0">
-              <span className="material-symbols-outlined text-[18px]">done</span>
+            <div className={`w-8 h-8 rounded-full border flex items-center justify-center shrink-0 ${getToastPresentation(toast.type).iconClass}`}>
+              <span className="material-symbols-outlined text-[18px]">{getToastPresentation(toast.type).icon}</span>
             </div>
             <div className="flex flex-col flex-1">
               <span className="text-xs font-bold text-[#171717]">{toast.title}</span>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useAuth } from '../auth/AuthProvider';
 import { SearchableSelect, type SearchableSelectOption } from '../components/SearchableSelect';
 import { StatCard, StatusBadge } from '../components/ui';
@@ -73,6 +73,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
   const [viewingRoute, setViewingRoute] = useState<RouteItem | null>(null);
   const [editingRoute, setEditingRoute] = useState<RouteItem | null>(null);
   const [closingRoute, setClosingRoute] = useState<RouteItem | null>(null);
+  const closeRouteInFlight = useRef(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [saving, setSaving] = useState(false);
   const [closing, setClosing] = useState(false);
@@ -511,8 +512,9 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
   };
 
   const handleCloseRoute = async () => {
-    if (!closingRoute) return;
+    if (!closingRoute || closeRouteInFlight.current) return;
 
+    closeRouteInFlight.current = true;
     setClosing(true);
     try {
       await closeFixedRoute(closingRoute.id);
@@ -531,6 +533,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
         type: 'error'
       });
     } finally {
+      closeRouteInFlight.current = false;
       setClosing(false);
     }
   };

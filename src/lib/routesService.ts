@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { isMissingRouteClosureColumn } from '../utils/routeClosureCompatibility';
 import type { RouteItem, UserRole } from '../types';
 
 export const ROUTE_DAYS = [
@@ -110,7 +111,7 @@ export const supabaseFixedRouteGateway: FixedRouteGateway = {
 
     if (error) {
       // Se a coluna encerrada_em ainda não existe no banco (migration pendente)
-      if (error.code === '42703' || String(error.message).includes('encerrada_em')) {
+      if (isMissingRouteClosureColumn(error)) {
         throw new Error(
           'A coluna "encerrada_em" ainda não existe no banco de dados. Aplique a migração 20261018235500_soft_delete_fixed_routes.sql no Supabase para habilitar o encerramento lógico de rotas.'
         );

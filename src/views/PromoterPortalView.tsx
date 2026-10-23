@@ -136,6 +136,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
   const [savingScaleRoute, setSavingScaleRoute] = useState<boolean>(false);
   const [closingScaleRoute, setClosingScaleRoute] = useState<RouteItem | null>(null);
   const [savingCloseScale, setSavingCloseScale] = useState(false);
+  const closeScaleInFlight = useRef(false);
   const [showCreateScale, setShowCreateScale] = useState(false);
   const [savingNewScale, setSavingNewScale] = useState(false);
   const [routeIndustries, setRouteIndustries] = useState<Array<{ codigo: string; nome: string }>>([]);
@@ -688,7 +689,8 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
   };
 
   const handleCloseScale = async () => {
-    if (!closingScaleRoute || !canManageRoutes) return;
+    if (!closingScaleRoute || !canManageRoutes || closeScaleInFlight.current) return;
+    closeScaleInFlight.current = true;
     setSavingCloseScale(true);
     try {
       await closeFixedRoute(closingScaleRoute.id);
@@ -708,6 +710,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
         type: 'error'
       });
     } finally {
+      closeScaleInFlight.current = false;
       setSavingCloseScale(false);
     }
   };
