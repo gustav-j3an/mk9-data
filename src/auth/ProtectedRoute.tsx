@@ -1,13 +1,34 @@
 import { FormEvent, useState } from 'react';
-import { Navigate, Outlet, useLocation } from 'react-router-dom';
+import { Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from './AuthProvider';
+import { signOutAndNavigateToLogin } from './firstAccessNavigation';
 
 function FirstAccessForm() {
-  const { configured, updatePassword } = useAuth();
+  const { configured, updatePassword, signOut } = useAuth();
+  const navigate = useNavigate();
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [message, setMessage] = useState<{ text: string; type: 'error' | 'success' } | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  async function handleReturnToLogin() {
+    setMessage(null);
+    setSubmitting(true);
+    try {
+      await signOutAndNavigateToLogin(
+        signOut,
+        () => {
+          setNewPassword('');
+          setConfirmPassword('');
+        },
+        navigate
+      );
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : 'Erro desconhecido';
+      setMessage({ text: `Não foi possível encerrar a sessão: ${detail}`, type: 'error' });
+      setSubmitting(false);
+    }
+  }
 
   async function handleSaveNewPassword(event: FormEvent) {
     event.preventDefault();
@@ -103,6 +124,15 @@ function FirstAccessForm() {
               {submitting ? 'Salvando nova senha...' : 'Salvar nova senha'}
             </button>
           </form>
+          <button
+            type="button"
+            disabled={submitting}
+            onClick={handleReturnToLogin}
+            className="mt-4 flex min-h-11 w-full items-center justify-center gap-2 rounded-lg px-3 text-sm font-semibold text-[#4B5563] transition hover:bg-[#EAE8E2] hover:text-[#171717] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-600 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <span aria-hidden="true" className="text-base">←</span>
+            Voltar para o login
+          </button>
         </div>
       </section>
     </main>

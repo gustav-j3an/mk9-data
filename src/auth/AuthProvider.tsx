@@ -553,10 +553,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return { error: result.error ? new Error(result.error.message) : null };
     },
     signOut: async () => {
+      if (supabase) {
+        const { error: signOutError } = await supabase.auth.signOut();
+        if (signOutError) throw new Error(signOutError.message);
+      }
       setSession(null);
       setProfile(null);
       setIsPasswordRecovery(false);
-      if (supabase) await supabase.auth.signOut();
     },
     refreshProfile: async () => {
       await fetchProfile(session);
