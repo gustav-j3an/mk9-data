@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { BrowserRouter, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { ScreenId, ToastMessage } from './types';
 import { AppShell } from './components/AppShell';
 import { CockpitView } from './views/CockpitView';
@@ -30,47 +30,31 @@ import { AuthProvider, useAuth } from './auth/AuthProvider';
 import { LoginPage } from './auth/LoginPage';
 import { ResetPasswordPage } from './auth/ResetPasswordPage';
 import { ProtectedRoute } from './auth/ProtectedRoute';
+import { defaultScreenForRole, roleCanOpenScreen, screenFromPath, screenPath } from './navigation';
 
 function isScreenAllowedForRole(screen: ScreenId, role: string, rhAllowed = false, faltasAtestadosAllowed = false, rhMatriculasAllowed = false): boolean {
   if (screen === 'faltas-atestados') return faltasAtestadosAllowed;
   if (screen === 'rh-matriculas') return role === 'admin' && rhMatriculasAllowed;
   if (screen === 'rh-ausencias') return rhAllowed;
-  if (screen === 'meu-perfil') {
-    return true;
-  }
-  if (role === 'promotor') {
-    return screen === 'portal-promotor';
-  }
-  if (role === 'client_industry') {
-    return screen === 'portal-industria';
-  }
-  if (role === 'operador') {
-    return screen !== 'importacao' && screen !== 'usuarios';
-  }
-  if (role === 'gestor') {
-    return screen !== 'usuarios';
-  }
-  return true;
+  return roleCanOpenScreen(screen, role);
 }
 
 function Dashboard() {
-  const { role, profile } = useAuth();
+  const { role } = useAuth();
+  const location = useLocation();
+  const navigate = useNavigate();
   const rh = useRhAccess();
   const faltasAtestados = useFaltasAtestadosAccess();
   const rhMatriculas = useRhMatriculasAccess();
   const rhAllowed = rh.mine || rh.team || rh.management;
-  const [currentScreen, setCurrentScreen] = useState<ScreenId>(
-    role === 'promotor' ? 'portal-promotor' : role === 'client_industry' ? 'portal-industria' : 'cockpit'
-  );
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
 
-  useEffect(() => {
-    if (role === 'promotor' && !['portal-promotor', 'rh-ausencias'].includes(currentScreen)) {
-      setCurrentScreen('portal-promotor');
-    } else if (role === 'client_industry' && !['portal-industria', 'rh-ausencias'].includes(currentScreen)) {
-      setCurrentScreen('portal-industria');
-    }
-  }, [role, currentScreen]);
+  const requestedScreen = screenFromPath(location.pathname);
+  const homeScreen = defaultScreenForRole(role);
+  const currentScreen = requestedScreen || homeScreen;
+  const accessCheckPending = currentScreen === 'rh-ausencias' && rh.loading
+    || currentScreen === 'faltas-atestados' && faltasAtestados.loading
+    || currentScreen === 'rh-matriculas' && rhMatriculas.loading;
 
   const addToast = (toast: Omit<ToastMessage, 'id'>) => {
     const id = `toast-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`;
@@ -103,23 +87,31 @@ function Dashboard() {
   const handleNavigate = (screen: ScreenId) => {
     if (!isScreenAllowedForRole(screen, role, rhAllowed, faltasAtestados.allowed, rhMatriculas.allowed)) {
       if (role === 'promotor') {
-        setCurrentScreen('portal-promotor');
+        navigate(screenPath('portal-promotor'), { replace: true });
       } else if (role === 'client_industry') {
-        setCurrentScreen('portal-industria');
+        navigate(screenPath('portal-industria'), { replace: true });
       }
       return;
     }
-    setCurrentScreen(screen);
+    navigate(screenPath(screen));
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const activeScreen = isScreenAllowedForRole(currentScreen, role, rhAllowed, faltasAtestados.allowed, rhMatriculas.allowed)
+  const currentScreenAllowed = isScreenAllowedForRole(currentScreen, role, rhAllowed, faltasAtestados.allowed, rhMatriculas.allowed);
+  const activeScreen = currentScreenAllowed
     ? currentScreen
-    : role === 'promotor'
-    ? 'portal-promotor'
-    : role === 'client_industry'
-    ? 'portal-industria'
-    : 'cockpit';
+    : homeScreen;
+
+  useEffect(() => {
+    if (accessCheckPending) return;
+    if (!requestedScreen || !currentScreenAllowed) {
+      navigate(screenPath(activeScreen), { replace: true });
+    }
+  }, [accessCheckPending, requestedScreen, currentScreenAllowed, activeScreen, navigate]);
+
+  if (accessCheckPending) {
+    return <div className="min-h-screen bg-[#E4E2DB] flex items-center justify-center text-[#171717] font-mono text-xs">Verificando permissões...</div>;
+  }
 
   return (
     <AppShell

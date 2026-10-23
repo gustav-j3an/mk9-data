@@ -168,6 +168,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setLoading(false);
       return;
     }
+    let active = true;
+    let authEventReceived = false;
 
     const isRecoveryInUrl =
       window.location.hash.includes('type=recovery') ||
@@ -177,21 +179,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setIsPasswordRecovery(true);
     }
 
-    supabase.auth.getSession().then(({ data, error: sessionError }) => {
+    void supabase.auth.getSession().then(async ({ data, error: sessionError }) => {
+      if (!active || authEventReceived) return;
       if (sessionError) setError(sessionError.message);
       setSession(data.session);
-      fetchProfile(data.session).finally(() => setLoading(false));
+      await fetchProfile(data.session);
+    }).catch((sessionError: unknown) => {
+      if (!active || authEventReceived) return;
+      setError(sessionError instanceof Error ? sessionError.message : 'Não foi possível restaurar a sessão.');
+      setSession(null);
+      setProfile(null);
+    }).finally(() => {
+      if (active && !authEventReceived) setLoading(false);
     });
 
     const { data } = supabase.auth.onAuthStateChange((event, nextSession) => {
+      authEventReceived = true;
       if (event === 'PASSWORD_RECOVERY') {
         setIsPasswordRecovery(true);
       }
       setSession(nextSession);
-      fetchProfile(nextSession).finally(() => setLoading(false));
+      setLoading(true);
+      void Promise.resolve().then(() => fetchProfile(nextSession)).finally(() => {
+        if (active) setLoading(false);
+      });
     });
 
-    return () => data.subscription.unsubscribe();
+    return () => { active = false; data.subscription.unsubscribe(); };
   }, [fetchProfile]);
 
   const updatePassword = useCallback(async (newPassword: string) => {

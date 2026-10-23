@@ -28,6 +28,6 @@ export function FaltasAtestadosAccessProvider({ children }: { children: React.Re
     return () => { active = false; };
   }, [token]);
 
-  const access = state?.token === token ? state.access : denied;
+  const access = state?.token === token ? state.access : token ? { loading: true, allowed: false } : denied;
   return <Context.Provider value={access}>{children}</Context.Provider>;
 }

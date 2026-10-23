@@ -1,11 +1,16 @@
 import { FormEvent, useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from './AuthProvider';
 import { AuthorSignature } from '../components/AuthorSignature';
 
 export function LoginPage() {
-  const { configured, session, signIn, isPasswordRecovery, updatePassword, resetPasswordForEmail } = useAuth();
+  const { configured, session, loading, signIn, isPasswordRecovery, updatePassword, resetPasswordForEmail } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+  const requestedPath = (location.state as { from?: unknown } | null)?.from;
+  const returnPath = typeof requestedPath === 'string' && requestedPath.startsWith('/') && !requestedPath.startsWith('//')
+    ? requestedPath
+    : '/';
   
   // Normal Login state
   const [email, setEmail] = useState('');
@@ -24,9 +29,9 @@ export function LoginPage() {
 
   useEffect(() => {
     if (session && !isPasswordRecovery) {
-      navigate('/', { replace: true });
+      navigate(returnPath, { replace: true });
     }
-  }, [session, isPasswordRecovery, navigate]);
+  }, [session, isPasswordRecovery, navigate, returnPath]);
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -89,6 +94,10 @@ export function LoginPage() {
         type: 'success'
       });
     }
+  }
+
+  if (loading) {
+    return <main className="min-h-screen bg-[#EAE8E2] flex items-center justify-center text-[#171717] font-mono text-sm" role="status">Restaurando sessão...</main>;
   }
 
   return (

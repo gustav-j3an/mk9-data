@@ -53,3 +53,21 @@ test('auth sign-out failure is checked before local session state is cleared', a
   assert.ok(signOutImplementation.indexOf('await supabase.auth.signOut()') < signOutImplementation.indexOf('setSession(null)'));
   assert.match(signOutImplementation, /if \(signOutError\) throw new Error/);
 });
+
+test('restauração da sessão controla o loading e evita substituir sessão por resposta antiga', async () => {
+  const authProvider = await source('./AuthProvider.tsx');
+  assert.match(authProvider, /let authEventReceived = false/);
+  assert.match(authProvider, /if \(!active \|\| authEventReceived\) return/);
+  assert.match(authProvider, /getSession\(\)\.then\(async/);
+  assert.match(authProvider, /finally\(\(\) => \{\s*if \(active && !authEventReceived\) setLoading\(false\)/);
+});
+
+test('acesso interno não autenticado preserva destino completo e login usa caminho local', async () => {
+  const protectedRoute = await source('./ProtectedRoute.tsx');
+  const loginPage = await source('./LoginPage.tsx');
+  assert.match(protectedRoute, /location\.pathname\}\$\{location\.search\}\$\{location\.hash/);
+  assert.match(loginPage, /requestedPath/);
+  assert.match(loginPage, /requestedPath\.startsWith\('\/'\) && !requestedPath\.startsWith\('\/\/'\)/);
+  assert.match(loginPage, /navigate\(returnPath, \{ replace: true \}\)/);
+  assert.match(loginPage, /if \(loading\)/);
+});

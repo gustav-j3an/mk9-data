@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { ScreenId, ToastMessage, Visit, RouteItem, VisitPhoto, SystemSettingsState } from '../types';
 import { supabase } from '../lib/supabase';
 import { fetchSystemSettings } from '../lib/systemSettings';
@@ -17,6 +18,7 @@ import { isWhatsAppShareableVisit } from '../utils/whatsappShare';
 import { canManageOldOpenVisits, filterOldOpenVisits, getAdministrativeResolutionLabel, getVisitDurationLabel, getVisitResolutionCounts } from '../utils/oldOpenVisitManagement';
 import { isRegularizationReasonValid, regularizeOldOpenVisit, VISIT_REGULARIZATION_BACKEND_VERIFIED, type VisitRegularizationAction } from '../lib/visitRegularizationService';
 import { filterPromoterDailySummaries, paginateVisits, sortVisitsForDisplay, type VisitPageSize } from '../utils/visitsTrackingPresentation';
+import { parseVisitsTrackingQuery, updateVisitsTrackingQuery } from './visitsTrackingQuery';
 
 interface VisitsTrackingViewProps {
   onNavigate: (screen: ScreenId) => void;
@@ -28,6 +30,8 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
   onShowToast
 }) => {
   const { profile, role } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialQuery = parseVisitsTrackingQuery(searchParams);
 
   // Escopo de Supervisor:
   // Para admin e gestor, preserva visualização global ('all').
@@ -36,7 +40,7 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
   const hasInitializedSupervisorFilterRef = useRef(false);
 
   // 1. Estados de Data Operacional
-  const [selectedDate, setSelectedDate] = useState<string>(() => getLocalDateString(new Date()));
+  const [selectedDate, setSelectedDate] = useState<string>(() => initialQuery.date || getLocalDateString(new Date()));
 
   // 2. Estados de Carregamento e Dados
   const [loading, setLoading] = useState(true);
@@ -61,16 +65,16 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
   });
 
   // 3. Filtros
-  const [filterSupervisor, setFilterSupervisor] = useState<string>('all');
-  const [filterEquipe, setFilterEquipe] = useState<string>('all');
-  const [filterPromotor, setFilterPromotor] = useState<string>('all');
-  const [filterLoja, setFilterLoja] = useState<string>('all');
-  const [filterIndustria, setFilterIndustria] = useState<string>('all');
-  const [filterStatus, setFilterStatus] = useState<string>('all'); // 'all' | 'em_andamento' | 'concluida' | 'nao_realizada' | 'pendente'
-  const [filterOcorrencia, setFilterOcorrencia] = useState<string>('all'); // 'all' | 'com_ocorrencia' | 'sem_ocorrencia'
-  const [searchQuery, setSearchQuery] = useState('');
-  const [visitPage, setVisitPage] = useState(1);
-  const [visitPageSize, setVisitPageSize] = useState<VisitPageSize>(15);
+  const [filterSupervisor, setFilterSupervisor] = useState<string>(() => initialQuery.supervisor || 'all');
+  const [filterEquipe, setFilterEquipe] = useState<string>(() => initialQuery.team || 'all');
+  const [filterPromotor, setFilterPromotor] = useState<string>(() => initialQuery.promoter || 'all');
+  const [filterLoja, setFilterLoja] = useState<string>(() => initialQuery.store || 'all');
+  const [filterIndustria, setFilterIndustria] = useState<string>(() => initialQuery.industry || 'all');
+  const [filterStatus, setFilterStatus] = useState<string>(() => initialQuery.status || 'all');
+  const [filterOcorrencia, setFilterOcorrencia] = useState<string>(() => initialQuery.occurrence || 'all');
+  const [searchQuery, setSearchQuery] = useState(() => initialQuery.search || '');
+  const [visitPage, setVisitPage] = useState(() => initialQuery.page || 1);
+  const [visitPageSize, setVisitPageSize] = useState<VisitPageSize>(() => initialQuery.pageSize || 15);
   const [summarySearch, setSummarySearch] = useState('');
   const [summaryOnlyPending, setSummaryOnlyPending] = useState(false);
 
@@ -94,6 +98,7 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
   // Controle de concorrência e identificador sequencial de requisição
   const reqSeqRef = useRef<number>(0);
   const isFetchingRef = useRef<boolean>(false);
+  const didInitializeVisitFiltersRef = useRef(false);
 
   // 5. Carga de Dados do Supabase com Paginação Segura de Rotas e Proteção de Concorrência
   const loadTrackingData = useCallback(async (isSilent = false) => {
@@ -553,12 +558,25 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
     searchQuery
   ]);
 
-  useEffect(() => setVisitPage(1), [
-    selectedDate, filterSupervisor, filterEquipe, filterPromotor, filterLoja,
-    filterIndustria, filterStatus, filterOcorrencia, searchQuery, visitPageSize
-  ]);
+  useEffect(() => {
+    if (!didInitializeVisitFiltersRef.current) {
+      didInitializeVisitFiltersRef.current = true;
+      return;
+    }
+    setVisitPage(1);
+  }, [selectedDate, filterSupervisor, filterEquipe, filterPromotor, filterLoja, filterIndustria, filterStatus, filterOcorrencia, searchQuery, visitPageSize]);
+  useEffect(() => {
+    setSearchParams(current => updateVisitsTrackingQuery(current, {
+      date: selectedDate, supervisor: filterSupervisor, team: filterEquipe, promoter: filterPromotor,
+      store: filterLoja, industry: filterIndustria, status: filterStatus, occurrence: filterOcorrencia,
+      search: searchQuery, page: visitPage, pageSize: visitPageSize
+    }), { replace: true });
+  }, [selectedDate, filterSupervisor, filterEquipe, filterPromotor, filterLoja, filterIndustria, filterStatus, filterOcorrencia, searchQuery, visitPage, visitPageSize, setSearchParams]);
   const orderedFilteredVisits = useMemo(() => sortVisitsForDisplay(filteredVisits), [filteredVisits]);
   const totalVisitPages = Math.max(1, Math.ceil(orderedFilteredVisits.length / visitPageSize));
+  useEffect(() => {
+    if (visitPage > totalVisitPages) setVisitPage(totalVisitPages);
+  }, [visitPage, totalVisitPages]);
   const visibleVisits = useMemo(() => paginateVisits(orderedFilteredVisits, visitPage, visitPageSize), [orderedFilteredVisits, visitPage, visitPageSize]);
   const toggleStatusIndicator = (status: string) => {
     if (status === 'all') setFilterOcorrencia('all');

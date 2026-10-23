@@ -4,10 +4,12 @@ import { test } from 'node:test';
 
 test('Acompanhamento pagina resultados já filtrados e volta ao início quando os filtros mudam', async () => {
   const source = await readFile(new URL('./VisitsTrackingView.tsx', import.meta.url), 'utf8');
-  assert.match(source, /useState\<VisitPageSize\>\(15\)/);
+  assert.match(source, /useState<VisitPageSize>\(\(\) => initialQuery\.pageSize \|\| 15\)/);
+  assert.match(source, /parseVisitsTrackingQuery\(searchParams\)/);
   assert.match(source, /paginateVisits\(orderedFilteredVisits, visitPage, visitPageSize\)/);
   assert.match(source, /\{visibleVisits\.map\(\(item\) =>/);
-  assert.match(source, /setVisitPage\(1\), \[/);
+  assert.match(source, /setVisitPage\(1\);/);
+  assert.match(source, /updateVisitsTrackingQuery\(current/);
   assert.match(source, /value=\{15\}/);
   assert.match(source, /value=\{25\}/);
   assert.match(source, /value=\{50\}/);
