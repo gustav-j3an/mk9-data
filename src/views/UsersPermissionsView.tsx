@@ -1464,23 +1464,23 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
 
       {/* Modal Confirmar Exclusão de Usuário */}
       {deleteModalUser && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
-          <div className="bg-[#0b0e14] border border-red-500/30 rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto p-4 bg-black/80 backdrop-blur-md">
+          <div role="dialog" aria-modal="true" aria-labelledby="delete-user-title" className="my-auto max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto bg-[#0b0e14] border border-red-500/30 rounded-2xl p-5 sm:p-6 shadow-2xl space-y-4 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-400">
             <div className="flex items-center gap-3 text-red-400">
               <span className="material-symbols-outlined text-2xl">warning</span>
-              <h3 className="text-base font-bold text-[#171717]">Excluir usuário?</h3>
+              <h3 id="delete-user-title" className="text-base font-bold text-slate-50">Excluir usuário?</h3>
             </div>
 
-            <p className="text-xs text-[#171717] leading-relaxed">
-              Essa ação excluirá permanentemente o usuário <strong className="text-[#171717]">{deleteModalUser.name}</strong> ({deleteModalUser.email}) e o acesso dele ao sistema. Essa operação não pode ser desfeita.
+            <p className="text-sm text-slate-300 leading-relaxed">
+              Essa ação excluirá permanentemente o usuário <strong className="text-slate-50">{deleteModalUser.name}</strong> (<span className="font-mono text-red-200 break-all">{deleteModalUser.email}</span>) e o acesso dele ao sistema. Essa operação não pode ser desfeita.
             </p>
 
-            <div className="pt-3 border-t border-[#CFCDC5] flex items-center justify-end gap-2 text-xs">
+            <div className="pt-3 border-t border-slate-700 flex items-center justify-end gap-2 text-xs">
               <button
                 type="button"
                 disabled={deletingUser}
                 onClick={() => setDeleteModalUser(null)}
-                className="px-4 py-2 rounded-xl bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] border border-[#CFCDC5] font-semibold"
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-600 font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
               >
                 Cancelar
               </button>
@@ -1488,7 +1488,7 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                 type="button"
                 disabled={deletingUser}
                 onClick={handleConfirmDelete}
-                className="px-5 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold disabled:opacity-50 flex items-center gap-1.5"
+                className="px-5 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold disabled:opacity-50 flex items-center gap-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-300 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0b0e14]"
               >
                 {deletingUser ? (
                   <span>Excluindo...</span>
@@ -1506,22 +1506,22 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
 
       {/* Modal Credenciais Criadas (Exibido 1x para o Administrador) */}
       {createdCredentials && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
-          <div className="bg-[#0b0e14] border border-purple-500/30 rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto p-4 bg-black/80 backdrop-blur-md">
+          <div role="dialog" aria-modal="true" aria-labelledby="created-user-title" className="my-auto max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto bg-[#0b0e14] border border-purple-500/30 rounded-2xl p-5 sm:p-6 shadow-2xl space-y-4 focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-400">
             <div className="flex items-center gap-3 text-purple-400">
               <span className="material-symbols-outlined text-2xl">check_circle</span>
-              <h3 className="text-base font-bold text-[#171717]">Usuário criado com sucesso</h3>
+              <h3 id="created-user-title" className="text-base font-bold text-slate-50">Usuário criado com sucesso</h3>
             </div>
 
             {createdCredentials.emailSent ? (
               <>
                 <div className="p-4 bg-emerald-950/20 border border-emerald-500/30 rounded-xl text-xs space-y-3">
                   <div>
-                    <span className="text-[#77766F] font-sans block mb-1">As credenciais foram enviadas para:</span>
-                    <div className="text-emerald-300 font-bold font-mono text-sm select-all">{createdCredentials.email}</div>
+                    <span className="text-slate-300 font-sans block mb-1">As credenciais foram enviadas para:</span>
+                    <div className="text-emerald-300 font-bold font-mono text-sm select-all break-all">{createdCredentials.email}</div>
                   </div>
                   <div>
-                    <span className="text-[#77766F] font-sans block mb-1">Link de acesso:</span>
+                    <span className="text-slate-300 font-sans block mb-1">Link de acesso:</span>
                     <a
                       href="https://mk9-date.vercel.app/login"
                       target="_blank"
@@ -1537,7 +1537,7 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                   <button
                     type="button"
                     onClick={() => setShowContingencyPassword((prev) => !prev)}
-                    className="text-[11px] text-[#77766F] hover:text-amber-400 flex items-center gap-1 transition-colors font-mono"
+                    className="text-[11px] text-slate-300 hover:text-amber-300 flex items-center gap-1 transition-colors font-mono focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 rounded"
                   >
                     <span className="material-symbols-outlined text-sm">
                       {showContingencyPassword ? 'expand_less' : 'key'}
@@ -1548,9 +1548,9 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                   </button>
 
                   {showContingencyPassword && createdCredentials.tempPassword && (
-                    <div className="mt-2.5 p-3 bg-[#EAE8E2] border border-amber-500/30 rounded-xl text-xs font-mono space-y-1">
-                      <span className="text-amber-400 text-[11px] font-bold block">Senha Temporária (Contingência):</span>
-                      <div className="text-amber-300 font-bold bg-amber-500/10 border border-amber-500/20 px-2.5 py-1.5 rounded select-all text-sm tracking-wider">
+                    <div className="mt-2.5 p-3 bg-slate-900 border border-amber-500/40 rounded-xl text-xs font-mono space-y-1">
+                      <span className="text-amber-300 text-[11px] font-bold block">Senha Temporária (Contingência):</span>
+                      <div className="text-amber-200 font-bold bg-amber-500/10 border border-amber-500/30 px-2.5 py-1.5 rounded select-all text-sm tracking-wider break-all">
                         {createdCredentials.tempPassword}
                       </div>
                     </div>
@@ -1564,15 +1564,15 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                     <span className="material-symbols-outlined text-lg">warning</span>
                     <span>Usuário criado, mas não foi possível enviar o e-mail.</span>
                   </div>
-                  <p className="text-[#171717] font-sans text-[11px] leading-relaxed">
+                  <p className="text-slate-200 font-sans text-xs leading-relaxed">
                     Repasse a senha temporária manualmente para o usuário poder realizar o primeiro acesso.
                   </p>
                   <div>
-                    <span className="text-[#77766F] font-sans block mb-1">Login / E-mail:</span>
-                    <div className="text-white font-bold font-mono">{createdCredentials.email}</div>
+                    <span className="text-slate-300 font-sans block mb-1">Login / E-mail:</span>
+                    <div className="text-emerald-300 font-bold font-mono break-all">{createdCredentials.email}</div>
                   </div>
                   <div>
-                    <span className="text-[#77766F] font-sans block mb-1">Link de acesso:</span>
+                    <span className="text-slate-300 font-sans block mb-1">Link de acesso:</span>
                     <a
                       href="https://mk9-date.vercel.app/login"
                       target="_blank"
@@ -1585,7 +1585,7 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
                   {createdCredentials.tempPassword && (
                     <div>
                       <span className="text-amber-300 font-bold font-sans block mb-1">Senha temporária:</span>
-                      <div className="text-amber-400 font-bold bg-amber-500/15 border border-amber-500/40 px-3 py-2 rounded-lg select-all font-mono text-sm tracking-wider">
+                      <div className="text-amber-200 font-bold bg-amber-500/15 border border-amber-500/40 px-3 py-2 rounded-lg select-all font-mono text-sm tracking-wider break-all">
                         {createdCredentials.tempPassword}
                       </div>
                     </div>
@@ -1598,7 +1598,7 @@ export const UsersPermissionsView: React.FC<UsersPermissionsViewProps> = ({ onSh
               <button
                 type="button"
                 onClick={() => setCreatedCredentials(null)}
-                className="px-5 py-2 rounded-xl bg-[#222222] hover:bg-black text-white font-bold text-xs shadow-md"
+                className="px-5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white border border-slate-600 font-bold text-xs shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-300"
               >
                 Concluído
               </button>

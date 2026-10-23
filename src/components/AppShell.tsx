@@ -1023,11 +1023,11 @@ export const AppShell: React.FC<AppShellProps> = ({
       </main>
 
       {/* GLOBAL TOAST CONTAINER */}
-      <div className="fixed bottom-5 right-5 z-50 flex flex-col gap-2 pointer-events-none">
+      <div className="fixed bottom-5 right-5 z-50 flex flex-col gap-2 pointer-events-none max-w-[calc(100vw-2.5rem)]">
         {toasts.map((toast) => (
           <div
             key={toast.id}
-            className="pointer-events-auto bg-[#F7F6F2] border border-[#CFCDC5] px-4 py-3 rounded-xl shadow-xl flex items-center gap-3 transition-all duration-300 min-w-[300px] max-w-md"
+            className="pointer-events-auto bg-[#F7F6F2] border border-[#CFCDC5] px-4 py-3 rounded-xl shadow-xl flex items-center gap-3 transition-all duration-300 w-full min-w-0 max-w-md"
           >
             <div className="w-8 h-8 rounded-full bg-[#E8F5EE] text-[#16845B] border border-[#B9E5D0] flex items-center justify-center shrink-0">
               <span className="material-symbols-outlined text-[18px]">done</span>
@@ -1038,7 +1038,8 @@ export const AppShell: React.FC<AppShellProps> = ({
             </div>
             <button
               onClick={() => onDismissToast(toast.id)}
-              className="text-[#737373] hover:text-[#171717] p-1 rounded cursor-pointer"
+              aria-label="Fechar notificação"
+              className="text-[#5F5F5F] hover:text-[#171717] p-1 rounded cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-600"
             >
               <span className="material-symbols-outlined text-[16px]">close</span>
             </button>
