@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { calculateOperationalVisits } from './routePlanner';
 import type { RouteItem, Visit } from '../types';
-import { getCurrentWeekBounds, getDaysLate, getOperationalDateRange, selectPastVisitsFromAgenda } from './promoterPendingVisits';
+import { getCurrentWeekBounds, getDaysLate, getOperationalDateRange, getPromoterHistoryVisitDateRange, selectPastVisitsFromAgenda } from './promoterPendingVisits';
 
 const today = '2026-10-22';
 const route: RouteItem = {
@@ -22,6 +22,14 @@ test('a segunda-feira seguinte exclui ocorrências da semana anterior da janela 
   assert.deepEqual(getCurrentWeekBounds('2026-10-26'), { start: '2026-10-26', end: '2026-11-01' });
 });
 
+test('consulta de semana anterior inclui execucoes atuais para reconciliar a data programada original', () => {
+  assert.deepEqual(getPromoterHistoryVisitDateRange('2026-10-23', '2026-10-18'), {
+    start: '2026-07-25', end: '2026-10-25'
+  });
+  assert.deepEqual(getPromoterHistoryVisitDateRange('2026-10-23', '2026-11-08'), {
+    start: '2026-07-25', end: '2026-11-08'
+  });
+});
 test('a janela histórica contém 90 dias completos e inclui hoje sem desvio UTC', () => {
   const range = getOperationalDateRange(today);
   assert.equal(range.length, 91);

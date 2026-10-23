@@ -40,11 +40,25 @@ test('appointment filters retain only the selected status and preserve all on re
   assert.deepEqual(filterPromoterAppointments(appointments, 'all'), appointments);
 });
 
-test('weekly metric counts include only pendente, concluida and nao_realizada records', () => {
+test('weekly metrics separate scheduled, active, completed and missed visits; today pending is not missed', () => {
   assert.deepEqual(getWeeklyPromoterMetricCounts([
     { status: 'planejada' }, { status: 'em_andamento' }, { status: 'pendente' },
     { status: 'concluida' }, { status: 'concluida' }, { status: 'nao_realizada' }
-  ]), { pending: 1, completed: 2, notDone: 1 });
+  ]), { scheduled: 1, completed: 2, inProgress: 1, notDone: 1 });
+});
+
+test('late overdue pending records count as missed and an unperformed filter includes administrative closures', () => {
+  const visits = [
+    { status: 'pendente', isPastOverdue: true },
+    { status: 'planejada', visitObj: { regularization_status: 'closed_without_execution_proof' } }
+  ];
+  assert.equal(getWeeklyPromoterMetricCounts(visits).notDone, 2);
+  assert.deepEqual(filterPromoterAppointments(visits, 'nao_realizada'), visits);
+});
+
+test('completed weekly filter includes administrative completions with evidence', () => {
+  const adminCompleted = { status: 'em_andamento', visitObj: { regularization_status: 'administratively_completed_with_proof' } };
+  assert.deepEqual(filterPromoterAppointments([adminCompleted], 'concluida'), [adminCompleted]);
 });
 
 test('metrics show unavailable while loading or after a load error', () => {
@@ -79,7 +93,7 @@ test('administrative resolutions stay separate from active and completed operati
 });
 
 test('future planned visits stay scheduled and are not counted as not done', () => {
-  assert.deepEqual(getWeeklyPromoterMetricCounts([{ status: 'planejada' }]), { pending: 0, completed: 0, notDone: 0 });
+  assert.deepEqual(getWeeklyPromoterMetricCounts([{ status: 'planejada' }]), { scheduled: 1, completed: 0, inProgress: 0, notDone: 0 });
 });
 
 test('scheduled appointments group by date in chronological order without merging stores or industries', () => {

@@ -10,7 +10,7 @@ import {
   DayOfWeekDate,
   OperationalVisitItem
 } from '../utils/routePlanner';
-import { getCurrentWeekBounds, getDaysLate, getOperationalDateRange, selectPastVisitsFromAgenda } from '../utils/promoterPendingVisits';
+import { getCurrentWeekBounds, getDaysLate, getOperationalDateRange, getPromoterHistoryVisitDateRange, selectPastVisitsFromAgenda } from '../utils/promoterPendingVisits';
 import { fetchWithOptionalWhatsAppGroupLink } from '../utils/promoterPortalQueryCompatibility';
 
 async function fetchAllQueryPages<T>(queryPage: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: unknown }>, pageSize = 500): Promise<{ data: T[]; error: unknown | null }> {
@@ -52,7 +52,7 @@ import {
 } from '../lib/routesService';
 import { isWhatsAppShareableVisit } from '../utils/whatsappShare';
 import { loadRoutesWithClosureFallback } from '../utils/routeClosureCompatibility';
-import { filterPromoterAppointments, getMetricDisplayValue, getRegularizationCounts, getRegularizationPresentation, isUnresolvedVisitInProgress, PROMOTER_APPOINTMENT_TABS, type PromoterAppointmentsTab } from '../utils/promoterPortalPresentation';
+import { filterPromoterAppointments, getMetricDisplayValue, getRegularizationCounts, getRegularizationPresentation, getWeeklyPromoterMetricCounts, isUnresolvedVisitInProgress, PROMOTER_APPOINTMENT_TABS, type PromoterAppointmentsTab } from '../utils/promoterPortalPresentation';
 import { getScheduledVisitAction, isScheduledVisitActionRpcReady, type ScheduledVisitAction } from '../utils/scheduledVisitActions';
 import { canReviewOldOpenVisits, createRequestGate, findOwnOpenVisit, formatOpenVisitConflictMessage, getOldOpenVisitCheckInBlockMessage, getOldOpenVisitsLabel, getPromoterOpenVisitAction, isAnotherVisitInProgressError, isOpenVisitFromToday } from '../utils/visitCheckInConflict';
 
@@ -287,7 +287,9 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
 
       const weekDays = getWeekDaysRange(new Date(), weekOffset);
       const weekEndStr = weekDays[6].dateStr;
-      const historyStartStr = getOperationalDateRange(todayStr)[0].dateStr;
+      const historyRange = getPromoterHistoryVisitDateRange(todayStr, weekEndStr);
+      const historyStartStr = historyRange.start;
+      const historyEndStr = historyRange.end;
 
       const logSchemaFallback = (query: string, column: string, error: unknown) => {
         if (!import.meta.env.DEV) return;
@@ -310,7 +312,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
           column,
           filters: query === 'system_settings' ? [] : { promotor_matricula: promotorMatricula },
           date_filters: query.startsWith('visits')
-            ? { data_visita_gte: historyStartStr, data_visita_lte: weekEndStr }
+            ? { data_visita_gte: historyStartStr, data_visita_lte: historyEndStr }
             : query === 'rotas'
               ? { encerrada_em_gte: historyStartStr }
               : undefined,
@@ -360,7 +362,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
           photos:visit_photos(*),
           occurrences:visit_occurrences(*),
           validity_items:visit_product_validity(*)
-        `).gte('data_visita', historyStartStr).lte('data_visita', weekEndStr).eq('promotor_matricula', promotorMatricula).order('data_visita', { ascending: true });
+        `).gte('data_visita', historyStartStr).lte('data_visita', historyEndStr).eq('promotor_matricula', promotorMatricula).order('data_visita', { ascending: true });
         visitsQuery = () => fetchWithOptionalWhatsAppGroupLink(
           () => fetchAllQueryPages<Visit>((from, to) => visitsBaseQuery(true).range(from, to)),
           () => fetchAllQueryPages<Visit>((from, to) => visitsBaseQuery(false).range(from, to)),
@@ -855,7 +857,9 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
       daysRange: weekDaysRange,
       todayStr,
       operationMode,
-      officialStartDate
+      officialStartDate,
+      classifyPastScheduledAsNotDone: true,
+      deduplicateScheduledOccurrences: true
     });
   }, [operationalRoutes, weekVisits, weekDaysRange, todayStr, operationMode, officialStartDate]);
   // Project the entire selected week's schedule, including occurrences with no visits row.
@@ -867,7 +871,9 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
     daysRange: currentWeekDaysRange,
     todayStr,
     operationMode,
-    officialStartDate
+    officialStartDate,
+    classifyPastScheduledAsNotDone: true,
+    deduplicateScheduledOccurrences: true
   }), [operationalRoutes, weekVisits, currentWeekDaysRange, todayStr, operationMode, officialStartDate]);
 
   // Agenda das visitas de HOJE com ordenação amigável:
@@ -913,14 +919,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
   const realUf = promoterDetails?.uf || profile?.promotor_uf;
   // Meta de execução diária baseada nas visitas previstas para hoje.
   const totalPlanned = todayOperationalVisits.filter(v => v.status !== 'nao_realizada' && !v.visitObj?.regularization_status).length;
-  const weeklyMetrics = useMemo(() => weekOperationalVisits.reduce((counts, item) => {
-    counts.scheduled += 1;
-    const regularization = item.visitObj?.regularization_status;
-    if (item.status === 'concluida' || regularization === 'administratively_completed_with_proof') counts.completed += 1;
-    if (item.status === 'em_andamento' && !regularization) counts.inProgress += 1;
-    if (item.status === 'pendente' || item.status === 'nao_realizada' || regularization === 'closed_without_execution_proof') counts.notDone += 1;
-    return counts;
-  }, { scheduled: 0, completed: 0, inProgress: 0, notDone: 0 }), [weekOperationalVisits]);
+  const weeklyMetrics = useMemo(() => getWeeklyPromoterMetricCounts(weekOperationalVisits), [weekOperationalVisits]);
   const todayCompletedCount = todayOperationalVisits.filter((v) => v.status === 'concluida').length;
   const executionPerc = totalPlanned > 0 ? Math.round((todayCompletedCount / totalPlanned) * 100) : 0;
   const metricText = (value: number) => getMetricDisplayValue(value, loading, Boolean(loadError));
@@ -3031,17 +3030,23 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
         </div>
 
         <p className="text-xs font-semibold text-[#5F5F5F]">Semana de {weekDaysRange[0]?.dateStr.split('-').reverse().join('/')} a {weekDaysRange[6]?.dateStr.split('-').reverse().join('/')}</p>
-        <div aria-label="Indicadores semanais" className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+        <div aria-label="Indicadores semanais" className="grid grid-cols-2 gap-2 sm:grid-cols-2 lg:grid-cols-4">
           {[
-            ['Programadas', weeklyMetrics.scheduled, 'text-[#171717]'],
-            ['Concluídas', weeklyMetrics.completed, 'text-emerald-700'],
-            ['Em andamento', weeklyMetrics.inProgress, 'text-amber-800'],
-            ['Não realizadas', weeklyMetrics.notDone, 'text-rose-700']
-          ].map(([label, value, color]) => (
-            <div key={label} className="rounded-xl border border-[#CFCDC5] bg-white px-3 py-2">
-              <p className="text-[10px] font-bold uppercase tracking-wide text-[#5F5F5F]">{label}</p>
-              <p className={`text-lg font-extrabold ${color}`}>{metricText(value as number)}</p>
-            </div>
+            { label: 'Programadas', value: weeklyMetrics.scheduled, color: 'text-[#171717]', filter: 'planejada' as const },
+            { label: 'Concluídas', value: weeklyMetrics.completed, color: 'text-emerald-700', filter: 'concluida' as const },
+            { label: 'Em andamento', value: weeklyMetrics.inProgress, color: 'text-amber-800', filter: 'em_andamento' as const },
+            { label: 'Não realizadas', value: weeklyMetrics.notDone, color: 'text-rose-700', filter: 'nao_realizada' as const }
+          ].map(({ label, value, color, filter }) => (
+            <button key={label} type="button" aria-pressed={statusFilter === filter}
+              onClick={() => {
+                setStatusFilter(statusFilter === filter ? 'all' : filter);
+                setWeekHistoryFilterMode('all');
+                setIsWeekHistoryOpen(true);
+              }}
+              className={`rounded-xl border px-3 py-2 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600 ${statusFilter === filter ? 'border-[#286FF5] bg-blue-50 ring-1 ring-[#286FF5]' : 'border-[#CFCDC5] bg-white hover:border-[#286FF5]'}`}>
+              <span className="block text-[10px] font-bold uppercase tracking-wide text-[#5F5F5F]">{label}</span>
+              <span className={`block text-lg font-extrabold ${color}`}>{metricText(value)}</span>
+            </button>
           ))}
         </div>
 
@@ -3218,6 +3223,15 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                   const isTodayItem = item.dataStr === getLocalDateString(new Date());
                   const actionDecision = getScheduledVisitAction({ item, today: todayStr, weekStart: currentWeekStartStr, weekEnd: currentWeekEndStr, authorized: !isImplantacaoMode || isAuthorized, hasActiveVisit: Boolean(activeVisit) });
                   const regularizationLabel = getRegularizationPresentation(item.visitObj?.regularization_status);
+                  const actualVisitDate = item.visitObj?.data_visita || null;
+                  const isCompletedLate = item.status === 'concluida' && Boolean(actualVisitDate && actualVisitDate > item.dataStr);
+                  const scheduleTimingLabel = actualVisitDate && actualVisitDate !== item.dataStr
+                    ? actualVisitDate < item.dataStr
+                      ? 'Executada antecipadamente'
+                      : item.status === 'concluida'
+                        ? 'Concluída com atraso'
+                        : item.status === 'em_andamento' ? 'Iniciada com atraso' : null
+                    : null;
                   const routeObj = routes.find((r) => r.id === item.routeId) || {
                     id: item.routeId,
                     promotor_matricula: item.promotorMatricula,
@@ -3268,7 +3282,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                                 : 'bg-slate-100 text-slate-800 border border-slate-300'
                             }`}
                           >
-                            {regularizationLabel || (item.status === 'concluida' && '🟢 Concluída')}
+                            {regularizationLabel || (item.status === 'concluida' && (isCompletedLate ? '🟢 Concluída com atraso' : '🟢 Concluída'))}
                         {!regularizationLabel && item.status === 'em_andamento' && '🔵 Em andamento'}
                             {item.status === 'pendente' && (item.isPastOverdue ? '🔴 Pendente (Atrasada)' : '🔴 Pendente')}
                             {item.status === 'nao_realizada' && '🟠 Não realizada'}
@@ -3283,9 +3297,9 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                         <p className="text-[11px] text-[#77766F]">
                           Cidade/UF: {item.lojaCidade || '—'}/{item.lojaUf || '-'}
                         </p>
-                        {item.visitObj?.scheduled_date && item.visitObj.scheduled_date !== item.visitObj.data_visita && (
-                          <p className="text-[11px] font-bold text-emerald-700">
-                            Executada antecipadamente em {item.visitObj.data_visita.split('-').reverse().join('/')}
+                        {scheduleTimingLabel && actualVisitDate && (
+                          <p className={`text-[11px] font-bold ${actualVisitDate > item.dataStr ? 'text-amber-800' : 'text-emerald-700'}`}>
+                            {scheduleTimingLabel} em {actualVisitDate.split('-').reverse().join('/')}
                           </p>
                         )}
                         <div className="flex flex-wrap items-center gap-3 text-[10px] text-[#5F5F5F]">

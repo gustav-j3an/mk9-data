@@ -35,6 +35,14 @@ export function getCurrentWeekBounds(todayStr: string): { start: string; end: st
   return { start: toDateStr(monday), end: toDateStr(sunday) };
 }
 
+export function getPromoterHistoryVisitDateRange(todayStr: string, selectedWeekEnd: string): { start: string; end: string } {
+  const currentWeekEnd = getCurrentWeekBounds(todayStr).end;
+  return {
+    start: getOperationalDateRange(todayStr)[0].dateStr,
+    end: selectedWeekEnd > currentWeekEnd ? selectedWeekEnd : currentWeekEnd
+  };
+}
+
 export function getDaysLate(dateStr: string, todayStr: string): number {
   const parse = (value: string) => {
     const [year, month, day] = value.split('-').map(Number);

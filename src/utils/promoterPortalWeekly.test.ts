@@ -110,7 +110,81 @@ describe('Portal do Promotor - Visualizacao Semanal e Escala Fixa', () => {
     assert.strictEqual(futureVisit?.status, 'planejada');
   });
 
-  it('5. Preservacao de atendimentos concluidos ao alterar a escala futura', () => {
+  it('5. Datas vencidas sem execucao viram nao realizadas, enquanto hoje permanece programada', () => {
+    const visits = calculateOperationalVisits({
+      routes: [mockRouteSegQua], visits: [], daysRange: weekDays, todayStr: '2026-10-14',
+      classifyPastScheduledAsNotDone: true, deduplicateScheduledOccurrences: true
+    });
+    const monday = visits.find((visit) => visit.dataStr === '2026-10-12');
+    const wednesday = visits.find((visit) => visit.dataStr === '2026-10-14');
+    assert.equal(monday?.status, 'nao_realizada');
+    assert.equal(monday?.isPastOverdue, true);
+    assert.equal(wednesday?.status, 'planejada');
+  });
+
+  it('6. Uma visita vinculada a outra data cumpre a programacao original e conserva a data real', () => {
+    const route = { ...mockRouteSegQua, quarta: false };
+    const delayedVisit: Visit = {
+      id: 'visit-recovered-later', rota_id: route.id,
+      promotor_matricula: 'PROM01', loja_codigo: 'LJ01', industria_codigo: 'IND01',
+      scheduled_date: '2026-10-12', data_visita: '2026-10-16', status: 'concluida',
+      started_at: '2026-10-16T09:00:00Z', completed_at: '2026-10-16T10:00:00Z'
+    };
+    const visits = calculateOperationalVisits({
+      routes: [route], visits: [delayedVisit], daysRange: weekDays, todayStr: '2026-10-16',
+      classifyPastScheduledAsNotDone: true, deduplicateScheduledOccurrences: true
+    });
+    const originalOccurrence = visits.find((visit) => visit.dataStr === '2026-10-12');
+    assert.equal(originalOccurrence?.status, 'concluida');
+    assert.equal(originalOccurrence?.visitObj?.scheduled_date, '2026-10-12');
+    assert.equal(originalOccurrence?.visitObj?.data_visita, '2026-10-16');
+    assert.equal(visits.some((visit) => visit.dataStr === '2026-10-16' && visit.visitObj?.id === delayedVisit.id), false);
+  });
+
+  it('7. Atendimento iniciado em outro dia continua em andamento na data originalmente programada', () => {
+    const route = { ...mockRouteSegQua, quarta: false };
+    const activeVisit: Visit = {
+      id: 'visit-active-later', rota_id: route.id,
+      promotor_matricula: 'PROM01', loja_codigo: 'LJ01', industria_codigo: 'IND01',
+      scheduled_date: '2026-10-12', data_visita: '2026-10-16', status: 'em_andamento',
+      started_at: '2026-10-16T09:00:00Z'
+    };
+    const visits = calculateOperationalVisits({
+      routes: [route], visits: [activeVisit], daysRange: weekDays, todayStr: '2026-10-16',
+      classifyPastScheduledAsNotDone: true, deduplicateScheduledOccurrences: true
+    });
+    const originalOccurrence = visits.find((visit) => visit.dataStr === '2026-10-12');
+    assert.equal(originalOccurrence?.status, 'em_andamento');
+    assert.equal(originalOccurrence?.visitObj?.data_visita, '2026-10-16');
+  });
+
+  it('8. Uma visita sem data original cumpre o unico horario semanal da mesma rota em outro dia', () => {
+    const route = { ...mockRouteSegQua, id: 'route-1', quarta: false };
+    const actualVisit: Visit = {
+      id: 'visit-actual-friday', rota_id: route.id,
+      promotor_matricula: 'PROM01', loja_codigo: 'LJ01', industria_codigo: 'IND01',
+      data_visita: '2026-10-16', status: 'concluida'
+    };
+    const visits = calculateOperationalVisits({
+      routes: [route], visits: [actualVisit], daysRange: weekDays, todayStr: '2026-10-16',
+      classifyPastScheduledAsNotDone: true, deduplicateScheduledOccurrences: true
+    });
+    const originalOccurrence = visits.find((visit) => visit.dataStr === '2026-10-12');
+    assert.equal(originalOccurrence?.status, 'concluida');
+    assert.equal(originalOccurrence?.visitObj?.data_visita, '2026-10-16');
+    assert.equal(visits.filter((visit) => visit.visitObj?.id === actualVisit.id).length, 1);
+  });
+
+  it('9. Rotas duplicadas nao duplicam a mesma ocorrencia semanal', () => {
+    const duplicateRoute = { ...mockRouteSegQua, id: 'route-duplicate' };
+    const visits = calculateOperationalVisits({
+      routes: [mockRouteSegQua, duplicateRoute], visits: [], daysRange: weekDays, todayStr: '2026-10-14',
+      classifyPastScheduledAsNotDone: true, deduplicateScheduledOccurrences: true
+    });
+    assert.equal(visits.filter((visit) => visit.dataStr === '2026-10-12' && visit.lojaCodigo === 'LJ01').length, 1);
+  });
+
+  it('10. Preservacao de atendimentos concluidos ao alterar a escala futura', () => {
     const wednesday = weekDays.find((d) => d.dayKey === 'quarta')!;
 
     const completedVisit: Visit = {
@@ -147,7 +221,7 @@ describe('Portal do Promotor - Visualizacao Semanal e Escala Fixa', () => {
     assert.strictEqual(visitOnWednesday?.completedAt, `${wednesday.dateStr}T10:00:00Z`);
   });
 
-  it('6. Escala encerrada preserva dias validos anteriores e nao projeta datas posteriores', () => {
+  it('11. Escala encerrada preserva dias validos anteriores e nao projeta datas posteriores', () => {
     const wednesday = weekDays.find((d) => d.dayKey === 'quarta')!;
     const completedVisit: Visit = {
       id: 'visit-closed-route',
@@ -186,7 +260,7 @@ describe('Portal do Promotor - Visualizacao Semanal e Escala Fixa', () => {
     assert.strictEqual(preservedVisit?.visitObj?.photos?.[0]?.id, 'photo-preserved');
   });
 
-  it('7. Escala Fixa da Semana: agrupa lojas por dia de segunda a domingo', () => {
+  it('12. Escala Fixa da Semana: agrupa lojas por dia de segunda a domingo', () => {
     const routesList = [mockRouteSegQua, mockRouteTerSex];
 
     const segLojas = routesList.filter((r) => r.segunda).length;

@@ -13,7 +13,7 @@ test('programação virtual semanal sem linha em visits pode ser antecipada', ()
 });
 
 test('recuperação aceita programação não realizada somente dentro da semana atual', () => {
-  const item = { ...base, dataStr: '2026-10-21', status: 'pendente' } as typeof base;
+  const item = { ...base, dataStr: '2026-10-21', status: 'nao_realizada' } as typeof base;
   assert.equal(getScheduledVisitAction({ item, ...common }).action, 'recover');
   assert.equal(getScheduledVisitAction({ item: { ...item, dataStr: '2026-10-18' }, ...common }).allowed, false);
 });

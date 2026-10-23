@@ -16,12 +16,17 @@ export function getAppointmentsTabForMetric(status: PromoterMetricStatus): Promo
   return 'today';
 }
 
-export function filterPromoterAppointments<T extends { status: string; regularization_status?: string | null; visitObj?: { regularization_status?: string | null } | null }>(
+export function filterPromoterAppointments<T extends { status: string; isPastOverdue?: boolean; regularization_status?: string | null; visitObj?: { regularization_status?: string | null } | null }>(
   appointments: T[],
   status: 'all' | PromoterMetricStatus
 ): T[] {
-  return status === 'all' ? appointments : appointments.filter(appointment => appointment.status === status
-    && !(status === 'em_andamento' && (appointment.regularization_status || appointment.visitObj?.regularization_status)));
+  return status === 'all' ? appointments : appointments.filter(appointment => {
+    const regularization = appointment.regularization_status || appointment.visitObj?.regularization_status;
+    if (status === 'nao_realizada' && (regularization === 'closed_without_execution_proof'
+      || (appointment.status === 'pendente' && appointment.isPastOverdue))) return true;
+    if (status === 'concluida' && regularization === 'administratively_completed_with_proof') return true;
+    return appointment.status === status && !(status === 'em_andamento' && regularization);
+  });
 }
 
 export function isUnresolvedVisitInProgress(visit: { status: string; regularization_status?: string | null }): boolean {
@@ -43,13 +48,21 @@ export function getRegularizationCounts(visits: Array<{ status: string; regulari
   }, { inProgress: 0, administrativelyCompleted: 0, closedWithoutProof: 0 });
 }
 
-export function getWeeklyPromoterMetricCounts(appointments: Array<{ status: string }>) {
+export function getWeeklyPromoterMetricCounts(appointments: Array<{
+  status: string;
+  isPastOverdue?: boolean;
+  regularization_status?: string | null;
+  visitObj?: { regularization_status?: string | null } | null;
+}>) {
   return appointments.reduce((counts, appointment) => {
-    if (appointment.status === 'pendente') counts.pending += 1;
-    if (appointment.status === 'concluida') counts.completed += 1;
-    if (appointment.status === 'nao_realizada') counts.notDone += 1;
+    const regularization = appointment.regularization_status || appointment.visitObj?.regularization_status;
+    if (appointment.status === 'planejada') counts.scheduled += 1;
+    if (appointment.status === 'concluida' || regularization === 'administratively_completed_with_proof') counts.completed += 1;
+    if (appointment.status === 'em_andamento' && !regularization) counts.inProgress += 1;
+    if (appointment.status === 'nao_realizada' || (appointment.status === 'pendente' && appointment.isPastOverdue)
+      || regularization === 'closed_without_execution_proof') counts.notDone += 1;
     return counts;
-  }, { pending: 0, completed: 0, notDone: 0 });
+  }, { scheduled: 0, completed: 0, inProgress: 0, notDone: 0 });
 }
 
 export function getMetricDisplayValue(value: number, loading: boolean, hasError: boolean): number | '—' {

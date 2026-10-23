@@ -239,6 +239,10 @@ export interface CalculateOperationalVisitsParams {
   todayStr?: string;
   operationMode?: OperationMode | 'DESCONHECIDO';
   officialStartDate?: string | null;
+  /** Portal-only override for elapsed schedule occurrences that remain unfulfilled. */
+  classifyPastScheduledAsNotDone?: boolean;
+  /** Avoid duplicate route rows counting one promoter/store/industry/date occurrence twice. */
+  deduplicateScheduledOccurrences?: boolean;
 }
 
 /**
@@ -259,7 +263,9 @@ export const calculateOperationalVisits = ({
   daysRange,
   todayStr = getLocalDateString(new Date()),
   operationMode = 'IMPLANTACAO',
-  officialStartDate = null
+  officialStartDate = null,
+  classifyPastScheduledAsNotDone = false,
+  deduplicateScheduledOccurrences = false
 }: CalculateOperationalVisitsParams): OperationalVisitItem[] => {
   // 1. Determinar o modo operacional efetivo com tratamento de segurança
   // Se o modo for desconhecido, inválido ou diferente de OPERACAO_OFICIAL, adota IMPLANTACAO
@@ -339,6 +345,42 @@ export const calculateOperationalVisits = ({
 
   const plannedItems: OperationalVisitItem[] = [];
   const matchedVisitKeys = new Set<string>();
+  const matchedVisitIds = new Set<string>();
+  const scheduledOccurrenceKeys = new Set<string>();
+  const routeWeekScheduleDates = new Map<string, Set<string>>();
+  const routeIdsByRouteWeek = new Map<string, Set<string>>();
+
+  const getWeekStartKey = (dateStr: string): string => {
+    const date = new Date(`${dateStr}T00:00:00Z`);
+    date.setUTCDate(date.getUTCDate() - ((date.getUTCDay() + 6) % 7));
+    return date.toISOString().slice(0, 10);
+  };
+
+  // Count distinct route occurrences so an actual visit on another day can only
+  // fulfill a schedule when that route has exactly one occurrence in that week.
+  routes.forEach((route) => {
+    const routeClosedDate = route.encerrada_em ? String(route.encerrada_em).slice(0, 10) : null;
+    const routeKey = `${route.promotor_matricula}|${route.loja_codigo}|${route.industria_codigo}`;
+    const isQuinzenal = (route.frequencia || '').toUpperCase() === 'QUINZENAL';
+    daysRange.forEach((dayInfo) => {
+      if (routeClosedDate && dayInfo.dateStr > routeClosedDate) return;
+      let isScheduled = Boolean(route[dayInfo.dayKey as keyof RouteItem]);
+      if (isScheduled && isQuinzenal) {
+        const [year, month] = dayInfo.dateStr.split('-').map(Number);
+        isScheduled = getScheduledQuinzenalDates(route, year, month).has(dayInfo.dateStr);
+      }
+      if (!isScheduled) return;
+      const weekKey = `${routeKey}|${getWeekStartKey(dayInfo.dateStr)}`;
+      const dates = routeWeekScheduleDates.get(weekKey) || new Set<string>();
+      dates.add(dayInfo.dateStr);
+      routeWeekScheduleDates.set(weekKey, dates);
+      if (route.id) {
+        const routeIds = routeIdsByRouteWeek.get(weekKey) || new Set<string>();
+        routeIds.add(route.id);
+        routeIdsByRouteWeek.set(weekKey, routeIds);
+      }
+    });
+  });
 
   // 3. Processar cada rota ativa para os dias solicitados
   routes.forEach((r) => {
@@ -362,7 +404,22 @@ export const calculateOperationalVisits = ({
 
       if (isDayActive) {
         const key = `${r.promotor_matricula}|${r.loja_codigo}|${r.industria_codigo}|${dayInfo.dateStr}`;
-        const v = visitsMap.get(key);
+        if (deduplicateScheduledOccurrences && scheduledOccurrenceKeys.has(key)) return;
+        scheduledOccurrenceKeys.add(key);
+        let v = visitsMap.get(key);
+        const routeKey = `${r.promotor_matricula}|${r.loja_codigo}|${r.industria_codigo}`;
+        const routeWeekKey = `${routeKey}|${getWeekStartKey(dayInfo.dateStr)}`;
+        const weekScheduleDates = routeWeekScheduleDates.get(routeWeekKey);
+        if (!v && weekScheduleDates?.size === 1 && r.id) {
+          const weekStart = getWeekStartKey(dayInfo.dateStr);
+          const scheduledRouteIds = routeIdsByRouteWeek.get(routeWeekKey) || new Set([r.id]);
+          const candidates = (visitsByRouteKey.get(routeKey) || []).filter((visit) => {
+            if (visit.scheduled_date || !visit.rota_id || !scheduledRouteIds.has(visit.rota_id) || matchedVisitIds.has(visit.id)) return false;
+            if (visit.status !== 'concluida' && visit.status !== 'em_andamento') return false;
+            return getWeekStartKey(visit.data_visita) === weekStart;
+          });
+          if (candidates.length === 1) v = candidates[0];
+        }
 
         const promotorObj = r.promotor || promotoresList.find((p) => p.matricula === r.promotor_matricula);
         const industriaObj = r.industria || industriasList.find((ind) => ind.codigo === r.industria_codigo);
@@ -378,6 +435,7 @@ export const calculateOperationalVisits = ({
 
         if (v) {
           matchedVisitKeys.add(key);
+          matchedVisitIds.add(v.id);
           isRealExecution = true;
           startedAt = v.started_at || null;
           completedAt = v.completed_at || null;
@@ -474,6 +532,21 @@ export const calculateOperationalVisits = ({
           }
         }
 
+        const beforeOfficialStart = isOfficialLive && dayInfo.dateStr < cleanOfficialStartDate!;
+        const hasTerminalOrActiveAttendance = status === 'concluida' || status === 'em_andamento'
+          || Boolean(v?.regularization_status);
+        if (classifyPastScheduledAsNotDone && !beforeOfficialStart && !hasTerminalOrActiveAttendance) {
+          if (dayInfo.dateStr < todayStr) {
+            status = 'nao_realizada';
+            isPastOverdue = true;
+            priorityOrder = 2;
+          } else if (dayInfo.dateStr === todayStr && (!v || v.status === 'pendente')) {
+            status = 'planejada';
+            isPastOverdue = false;
+            priorityOrder = 5;
+          }
+        }
+
         plannedItems.push({
           key,
           routeId: r.id,
@@ -505,6 +578,7 @@ export const calculateOperationalVisits = ({
   // 4. Preservar visitas reais avulsas ou fora da grade que estejam no daysRange
   // Garante que NENHUMA visita real é perdida e NENHUMA visita é contada em dobro
   visits.forEach((v) => {
+    if (matchedVisitIds.has(v.id)) return;
     const scheduledDate = v.scheduled_date || v.data_visita;
     const dayInfo = daysRange.find((d) => d.dateStr === scheduledDate);
     if (!dayInfo) return;
