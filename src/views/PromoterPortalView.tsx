@@ -52,7 +52,8 @@ import {
 } from '../lib/routesService';
 import { isWhatsAppShareableVisit } from '../utils/whatsappShare';
 import { loadRoutesWithClosureFallback } from '../utils/routeClosureCompatibility';
-import { filterHistoricalAttendances, filterPromoterAppointments, formatAppointmentDateHeading, getMetricDisplayValue, getRegularizationCounts, getRegularizationPresentation, getWeeklyPromoterMetricCounts, groupAppointmentsByDate, isUnresolvedVisitInProgress } from '../utils/promoterPortalPresentation';
+import { filterPromoterAppointments, formatAppointmentDateHeading, getMetricDisplayValue, getRegularizationCounts, getRegularizationPresentation, groupAppointmentsByDate, isUnresolvedVisitInProgress } from '../utils/promoterPortalPresentation';
+import { getScheduledVisitAction, type ScheduledVisitAction } from '../utils/scheduledVisitActions';
 import { canReviewOldOpenVisits, createRequestGate, findOwnOpenVisit, formatOpenVisitConflictMessage, getOldOpenVisitCheckInBlockMessage, getOldOpenVisitsLabel, getPromoterOpenVisitAction, isAnotherVisitInProgressError, isOpenVisitFromToday } from '../utils/visitCheckInConflict';
 
 interface PromoterPortalViewProps {
@@ -92,7 +93,6 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
   // Visitas anteriores à data atual que não foram concluídas (Pendências de dias anteriores)
   const [startingRouteId, setStartingRouteId] = useState<string | null>(null);
   const [staleInProgressVisits, setStaleInProgressVisits] = useState<Visit[]>([]);
-  const [staleNotDoneVisits, setStaleNotDoneVisits] = useState<Visit[]>([]);
   const [staleNotDoneVisit, setStaleNotDoneVisit] = useState<Visit | null>(null);
   const [staleNotDoneReason, setStaleNotDoneReason] = useState<string>('');
   const [savingStaleNotDone, setSavingStaleNotDone] = useState<boolean>(false);
@@ -106,8 +106,8 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
   const [busyConflictTargetRoute, setBusyConflictTargetRoute] = useState<RouteItem | null>(null);
 
   // Estado para Recuperação de Visita Não Realizada / Pendente ("Realizar hoje" - Etapa 2)
-  const [recoverModalVisit, setRecoverModalVisit] = useState<Visit | null>(null);
-  const [recoveringVisit, setRecoveringVisit] = useState<boolean>(false);
+  const [scheduledAction, setScheduledAction] = useState<{ item: OperationalVisitItem; action: ScheduledVisitAction } | null>(null);
+  const [savingScheduledAction, setSavingScheduledAction] = useState(false);
 
   // Controle de colapso do Histórico da Semana (Fechado por padrão no mobile)
   const [isWeekHistoryOpen, setIsWeekHistoryOpen] = useState<boolean>(false);
@@ -115,11 +115,10 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
   // Estado para Agenda Semanal "MINHA SEMANA" (Etapa 7.2)
   const [weekOffset, setWeekOffset] = useState<number>(0);
   const [weekVisits, setWeekVisits] = useState<Visit[]>([]);
-  const [operationalHistoryVisits, setOperationalHistoryVisits] = useState<Visit[]>([]);
   const [selectedDayDateStr, setSelectedDayDateStr] = useState<string>(getLocalDateString(new Date()));
   const [weekHistoryFilterMode, setWeekHistoryFilterMode] = useState<'day' | 'all'>('day');
   const [statusFilter, setStatusFilter] = useState<'all' | 'planejada' | 'em_andamento' | 'pendente' | 'concluida' | 'nao_realizada'>('all');
-  const [appointmentsTab, setAppointmentsTab] = useState<'today' | 'pending' | 'upcoming' | 'history'>('today');
+  const [appointmentsTab, setAppointmentsTab] = useState<'today' | 'upcoming' | 'history'>('today');
   const [operationMode, setOperationMode] = useState<OperationMode | 'DESCONHECIDO'>('DESCONHECIDO');
   const [officialStartDate, setOfficialStartDate] = useState<string | null>(null);
   const onShowToastRef = useRef(onShowToast);
@@ -476,7 +475,6 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
       const allConsolidatedVisits = Array.from(visitsMap.values());
 
       setWeekVisits(allConsolidatedVisits);
-      setOperationalHistoryVisits(allConsolidatedVisits);
       setTodayVisits(allConsolidatedVisits.filter((v) => v.data_visita === todayStr));
 
       // Identificar visitas anteriores à data atual que não foram concluídas (Requisito 2)
@@ -487,11 +485,6 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
       setStaleInProgressVisits(stalesInProgress);
 
       // 2. Não realizadas de dias anteriores (data < hoje e status = 'nao_realizada')
-      const stalesNotDone = allConsolidatedVisits.filter(
-        (v) => v.status === 'nao_realizada' && v.data_visita < todayStr
-      );
-      setStaleNotDoneVisits(stalesNotDone);
-
       // Visita em andamento de HOJE
       const todayInProgress = allConsolidatedVisits.find((v) => isOpenVisitFromToday(v, now));
 
@@ -835,7 +828,8 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
       officialStartDate
     });
   }, [operationalRoutes, weekVisits, weekDaysRange, todayStr, operationMode, officialStartDate]);
-  const historicalAttendanceVisits = useMemo(() => filterHistoricalAttendances(weekOperationalVisits), [weekOperationalVisits]);
+  // Project the entire selected week's schedule, including occurrences with no visits row.
+  const historicalAttendanceVisits = weekOperationalVisits;
 
   const currentWeekOperationalVisits = useMemo(() => calculateOperationalVisits({
     routes: operationalRoutes,
@@ -845,16 +839,6 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
     operationMode,
     officialStartDate
   }), [operationalRoutes, weekVisits, currentWeekDaysRange, todayStr, operationMode, officialStartDate]);
-
-  const operationalHistoryRange = useMemo(() => getOperationalDateRange(todayStr), [todayStr]);
-  const allOperationalVisits = useMemo(() => calculateOperationalVisits({
-    routes: operationalRoutes,
-    visits: operationalHistoryVisits,
-    daysRange: operationalHistoryRange,
-    todayStr,
-    operationMode,
-    officialStartDate
-  }), [operationalRoutes, operationalHistoryVisits, operationalHistoryRange, todayStr, operationMode, officialStartDate]);
 
   // Agenda das visitas de HOJE com ordenação amigável:
   // 1º Em atendimento, 2º Pendentes/Planejadas, 3º Não realizadas, 4º Concluídas
@@ -876,11 +860,9 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
     });
   }, [currentWeekOperationalVisits, todayStr]);
 
-  const pastDueVisits = useMemo(() => allOperationalVisits.filter(item => item.dataStr >= currentWeekStartStr && item.dataStr <= todayStr && item.dataStr < currentWeekEndStr && item.isPastOverdue && item.status === 'pendente'), [allOperationalVisits, currentWeekStartStr, currentWeekEndStr, todayStr]);
   const upcomingVisits = useMemo(() => currentWeekOperationalVisits.filter(item => item.dataStr > todayStr && item.status === 'planejada'), [currentWeekOperationalVisits, todayStr]);
   const upcomingVisitGroups = useMemo(() => groupAppointmentsByDate(upcomingVisits), [upcomingVisits]);
   const filteredTodayOperationalVisits = useMemo(() => filterPromoterAppointments(todayOperationalVisits, statusFilter), [todayOperationalVisits, statusFilter]);
-  const filteredPastDueVisits = useMemo(() => filterPromoterAppointments(pastDueVisits, statusFilter === 'all' ? 'all' : statusFilter), [pastDueVisits, statusFilter]);
 
   // Visitas filtradas exclusivamente para o dia selecionado no Histórico Semanal (Item 2)
   const filteredHistoricalAttendanceVisits = useMemo(
@@ -903,10 +885,23 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
   const realUf = promoterDetails?.uf || profile?.promotor_uf;
   // Meta de execução diária baseada nas visitas previstas para hoje.
   const totalPlanned = todayOperationalVisits.filter(v => v.status !== 'nao_realizada' && !v.visitObj?.regularization_status).length;
-  const pendingCount = getWeeklyPromoterMetricCounts(currentWeekOperationalVisits).pending;
+  const weeklyMetrics = useMemo(() => weekOperationalVisits.reduce((counts, item) => {
+    counts.scheduled += 1;
+    const regularization = item.visitObj?.regularization_status;
+    if (item.status === 'concluida' || regularization === 'administratively_completed_with_proof') counts.completed += 1;
+    if (item.status === 'em_andamento' && !regularization) counts.inProgress += 1;
+    if (item.status === 'pendente' || item.status === 'nao_realizada' || regularization === 'closed_without_execution_proof') counts.notDone += 1;
+    if (item.dataStr > todayStr && item.status === 'planejada') counts.upcoming += 1;
+    return counts;
+  }, { scheduled: 0, completed: 0, inProgress: 0, notDone: 0, upcoming: 0 }), [weekOperationalVisits, todayStr]);
   const todayCompletedCount = todayOperationalVisits.filter((v) => v.status === 'concluida').length;
   const executionPerc = totalPlanned > 0 ? Math.round((todayCompletedCount / totalPlanned) * 100) : 0;
   const metricText = (value: number) => getMetricDisplayValue(value, loading, Boolean(loadError));
+  const changeHistoryWeek = (offset: number) => {
+    setWeekOffset(offset);
+    setSelectedDayDateStr(getWeekDaysRange(new Date(), offset)[0].dateStr);
+    setWeekHistoryFilterMode('all');
+  };
 
   // Iniciar Visita
   const handleStartVisit = async (route: RouteItem) => {
@@ -1836,203 +1831,73 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
     }
   };
 
-  // 4. Recuperar Visita Não Realizada ("Realizar hoje" - Etapa 2)
-  // Reabre com atraso uma visita não realizada pertencente à janela operacional permitida (até 30 dias).
-  // Preserva integralmente: data_visita original, motivo_nao_realizada anterior, fotos, checklist e ocorrências.
-  // Registra nova ocorrência em visit_occurrences para auditoria e define started_at se ainda não existia.
-  const handleConfirmRecoverVisit = async () => {
-    if (!recoverModalVisit || !supabase || recoveringVisit) return;
-
-    if (!promotorMatricula) {
-      onShowToast({
-        title: 'Matrícula Não Vinculada',
-        message: 'Usuário sem matrícula associada não pode recuperar visitas.',
-        type: 'warning'
-      });
+  // Server validates the schedule, permissions, duplicate execution, and writes an audit record atomically.
+  const handleConfirmScheduledAction = async () => {
+    if (!scheduledAction || !supabase || savingScheduledAction) return;
+    if (isAdminUser || !promotorMatricula) {
+      onShowToast({ title: 'Ação não permitida', message: 'Somente o promotor vinculado pode iniciar uma programação.', type: 'error' });
       return;
     }
 
-    if (isImplantacaoMode && !isAuthorized) {
-      onShowToast({
-        title: 'Operação Não Liberada',
-        message: 'Seu usuário ainda não foi liberado para testes em campo.',
-        type: 'warning'
-      });
+    const today = getLocalDateString(new Date());
+    const decision = getScheduledVisitAction({
+      item: scheduledAction.item,
+      today,
+      weekStart: currentWeekStartStr,
+      weekEnd: currentWeekEndStr,
+      authorized: !isImplantacaoMode || isAuthorized,
+      hasActiveVisit: Boolean(activeVisit)
+    });
+    if (!decision.allowed || decision.action !== scheduledAction.action) {
+      onShowToast({ title: 'Programação indisponível', message: decision.reason || 'A programação mudou e precisa ser carregada novamente.', type: 'warning' });
+      setScheduledAction(null);
+      await loadPortalData();
       return;
     }
 
-    // Validação de conflito: não permite recuperar se já houver outra visita em andamento
-    if (activeVisit && activeVisit.id !== recoverModalVisit.id) {
-      const targetRouteFake = {
-        id: recoverModalVisit.rota_id || recoverModalVisit.id,
-        promotor_matricula: recoverModalVisit.promotor_matricula,
-        loja_codigo: recoverModalVisit.loja_codigo,
-        industria_codigo: recoverModalVisit.industria_codigo,
-        frequencia: 'SEMANAL',
-        loja: recoverModalVisit.loja,
-        industria: recoverModalVisit.industria
-      } as RouteItem;
-      setRecoverModalVisit(null);
-      setBusyConflictTargetRoute(targetRouteFake);
-      return;
-    }
-
-    setRecoveringVisit(true);
-
+    setSavingScheduledAction(true);
     try {
-      const todayStr = getLocalDateString(new Date());
+      const { data, error } = await supabase.rpc('attendance_start_scheduled_occurrence', {
+        p_route: scheduledAction.item.routeId,
+        p_scheduled_date: scheduledAction.item.dataStr,
+        p_action: scheduledAction.action
+      });
+      if (error) throw error;
+      const created = data as (Partial<Visit> & { id?: string }) | null;
+      if (!created?.id) throw new Error('O servidor não confirmou o atendimento programado.');
 
-      // 1. Revalidar no servidor o status e a matrícula atual da visita para evitar corrida/duplicidade
-      const { data: currentDbVisit, error: fetchErr } = await supabase
-        .from('visits')
-        .select(`
-          *,
-          industria:industrias(codigo, nome),
-          loja:lojas(codigo, nome, cidade, uf, endereco),
-          promotor:promotores(matricula, nome),
-          checklist_items:visit_checklist_items(*),
-          photos:visit_photos(*),
-          occurrences:visit_occurrences(*),
-          validity_items:visit_product_validity(*)
-        `)
-        .eq('id', recoverModalVisit.id)
-        .eq('promotor_matricula', promotorMatricula)
-        .single();
-
-      if (fetchErr || !currentDbVisit) {
-        throw new Error('Visita não encontrada ou você não tem permissão para recuperá-la.');
-      }
-
-      // Regra de segurança: não permitir recuperar visita já concluída
-      if (currentDbVisit.status === 'concluida') {
-        onShowToast({
-          title: 'Operação Não Permitida',
-          message: 'Esta visita já foi concluída anteriormente e não pode ser reaberta.',
-          type: 'warning'
-        });
-        setRecoverModalVisit(null);
-        await loadPortalData();
-        return;
-      }
-
-      // Regra de elegibilidade temporal: data planejada não pode ser futura e não pode exceder 30 dias (ciclo mensal)
-      if (currentDbVisit.data_visita > todayStr) {
-        onShowToast({
-          title: 'Data Futura',
-          message: 'Visitas futuras não podem ser recuperadas antecipadamente como pendência.',
-          type: 'warning'
-        });
-        setRecoverModalVisit(null);
-        return;
-      }
-
-      const diffDays = Math.round((new Date(todayStr).getTime() - new Date(currentDbVisit.data_visita).getTime()) / (1000 * 60 * 60 * 24));
-      if (diffDays > 30) {
-        onShowToast({
-          title: 'Período Excedido',
-          message: 'Visitas anteriores a 30 dias pertencem a ciclos operacionais já encerrados para auditoria.',
-          type: 'warning'
-        });
-        setRecoverModalVisit(null);
-        return;
-      }
-
-      const nowIso = new Date().toISOString();
-
-      // Preservar started_at original se já existia (ex: visita que começou e foi interrompida); caso contrário, registrar nowIso
-      const effectiveStartedAt = currentDbVisit.started_at || nowIso;
-
-      // 2. Atualizar status para 'em_andamento' preservando motivo_nao_realizada original
-      const { data: updatedVisitData, error: updateErr } = await supabase
-        .from('visits')
-        .update({
-          status: 'em_andamento',
-          started_at: effectiveStartedAt,
-          updated_at: nowIso
-        })
-        .eq('id', currentDbVisit.id)
-        .eq('promotor_matricula', promotorMatricula)
-        .select(`
-          *,
-          industria:industrias(codigo, nome),
-          loja:lojas(codigo, nome, cidade, uf, endereco),
-          promotor:promotores(matricula, nome),
-          checklist_items:visit_checklist_items(*),
-          photos:visit_photos(*),
-          occurrences:visit_occurrences(*),
-          validity_items:visit_product_validity(*)
-        `)
-        .single();
-
-      if (updateErr) throw updateErr;
-
-      // 3. Registrar ocorrência de auditoria em visit_occurrences registrando a recuperação com atraso
-      try {
-        const originalDateFmt = currentDbVisit.data_visita.split('-').reverse().join('/');
-        const todayFmt = todayStr.split('-').reverse().join('/');
-        await supabase.from('visit_occurrences').insert([
-          {
-            visit_id: currentDbVisit.id,
-            tipo: 'outro',
-            descricao: `[Recuperação de Pendência]: Visita originalmente planejada para ${originalDateFmt} recuperada para execução em ${todayFmt} com atraso.`
-          }
-        ]);
-      } catch (occErr) {
-        console.warn('Aviso: Falha ao registrar ocorrência de auditoria da recuperação:', occErr);
-      }
-
-      // 4. Carregar signedUrls para fotos existentes sem perder nada
-      const loadedVisit = (updatedVisitData || currentDbVisit) as Visit;
-      if (loadedVisit.photos && loadedVisit.photos.length > 0) {
-        const photosWithSignedUrls = await Promise.all(
-          loadedVisit.photos.map(async (p) => {
-            if (p.storage_path) {
-              const { data: sData } = await supabase!.storage
-                .from('visit-photos')
-                .createSignedUrl(p.storage_path, 3600);
-              if (sData?.signedUrl) {
-                return { ...p, signed_url: sData.signedUrl };
-              }
-            }
-            return p;
-          })
-        );
-        loadedVisit.photos = photosWithSignedUrls;
-      }
-
-      // 5. Configurar visita ativa no formulário de atendimento
+      const loadedVisit = {
+        ...created,
+        promotor_matricula: promotorMatricula,
+        loja_codigo: scheduledAction.item.lojaCodigo,
+        industria_codigo: scheduledAction.item.industriaCodigo,
+        data_visita: today,
+        status: 'em_andamento',
+        rota_id: scheduledAction.item.routeId,
+        scheduled_date: scheduledAction.item.dataStr,
+        loja: { codigo: scheduledAction.item.lojaCodigo, nome: scheduledAction.item.lojaNome, cidade: scheduledAction.item.lojaCidade, uf: scheduledAction.item.lojaUf },
+        industria: { codigo: scheduledAction.item.industriaCodigo, nome: scheduledAction.item.industriaNome },
+        promotor: { matricula: scheduledAction.item.promotorMatricula, nome: scheduledAction.item.promotorNome },
+        checklist_items: [], photos: [], occurrences: [], validity_items: []
+      } as Visit;
       setActiveVisit(loadedVisit);
       setGeneralObs(loadedVisit.observacao_geral || '');
-
-      // Preservar checklist preenchido ou carregar padrão
-      setChecklist(createChecklistState(loadedVisit.checklist_items));
-
+      setChecklist(createChecklistState([]));
+      setScheduledAction(null);
       onShowToast({
-        title: 'Visita Recuperada com Sucesso!',
-        message: `Atendimento liberado para a loja ${loadedVisit.loja?.nome || loadedVisit.loja_codigo} (Planejada para ${loadedVisit.data_visita.split('-').reverse().join('/')}).`,
+        title: scheduledAction.action === 'advance' ? 'Visita antecipada' : 'Visita recuperada',
+        message: `Atendimento iniciado. A data programada (${scheduledAction.item.dataStr.split('-').reverse().join('/')}) foi preservada para auditoria.`,
         type: 'success'
       });
-
-      setRecoverModalVisit(null);
       await loadPortalData();
-
-      // Rolar suavemente para a área de atendimento
-      setTimeout(() => {
-        const el = document.getElementById('active-visit-section');
-        if (el) el.scrollIntoView({ behavior: 'smooth' });
-      }, 250);
+      setTimeout(() => document.getElementById('active-visit-section')?.scrollIntoView({ behavior: 'smooth' }), 250);
     } catch (err: any) {
-      console.error('Erro ao recuperar visita pendente:', err);
-      onShowToast({
-        title: 'Falha ao Recuperar Visita',
-        message: err.message || 'Não foi possível reabrir a pendência no banco de dados.',
-        type: 'error'
-      });
+      console.error('Erro ao iniciar ocorrência programada:', err);
+      onShowToast({ title: 'Falha ao iniciar visita', message: err.message || 'Não foi possível confirmar a programação no servidor.', type: 'error' });
     } finally {
-      setRecoveringVisit(false);
+      setSavingScheduledAction(false);
     }
   };
-
   return (
     <div className="w-full px-3 sm:px-6 py-4 sm:py-6 max-w-4xl mx-auto space-y-4 sm:space-y-6 font-sans">
       {/* CABEÇALHO PORTAL MOBILE-FIRST */}
@@ -2181,7 +2046,6 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
           <nav aria-label="Filtrar atendimentos" className="grid grid-cols-4 gap-1 rounded-xl border border-[#CFCDC5] bg-[#EAE8E2] p-1">
             {([
               ['today', 'Hoje'],
-              ['pending', `Pendentes (${metricText(pendingCount)})`],
               ['upcoming', `Próximos (${metricText(upcomingVisits.length)})`],
               ['history', 'Histórico']
             ] as const).map(([tab, label]) => (
@@ -2519,48 +2383,21 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
             {upcomingVisitGroups.map(group => <section key={group.date} aria-label={formatAppointmentDateHeading(group.date)} className="space-y-2">
               <h3 className="border-b border-blue-200 pb-1 text-sm font-extrabold uppercase tracking-wide text-[#14243B]">{formatAppointmentDateHeading(group.date)}</h3>
               <ul className="space-y-2 md:grid md:grid-cols-2 md:gap-2 md:space-y-0">
-                {group.appointments.map(item => <li key={`upcoming-${item.key}`} className="rounded-lg border border-blue-100 bg-white p-3">
-                  <h4 className="truncate text-sm font-bold text-[#171717]">{item.lojaNome}</h4>
-                  <p className="text-sm text-[#3F3F46]">Indústria: <strong>{item.industriaNome}</strong></p>
-                  <p className="text-xs text-[#5F5F5F]">Frequência: {item.frequencia} · Prevista: {item.dataStr.split('-').reverse().join('/')} · Planejada</p>
-                </li>)}
+                {group.appointments.map(item => {
+                  const decision = getScheduledVisitAction({ item, today: todayStr, weekStart: currentWeekStartStr, weekEnd: currentWeekEndStr, authorized: !isImplantacaoMode || isAuthorized, hasActiveVisit: Boolean(activeVisit) });
+                  return <li key={`upcoming-${item.key}`} className="flex flex-col justify-between gap-3 rounded-xl border border-[#CFCDC5] bg-[#F7F6F2] p-4 sm:flex-row sm:items-center">
+                    <div className="min-w-0 space-y-1">
+                      <h4 className="truncate text-sm font-extrabold text-[#171717]">{item.lojaNome}</h4>
+                      <p className="text-xs text-[#5F5F5F]">Indústria: <strong className="text-[#7E22CE]">{item.industriaNome}</strong></p>
+                      <p className="text-xs font-semibold text-[#14243B]">{item.dataStr.split('-').reverse().join('/')} · {item.dayOfWeekLabel}</p>
+                      <p className="text-xs text-[#5F5F5F]">Frequência: {item.frequencia} · Situação: Programada</p>
+                    </div>
+                    {!isAdminUser && <button type="button" disabled={!decision.allowed || savingScheduledAction} title={decision.reason} onClick={() => decision.allowed && decision.action && setScheduledAction({ item, action: decision.action })} className="min-h-10 shrink-0 rounded-lg bg-[#286FF5] px-4 py-2 text-xs font-bold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600">Antecipar visita</button>}
+                  </li>;
+                })}
               </ul>
             </section>)}
           </div>}
-        </section>
-      )}
-
-      {(!isAdminUser || selectedPromoterMatricula) && appointmentsTab === 'pending' && (
-        <section aria-labelledby="past-due-visits-title" className="bg-[#F7F6F2] border border-rose-300 rounded-2xl p-5 sm:p-6 shadow-xs space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#CFCDC5] pb-3">
-            <div>
-              <h2 id="past-due-visits-title" className="text-base font-extrabold text-rose-800 font-mono">Pendências da Semana ({filteredPastDueVisits.length})</h2>
-              <p className="text-xs text-[#77766F]">Programações vencidas de segunda a domingo desta semana. A data original é preservada.</p>
-            </div>
-            {statusFilter !== 'all' && <button type="button" onClick={() => setStatusFilter('all')} className="rounded-lg border border-[#CFCDC5] px-3 py-1.5 text-xs font-bold">Limpar filtro</button>}
-          </div>
-          <div className="space-y-2">
-            {todayOperationalVisits.filter(item => item.status === 'pendente').map(item => <article key={`today-pending-${item.key}`} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-rose-200 bg-white p-3">
-              <div className="min-w-0"><p className="text-[10px] font-bold uppercase text-rose-700">Pendente hoje</p><h3 className="truncate text-sm font-bold text-[#171717]">{item.lojaNome}</h3><p className="text-xs text-[#5F5F5F]">{item.industriaNome} · {todayStr.split('-').reverse().join('/')}</p></div>
-              <button type="button" onClick={() => { setAppointmentsTab('today'); setStatusFilter('pendente'); }} className="rounded-lg border border-[#AEB9C8] px-3 py-2 text-xs font-bold">Abrir atendimento</button>
-            </article>)}
-            {filteredPastDueVisits.map(item => {
-              const days = getDaysLate(item.dataStr, todayStr);
-              return <article key={`past-due-${item.key}`} className="flex flex-col gap-3 rounded-xl border border-rose-200 bg-rose-50/60 p-3 sm:flex-row sm:items-center sm:justify-between">
-                <div className="min-w-0 space-y-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-xs font-bold text-rose-800">Pendente há {days} {days === 1 ? 'dia' : 'dias'}</span>
-                    <span className="text-xs text-[#5F5F5F]">Prevista: {item.dataStr.split('-').reverse().join('/')}</span>
-                  </div>
-                  <h3 className="truncate text-sm font-bold text-[#171717]">{item.lojaNome}</h3>
-                  <p className="text-xs text-[#5F5F5F]">Indústria: <strong>{item.industriaNome}</strong> · Promotor: <strong>{item.promotorNome}</strong></p>
-                  <p className="text-xs text-[#5F5F5F]">Frequência: {item.frequencia} · Status: Pendente</p>
-                </div>
-                <button type="button" onClick={() => item.visitObj ? setAdminInspectionVisit(item) : setSelectedOperationalDetails(item)} className="self-start rounded-lg border border-[#AEB9C8] px-3 py-2 text-xs font-bold text-[#14243B] hover:bg-white">Ver detalhes</button>
-              </article>;
-            })}
-            {todayOperationalVisits.filter(item => item.status === 'pendente').length === 0 && filteredPastDueVisits.length === 0 && <p className="text-sm text-[#5F5F5F]">{loadError ? 'Não foi possível confirmar as pendências.' : 'Nenhum atendimento pendente nesta semana.'}</p>}
-          </div>
         </section>
       )}
 
@@ -3160,7 +2997,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
           <div className="flex items-center gap-2 shrink-0 font-mono text-xs">
             <button
               type="button"
-              onClick={() => setWeekOffset((prev) => prev - 1)}
+              onClick={() => changeHistoryWeek(weekOffset - 1)}
               className="p-1.5 rounded-lg bg-[#EAE8E2] hover:bg-[#CFCDC5] border border-[#CFCDC5] text-[#171717] cursor-pointer flex items-center gap-1 transition-colors"
               title="Semana anterior"
             >
@@ -3173,6 +3010,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
               onClick={() => {
                 setWeekOffset(0);
                 setSelectedDayDateStr(getLocalDateString(new Date()));
+                setWeekHistoryFilterMode('all');
               }}
               className={`px-3 py-1.5 rounded-lg border text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
                 weekOffset === 0
@@ -3186,7 +3024,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
 
             <button
               type="button"
-              onClick={() => setWeekOffset((prev) => prev + 1)}
+              onClick={() => changeHistoryWeek(weekOffset + 1)}
               className="p-1.5 rounded-lg bg-[#EAE8E2] hover:bg-[#CFCDC5] border border-[#CFCDC5] text-[#171717] cursor-pointer flex items-center gap-1 transition-colors"
               title="Próxima semana"
             >
@@ -3196,6 +3034,22 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
           </div>
         </div>
 
+        <p className="text-xs font-semibold text-[#5F5F5F]">Semana de {weekDaysRange[0]?.dateStr.split('-').reverse().join('/')} a {weekDaysRange[6]?.dateStr.split('-').reverse().join('/')}</p>
+        <div aria-label="Indicadores semanais" className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+          {[
+            ['Programadas', weeklyMetrics.scheduled, 'text-[#171717]'],
+            ['Concluídas', weeklyMetrics.completed, 'text-emerald-700'],
+            ['Em andamento', weeklyMetrics.inProgress, 'text-amber-800'],
+            ['Não realizadas', weeklyMetrics.notDone, 'text-rose-700'],
+            ['Próximos dias', weeklyMetrics.upcoming, 'text-blue-700']
+          ].map(([label, value, color]) => (
+            <div key={label} className="rounded-xl border border-[#CFCDC5] bg-white px-3 py-2">
+              <p className="text-[10px] font-bold uppercase tracking-wide text-[#5F5F5F]">{label}</p>
+              <p className={`text-lg font-extrabold ${color}`}>{metricText(value as number)}</p>
+            </div>
+          ))}
+        </div>
+
         {/* CONTEÚDO EXPANSÍVEL DA SEMANA */}
         {isWeekHistoryOpen && (
           <div className="space-y-4 pt-1">
@@ -3203,7 +3057,15 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
             <div>
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2 font-mono text-xs text-[#5F5F5F]">
                 <span>Filtre o histórico por dia ou visualize todos os atendimentos do período:</span>
-                <div className="flex items-center gap-1.5 self-end sm:self-auto">
+                <div className="flex flex-wrap items-center gap-1.5 self-end sm:self-auto">
+                  <select aria-label="Filtrar programação por situação" value={statusFilter} onChange={event => setStatusFilter(event.target.value as typeof statusFilter)} className="min-h-9 rounded-lg border border-[#CFCDC5] bg-white px-2 text-xs font-semibold text-[#171717] focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600">
+                    <option value="all">Todas as situações</option>
+                    <option value="planejada">Programadas</option>
+                    <option value="em_andamento">Em andamento</option>
+                    <option value="pendente">Pendentes</option>
+                    <option value="concluida">Concluídas</option>
+                    <option value="nao_realizada">Não realizadas</option>
+                  </select>
                   <button
                     type="button"
                     onClick={() => setWeekHistoryFilterMode('day')}
@@ -3359,6 +3221,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
               <div className="space-y-3">
                 {displayedWeekVisits.map((item, idx) => {
                   const isTodayItem = item.dataStr === getLocalDateString(new Date());
+                  const actionDecision = getScheduledVisitAction({ item, today: todayStr, weekStart: currentWeekStartStr, weekEnd: currentWeekEndStr, authorized: !isImplantacaoMode || isAuthorized, hasActiveVisit: Boolean(activeVisit) });
                   const regularizationLabel = getRegularizationPresentation(item.visitObj?.regularization_status);
                   const routeObj = routes.find((r) => r.id === item.routeId) || {
                     id: item.routeId,
@@ -3490,19 +3353,10 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                               )
                             )}
 
-                            {item.status === 'pendente' && !isTodayItem && item.isPastOverdue && item.visitObj && !activeVisit && (
-                              isImplantacaoMode && !isAuthorized ? (
-                                <span className="text-xs text-[#5F5F5F] font-mono italic">Aguardando Liberação</span>
-                              ) : (
-                                <button
-                                  onClick={() => handleStartVisit(routeObj)}
-                                  disabled={staleInProgressVisits.length > 0}
-                                  className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 disabled:bg-[#CFCDC5] disabled:text-[#737373] disabled:cursor-not-allowed text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-md"
-                                >
-                                  <span className="material-symbols-outlined text-sm">play_arrow</span>
-                                  <span>Regularizar Pendência</span>
-                                </button>
-                              )
+                            {(item.status === 'pendente' || item.status === 'nao_realizada') && !isTodayItem && actionDecision.allowed && (
+                              <button type="button" onClick={() => setScheduledAction({ item, action: 'recover' })} disabled={savingScheduledAction} className="min-h-10 rounded-xl bg-[#222222] px-4 py-2 text-xs font-bold text-white shadow-md hover:bg-black disabled:opacity-50">
+                                <span className="material-symbols-outlined mr-1 align-middle text-sm">replay</span>Realizar hoje
+                              </button>
                             )}
                           </>
                         )}
@@ -3524,36 +3378,10 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                           </div>
                         )}
 
-                        {item.status === 'nao_realizada' && (
-                          item.visitObj ? (
-                            <button
-                              onClick={() => {
-                                if (activeVisit) {
-                                  onShowToast({
-                                    title: 'Atendimento Já em Andamento',
-                                    message: `Finalize ou interrompa o atendimento da loja ${activeVisit.loja?.nome || activeVisit.loja_codigo} antes de recuperar outra visita.`,
-                                    type: 'warning'
-                                  });
-                                  const el = document.getElementById('active-visit-section');
-                                  if (el) el.scrollIntoView({ behavior: 'smooth' });
-                                  return;
-                                }
-                                if (item.visitObj) {
-                                  setRecoverModalVisit(item.visitObj);
-                                }
-                              }}
-                              className="px-3 py-1.5 rounded-xl bg-[#222222] hover:bg-black text-white font-bold text-xs flex items-center gap-1 cursor-pointer shadow-md transition-colors"
-                              title="Realizar esta visita hoje com atraso"
-                            >
-                              <span className="material-symbols-outlined text-sm">replay</span>
-                              <span>Realizar hoje</span>
-                            </button>
-                          ) : (
-                            <span className="text-xs text-rose-400 font-bold flex items-center gap-1 px-3 py-2 bg-rose-500/10 rounded-xl border border-rose-500/30">
-                              <span className="material-symbols-outlined text-sm">cancel</span>
-                              Não Realizada
-                            </span>
-                          )
+                        {item.status === 'nao_realizada' && !actionDecision.allowed && (
+                          <span title={actionDecision.reason} className="text-xs text-rose-700 font-bold flex items-center gap-1 px-3 py-2 bg-rose-50 rounded-xl border border-rose-200">
+                            <span className="material-symbols-outlined text-sm">cancel</span>Não realizada
+                          </span>
                         )}
 
                         {item.status === 'planejada' && (
@@ -4443,74 +4271,34 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
         </div>
       )}
 
-      {/* MODAL CONFIRMAÇÃO DE RECUPERAÇÃO DE VISITA PENDENTE COM ATRASO */}
-      {recoverModalVisit && (
-        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-[#F7F6F2] border-2 border-purple-500/50 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5">
+      {scheduledAction && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/75 p-4" onMouseDown={event => { if (event.target === event.currentTarget && !savingScheduledAction) setScheduledAction(null); }}>
+          <section role="dialog" aria-modal="true" aria-labelledby="scheduled-action-title" className="my-auto w-full max-w-md space-y-5 rounded-2xl border-2 border-purple-500/50 bg-[#F7F6F2] p-5 shadow-2xl sm:p-6">
             <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-3">
-              <h3 className="text-sm font-bold text-[#171717] font-mono flex items-center gap-2">
-                <span className="material-symbols-outlined text-purple-400">replay</span>
-                Recuperar Visita Pendente
-              </h3>
-              <button
-                onClick={() => setRecoverModalVisit(null)}
-                disabled={recoveringVisit}
-                className="text-[#77766F] hover:text-white cursor-pointer"
-              >
+              <h2 id="scheduled-action-title" className="flex items-center gap-2 text-base font-bold text-[#171717]">
+                <span className="material-symbols-outlined text-purple-700">{scheduledAction.action === 'advance' ? 'event_upcoming' : 'replay'}</span>
+                {scheduledAction.action === 'advance' ? 'Antecipar visita?' : 'Realizar visita hoje?'}
+              </h2>
+              <button type="button" onClick={() => setScheduledAction(null)} disabled={savingScheduledAction} aria-label="Fechar confirmação" className="rounded p-1 text-[#5F5F5F] focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600 disabled:opacity-50">
                 <span className="material-symbols-outlined">close</span>
               </button>
             </div>
-
-            <div className="space-y-3 font-mono text-xs">
-              <div className="p-3.5 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] text-[#171717] space-y-1">
-                <div>Loja: <strong className="text-[#171717]">{recoverModalVisit.loja?.nome || recoverModalVisit.loja_codigo}</strong></div>
-                <div>Indústria: <strong className="text-purple-300">{recoverModalVisit.industria?.nome || recoverModalVisit.industria_codigo}</strong></div>
-                <div>Data Originalmente Planejada: <strong className="text-amber-400">{recoverModalVisit.data_visita.split('-').reverse().join('/')}</strong></div>
-                {recoverModalVisit.motivo_nao_realizada && (
-                  <div className="pt-1 text-[11px] text-[#77766F]">
-                    Motivo Anterior: <span className="text-rose-300 italic">{recoverModalVisit.motivo_nao_realizada}</span>
-                  </div>
-                )}
-              </div>
-
-              <div className="p-3 rounded-xl bg-purple-500/10 border border-purple-500/30 text-purple-200 text-[11px] leading-relaxed space-y-1">
-                <p>
-                  • Esta visita será iniciada na <strong>data de hoje</strong> e vinculada ao seu atendimento ativo.
-                </p>
-                <p>
-                  • O motivo anterior e as evidências já registradas serão integralmente <strong>preservados</strong>.
-                </p>
-                <p>
-                  • A data planejada original será mantida para auditoria, e a recuperação ficará registrada como <strong>atendimento realizado com atraso</strong>.
-                </p>
-              </div>
+            <div className="space-y-2 rounded-xl border border-[#CFCDC5] bg-[#EAE8E2] p-4 text-sm text-[#171717]">
+              <p>Loja: <strong>{scheduledAction.item.lojaNome}</strong></p>
+              <p>Indústria: <strong>{scheduledAction.item.industriaNome}</strong></p>
+              <p>Programada para: <strong>{scheduledAction.item.dataStr.split('-').reverse().join('/')} · {scheduledAction.item.dayOfWeekLabel}</strong></p>
+              <p>Frequência contratada: <strong>{scheduledAction.item.frequencia}</strong></p>
             </div>
-
-            <div className="pt-3 border-t border-[#CFCDC5] flex items-center justify-end gap-3 font-mono">
-              <button
-                type="button"
-                onClick={() => setRecoverModalVisit(null)}
-                disabled={recoveringVisit}
-                className="px-4 py-2 rounded-xl bg-[#EAE8E2] text-[#171717] border border-[#CFCDC5] text-xs font-semibold cursor-pointer"
-              >
-                Cancelar
-              </button>
-              <button
-                type="button"
-                onClick={handleConfirmRecoverVisit}
-                disabled={recoveringVisit}
-                className="px-5 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-md transition-colors"
-              >
-                <span className={`material-symbols-outlined text-sm ${recoveringVisit ? 'animate-spin' : ''}`}>
-                  {recoveringVisit ? 'sync' : 'play_arrow'}
-                </span>
-                <span>{recoveringVisit ? 'Reabrindo Visita...' : 'Confirmar e Iniciar Hoje'}</span>
+            <p className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs leading-relaxed text-amber-950">A data original da escala será preservada. O servidor validará a ocorrência e registrará esta ação para auditoria; nenhuma programação extra será criada.</p>
+            <div className="flex flex-col-reverse justify-end gap-2 border-t border-[#CFCDC5] pt-3 sm:flex-row">
+              <button type="button" onClick={() => setScheduledAction(null)} disabled={savingScheduledAction} className="min-h-10 rounded-xl border border-[#CFCDC5] bg-[#EAE8E2] px-4 py-2 text-sm font-semibold text-[#171717] focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600">Cancelar</button>
+              <button type="button" onClick={handleConfirmScheduledAction} disabled={savingScheduledAction} className="min-h-10 rounded-xl bg-purple-700 px-4 py-2 text-sm font-bold text-white hover:bg-purple-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600 disabled:opacity-50">
+                {savingScheduledAction ? 'Validando no servidor…' : 'Confirmar e iniciar hoje'}
               </button>
             </div>
-          </div>
+          </section>
         </div>
       )}
-
       {/* MODAL DE CONSULTA DE DETALHES DA VISITA (MODO ADMINISTRATIVO) */}
       {adminInspectionVisit && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 overflow-y-auto">

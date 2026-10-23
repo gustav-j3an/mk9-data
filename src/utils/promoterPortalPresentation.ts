@@ -1,4 +1,4 @@
-export type PromoterAppointmentsTab = 'today' | 'pending' | 'upcoming' | 'history';
+export type PromoterAppointmentsTab = 'today' | 'upcoming' | 'history';
 export type PromoterMetricStatus = 'planejada' | 'em_andamento' | 'pendente' | 'concluida' | 'nao_realizada';
 
 export interface PromoterAppointmentGroup<T> {
@@ -7,7 +7,7 @@ export interface PromoterAppointmentGroup<T> {
 }
 
 export function getAppointmentsTabForMetric(status: PromoterMetricStatus): PromoterAppointmentsTab {
-  if (status === 'pendente') return 'pending';
+  if (status === 'pendente') return 'history';
   if (status === 'concluida' || status === 'nao_realizada') return 'history';
   return 'today';
 }

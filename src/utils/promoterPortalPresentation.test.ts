@@ -16,7 +16,7 @@ import {
 test('indicator statuses navigate to the corresponding appointments filter', () => {
   assert.equal(getAppointmentsTabForMetric('planejada'), 'today');
   assert.equal(getAppointmentsTabForMetric('em_andamento'), 'today');
-  assert.equal(getAppointmentsTabForMetric('pendente'), 'pending');
+  assert.equal(getAppointmentsTabForMetric('pendente'), 'history');
   assert.equal(getAppointmentsTabForMetric('concluida'), 'history');
   assert.equal(getAppointmentsTabForMetric('nao_realizada'), 'history');
 });
