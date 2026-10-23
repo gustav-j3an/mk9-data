@@ -97,7 +97,20 @@ describe('Portal do Promotor - Visualizacao Semanal e Escala Fixa', () => {
     assert.strictEqual(sundayVisits.length, 0);
   });
 
-  it('4. Preservacao de atendimentos concluidos ao alterar a escala futura', () => {
+  it('4. Historico semanal mantem visitas futuras como programadas, sem classifica-las como nao realizadas', () => {
+    const visits = calculateOperationalVisits({
+      routes: [mockRouteTerSex],
+      visits: [],
+      daysRange: weekDays,
+      todayStr: '2026-10-14'
+    });
+    const futureVisit = visits.find((visit) => visit.dataStr === '2026-10-16');
+
+    assert.ok(futureVisit, 'a programacao futura deve permanecer no conjunto semanal do historico');
+    assert.strictEqual(futureVisit?.status, 'planejada');
+  });
+
+  it('5. Preservacao de atendimentos concluidos ao alterar a escala futura', () => {
     const wednesday = weekDays.find((d) => d.dayKey === 'quarta')!;
 
     const completedVisit: Visit = {
@@ -134,7 +147,7 @@ describe('Portal do Promotor - Visualizacao Semanal e Escala Fixa', () => {
     assert.strictEqual(visitOnWednesday?.completedAt, `${wednesday.dateStr}T10:00:00Z`);
   });
 
-  it('5. Escala encerrada preserva dias validos anteriores e nao projeta datas posteriores', () => {
+  it('6. Escala encerrada preserva dias validos anteriores e nao projeta datas posteriores', () => {
     const wednesday = weekDays.find((d) => d.dayKey === 'quarta')!;
     const completedVisit: Visit = {
       id: 'visit-closed-route',
@@ -173,7 +186,7 @@ describe('Portal do Promotor - Visualizacao Semanal e Escala Fixa', () => {
     assert.strictEqual(preservedVisit?.visitObj?.photos?.[0]?.id, 'photo-preserved');
   });
 
-  it('6. Escala Fixa da Semana: agrupa lojas por dia de segunda a domingo', () => {
+  it('7. Escala Fixa da Semana: agrupa lojas por dia de segunda a domingo', () => {
     const routesList = [mockRouteSegQua, mockRouteTerSex];
 
     const segLojas = routesList.filter((r) => r.segunda).length;

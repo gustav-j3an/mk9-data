@@ -1,4 +1,8 @@
-export type PromoterAppointmentsTab = 'today' | 'upcoming' | 'history';
+export const PROMOTER_APPOINTMENT_TABS = [
+  { id: 'today', label: 'Hoje' },
+  { id: 'history', label: 'Histórico' }
+] as const;
+export type PromoterAppointmentsTab = typeof PROMOTER_APPOINTMENT_TABS[number]['id'];
 export type PromoterMetricStatus = 'planejada' | 'em_andamento' | 'pendente' | 'concluida' | 'nao_realizada';
 
 export interface PromoterAppointmentGroup<T> {

@@ -10,8 +10,14 @@ import {
   groupAppointmentsByDate,
   getRegularizationCounts,
   getRegularizationPresentation,
-  isUnresolvedVisitInProgress
+  isUnresolvedVisitInProgress,
+  PROMOTER_APPOINTMENT_TABS
 } from './promoterPortalPresentation';
+
+test('promoter navigation exposes only Today and History tabs', () => {
+  assert.deepEqual(PROMOTER_APPOINTMENT_TABS.map(tab => tab.id), ['today', 'history']);
+  assert.deepEqual(PROMOTER_APPOINTMENT_TABS.map(tab => tab.label), ['Hoje', 'Histórico']);
+});
 
 test('indicator statuses navigate to the corresponding appointments filter', () => {
   assert.equal(getAppointmentsTabForMetric('planejada'), 'today');
@@ -72,7 +78,11 @@ test('administrative resolutions stay separate from active and completed operati
   assert.equal(getRegularizationPresentation(visits[2].regularization_status), 'Concluída administrativamente · com comprovação');
 });
 
-test('upcoming appointments group by date in chronological order without merging stores or industries', () => {
+test('future planned visits stay scheduled and are not counted as not done', () => {
+  assert.deepEqual(getWeeklyPromoterMetricCounts([{ status: 'planejada' }]), { pending: 0, completed: 0, notDone: 0 });
+});
+
+test('scheduled appointments group by date in chronological order without merging stores or industries', () => {
   const appointments = [
     { key: 'friday-x', dataStr: '2026-10-23', lojaNome: 'Loja A', industriaNome: 'Indústria X' },
     { key: 'saturday-z', dataStr: '2026-10-24', lojaNome: 'Loja C', industriaNome: 'Indústria Z' },

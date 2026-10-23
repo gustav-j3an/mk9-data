@@ -52,7 +52,7 @@ import {
 } from '../lib/routesService';
 import { isWhatsAppShareableVisit } from '../utils/whatsappShare';
 import { loadRoutesWithClosureFallback } from '../utils/routeClosureCompatibility';
-import { filterPromoterAppointments, formatAppointmentDateHeading, getMetricDisplayValue, getRegularizationCounts, getRegularizationPresentation, groupAppointmentsByDate, isUnresolvedVisitInProgress } from '../utils/promoterPortalPresentation';
+import { filterPromoterAppointments, getMetricDisplayValue, getRegularizationCounts, getRegularizationPresentation, isUnresolvedVisitInProgress, PROMOTER_APPOINTMENT_TABS, type PromoterAppointmentsTab } from '../utils/promoterPortalPresentation';
 import { getScheduledVisitAction, isScheduledVisitActionRpcReady, type ScheduledVisitAction } from '../utils/scheduledVisitActions';
 import { canReviewOldOpenVisits, createRequestGate, findOwnOpenVisit, formatOpenVisitConflictMessage, getOldOpenVisitCheckInBlockMessage, getOldOpenVisitsLabel, getPromoterOpenVisitAction, isAnotherVisitInProgressError, isOpenVisitFromToday } from '../utils/visitCheckInConflict';
 
@@ -119,7 +119,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
   const [selectedDayDateStr, setSelectedDayDateStr] = useState<string>(getLocalDateString(new Date()));
   const [weekHistoryFilterMode, setWeekHistoryFilterMode] = useState<'day' | 'all'>('day');
   const [statusFilter, setStatusFilter] = useState<'all' | 'planejada' | 'em_andamento' | 'pendente' | 'concluida' | 'nao_realizada'>('all');
-  const [appointmentsTab, setAppointmentsTab] = useState<'today' | 'upcoming' | 'history'>('today');
+  const [appointmentsTab, setAppointmentsTab] = useState<PromoterAppointmentsTab>('today');
   const [operationMode, setOperationMode] = useState<OperationMode | 'DESCONHECIDO'>('DESCONHECIDO');
   const [officialStartDate, setOfficialStartDate] = useState<string | null>(null);
   const onShowToastRef = useRef(onShowToast);
@@ -890,8 +890,6 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
     });
   }, [currentWeekOperationalVisits, todayStr]);
 
-  const upcomingVisits = useMemo(() => currentWeekOperationalVisits.filter(item => item.dataStr > todayStr && item.status === 'planejada'), [currentWeekOperationalVisits, todayStr]);
-  const upcomingVisitGroups = useMemo(() => groupAppointmentsByDate(upcomingVisits), [upcomingVisits]);
   const filteredTodayOperationalVisits = useMemo(() => filterPromoterAppointments(todayOperationalVisits, statusFilter), [todayOperationalVisits, statusFilter]);
 
   // Visitas filtradas exclusivamente para o dia selecionado no Histórico Semanal (Item 2)
@@ -921,9 +919,8 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
     if (item.status === 'concluida' || regularization === 'administratively_completed_with_proof') counts.completed += 1;
     if (item.status === 'em_andamento' && !regularization) counts.inProgress += 1;
     if (item.status === 'pendente' || item.status === 'nao_realizada' || regularization === 'closed_without_execution_proof') counts.notDone += 1;
-    if (item.dataStr > todayStr && item.status === 'planejada') counts.upcoming += 1;
     return counts;
-  }, { scheduled: 0, completed: 0, inProgress: 0, notDone: 0, upcoming: 0 }), [weekOperationalVisits, todayStr]);
+  }, { scheduled: 0, completed: 0, inProgress: 0, notDone: 0 }), [weekOperationalVisits]);
   const todayCompletedCount = todayOperationalVisits.filter((v) => v.status === 'concluida').length;
   const executionPerc = totalPlanned > 0 ? Math.round((todayCompletedCount / totalPlanned) * 100) : 0;
   const metricText = (value: number) => getMetricDisplayValue(value, loading, Boolean(loadError));
@@ -2073,12 +2070,8 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
             <h2 className="text-sm font-extrabold uppercase tracking-wide text-[#171717]">Meus atendimentos</h2>
             <span className="text-[10px] text-[#77766F]">{todayStr.split('-').reverse().join('/')}</span>
           </div>
-          <nav aria-label="Filtrar atendimentos" className="grid grid-cols-3 gap-1 rounded-xl border border-[#CFCDC5] bg-[#EAE8E2] p-1">
-            {([
-              ['today', 'Hoje'],
-              ['upcoming', `Próximos (${metricText(upcomingVisits.length)})`],
-              ['history', 'Histórico']
-            ] as const).map(([tab, label]) => (
+          <nav aria-label="Filtrar atendimentos" className="grid grid-cols-2 gap-1 rounded-xl border border-[#CFCDC5] bg-[#EAE8E2] p-1">
+            {PROMOTER_APPOINTMENT_TABS.map(({ id: tab, label }) => (
               <button key={tab} type="button" aria-pressed={appointmentsTab === tab}
                 onClick={() => {
                   setAppointmentsTab(tab);
@@ -2403,35 +2396,6 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
           <button type="button" onClick={() => onNavigate('acompanhamento-visitas')} className="shrink-0 rounded-lg border border-amber-400 bg-white px-4 py-2 text-xs font-bold text-amber-950 hover:bg-amber-100">Abrir central administrativa</button>
         </section>
       )}
-      {(!isAdminUser || selectedPromoterMatricula) && appointmentsTab === 'upcoming' && (
-        <section aria-labelledby="upcoming-visits-title" className="space-y-3 rounded-2xl border border-blue-200 bg-blue-50/50 p-5">
-          <div className="border-b border-blue-100 pb-3">
-            <h2 id="upcoming-visits-title" className="text-base font-extrabold text-[#14243B]">Próximos atendimentos</h2>
-            <p className="text-sm text-[#5F5F5F]">Programações futuras desta semana.</p>
-            {!isAdminUser && scheduledActionRpcStatus !== 'ready' && <p role="status" className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-950">{scheduledActionRpcStatus === 'checking' ? 'Verificando disponibilidade das ações no servidor…' : 'Antecipação indisponível: o servidor ainda não confirmou a atualização necessária.'}</p>}
-          </div>
-          {upcomingVisitGroups.length === 0 ? <p className="text-sm text-[#5F5F5F]">{loadError ? 'Não foi possível confirmar os próximos atendimentos.' : 'Nenhum atendimento programado para os próximos dias desta semana.'}</p> : <div className="space-y-4">
-            {upcomingVisitGroups.map(group => <section key={group.date} aria-label={formatAppointmentDateHeading(group.date)} className="space-y-2">
-              <h3 className="border-b border-blue-200 pb-1 text-sm font-extrabold uppercase tracking-wide text-[#14243B]">{formatAppointmentDateHeading(group.date)}</h3>
-              <ul className="space-y-2 md:grid md:grid-cols-2 md:gap-2 md:space-y-0">
-                {group.appointments.map(item => {
-                  const decision = getScheduledVisitAction({ item, today: todayStr, weekStart: currentWeekStartStr, weekEnd: currentWeekEndStr, authorized: !isImplantacaoMode || isAuthorized, hasActiveVisit: Boolean(activeVisit) });
-                  return <li key={`upcoming-${item.key}`} className="flex flex-col justify-between gap-3 rounded-xl border border-[#CFCDC5] bg-[#F7F6F2] p-4 sm:flex-row sm:items-center">
-                    <div className="min-w-0 space-y-1">
-                      <h4 className="truncate text-sm font-extrabold text-[#171717]">{item.lojaNome}</h4>
-                      <p className="text-xs text-[#5F5F5F]">Indústria: <strong className="text-[#7E22CE]">{item.industriaNome}</strong></p>
-                      <p className="text-xs font-semibold text-[#14243B]">{item.dataStr.split('-').reverse().join('/')} · {item.dayOfWeekLabel}</p>
-                      <p className="text-xs text-[#5F5F5F]">Frequência: {item.frequencia} · Situação: Programada</p>
-                    </div>
-                    {!isAdminUser && <button type="button" disabled={!decision.allowed || savingScheduledAction || scheduledActionRpcStatus !== 'ready'} title={scheduledActionRpcStatus !== 'ready' ? 'Ação indisponível até o servidor confirmar que a RPC está instalada.' : decision.reason} onClick={() => decision.allowed && scheduledActionRpcStatus === 'ready' && decision.action && setScheduledAction({ item, action: decision.action })} className="min-h-10 shrink-0 rounded-lg bg-[#286FF5] px-4 py-2 text-xs font-bold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600">{scheduledActionRpcStatus === 'ready' ? 'Antecipar visita' : scheduledActionRpcStatus === 'checking' ? 'Verificando…' : 'Indisponível'}</button>}
-                  </li>;
-                })}
-              </ul>
-            </section>)}
-          </div>}
-        </section>
-      )}
-
       {selectedOperationalDetails && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onMouseDown={event => { if (event.target === event.currentTarget) setSelectedOperationalDetails(null); }}>
           <section role="dialog" aria-modal="true" aria-labelledby="operational-detail-title" className="w-full max-w-lg space-y-3 rounded-2xl border border-[#CFCDC5] bg-[#F7F6F2] p-5">
@@ -3072,8 +3036,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
             ['Programadas', weeklyMetrics.scheduled, 'text-[#171717]'],
             ['Concluídas', weeklyMetrics.completed, 'text-emerald-700'],
             ['Em andamento', weeklyMetrics.inProgress, 'text-amber-800'],
-            ['Não realizadas', weeklyMetrics.notDone, 'text-rose-700'],
-            ['Próximos dias', weeklyMetrics.upcoming, 'text-blue-700']
+            ['Não realizadas', weeklyMetrics.notDone, 'text-rose-700']
           ].map(([label, value, color]) => (
             <div key={label} className="rounded-xl border border-[#CFCDC5] bg-white px-3 py-2">
               <p className="text-[10px] font-bold uppercase tracking-wide text-[#5F5F5F]">{label}</p>
