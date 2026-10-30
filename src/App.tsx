@@ -84,6 +84,32 @@ function Dashboard() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
+  const currentScreenAllowed = isScreenAllowedForRole(currentScreen, role, rhAllowed, faltasAtestados.allowed, rhMatriculas.allowed);
+  const activeScreen = currentScreenAllowed
+    ? currentScreen
+    : homeScreen;
+
+  // Preservar e restaurar posição de rolagem por tela em sessionStorage
+  useEffect(() => {
+    const scrollKey = `mk9_scroll_${activeScreen}`;
+    const savedScroll = sessionStorage.getItem(scrollKey);
+    if (savedScroll !== null) {
+      const top = parseInt(savedScroll, 10);
+      if (!isNaN(top)) {
+        window.scrollTo({ top, behavior: 'instant' as ScrollBehavior });
+      }
+    }
+
+    const handleScroll = () => {
+      sessionStorage.setItem(scrollKey, String(window.scrollY));
+    };
+
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    return () => {
+      window.removeEventListener('scroll', handleScroll);
+    };
+  }, [activeScreen]);
+
   const handleNavigate = (screen: ScreenId) => {
     if (!isScreenAllowedForRole(screen, role, rhAllowed, faltasAtestados.allowed, rhMatriculas.allowed)) {
       if (role === 'promotor') {
@@ -93,14 +119,11 @@ function Dashboard() {
       }
       return;
     }
+    // Ao navegar intencionalmente via menu/botão, inicia no topo
+    sessionStorage.removeItem(`mk9_scroll_${screen}`);
     navigate(screenPath(screen));
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
-
-  const currentScreenAllowed = isScreenAllowedForRole(currentScreen, role, rhAllowed, faltasAtestados.allowed, rhMatriculas.allowed);
-  const activeScreen = currentScreenAllowed
-    ? currentScreen
-    : homeScreen;
 
   useEffect(() => {
     if (accessCheckPending) return;

@@ -198,10 +198,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (event === 'PASSWORD_RECOVERY') {
         setIsPasswordRecovery(true);
       }
-      setSession(nextSession);
-      setLoading(true);
-      void Promise.resolve().then(() => fetchProfile(nextSession)).finally(() => {
-        if (active) setLoading(false);
+
+      // Se for apenas renovação silenciosa de token para o mesmo usuário, não aciona o spinner global de tela inteira
+      setSession((prevSession) => {
+        const isSameUser = prevSession?.user?.id && nextSession?.user?.id && prevSession.user.id === nextSession.user.id;
+        const isTokenRefreshOnly = isSameUser && (event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED');
+
+        if (!isTokenRefreshOnly) {
+          setLoading(true);
+        }
+
+        void Promise.resolve().then(() => fetchProfile(nextSession)).finally(() => {
+          if (active && !isTokenRefreshOnly) setLoading(false);
+        });
+
+        return nextSession;
       });
     });
 

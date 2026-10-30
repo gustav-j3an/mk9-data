@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { ScreenId, ToastMessage, Visit, RouteItem, AlertItem, SystemSettingsState } from '../types';
 import { supabase } from '../lib/supabase';
 import { fetchSystemSettings } from '../lib/systemSettings';
@@ -12,6 +13,7 @@ import {
 import { buildGoogleMapsDirectionsUrl } from '../utils/googleMaps';
 import { CHECKLIST_QUANTITY_KEYS } from '../utils/visitExecution';
 import { StatCard, StatusBadge, DataTable, Column } from '../components/ui';
+import { parseOperationalDashboardQuery, updateOperationalDashboardQuery } from './operationalDashboardQuery';
 
 interface OperationalDashboardViewProps {
   onNavigate: (screen: ScreenId) => void;
@@ -24,6 +26,8 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
 }) => {
   const { role } = useAuth();
   const canResolve = role === 'admin' || role === 'gestor';
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialQuery = parseOperationalDashboardQuery(searchParams);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -37,7 +41,7 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
   });
 
   // Filtro de Período Simples (today | week | month)
-  const [periodFilter, setPeriodFilter] = useState<'today' | 'week' | 'month'>('today');
+  const [periodFilter, setPeriodFilter] = useState<'today' | 'week' | 'month'>(() => initialQuery.period || 'today');
 
   const [visits, setVisits] = useState<Visit[]>([]);
   const [routes, setRoutes] = useState<RouteItem[]>([]);
@@ -45,17 +49,17 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
   const [industriasList, setIndustriasList] = useState<any[]>([]);
 
   // Filtros adicionais para Agenda, Rupturas, Validades e Visitas
-  const [filterIndustria, setFilterIndustria] = useState<string>('all');
-  const [filterPromotor, setFilterPromotor] = useState<string>('all');
-  const [filterLoja, setFilterLoja] = useState<string>('all');
-  const [filterRupturaStatus, setFilterRupturaStatus] = useState<string>('abertas');
-  const [filterValidadeStatus, setFilterValidadeStatus] = useState<string>('all'); // 'all' | 'vencidos' | 'ate3' | 'ate7' | 'ate30' | 'normal'
-  const [filterAgendaStatus, setFilterAgendaStatus] = useState<string>('all'); // 'all' | 'em_andamento' | 'pendente' | 'nao_realizada' | 'concluida'
-  const [filterAlertPriority, setFilterAlertPriority] = useState<string>('active'); // 'active' | 'all' | 'critico' | 'atencao' | 'pendente' | 'resolvido'
+  const [filterIndustria, setFilterIndustria] = useState<string>(() => initialQuery.industry || 'all');
+  const [filterPromotor, setFilterPromotor] = useState<string>(() => initialQuery.promoter || 'all');
+  const [filterLoja, setFilterLoja] = useState<string>(() => initialQuery.store || 'all');
+  const [filterRupturaStatus, setFilterRupturaStatus] = useState<string>(() => initialQuery.ruptureStatus || 'abertas');
+  const [filterValidadeStatus, setFilterValidadeStatus] = useState<string>(() => initialQuery.validityStatus || 'all'); // 'all' | 'vencidos' | 'ate3' | 'ate7' | 'ate30' | 'normal'
+  const [filterAgendaStatus, setFilterAgendaStatus] = useState<string>(() => initialQuery.agendaStatus || 'all'); // 'all' | 'em_andamento' | 'pendente' | 'nao_realizada' | 'concluida'
+  const [filterAlertPriority, setFilterAlertPriority] = useState<string>(() => initialQuery.alertPriority || 'active'); // 'active' | 'all' | 'critico' | 'atencao' | 'pendente' | 'resolvido'
 
   // Sub-abas de organização compacta
-  const [centralTab, setCentralTab] = useState<'alertas' | 'pendencias' | 'visitas_hoje' | 'promotores'>('alertas');
-  const [ocorrenciasTab, setOcorrenciasTab] = useState<'rupturas' | 'incidentes' | 'validades' | 'checklist'>('rupturas');
+  const [centralTab, setCentralTab] = useState<'alertas' | 'pendencias' | 'visitas_hoje' | 'promotores'>(() => initialQuery.centralTab || 'alertas');
+  const [ocorrenciasTab, setOcorrenciasTab] = useState<'rupturas' | 'incidentes' | 'validades' | 'checklist'>(() => initialQuery.ocorrenciasTab || 'rupturas');
 
   // Buscas inteligentes nas sub-abas da Central
   const [searchAlerts, setSearchAlerts] = useState('');
@@ -70,8 +74,42 @@ export const OperationalDashboardView: React.FC<OperationalDashboardViewProps> =
   const [selectedVisit, setSelectedVisit] = useState<Visit | null>(null);
 
   // Estado para Central de Pendências Operacionais
-  const [pendenciaStatusFilter, setPendenciaStatusFilter] = useState<string>('pendente'); // 'pendente' | 'em_andamento' | 'nao_realizada' | 'concluida' | 'todas'
+  const [pendenciaStatusFilter, setPendenciaStatusFilter] = useState<string>(() => initialQuery.pendenciaStatus || 'pendente'); // 'pendente' | 'em_andamento' | 'nao_realizada' | 'concluida' | 'todas'
   const [selectedPendingItem, setSelectedPendingItem] = useState<OperationalVisitItem | null>(null);
+
+  // Sincronizar parâmetros de navegação na URL
+  useEffect(() => {
+    setSearchParams(
+      (current) =>
+        updateOperationalDashboardQuery(current, {
+          period: periodFilter,
+          centralTab,
+          ocorrenciasTab,
+          industry: filterIndustria,
+          promoter: filterPromotor,
+          store: filterLoja,
+          ruptureStatus: filterRupturaStatus,
+          validityStatus: filterValidadeStatus,
+          agendaStatus: filterAgendaStatus,
+          alertPriority: filterAlertPriority,
+          pendenciaStatus: pendenciaStatusFilter
+        }),
+      { replace: true }
+    );
+  }, [
+    periodFilter,
+    centralTab,
+    ocorrenciasTab,
+    filterIndustria,
+    filterPromotor,
+    filterLoja,
+    filterRupturaStatus,
+    filterValidadeStatus,
+    filterAgendaStatus,
+    filterAlertPriority,
+    pendenciaStatusFilter,
+    setSearchParams
+  ]);
 
   // Estado para URLs Assinadas de Fotos de Ruptura (visitId -> signedUrl)
   const [rupturePhotosSigned, setRupturePhotosSigned] = useState<Record<string, string>>({});

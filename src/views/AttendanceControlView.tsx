@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { ScreenId, ToastMessage, RouteItem, Visit } from '../types';
 import { fetchAttendance, saveAttendance, resolveCrmAttendance, fetchAttendanceAudit, attendanceErrorMessage, type AttendanceAuditEntry } from '../lib/attendanceService';
 import { AttendanceJourneyPanel } from '../components/AttendanceJourneyPanel';
@@ -6,6 +7,7 @@ import type { Promoter } from '../utils/attendanceEngine';
 import { LABELS, filterRoster, exportRows, zoned, type PresenceItem, type OverrideStatus } from '../utils/attendanceEngine';
 import { type PromoterOperationalSummary, type PromoterVisitDetail, type RouteExecutionStatus } from '../utils/visitActivityEngine';
 import { calculateOperationalMetrics, filterPromoterSummaries, type RouteStatusFilter } from '../utils/attendanceFilters';
+import { parseAttendanceControlQuery, updateAttendanceControlQuery } from './attendanceControlQuery';
 import * as XLSX from 'xlsx';
 
 interface AttendanceControlViewProps {
@@ -17,8 +19,11 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
   onNavigate,
   onShowToast
 }) => {
-  // Data Operacional Inicializada dinamicamente com a data local (sem desvios UTC)
-  const [dateVal, setDateVal] = useState<string>(() => zoned(new Date().toISOString()).date);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialQuery = parseAttendanceControlQuery(searchParams);
+
+  // Data Operacional Inicializada dinamicamente com a data da URL ou data local (sem desvios UTC)
+  const [dateVal, setDateVal] = useState<string>(() => initialQuery.date || zoned(new Date().toISOString()).date);
 
   // Dados carregados do Supabase
   const [items, setItems] = useState<PresenceItem[]>([]);
@@ -29,23 +34,42 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
   const [error, setError] = useState<string | null>(null);
 
   // Filtros de Busca e Visualização
-  const [search, setSearch] = useState('');
-  const [supervisorFilter, setSupervisorFilter] = useState('');
-  const [scopeFilter, setScopeFilter] = useState<'com_roteiro' | 'todos' | 'sem_programacao'>('com_roteiro');
-  const [statusFilter, setStatusFilter] = useState<RouteStatusFilter>('ALL');
-  const [squadFilter, setSquadFilter] = useState('');
-  const [quickFilter, setQuickFilter] = useState<'all' | 'presente' | 'falta' | 'atestado' | 'atestado_pendente' | 'sem_registro' | 'sem_expediente'>('all');
+  const [search, setSearch] = useState(() => initialQuery.search || '');
+  const [supervisorFilter, setSupervisorFilter] = useState(() => initialQuery.supervisor || '');
+  const [scopeFilter, setScopeFilter] = useState<'com_roteiro' | 'todos' | 'sem_programacao'>(() => initialQuery.scope || 'com_roteiro');
+  const [statusFilter, setStatusFilter] = useState<RouteStatusFilter>(() => (initialQuery.status as RouteStatusFilter) || 'ALL');
+  const [squadFilter, setSquadFilter] = useState(() => initialQuery.squad || '');
+  const [quickFilter, setQuickFilter] = useState<'all' | 'presente' | 'falta' | 'atestado' | 'atestado_pendente' | 'sem_registro' | 'sem_expediente'>(() => initialQuery.quick || 'all');
   const [promoters, setPromoters] = useState<Promoter[]>([]);
   const [audit, setAudit] = useState<{ name:string; rows:AttendanceAuditEntry[] } | null>(null);
   const [activityModalItem, setActivityModalItem] = useState<PresenceItem | null>(null);
-  const [includeOffSchedule, setIncludeOffSchedule] = useState(false);
+  const [includeOffSchedule, setIncludeOffSchedule] = useState(() => Boolean(initialQuery.offSchedule));
   const [canEdit, setCanEdit] = useState(false);
   const [saving, setSaving] = useState(false);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [syncedAt, setSyncedAt] = useState<string | null>(null);
   const [timezone, setTimezone] = useState('America/Sao_Paulo');
   const requestId = useRef(0);
+  const isFetchingRef = useRef(false);
   const dialogRef = useRef<HTMLDivElement>(null);
+
+  // Sincronizar parâmetros de filtro na URL
+  useEffect(() => {
+    setSearchParams(
+      (current) =>
+        updateAttendanceControlQuery(current, {
+          date: dateVal,
+          search,
+          supervisor: supervisorFilter,
+          scope: scopeFilter,
+          status: statusFilter,
+          squad: squadFilter,
+          quick: quickFilter,
+          offSchedule: includeOffSchedule
+        }),
+      { replace: true }
+    );
+  }, [dateVal, search, supervisorFilter, scopeFilter, statusFilter, squadFilter, quickFilter, includeOffSchedule, setSearchParams]);
 
   // Área de Configurações (Jornadas, modelos, calendário e avisos consolidados)
   const [showConfig, setShowConfig] = useState(false);
@@ -78,15 +102,14 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
     return () => { document.removeEventListener('keydown', handleKey); previous?.focus(); };
   }, [modalOpen, saving]);
 
-  const fetchAttendanceData = useCallback(async () => {
+  const fetchAttendanceData = useCallback(async (isSilent = false) => {
+    if (isSilent && isFetchingRef.current) return;
+    isFetchingRef.current = true;
     const request = ++requestId.current;
-    setLoading(true);
+    if (!isSilent) {
+      setLoading(true);
+    }
     setError(null);
-    setItems([]);
-    setOperationalSummaries([]);
-    setCanEdit(false);
-    setWarnings([]);
-    setSyncedAt(null);
     try {
       const result = await fetchAttendance(dateVal);
       if (request !== requestId.current) return;
@@ -103,16 +126,19 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
       if (request !== requestId.current) return;
       setError(attendanceErrorMessage(err));
     } finally {
-      if (request === requestId.current) setLoading(false);
+      if (request === requestId.current) {
+        isFetchingRef.current = false;
+        setLoading(false);
+      }
     }
   }, [dateVal]);
 
   useEffect(() => {
     setModalOpen(false);
-    void fetchAttendanceData();
+    void fetchAttendanceData(false);
     const timer = window.setInterval(() => {
       if (dialogRef.current || document.querySelector('[data-attendance-journey][open]')) return;
-      void fetchAttendanceData();
+      void fetchAttendanceData(true);
     }, 60000);
     return () => { ++requestId.current; window.clearInterval(timer); };
   }, [fetchAttendanceData]);
@@ -606,7 +632,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
             <h3 className="text-sm font-bold text-rose-800">Falha ao carregar registros</h3>
             <p className="text-xs text-[#5F5F5F]">{error}</p>
             <button
-              onClick={fetchAttendanceData}
+              onClick={() => void fetchAttendanceData(false)}
               className="mt-2 px-4 py-1.5 rounded-lg bg-rose-700 text-white font-semibold text-xs cursor-pointer shadow-xs"
             >
               Tentar novamente
