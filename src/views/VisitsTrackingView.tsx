@@ -1299,7 +1299,7 @@ export const VisitsTrackingView: React.FC<VisitsTrackingViewProps> = ({
                 ))}
               </div>
             )}
-            <p className="text-[11px] text-[#73726C]">As ações de regularização permanecem bloqueadas até aprovação e implementação da RPC com auditoria atômica. Nenhum status ou dado histórico é alterado nesta tela.</p>
+            <p className="text-[11px] text-[#73726C]">A regularização administrativa está disponível para usuários autorizados. Cada decisão exige justificativa e é registrada em auditoria, preservando os dados originais da visita.</p>
           </div>
         </details>
       )}
