@@ -6,7 +6,7 @@ export type VisitRegularizationAction =
 
 // Flip only after the migration is deployed and its auth, scope and concurrency
 // tests have passed in the target environment.
-export const VISIT_REGULARIZATION_BACKEND_VERIFIED = false;
+export const VISIT_REGULARIZATION_BACKEND_VERIFIED = true;
 
 export interface VisitRegularizationRpc {
   (name: string, args: Record<string, unknown>): PromiseLike<{ data: unknown; error: { message?: string } | null }>;

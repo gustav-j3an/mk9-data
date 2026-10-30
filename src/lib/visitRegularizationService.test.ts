@@ -7,7 +7,7 @@ test('não chama RPC até o backend ser implantado e verificado', async () => {
   await assert.rejects(() => submitVisitRegularization(async () => {
     calls += 1;
     return { data: null, error: null };
-  }, 'visit-1', 'closed_without_execution_proof', 'Motivo válido'), /aguarda a validação/);
+  }, 'visit-1', 'closed_without_execution_proof', 'Motivo válido', false), /aguarda a validação/);
   assert.equal(calls, 0);
 });
 
