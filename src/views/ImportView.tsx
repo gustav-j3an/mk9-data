@@ -514,179 +514,178 @@ export const ImportView: React.FC<ImportViewProps> = ({ onShowToast }) => {
   const currentSpec = TEMPLATE_SPECS[selectedType];
 
   return (
-    <div className="w-full px-4 lg:px-8 py-6 max-w-[1720px] mx-auto space-y-8 font-sans">
+    <div className="w-full px-4 lg:px-8 py-4 sm:py-5 max-w-[1720px] mx-auto space-y-5 font-sans">
       {/* Top Header */}
-      <section className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-[#CFCDC5] pb-6">
-        <div>
+      <section className="flex flex-col gap-3 border-b border-[#CFCDC5] pb-4 md:flex-row md:items-center md:justify-between">
+        <div className="min-w-0">
           <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-lg bg-gradient-to-tr from-purple-600 to-indigo-500 flex items-center justify-center font-bold text-white shadow-[0_0_14px_rgba(147,51,234,0.6)]">
-              <span className="material-symbols-outlined text-[20px]">upload_file</span>
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-violet-100 text-violet-800 ring-1 ring-violet-200">
+              <span className="material-symbols-outlined text-[20px]" aria-hidden="true">upload_file</span>
             </div>
-            <h1 className="text-3xl font-extrabold text-[#171717] tracking-tight">
+            <h1 className="text-xl font-extrabold tracking-tight text-[#171717] sm:text-2xl">
               Importação de Dados por Planilha
             </h1>
           </div>
-          <p className="text-xs sm:text-sm text-[#77766F] mt-1 max-w-3xl">
-            Carga em lote de <code className="text-purple-400 font-mono">Indústrias</code>, <code className="text-cyan-400 font-mono">Lojas</code>, <code className="text-emerald-400 font-mono">Promotores</code> e <code className="text-amber-400 font-mono">Rotas</code> com validação prévia de integridade.
+          <p className="mt-1 max-w-3xl text-xs leading-relaxed text-[#57564F] sm:text-sm">
+            Importe <code className="font-mono font-semibold text-violet-800">Indústrias</code>, <code className="font-mono font-semibold text-cyan-800">Lojas</code>, <code className="font-mono font-semibold text-emerald-800">Promotores</code> e <code className="font-mono font-semibold text-amber-800">Rotas</code> com validação prévia.
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => setStep(step === 'history' ? 'upload' : 'history')}
-            className="px-4 py-2 rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] text-xs font-semibold text-[#171717] hover:text-white hover:border-purple-500/40 transition-colors flex items-center gap-1.5 cursor-pointer"
-          >
-            <span className="material-symbols-outlined text-[18px]">
-              {step === 'history' ? 'upload_file' : 'history'}
-            </span>
-            <span>{step === 'history' ? 'Nova Importação' : 'Histórico de Cargas'}</span>
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={() => setStep(step === 'history' ? 'upload' : 'history')}
+          className="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-lg border border-[#B9B7AE] bg-white px-3.5 py-2 text-xs font-semibold text-[#292822] transition-colors hover:border-violet-400 hover:bg-violet-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-600 focus-visible:ring-offset-2"
+        >
+          <span className="material-symbols-outlined text-[18px]" aria-hidden="true">
+            {step === 'history' ? 'upload_file' : 'history'}
+          </span>
+          <span>{step === 'history' ? 'Nova Importação' : 'Histórico de Cargas'}</span>
+        </button>
       </section>
 
       {/* VIEW: UPLOAD */}
       {step === 'upload' && (
-        <section className="space-y-6">
-          {/* Configuração de Tipo & Download de Modelos */}
-          <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-6 shadow-2xl space-y-6">
-            <h3 className="text-sm font-bold text-[#171717] uppercase tracking-wider font-mono flex items-center gap-2">
-              <span className="material-symbols-outlined text-purple-400">tune</span>
-              1. Selecione o Tipo de Cadastro &amp; Baixe o Modelo Limpo
-            </h3>
+        <section className="space-y-4" aria-label="Configuração da importação">
+          <div className="space-y-4 rounded-xl border border-[#CFCDC5] bg-[#F7F6F2] p-4 shadow-sm sm:p-5">
+            <div className="flex items-start gap-2.5">
+              <span className="material-symbols-outlined mt-0.5 text-lg text-violet-800" aria-hidden="true">tune</span>
+              <div>
+                <h2 className="text-sm font-bold tracking-wide text-[#25241F]">1. Escolha o cadastro e baixe o modelo</h2>
+                <p className="mt-0.5 text-xs text-[#57564F]">Selecione um tipo de planilha. Os modelos XLSX e CSV já vêm com os campos correspondentes.</p>
+              </div>
+            </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
               {(['industrias', 'lojas', 'promotores', 'rotas'] as ImportType[]).map((type) => {
                 const spec = TEMPLATE_SPECS[type];
+                const isSelected = selectedType === type;
                 return (
-                  <button
+                  <article
                     key={type}
-                    onClick={() => setSelectedType(type)}
-                    className={`p-4 rounded-xl border text-left transition-all cursor-pointer ${
-                      selectedType === type
-                        ? 'bg-purple-950/40 border-purple-500 text-white shadow-[0_0_15px_rgba(147,51,234,0.3)]'
-                        : 'bg-[#EAE8E2] border-[#CFCDC5] text-[#77766F] hover:border-[#CFCDC5] hover:text-slate-200'
+                    className={`flex h-full flex-col overflow-hidden rounded-xl border transition-colors ${
+                      isSelected
+                        ? 'border-violet-500 bg-violet-50 ring-1 ring-violet-200'
+                        : 'border-[#CFCDC5] bg-white hover:border-[#A9A69B]'
                     }`}
                   >
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-sm uppercase tracking-wider font-mono">{type}</span>
-                      <span className="material-symbols-outlined text-xl">
-                        {type === 'industrias' ? 'factory' : type === 'lojas' ? 'store' : type === 'promotores' ? 'badge' : 'alt_route'}
+                    <button
+                      type="button"
+                      aria-pressed={isSelected}
+                      onClick={() => setSelectedType(type)}
+                      className="flex min-h-[112px] w-full flex-1 flex-col p-3.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-violet-600"
+                    >
+                      <span className="flex w-full items-center justify-between gap-2">
+                        <span className={`text-sm font-bold uppercase tracking-wide ${isSelected ? 'text-violet-950' : 'text-[#292822]'}`}>
+                          {type}
+                        </span>
+                        <span className={`material-symbols-outlined text-xl ${isSelected ? 'text-violet-800' : 'text-[#57564F]'}`} aria-hidden="true">
+                          {type === 'industrias' ? 'factory' : type === 'lojas' ? 'store' : type === 'promotores' ? 'badge' : 'alt_route'}
+                        </span>
                       </span>
-                    </div>
-                    <p className="text-[11px] text-[#77766F] mt-2">
-                      {type === 'industrias' && 'Marcas e indústrias parceiras.'}
-                      {type === 'lojas' && 'PDVs, redes e endereços.'}
-                      {type === 'promotores' && 'Matrículas e equipes.'}
-                      {type === 'rotas' && 'Vínculos diários de visitas.'}
-                    </p>
+                      <span className="mt-2 text-xs leading-relaxed text-[#57564F]">
+                        {type === 'industrias' && 'Marcas e indústrias parceiras.'}
+                        {type === 'lojas' && 'PDVs, redes e endereços.'}
+                        {type === 'promotores' && 'Matrículas e equipes.'}
+                        {type === 'rotas' && 'Vínculos diários de visitas.'}
+                      </span>
+                      <span className={`mt-auto pt-2 text-[11px] font-semibold ${isSelected ? 'text-violet-800' : 'text-[#57564F]'}`}>
+                        {isSelected ? 'Tipo selecionado' : 'Selecionar este cadastro'}
+                      </span>
+                    </button>
 
-                    <div className="mt-4 pt-3 border-t border-[#CFCDC5] flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 border-t border-[#E2E0D8] px-3 py-2.5">
                       <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleDownloadXLSX(type);
-                        }}
-                        className="px-2 py-1 rounded bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 text-[10px] font-mono font-bold flex items-center gap-1 border border-emerald-500/40 transition-colors"
-                        title="Baixar Modelo Completo XLSX com Abas e Filtros"
+                        type="button"
+                        onClick={() => handleDownloadXLSX(type)}
+                        className="inline-flex min-h-9 flex-1 items-center justify-center gap-1.5 rounded-md border border-emerald-700 bg-emerald-50 px-2 text-[11px] font-bold text-emerald-900 transition-colors hover:bg-emerald-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-700 focus-visible:ring-offset-1"
+                        title="Baixar modelo XLSX completo"
                       >
-                        <span className="material-symbols-outlined text-[12px]">grid_on</span>
-                        <span>XLSX</span>
+                        <span className="material-symbols-outlined text-[15px]" aria-hidden="true">grid_on</span>
+                        XLSX
                       </button>
-
                       <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleDownloadCSV(type);
-                        }}
-                        className="px-2 py-1 rounded bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 text-[10px] font-mono font-bold flex items-center gap-1 border border-cyan-500/40 transition-colors"
-                        title="Baixar Modelo CSV Limpo com Cabeçalho UTF-8"
+                        type="button"
+                        onClick={() => handleDownloadCSV(type)}
+                        className="inline-flex min-h-9 flex-1 items-center justify-center gap-1.5 rounded-md border border-cyan-800 bg-cyan-50 px-2 text-[11px] font-bold text-cyan-950 transition-colors hover:bg-cyan-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-800 focus-visible:ring-offset-1"
+                        title="Baixar modelo CSV com cabeçalho UTF-8"
                       >
-                        <span className="material-symbols-outlined text-[12px]">csv</span>
-                        <span>CSV Limpo</span>
+                        <span className="material-symbols-outlined text-[15px]" aria-hidden="true">csv</span>
+                        CSV
                       </button>
                     </div>
-                  </button>
+                  </article>
                 );
               })}
             </div>
 
-            {/* Painel de Instruções e Orientações do Tipo Selecionado */}
-            <div className="p-5 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] space-y-3">
-              <div className="flex items-center gap-2">
-                <span className="material-symbols-outlined text-purple-400 text-lg">info</span>
-                <h4 className="text-xs font-bold text-[#171717] uppercase tracking-wider font-mono">
-                  Instruções &amp; Relacionamentos: {currentSpec.title}
-                </h4>
+            <section className="rounded-lg border border-[#D5D2C8] bg-[#F0EEE8] p-3.5 sm:p-4" aria-labelledby="import-instructions-heading">
+              <div className="mb-3 flex items-center gap-2">
+                <span className="material-symbols-outlined text-lg text-violet-800" aria-hidden="true">info</span>
+                <h3 id="import-instructions-heading" className="text-xs font-bold uppercase tracking-wide text-[#292822]">
+                  Orientações: {currentSpec.title}
+                </h3>
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs text-[#171717]">
+              <div className="grid grid-cols-1 gap-x-6 gap-y-3 text-xs sm:grid-cols-2">
                 <div>
-                  <span className="font-bold text-[#77766F] font-mono block">FINALIDADE:</span>
-                  <p className="mt-0.5 text-[#171717]">{currentSpec.instructions.finalidade}</p>
+                  <h4 className="font-bold text-[#57564F]">Finalidade</h4>
+                  <p className="mt-0.5 leading-relaxed text-[#292822]">{currentSpec.instructions.finalidade}</p>
                 </div>
                 <div>
-                  <span className="font-bold text-[#77766F] font-mono block">CAMPOS OBRIGATÓRIOS:</span>
-                  <p className="mt-0.5 text-amber-300 font-mono">{currentSpec.instructions.obrigatorios}</p>
+                  <h4 className="font-bold text-[#57564F]">Campos obrigatórios</h4>
+                  <p className="mt-0.5 font-mono leading-relaxed text-amber-900">{currentSpec.instructions.obrigatorios}</p>
                 </div>
                 <div>
-                  <span className="font-bold text-[#77766F] font-mono block">ORDEM DE IMPORTAÇÃO:</span>
-                  <p className="mt-0.5 text-purple-300 font-mono">{currentSpec.instructions.ordem}</p>
+                  <h4 className="font-bold text-[#57564F]">Ordem de importação</h4>
+                  <p className="mt-0.5 font-mono leading-relaxed text-violet-900">{currentSpec.instructions.ordem}</p>
                 </div>
                 <div>
-                  <span className="font-bold text-[#77766F] font-mono block">DEPENDÊNCIAS &amp; RELACIONAMENTOS:</span>
-                  <p className="mt-0.5 text-cyan-300 font-mono">{currentSpec.instructions.relacionamentos}</p>
+                  <h4 className="font-bold text-[#57564F]">Dependências e relacionamentos</h4>
+                  <p className="mt-0.5 font-mono leading-relaxed text-cyan-950">{currentSpec.instructions.relacionamentos}</p>
                 </div>
               </div>
-            </div>
+            </section>
 
-            {/* Configuração de Preservação vs Upsert */}
-            <div className="pt-4 border-t border-[#CFCDC5] flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-              <div className="space-y-1">
-                <span className="text-xs font-bold text-slate-200">Modo de Gravação de Dados</span>
-                <p className="text-xs text-[#77766F]">
-                  Por padrão, os dados existentes são <strong>preservados</strong>. Marque para atualizar registros com chaves duplicadas (Upsert).
+            <section className="flex flex-col gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3.5 sm:flex-row sm:items-center sm:justify-between sm:p-4" aria-labelledby="import-mode-heading">
+              <div>
+                <h3 id="import-mode-heading" className="text-xs font-bold text-[#292822]">Modo de gravação</h3>
+                <p className="mt-0.5 max-w-3xl text-xs leading-relaxed text-[#57564F]">
+                  O padrão preserva os registros existentes. Ative o Upsert somente se quiser atualizar registros que tenham chaves duplicadas.
                 </p>
               </div>
-
-              <label className="inline-flex items-center gap-2 cursor-pointer bg-[#EAE8E2] border border-[#CFCDC5] px-4 py-2.5 rounded-xl">
+              <label className="inline-flex min-h-11 shrink-0 cursor-pointer items-center gap-2.5 rounded-lg border border-amber-300 bg-white px-3.5 py-2 text-xs font-semibold text-[#292822] transition-colors hover:bg-amber-100 focus-within:ring-2 focus-within:ring-amber-700 focus-within:ring-offset-1">
                 <input
                   type="checkbox"
                   checked={allowUpsert}
                   onChange={(e) => setAllowUpsert(e.target.checked)}
-                  className="rounded border-[#CFCDC5] bg-[#F7F6F2] text-purple-600 focus:ring-purple-500 w-4 h-4"
+                  className="h-5 w-5 accent-amber-800 focus-visible:outline-none"
                 />
-                <span className="text-xs font-mono font-bold text-slate-200">
-                  {allowUpsert ? 'Modo Upsert (Atualizar Duplicados)' : 'Modo Seguro (Manter Existentes)'}
-                </span>
+                <span>{allowUpsert ? 'Upsert ativado' : 'Atualizar duplicados (Upsert)'}</span>
               </label>
-            </div>
+            </section>
           </div>
 
-          {/* Área de Dropzone / Upload */}
-          <div className="bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl p-10 shadow-2xl text-center relative overflow-hidden">
+          <div className="relative overflow-hidden rounded-xl border border-dashed border-violet-400 bg-violet-50/70 p-5 text-center transition-colors hover:border-violet-600 hover:bg-violet-50 focus-within:ring-2 focus-within:ring-violet-600 focus-within:ring-offset-2 sm:p-7">
             <input
               type="file"
               accept=".csv,.xlsx,.xls"
               onChange={handleFileChange}
-              className="absolute inset-0 opacity-0 cursor-pointer w-full h-full z-10"
+              aria-label="Selecionar planilha preenchida em CSV ou Excel"
+              aria-describedby="import-file-help"
+              className="absolute inset-0 z-10 h-full w-full cursor-pointer opacity-0"
             />
-            <div className="max-w-md mx-auto space-y-4 flex flex-col items-center">
-              <div className="w-16 h-16 rounded-full bg-[#EAE8E2] border border-[#CFCDC5] flex items-center justify-center text-purple-400 shadow-inner">
-                <span className="material-symbols-outlined text-4xl">cloud_upload</span>
-              </div>
-              <div className="space-y-1">
-                <h3 className="text-base font-bold text-[#171717]">Arraste ou selecione a planilha preenchida (CSV ou XLSX)</h3>
-                <p className="text-xs text-[#77766F]">
-                  Suporta arquivos formatados para <strong>{selectedType.toUpperCase()}</strong>.
-                </p>
-              </div>
-              <button className="px-5 py-2.5 rounded-xl bg-[#222222] hover:bg-black text-white font-bold text-xs shadow-xs transition-all">
+            <div className="pointer-events-none mx-auto flex max-w-2xl flex-col items-center">
+              <span className="material-symbols-outlined mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-white text-3xl text-violet-800 ring-1 ring-violet-200" aria-hidden="true">cloud_upload</span>
+              <h3 className="text-sm font-bold text-[#25241F]">Arraste ou selecione sua planilha</h3>
+              <p id="import-file-help" className="mt-1 text-xs text-[#57564F]">
+                Arquivos CSV ou XLSX para <strong>{selectedType.toUpperCase()}</strong>. A validação acontece antes de qualquer gravação.
+              </p>
+              <span className="mt-3 inline-flex min-h-10 items-center justify-center rounded-lg bg-violet-800 px-4 py-2 text-xs font-bold text-white shadow-sm">
                 Selecionar Arquivo Preenchido
-              </button>
+              </span>
             </div>
           </div>
         </section>
       )}
-
       {/* VIEW: PRÉVIA E VALIDAÇÃO */}
       {step === 'preview' && (
         <section className="space-y-6">
