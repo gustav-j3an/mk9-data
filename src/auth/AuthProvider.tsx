@@ -1,7 +1,9 @@
-import { createContext, useContext, useEffect, useMemo, useState, useCallback } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { createIsolatedClient, isSupabaseConfigured, supabase } from '../lib/supabase';
 import type { UserProfile, UserRole } from '../types';
+import { PROFILE_RESTORE_TIMEOUT_MS, SESSION_RESTORE_TIMEOUT_MS, settleWithin } from './sessionRestoration';
+import { shouldKeepAuthenticatedViewMountedOnAuthEvent } from './authEventBehavior';
 
 interface AuthContextValue {
   session: Session | null;
@@ -33,10 +35,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isPasswordRecovery, setIsPasswordRecovery] = useState(false);
+  const profileRequestSequenceRef = useRef(0);
+  const currentSessionUserIdRef = useRef<string | null>(null);
 
-  const fetchProfile = useCallback(async (currentSession: Session | null) => {
+  const fetchProfile = useCallback(async (
+    currentSession: Session | null,
+    requestSequence = ++profileRequestSequenceRef.current,
+    options: { preserveExistingOnError?: boolean } = {}
+  ) => {
+    const isCurrentRequest = () => requestSequence === profileRequestSequenceRef.current;
     if (!currentSession?.user) {
-      setProfile(null);
+      if (isCurrentRequest()) setProfile(null);
       return;
     }
 
@@ -50,7 +59,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
 
     if (!supabase) {
-      setProfile(defaultProfile);
+      if (isCurrentRequest()) setProfile(defaultProfile);
       return;
     }
 
@@ -60,9 +69,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         .select('*')
         .eq('id', user.id)
         .maybeSingle();
+      if (!isCurrentRequest()) return;
 
       if (profileErr) {
         console.warn('Profile fetch warning (fallback to session metadata):', profileErr.message);
+        if (options.preserveExistingOnError) return;
       }
 
       const matricula = data?.promotor_matricula || null;
@@ -84,6 +95,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           .select('matricula, nome, cidade, uf, supervisor, equipe, status')
           .eq('matricula', matricula)
           .maybeSingle();
+        if (!isCurrentRequest()) return;
 
         if (pErr) {
           console.error('Erro ao buscar promotor em public.promotores:', pErr.message);
@@ -107,6 +119,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           .select('nome')
           .eq('codigo', indCodigo)
           .maybeSingle();
+        if (!isCurrentRequest()) return;
         if (indData) {
           industriaNome = indData.nome;
         }
@@ -126,6 +139,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             const { data: signData, error: signErr } = await supabase.storage
               .from('avatars')
               .createSignedUrl(rawAvatar, 86400); // 24 horas
+            if (!isCurrentRequest()) return;
 
             if (!signErr && signData?.signedUrl) {
               resolvedAvatarUrl = signData.signedUrl;
@@ -138,6 +152,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
       }
 
+      if (!isCurrentRequest()) return;
       setProfile({
         id: user.id,
         email: user.email || defaultProfile.email,
@@ -158,8 +173,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         updated_at: data?.updated_at
       });
     } catch (e) {
+      if (!isCurrentRequest()) return;
       console.warn('Profile load error, using default fallback:', e);
-      setProfile(defaultProfile);
+      if (!options.preserveExistingOnError) setProfile(defaultProfile);
     }
   }, []);
 
@@ -179,14 +195,46 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setIsPasswordRecovery(true);
     }
 
-    void supabase.auth.getSession().then(async ({ data, error: sessionError }) => {
+    const restoreProfile = async (
+      currentSession: Session | null,
+      preserveExistingOnError = false
+    ) => {
+      const requestSequence = ++profileRequestSequenceRef.current;
+      if (!currentSession) {
+        setProfile(null);
+        return;
+      }
+
+      try {
+        await settleWithin(
+          fetchProfile(currentSession, requestSequence, { preserveExistingOnError }),
+          PROFILE_RESTORE_TIMEOUT_MS,
+          'O perfil demorou para responder. A sessão foi mantida com permissões básicas.'
+        );
+      } catch (profileError) {
+        if (!active || requestSequence !== profileRequestSequenceRef.current) return;
+        if (!preserveExistingOnError) {
+          setProfile(null);
+          setError(profileError instanceof Error ? profileError.message : 'Não foi possível carregar o perfil.');
+          // A changed user must never retain the previous user's profile or role.
+        }
+      }
+    };
+
+    void settleWithin(
+      supabase.auth.getSession(),
+      SESSION_RESTORE_TIMEOUT_MS,
+      'A restauração da sessão excedeu o tempo limite.'
+    ).then(async ({ data, error: sessionError }) => {
       if (!active || authEventReceived) return;
       if (sessionError) setError(sessionError.message);
+      currentSessionUserIdRef.current = data.session?.user?.id ?? null;
       setSession(data.session);
-      await fetchProfile(data.session);
+      await restoreProfile(data.session);
     }).catch((sessionError: unknown) => {
       if (!active || authEventReceived) return;
       setError(sessionError instanceof Error ? sessionError.message : 'Não foi possível restaurar a sessão.');
+      currentSessionUserIdRef.current = null;
       setSession(null);
       setProfile(null);
     }).finally(() => {
@@ -198,11 +246,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (event === 'PASSWORD_RECOVERY') {
         setIsPasswordRecovery(true);
       }
+      const nextUserId = nextSession?.user?.id ?? null;
+      const keepAuthenticatedViewMounted = shouldKeepAuthenticatedViewMountedOnAuthEvent(
+        event,
+        currentSessionUserIdRef.current,
+        nextUserId
+      );
+      currentSessionUserIdRef.current = nextUserId;
       setSession(nextSession);
-      setLoading(true);
-      void Promise.resolve().then(() => fetchProfile(nextSession)).finally(() => {
-        if (active) setLoading(false);
-      });
+      if (!keepAuthenticatedViewMounted) setLoading(true);
+      void Promise.resolve()
+        .then(() => restoreProfile(nextSession, keepAuthenticatedViewMounted))
+        .finally(() => {
+          if (active && !keepAuthenticatedViewMounted) setLoading(false);
+        });
     });
 
     return () => { active = false; data.subscription.unsubscribe(); };
@@ -562,6 +619,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const result = await supabase.auth.signInWithPassword({ email, password });
       if (result.data.session) {
         setSession(result.data.session);
+        currentSessionUserIdRef.current = result.data.session.user.id;
         await fetchProfile(result.data.session);
       }
       return { error: result.error ? new Error(result.error.message) : null };
@@ -571,6 +629,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const { error: signOutError } = await supabase.auth.signOut();
         if (signOutError) throw new Error(signOutError.message);
       }
+      currentSessionUserIdRef.current = null;
       setSession(null);
       setProfile(null);
       setIsPasswordRecovery(false);

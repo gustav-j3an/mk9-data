@@ -1,8 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { ScreenId, ToastMessage, RouteItem, Visit } from '../types';
 import { fetchAttendance, saveAttendance, resolveCrmAttendance, fetchAttendanceAudit, attendanceErrorMessage, type AttendanceAuditEntry } from '../lib/attendanceService';
-import { AttendanceJourneyPanel } from '../components/AttendanceJourneyPanel';
-import type { Promoter } from '../utils/attendanceEngine';
 import { LABELS, filterRoster, exportRows, zoned, type PresenceItem, type OverrideStatus } from '../utils/attendanceEngine';
 import { type PromoterOperationalSummary, type PromoterVisitDetail, type RouteExecutionStatus } from '../utils/visitActivityEngine';
 import { calculateOperationalMetrics, filterPromoterSummaries, type RouteStatusFilter } from '../utils/attendanceFilters';
@@ -35,12 +33,12 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
   const [statusFilter, setStatusFilter] = useState<RouteStatusFilter>('ALL');
   const [squadFilter, setSquadFilter] = useState('');
   const [quickFilter, setQuickFilter] = useState<'all' | 'presente' | 'falta' | 'atestado' | 'atestado_pendente' | 'sem_registro' | 'sem_expediente'>('all');
-  const [promoters, setPromoters] = useState<Promoter[]>([]);
   const [audit, setAudit] = useState<{ name:string; rows:AttendanceAuditEntry[] } | null>(null);
   const [activityModalItem, setActivityModalItem] = useState<PresenceItem | null>(null);
   const [includeOffSchedule, setIncludeOffSchedule] = useState(false);
   const [canEdit, setCanEdit] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [pending, setPending] = useState<Awaited<ReturnType<typeof fetchAttendance>>['pending']>({supervisors: [], journeys: []});
   const [warnings, setWarnings] = useState<string[]>([]);
   const [syncedAt, setSyncedAt] = useState<string | null>(null);
   const [timezone, setTimezone] = useState('America/Sao_Paulo');
@@ -48,7 +46,6 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
   const dialogRef = useRef<HTMLDivElement>(null);
 
   // Área de Configurações (Jornadas, modelos, calendário e avisos consolidados)
-  const [showConfig, setShowConfig] = useState(false);
 
   // Detalhes do Promotor (Painel Modal Simples)
   const [detailPromoter, setDetailPromoter] = useState<PromoterOperationalSummary | null>(null);
@@ -86,6 +83,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
     setOperationalSummaries([]);
     setCanEdit(false);
     setWarnings([]);
+    setPending({supervisors: [], journeys: []});
     setSyncedAt(null);
     try {
       const result = await fetchAttendance(dateVal);
@@ -94,7 +92,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
       setOperationalSummaries(result.operationalSummary || []);
       setRoutesData(result.routes || []);
       setVisitsData(result.visits || []);
-      setPromoters(result.promoters);
+      setPending(result.pending);
       setWarnings(result.warnings);
       setCanEdit(result.canEdit);
       setTimezone(result.timezone);
@@ -247,68 +245,101 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
       {/* 1. CABEÇALHO SIMPLES */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-[#CFCDC5]">
         <div>
-          <div className="flex items-center gap-2.5">
-            <h1 className="text-2xl sm:text-3xl font-extrabold text-[#171717] tracking-tight">
+          <div className="flex flex-wrap items-center gap-2">
+            <h1 className="text-xl sm:text-2xl font-extrabold text-[#171717] tracking-tight mr-1">
               Controle Diário
             </h1>
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[#F7F6F2] border border-[#CFCDC5] text-[#171717] font-mono text-[11px]">
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#F7F6F2] border border-[#CFCDC5] text-[#171717] font-mono text-xs">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
               {loading ? 'Consultando…' : syncedAt ? `Atualizado às ${zoned(syncedAt, timezone).time}` : 'Pronto'}
             </span>
-            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-800 border border-slate-300 font-mono text-[11px] font-bold">
-              {loading ? '...' : `${totalCadastrados} promotores cadastrados`}
+            <span className="inline-flex items-center px-2.5 py-1 rounded-md bg-slate-100 text-slate-800 border border-slate-300 font-mono text-xs font-semibold">
+              {loading ? '...' : `${totalCadastrados} promotores`}
             </span>
-            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-800 border border-amber-300 font-mono text-[11px] font-bold">
-              {loading ? '...' : `${comJornada} com jornada • ${semJornada} sem expediente`}
+            <span className="inline-flex items-center px-2.5 py-1 rounded-md bg-amber-50 text-amber-900 border border-amber-300 font-mono text-xs font-semibold">
+              {loading ? '...' : `${comJornada} com jornada · ${semJornada} sem expediente`}
             </span>
-            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full bg-purple-600/20 text-purple-800 border border-purple-500/30 font-mono text-[11px] font-bold uppercase">
-              {loading ? 'Consultando elegibilidade' : error ? 'Dados indisponíveis' : `${metrics.length} elegíveis nos filtros`}
+            <span className="inline-flex items-center px-2.5 py-1 rounded-md bg-purple-50 text-purple-900 border border-purple-300 font-mono text-xs font-semibold">
+              {loading ? 'Consultando elegibilidade' : error ? 'Dados indisponíveis' : `${metrics.length} elegíveis`}
             </span>
           </div>
-          <p className="text-xs sm:text-sm text-[#77766F] mt-0.5">
+          <p className="text-xs sm:text-sm text-[#77766F] mt-1.5">
             Acompanhe o cumprimento operacional das rotas e atendimentos de campo.
           </p>
         </div>
 
-        {/* Botão de Configurações e Exportação */}
+        {/* Botão de Exportação */}
         <div className="flex items-center gap-2 self-start sm:self-auto">
           <button
             onClick={handleExport}
             disabled={loading || filteredSummaries.length === 0}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#F7F6F2] hover:bg-[#E4E2DB] text-[#171717] border border-[#CFCDC5] text-xs font-semibold shadow-xs transition-all"
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#F7F6F2] hover:bg-[#E4E2DB] text-[#171717] border border-[#CFCDC5] text-xs font-semibold shadow-xs transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             title="Exportar planilha"
           >
             <span className="material-symbols-outlined text-[18px]">download</span>
             <span className="hidden sm:inline">Exportar</span>
           </button>
-          <button
-            onClick={() => setShowConfig(!showConfig)}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl border text-xs font-bold transition-all shadow-xs cursor-pointer ${
-              showConfig
-                ? 'bg-[#222222] text-white border-black'
-                : 'bg-[#F7F6F2] hover:bg-[#E4E2DB] text-[#171717] border-[#CFCDC5]'
-            }`}
-          >
-            <span className="material-symbols-outlined text-[18px]">settings</span>
-            <span>Configurações</span>
-          </button>
         </div>
       </div>
-      <div className="flex flex-wrap items-center gap-3 px-1">
-        <label className="flex items-center gap-2 text-xs text-[#5F5F5F]">
-          Escopo do roteiro
-          <select aria-label="Escopo do roteiro" value={scopeFilter} onChange={e => setScopeFilter(e.target.value as typeof scopeFilter)} className="rounded-lg border border-[#CFCDC5] bg-[#F7F6F2] px-2 py-1 text-[#171717]">
-            <option value="com_roteiro">Com roteiro</option><option value="todos">Todos</option><option value="sem_programacao">Sem programação</option>
-          </select>
-        </label>
-        {statusFilter !== 'ALL' && <button onClick={() => setStatusFilter('ALL')} className="rounded-full border border-[#CFCDC5] px-3 py-1 text-xs text-[#171717]">Limpar filtro de roteiro</button>}
-      </div>
 
-      {warnings.map(message => <div key={message} role="status" className="rounded-xl border border-amber-400 bg-amber-50 p-3 text-xs text-amber-950">{message}</div>)}
-      {canEdit && <AttendanceJourneyPanel promoters={promoters} onSaved={()=>void fetchAttendanceData()} />}
+      {(pending.supervisors.length > 0 || pending.journeys.length > 0 || warnings.length > 0) && (
+        <details className="rounded-xl border border-amber-300 bg-amber-50/90 p-3 text-xs text-amber-950 transition-all">
+          <summary className="cursor-pointer font-semibold flex items-center justify-between select-none">
+            <span className="flex items-center gap-2">
+              <span className="material-symbols-outlined text-amber-700 text-base">warning</span>
+              <span>Pendências: <strong>{pending.supervisors.length}</strong> de supervisão · <strong>{pending.journeys.length}</strong> de jornada</span>
+            </span>
+            <span className="text-[11px] font-normal underline text-amber-900">Ver detalhes</span>
+          </summary>
+          <div className="mt-2.5 pt-2 border-t border-amber-200/80 space-y-3">
+            {pending.supervisors.length > 0 && (
+              <section className="bg-white/60 p-2.5 rounded-lg border border-amber-200">
+                <div className="flex items-center justify-between mb-1.5">
+                  <h2 className="font-bold text-amber-900">Supervisão pendente ({pending.supervisors.length})</h2>
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-[#222222] hover:bg-black text-white text-[11px] font-semibold transition-colors"
+                    onClick={() => onNavigate('gestao-equipes')}
+                  >
+                    <span className="material-symbols-outlined text-[14px]">groups</span>
+                    <span>Abrir Gestão de Equipes</span>
+                  </button>
+                </div>
+                <ul className="divide-y divide-amber-100 max-h-36 overflow-y-auto pr-1">
+                  {pending.supervisors.map(i => (
+                    <li key={i.matricula} className="py-1 flex items-center justify-between text-[11px]">
+                      <span className="font-medium text-[#171717]">{i.name} <span className="font-mono text-[#77766F]">({i.matricula})</span></span>
+                      <span className="text-amber-800 font-semibold">{i.supervisor}</span>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+            {pending.journeys.length > 0 && (
+              <section className="bg-white/60 p-2.5 rounded-lg border border-amber-200">
+                <h2 className="font-bold text-amber-900 mb-1">Programação sem jornada vigente ({pending.journeys.length})</h2>
+                <ul className="divide-y divide-amber-100 max-h-36 overflow-y-auto pr-1">
+                  {pending.journeys.map(i => (
+                    <li key={i.matricula} className="py-1 text-[11px] text-[#171717]">
+                      <span className="font-medium">{i.name}</span> <span className="font-mono text-[#77766F]">({i.matricula})</span>
+                    </li>
+                  ))}
+                </ul>
+                <p className="text-[11px] text-amber-800/90 mt-1.5">Solicite revisão cadastral ao responsável. Programação de visitas não define jornada.</p>
+              </section>
+            )}
+            {warnings.map(message => <p key={message} className="text-[11px] text-amber-900" role="status">{message}</p>)}
+          </div>
+        </details>
+      )}
       {audit && <div role="dialog" aria-modal="true" aria-label="Histórico de ajustes" className="fixed inset-0 z-50 bg-black/70 p-4 flex items-center justify-center"><div className="bg-[#F7F6F2] text-[#171717] p-5 rounded-xl max-w-2xl w-full max-h-[80vh] overflow-auto"><h2 className="font-bold">Histórico de ajustes — {audit.name}</h2><button className="my-3 border rounded px-3 py-2" onClick={()=>setAudit(null)}>Fechar histórico</button>{audit.rows.length===0?<p>Nenhum ajuste manual nesta data.</p>:audit.rows.map(row=><article key={row.id} className="border-t py-3 text-sm"><p>{row.changed_by_name} • {zoned(row.changed_at,timezone).date} {zoned(row.changed_at,timezone).time}</p><p>Anterior: {row.previous_value?.override_status || 'Sem ajuste'} → Novo: {row.new_value?.override_status}</p><p>Justificativa: {row.justification}</p></article>)}</div></div>}
-      {/* Metric KPI Tiles */}
-      {(() => {
+      {/* Metric KPI Tiles (Presença dos Promotores) */}
+      <section aria-label="Indicadores de Presença">
+        <div className="flex items-center gap-2 mb-2 px-1">
+          <span className="material-symbols-outlined text-[18px] text-purple-700">badge</span>
+          <h2 className="text-xs font-bold uppercase tracking-wider font-mono text-[#5F5F5F]">Presença e Frequência Operacional</h2>
+        </div>
+        {(() => {
         const total = metrics.length;
         const presentes = metrics.filter((i) => i.status === 'presente').length;
         const faltas = metrics.filter((i) => i.status === 'falta').length;
@@ -322,7 +353,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
         return (
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
             {/* Presentes */}
-            <div className="relative overflow-hidden rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] p-5 shadow-lg hover:border-emerald-500/40 transition-all">
+            <div className="relative overflow-hidden rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] p-5 shadow-xs hover:border-emerald-500/40 transition-all">
               <div className="absolute top-0 left-0 right-0 h-1 bg-emerald-500" />
               <div className="flex items-start justify-between">
                 <div className="space-y-1">
@@ -343,7 +374,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
             </div>
 
             {/* Faltas */}
-            <div className="relative overflow-hidden rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] p-5 shadow-lg hover:border-rose-500/40 transition-all">
+            <div className="relative overflow-hidden rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] p-5 shadow-xs hover:border-rose-500/40 transition-all">
               <div className="absolute top-0 left-0 right-0 h-1 bg-rose-500" />
               <div className="flex items-start justify-between">
                 <div className="space-y-1">
@@ -364,7 +395,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
             </div>
 
             {/* Atestados */}
-            <div className="relative overflow-hidden rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] p-5 shadow-lg hover:border-cyan-500/40 transition-all">
+            <div className="relative overflow-hidden rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] p-5 shadow-xs hover:border-cyan-500/40 transition-all">
               <div className="absolute top-0 left-0 right-0 h-1 bg-cyan-400" />
               <div className="flex items-start justify-between">
                 <div className="space-y-1">
@@ -385,7 +416,7 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
             </div>
 
             {/* Sem Registro */}
-            <div className="relative overflow-hidden rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] p-5 shadow-lg hover:border-purple-500/40 transition-all">
+            <div className="relative overflow-hidden rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] p-5 shadow-xs hover:border-purple-500/40 transition-all">
               <div className="absolute top-0 left-0 right-0 h-1 bg-slate-500" />
               <div className="flex items-start justify-between">
                 <div className="space-y-1">
@@ -407,58 +438,12 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
           </div>
         );
       })()}
+      </section>
 
-      {/* ÁREA DE CONFIGURAÇÕES (RECOLHÍVEL) */}
-      {showConfig && (
-        <div className="p-5 rounded-2xl bg-[#EAE8E2] border border-[#CFCDC5] space-y-4">
-          <div className="flex items-center justify-between pb-3 border-b border-[#CFCDC5]">
-            <div className="flex items-center gap-2">
-              <span className="material-symbols-outlined text-purple-700">tune</span>
-              <h2 className="font-bold text-sm text-[#171717]">Configurações Operacionais e Administrativas</h2>
-            </div>
-            <button
-              onClick={() => setShowConfig(false)}
-              className="p-1 text-[#77766F] hover:text-[#171717] rounded-lg"
-            >
-              <span className="material-symbols-outlined text-lg">close</span>
-            </button>
-          </div>
-
-          {/* Avisos consolidados recolhíveis */}
-          {warnings.length > 0 && (
-            <details className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-950">
-              <summary className="font-bold cursor-pointer select-none">
-                Avisos do Sistema ({warnings.length})
-              </summary>
-              <ul className="mt-2 list-disc list-inside space-y-1">
-                {warnings.map((msg, i) => <li key={i}>{msg}</li>)}
-              </ul>
-            </details>
-          )}
-
-          {canEdit && (
-            <AttendanceJourneyPanel
-              promoters={promoters}
-              onSaved={() => void fetchAttendanceData()}
-            />
-          )}
-
-          <div className="flex justify-end pt-2">
-            <button
-              onClick={() => onNavigate('gestao-equipes')}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#222222] text-white text-xs font-semibold hover:bg-black"
-            >
-              <span className="material-symbols-outlined text-[16px]">groups</span>
-              <span>Gerenciar equipes</span>
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* BARRA DE FILTROS: DATA, BUSCA POR PROMOTOR E SUPERVISOR */}
+      {/* BARRA DE FILTROS: DATA, BUSCA POR PROMOTOR, SUPERVISOR E ESCOPO */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3 p-4 rounded-xl bg-[#F7F6F2] border border-[#CFCDC5]">
         {/* Data selecionada */}
-        <div className="lg:col-span-3 flex items-center bg-[#EAE8E2] border border-[#CFCDC5] px-3 py-2 rounded-lg">
+        <div className="lg:col-span-3 flex items-center bg-[#EAE8E2] border border-[#CFCDC5] px-3 py-2 rounded-lg focus-within:border-black transition-colors">
           <span className="material-symbols-outlined text-[#77766F] mr-2 text-[18px]">calendar_today</span>
           <div className="flex flex-col min-w-0 flex-1">
             <span className="text-[9px] uppercase font-mono font-bold text-[#77766F]">Data Operacional</span>
@@ -473,26 +458,29 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
         </div>
 
         {/* Busca por Promotor */}
-        <div className="lg:col-span-5 flex items-center bg-[#EAE8E2] border border-[#CFCDC5] px-3 py-2 rounded-lg">
-          <span className="material-symbols-outlined text-[#77766F] mr-2 text-[18px]">search</span>
-          <input
-            type="text"
-            aria-label="Buscar promotor ou matrícula"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Buscar promotor por nome ou matrícula..."
-            className="w-full bg-transparent text-xs text-[#171717] placeholder:text-[#77766F] focus:outline-none"
-          />
+        <div className={`lg:col-span-4 flex items-center border px-3 py-2 rounded-lg transition-colors ${search ? 'bg-white border-black ring-1 ring-black/10' : 'bg-[#EAE8E2] border-[#CFCDC5]'}`}>
+          <span className={`material-symbols-outlined mr-2 text-[18px] ${search ? 'text-[#171717]' : 'text-[#77766F]'}`}>search</span>
+          <div className="flex flex-col min-w-0 flex-1">
+            <span className="text-[9px] uppercase font-mono font-bold text-[#77766F]">Buscar Promotor</span>
+            <input
+              type="text"
+              aria-label="Buscar promotor ou matrícula"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Nome ou matrícula..."
+              className="w-full bg-transparent text-xs text-[#171717] placeholder:text-[#77766F] focus:outline-none font-medium"
+            />
+          </div>
           {search && (
-            <button onClick={() => setSearch('')} className="text-[#77766F] hover:text-[#171717] p-1">
+            <button onClick={() => setSearch('')} title="Limpar busca" className="text-[#77766F] hover:text-[#171717] p-1 text-xs">
               ✕
             </button>
           )}
         </div>
 
         {/* Filtro por Supervisor */}
-        <div className="lg:col-span-4 flex items-center bg-[#EAE8E2] border border-[#CFCDC5] px-3 py-2 rounded-lg">
-          <span className="material-symbols-outlined text-[#77766F] mr-2 text-[18px]">supervisor_account</span>
+        <div className={`lg:col-span-3 flex items-center border px-3 py-2 rounded-lg transition-colors ${supervisorFilter ? 'bg-white border-black ring-1 ring-black/10' : 'bg-[#EAE8E2] border-[#CFCDC5]'}`}>
+          <span className={`material-symbols-outlined mr-2 text-[18px] ${supervisorFilter ? 'text-[#171717]' : 'text-[#77766F]'}`}>supervisor_account</span>
           <div className="flex flex-col min-w-0 flex-1">
             <span className="text-[9px] uppercase font-mono font-bold text-[#77766F]">Supervisor</span>
             <select
@@ -507,88 +495,187 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
               ))}
             </select>
           </div>
+          {supervisorFilter && (
+            <button onClick={() => setSupervisorFilter('')} title="Limpar supervisor" className="text-[#77766F] hover:text-[#171717] p-1 text-xs">
+              ✕
+            </button>
+          )}
+        </div>
+
+        {/* Escopo do roteiro */}
+        <div className={`lg:col-span-2 flex items-center border px-3 py-2 rounded-lg transition-colors ${scopeFilter !== 'com_roteiro' ? 'bg-white border-black ring-1 ring-black/10' : 'bg-[#EAE8E2] border-[#CFCDC5]'}`}>
+          <div className="flex flex-col min-w-0 flex-1">
+            <span className="text-[9px] uppercase font-mono font-bold text-[#77766F]">Escopo Roteiro</span>
+            <select
+              aria-label="Escopo do roteiro"
+              value={scopeFilter}
+              onChange={e => setScopeFilter(e.target.value as typeof scopeFilter)}
+              className="bg-transparent text-xs text-[#171717] focus:outline-none cursor-pointer font-medium"
+            >
+              <option value="com_roteiro" className="bg-[#F7F6F2]">Com roteiro</option>
+              <option value="todos" className="bg-[#F7F6F2]">Todos</option>
+              <option value="sem_programacao" className="bg-[#F7F6F2]">Sem programação</option>
+            </select>
+          </div>
         </div>
       </div>
-      <div className="flex flex-wrap items-center gap-2 px-1">
-        <button onClick={() => setQuickFilter('falta')} className={`px-3 py-1 rounded-full text-xs font-semibold transition-all ${quickFilter === 'falta' ? 'bg-rose-600 text-white font-bold' : 'bg-[#EAE8E2] text-rose-700 hover:bg-rose-50 border border-[#CFCDC5]'}`}>
-          Somente Faltas ({metrics.filter((i) => i.status === 'falta').length})
-        </button>
-        <button onClick={() => setQuickFilter('atestado')} className={`px-3 py-1 rounded-full text-xs font-semibold transition-all ${quickFilter === 'atestado' ? 'bg-[#087F9C] text-white font-bold' : 'bg-[#EAE8E2] text-[#087F9C] hover:bg-cyan-50 border border-[#CFCDC5]'}`}>
-          Atestados ({metrics.filter((i) => i.status === 'atestado').length})
-        </button>
-        <button onClick={() => setQuickFilter('sem_registro')} className={`px-3 py-1 rounded-full text-xs font-semibold transition-all ${quickFilter === 'sem_registro' ? 'bg-[#5F5F5F] text-white font-bold' : 'bg-[#EAE8E2] text-[#5F5F5F] hover:bg-[#E4E2DB] border border-[#CFCDC5]'}`}>
-          Sem Registro ({metrics.filter((i) => i.status === 'sem_registro').length})
-        </button>
-        <button onClick={() => setQuickFilter('sem_expediente')} className={`px-3 py-1 rounded-full text-xs font-semibold transition-all ${quickFilter === 'sem_expediente' ? 'bg-amber-700 text-white font-bold' : 'bg-[#EAE8E2] text-amber-800 hover:bg-amber-100 border border-[#CFCDC5]'}`}>
-          Sem Expediente ({items.filter((i) => i.operationalStatus === 'sem_expediente').length})
-        </button>
-        <button onClick={() => setQuickFilter('atestado_pendente')} aria-pressed={quickFilter === 'atestado_pendente'} className="px-3 py-1 rounded-full text-xs font-semibold border border-cyan-700 text-cyan-900">
-          Atestados pendentes
-        </button>
-        <label className="text-xs text-[#5F5F5F] flex items-center gap-2 cursor-pointer select-none">
-          <input type="checkbox" checked={includeOffSchedule} onChange={e => setIncludeOffSchedule(e.target.checked)} />
-          Incluir folgas e sem expediente (fora dos indicadores)
-        </label>
+
+      {/* FILTROS RÁPIDOS E AÇÕES DE LIMPEZA */}
+      <div className="flex flex-wrap items-center justify-between gap-3 px-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => setQuickFilter(quickFilter === 'all' ? 'all' : 'all')}
+            className={`px-3 py-1 rounded-full text-xs font-semibold transition-all ${quickFilter === 'all' ? 'bg-[#222222] text-white shadow-xs' : 'bg-[#EAE8E2] text-[#5F5F5F] hover:bg-[#E4E2DB] border border-[#CFCDC5]'}`}
+          >
+            Todos ({items.length})
+          </button>
+          <button
+            onClick={() => setQuickFilter(quickFilter === 'falta' ? 'all' : 'falta')}
+            className={`px-3 py-1 rounded-full text-xs font-semibold transition-all ${quickFilter === 'falta' ? 'bg-rose-600 text-white shadow-xs' : 'bg-[#EAE8E2] text-rose-700 hover:bg-rose-50 border border-[#CFCDC5]'}`}
+          >
+            Somente Faltas ({metrics.filter((i) => i.status === 'falta').length})
+          </button>
+          <button
+            onClick={() => setQuickFilter(quickFilter === 'atestado' ? 'all' : 'atestado')}
+            className={`px-3 py-1 rounded-full text-xs font-semibold transition-all ${quickFilter === 'atestado' ? 'bg-[#087F9C] text-white shadow-xs' : 'bg-[#EAE8E2] text-[#087F9C] hover:bg-cyan-50 border border-[#CFCDC5]'}`}
+          >
+            Atestados ({metrics.filter((i) => i.status === 'atestado').length})
+          </button>
+          <button
+            onClick={() => setQuickFilter(quickFilter === 'sem_registro' ? 'all' : 'sem_registro')}
+            className={`px-3 py-1 rounded-full text-xs font-semibold transition-all ${quickFilter === 'sem_registro' ? 'bg-[#5F5F5F] text-white shadow-xs' : 'bg-[#EAE8E2] text-[#5F5F5F] hover:bg-[#E4E2DB] border border-[#CFCDC5]'}`}
+          >
+            Sem Registro ({metrics.filter((i) => i.status === 'sem_registro').length})
+          </button>
+          <button
+            onClick={() => setQuickFilter(quickFilter === 'sem_expediente' ? 'all' : 'sem_expediente')}
+            className={`px-3 py-1 rounded-full text-xs font-semibold transition-all ${quickFilter === 'sem_expediente' ? 'bg-amber-700 text-white shadow-xs' : 'bg-[#EAE8E2] text-amber-800 hover:bg-amber-100 border border-[#CFCDC5]'}`}
+          >
+            Sem Expediente ({items.filter((i) => i.operationalStatus === 'sem_expediente').length})
+          </button>
+          <button
+            onClick={() => setQuickFilter(quickFilter === 'atestado_pendente' ? 'all' : 'atestado_pendente')}
+            aria-pressed={quickFilter === 'atestado_pendente'}
+            className={`px-3 py-1 rounded-full text-xs font-semibold transition-all ${quickFilter === 'atestado_pendente' ? 'bg-cyan-800 text-white shadow-xs' : 'border border-cyan-700 text-cyan-900 hover:bg-cyan-50 bg-[#EAE8E2]'}`}
+          >
+            Atestados pendentes
+          </button>
+          <label className="text-xs text-[#5F5F5F] flex items-center gap-2 cursor-pointer select-none ml-2">
+            <input type="checkbox" checked={includeOffSchedule} onChange={e => setIncludeOffSchedule(e.target.checked)} className="rounded text-purple-600 focus:ring-0" />
+            <span>Incluir folgas e sem expediente</span>
+          </label>
+        </div>
+
+        {/* Botão Limpar Filtros geral */}
+        {(search || supervisorFilter || scopeFilter !== 'com_roteiro' || statusFilter !== 'ALL' || quickFilter !== 'all' || includeOffSchedule) && (
+          <button
+            type="button"
+            onClick={() => {
+              setSearch('');
+              setSupervisorFilter('');
+              setScopeFilter('com_roteiro');
+              setStatusFilter('ALL');
+              setQuickFilter('all');
+              setIncludeOffSchedule(false);
+            }}
+            className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200 text-xs font-semibold transition-colors"
+          >
+            <span className="material-symbols-outlined text-[15px]">filter_alt_off</span>
+            <span>Limpar filtros</span>
+          </button>
+        )}
       </div>
 
-      {/* 2. QUATRO INDICADORES SIMPLES */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        {/* Completas */}
-        <button aria-pressed={statusFilter === 'COMPLETO'} onClick={() => setStatusFilter(statusFilter === 'COMPLETO' ? 'ALL' : 'COMPLETO')} className="text-left p-4 rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] flex items-center justify-between shadow-xs">
-          <div>
-            <span className="text-[11px] font-bold text-[#77766F] uppercase tracking-wider font-mono">Completas</span>
-            <div className="text-2xl font-extrabold text-emerald-700 font-mono mt-0.5">
-              {loading ? '—' : kpiMetrics.completos}
+      {/* 2. EXECUÇÃO DE ROTEIROS E VISITAS (STATUS DA ROTA) */}
+      <section aria-label="Indicadores de Execução de Visitas">
+        <div className="flex items-center justify-between mb-2 px-1">
+          <div className="flex items-center gap-2">
+            <span className="material-symbols-outlined text-[18px] text-blue-700">alt_route</span>
+            <h2 className="text-xs font-bold uppercase tracking-wider font-mono text-[#5F5F5F]">Execução de Roteiros e Visitas de Campo</h2>
+          </div>
+          {statusFilter !== 'ALL' && (
+            <button
+              onClick={() => setStatusFilter('ALL')}
+              className="text-xs text-blue-700 hover:underline font-medium"
+            >
+              Exibindo somente status {statusFilter.toLowerCase()} · Limpar filtro de roteiro
+            </button>
+          )}
+        </div>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          {/* Completas */}
+          <button
+            aria-pressed={statusFilter === 'COMPLETO'}
+            onClick={() => setStatusFilter(statusFilter === 'COMPLETO' ? 'ALL' : 'COMPLETO')}
+            className={`text-left p-4 rounded-xl border flex items-center justify-between shadow-xs transition-all ${statusFilter === 'COMPLETO' ? 'bg-emerald-50/80 border-emerald-500 ring-2 ring-emerald-500/20' : 'bg-[#F7F6F2] border-[#CFCDC5] hover:border-emerald-500/50'}`}
+          >
+            <div>
+              <span className="text-[11px] font-bold text-[#77766F] uppercase tracking-wider font-mono">Completas</span>
+              <div className="text-2xl font-extrabold text-emerald-700 font-mono mt-0.5">
+                {loading ? '—' : kpiMetrics.completos}
+              </div>
+              <p className="text-[10px] text-[#77766F] mt-1">Todas visitas realizadas</p>
             </div>
-            <p className="text-[10px] text-[#77766F] mt-1">Todas visitas realizadas</p>
-          </div>
-          <div className="p-2.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200">
-            <span className="material-symbols-outlined text-2xl">task_alt</span>
-          </div>
-        </button>
+            <div className="p-2.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200">
+              <span className="material-symbols-outlined text-2xl">task_alt</span>
+            </div>
+          </button>
 
-        {/* Parciais */}
-        <button aria-pressed={statusFilter === 'PARCIAL'} onClick={() => setStatusFilter(statusFilter === 'PARCIAL' ? 'ALL' : 'PARCIAL')} className="text-left p-4 rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] flex items-center justify-between shadow-xs">
-          <div>
-            <span className="text-[11px] font-bold text-[#77766F] uppercase tracking-wider font-mono">Parciais</span>
-            <div className="text-2xl font-extrabold text-amber-700 font-mono mt-0.5">
-              {loading ? '—' : kpiMetrics.parciais}
+          {/* Parciais */}
+          <button
+            aria-pressed={statusFilter === 'PARCIAL'}
+            onClick={() => setStatusFilter(statusFilter === 'PARCIAL' ? 'ALL' : 'PARCIAL')}
+            className={`text-left p-4 rounded-xl border flex items-center justify-between shadow-xs transition-all ${statusFilter === 'PARCIAL' ? 'bg-amber-50/80 border-amber-500 ring-2 ring-amber-500/20' : 'bg-[#F7F6F2] border-[#CFCDC5] hover:border-amber-500/50'}`}
+          >
+            <div>
+              <span className="text-[11px] font-bold text-[#77766F] uppercase tracking-wider font-mono">Parciais</span>
+              <div className="text-2xl font-extrabold text-amber-700 font-mono mt-0.5">
+                {loading ? '—' : kpiMetrics.parciais}
+              </div>
+              <p className="text-[10px] text-[#77766F] mt-1">Ao menos 1 concluída</p>
             </div>
-            <p className="text-[10px] text-[#77766F] mt-1">Ao menos 1 concluída</p>
-          </div>
-          <div className="p-2.5 rounded-lg bg-amber-50 text-amber-700 border border-amber-200">
-            <span className="material-symbols-outlined text-2xl">timelapse</span>
-          </div>
-        </button>
+            <div className="p-2.5 rounded-lg bg-amber-50 text-amber-700 border border-amber-200">
+              <span className="material-symbols-outlined text-2xl">timelapse</span>
+            </div>
+          </button>
 
-        {/* Não realizadas */}
-        <button aria-pressed={statusFilter === 'NAO_REALIZADO'} onClick={() => setStatusFilter(statusFilter === 'NAO_REALIZADO' ? 'ALL' : 'NAO_REALIZADO')} className="text-left p-4 rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] flex items-center justify-between shadow-xs">
-          <div>
-            <span className="text-[11px] font-bold text-[#77766F] uppercase tracking-wider font-mono">Não Realizadas</span>
-            <div className="text-2xl font-extrabold text-rose-700 font-mono mt-0.5">
-            {loading ? '—' : kpiMetrics.naoRealizados}
+          {/* Não realizadas */}
+          <button
+            aria-pressed={statusFilter === 'NAO_REALIZADO'}
+            onClick={() => setStatusFilter(statusFilter === 'NAO_REALIZADO' ? 'ALL' : 'NAO_REALIZADO')}
+            className={`text-left p-4 rounded-xl border flex items-center justify-between shadow-xs transition-all ${statusFilter === 'NAO_REALIZADO' ? 'bg-rose-50/80 border-rose-500 ring-2 ring-rose-500/20' : 'bg-[#F7F6F2] border-[#CFCDC5] hover:border-rose-500/50'}`}
+          >
+            <div>
+              <span className="text-[11px] font-bold text-[#77766F] uppercase tracking-wider font-mono">Não Realizadas</span>
+              <div className="text-2xl font-extrabold text-rose-700 font-mono mt-0.5">
+                {loading ? '—' : kpiMetrics.naoRealizados}
+              </div>
+              <p className="text-[10px] text-[#77766F] mt-1">Nenhuma concluída</p>
             </div>
-            <p className="text-[10px] text-[#77766F] mt-1">Nenhuma concluída</p>
-          </div>
-          <div className="p-2.5 rounded-lg bg-rose-50 text-rose-700 border border-rose-200">
-            <span className="material-symbols-outlined text-2xl">cancel</span>
-          </div>
-        </button>
+            <div className="p-2.5 rounded-lg bg-rose-50 text-rose-700 border border-rose-200">
+              <span className="material-symbols-outlined text-2xl">cancel</span>
+            </div>
+          </button>
 
-        {/* Em andamento */}
-        <button aria-pressed={statusFilter === 'EM_ATIVIDADE'} onClick={() => setStatusFilter(statusFilter === 'EM_ATIVIDADE' ? 'ALL' : 'EM_ATIVIDADE')} className="text-left p-4 rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] flex items-center justify-between shadow-xs">
-          <div>
-            <span className="text-[11px] font-bold text-[#77766F] uppercase tracking-wider font-mono">Em Andamento</span>
-            <div className="text-2xl font-extrabold text-blue-700 font-mono mt-0.5">
-              {loading ? '—' : kpiMetrics.emAtividade}
+          {/* Em andamento */}
+          <button
+            aria-pressed={statusFilter === 'EM_ATIVIDADE'}
+            onClick={() => setStatusFilter(statusFilter === 'EM_ATIVIDADE' ? 'ALL' : 'EM_ATIVIDADE')}
+            className={`text-left p-4 rounded-xl border flex items-center justify-between shadow-xs transition-all ${statusFilter === 'EM_ATIVIDADE' ? 'bg-blue-50/80 border-blue-500 ring-2 ring-blue-500/20' : 'bg-[#F7F6F2] border-[#CFCDC5] hover:border-blue-500/50'}`}
+          >
+            <div>
+              <span className="text-[11px] font-bold text-[#77766F] uppercase tracking-wider font-mono">Em Andamento</span>
+              <div className="text-2xl font-extrabold text-blue-700 font-mono mt-0.5">
+                {loading ? '—' : kpiMetrics.emAtividade}
+              </div>
+              <p className="text-[10px] text-[#77766F] mt-1">Dia atual em campo</p>
             </div>
-            <p className="text-[10px] text-[#77766F] mt-1">Dia atual em campo</p>
-          </div>
-          <div className="p-2.5 rounded-lg bg-blue-50 text-blue-700 border border-blue-200">
-            <span className="material-symbols-outlined text-2xl">pending_actions</span>
-          </div>
-        </button>
-      </div>
+            <div className="p-2.5 rounded-lg bg-blue-50 text-blue-700 border border-blue-200">
+              <span className="material-symbols-outlined text-2xl">pending_actions</span>
+            </div>
+          </button>
+        </div>
+      </section>
 
       {/* 3. TABELA PRINCIPAL SIMPLES */}
       {loading ? (
@@ -617,12 +704,20 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
         <div className="rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] p-10 text-center shadow-xs">
           <div className="max-w-md mx-auto space-y-3 flex flex-col items-center">
             <div className="w-14 h-14 rounded-full bg-[#EAE8E2] border border-[#CFCDC5] flex items-center justify-center text-[#77766F]">
-              <span className="material-symbols-outlined text-3xl">person_off</span>
+              <span className="material-symbols-outlined text-3xl">
+                {items.length === 0 ? 'event_busy' : 'person_search'}
+              </span>
             </div>
             <div className="space-y-1">
-              <h3 className="text-base font-bold text-[#171717]">{items.length ? 'Nenhum promotor corresponde aos filtros.' : 'Nenhum promotor disponível nesta data.'}</h3>
+              <h3 className="text-base font-bold text-[#171717]">
+                {items.length === 0
+                  ? `Nenhum promotor cadastrado ou escalado para a data ${dateVal}.`
+                  : 'Nenhum promotor corresponde aos filtros selecionados.'}
+              </h3>
               <p className="text-xs text-[#77766F]">
-                Nenhum registro de presença ou telemetria operacional foi cadastrado ou encontrado com os filtros aplicados.
+                {items.length === 0
+                  ? 'Não há registros de presença, escalas ou visitas programadas para esta data operacional no sistema.'
+                  : 'Existem promotores nesta data, porém nenhum atende à combinação de filtros, busca ou status atual.'}
               </p>
             </div>
             <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
@@ -635,16 +730,21 @@ export const AttendanceControlView: React.FC<AttendanceControlViewProps> = ({
                   <span>Ver promotores sem expediente ({semJornada})</span>
                 </button>
               )}
-            </div>
-            <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
-            {(search || supervisorFilter) && (
-              <button
-                onClick={() => { setSearch(''); setSupervisorFilter(''); }}
-                className="px-3 py-1.5 rounded-lg bg-[#222222] text-white text-xs font-semibold"
-              >
-                Limpar filtros
-              </button>
-            )}
+              {(search || supervisorFilter || scopeFilter !== 'com_roteiro' || statusFilter !== 'ALL' || quickFilter !== 'all' || includeOffSchedule) && (
+                <button
+                  onClick={() => {
+                    setSearch('');
+                    setSupervisorFilter('');
+                    setScopeFilter('com_roteiro');
+                    setStatusFilter('ALL');
+                    setQuickFilter('all');
+                    setIncludeOffSchedule(false);
+                  }}
+                  className="px-4 py-2 rounded-xl bg-[#222222] hover:bg-black text-white text-xs font-semibold shadow-xs transition-colors"
+                >
+                  Limpar todos os filtros
+                </button>
+              )}
             </div>
           </div>
         </div>

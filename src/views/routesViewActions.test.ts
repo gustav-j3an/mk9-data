@@ -31,3 +31,10 @@ test('editing validates and persists assignment and schedule fields, then refres
   assert.match(source, /await fetchRoutes\(\)/);
   assert.match(source, /disabled=\{Boolean\(r\.encerrada_em\)\}/);
 });
+
+test('rotas query does not request nonexistent column data or sequencia', async () => {
+  const source = await readFile(new URL('./RoutesView.tsx', import.meta.url), 'utf8');
+  assert.doesNotMatch(source, /id,codigo_rota,data,/);
+  assert.doesNotMatch(source, /,sequencia,/);
+  assert.match(source, /id,codigo_rota,promotor_matricula,loja_codigo,industria_codigo,observacao,/);
+});

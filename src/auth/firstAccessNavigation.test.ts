@@ -58,8 +58,9 @@ test('restauração da sessão controla o loading e evita substituir sessão por
   const authProvider = await source('./AuthProvider.tsx');
   assert.match(authProvider, /let authEventReceived = false/);
   assert.match(authProvider, /if \(!active \|\| authEventReceived\) return/);
-  assert.match(authProvider, /getSession\(\)\.then\(async/);
-  assert.match(authProvider, /finally\(\(\) => \{\s*if \(active && !authEventReceived\) setLoading\(false\)/);
+  assert.match(authProvider, /settleWithin\(\s*supabase\.auth\.getSession\(\),\s*SESSION_RESTORE_TIMEOUT_MS/);
+  assert.match(authProvider, /if \(active && !authEventReceived\) setLoading\(false\)/);
+  assert.match(authProvider, /setProfile\(null\);\s*setError\(profileError/);
 });
 
 test('acesso interno não autenticado preserva destino completo e login usa caminho local', async () => {

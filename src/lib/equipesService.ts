@@ -36,12 +36,26 @@ export function calculateTeamsMetrics(
 ): EquipeWithMetrics[] {
   if (!Array.isArray(equipes)) return [];
 
+  // Mapear correspondência de cada equipe (tanto por nome quanto por código)
+  // para uma chave canônica única (ID da equipe)
+  const teamById = new Map<string, Equipe>();
+  const lookupToTeamId = new Map<string, string>();
+
+  equipes.forEach((eq) => {
+    teamById.set(eq.id, eq);
+    if (eq.nome && eq.nome.trim()) {
+      lookupToTeamId.set(eq.nome.trim().toUpperCase(), eq.id);
+    }
+    if (eq.codigo && eq.codigo.trim()) {
+      lookupToTeamId.set(eq.codigo.trim().toUpperCase(), eq.id);
+    }
+  });
+
   // 1. Mapear promotores por equipe
-  // Chave: equipeNome (em maiúsculas/normalizado para correspondência segura)
-  // Valor: Set de matrículas únicas
+  // Chave: teamId -> Set de matrículas únicas
   const teamPromoterMatriculas = new Map<string, Set<string>>();
-  // Mapear também matrícula do promotor para sua equipe normalizada
-  const promoterToTeamMap = new Map<string, string>();
+  // Mapear também matrícula do promotor para teamId
+  const promoterToTeamIdMap = new Map<string, string>();
 
   (promotores || []).forEach((p) => {
     const rawEquipe = normalizeEquipeNome(p.equipe);
@@ -49,18 +63,19 @@ export function calculateTeamsMetrics(
     if (!rawEquipe || !matricula) return;
 
     const normalizedEquipeKey = rawEquipe.toUpperCase();
+    const teamId = lookupToTeamId.get(normalizedEquipeKey) || normalizedEquipeKey;
 
-    let set = teamPromoterMatriculas.get(normalizedEquipeKey);
+    let set = teamPromoterMatriculas.get(teamId);
     if (!set) {
       set = new Set<string>();
-      teamPromoterMatriculas.set(normalizedEquipeKey, set);
+      teamPromoterMatriculas.set(teamId, set);
     }
     set.add(matricula);
-    promoterToTeamMap.set(matricula, normalizedEquipeKey);
+    promoterToTeamIdMap.set(matricula, teamId);
   });
 
   // 2. Mapear PDVs distintos por equipe a partir de rotas
-  // Chave: normalizedEquipeKey -> Set de loja_codigo únicos
+  // Chave: teamId -> Set de loja_codigo únicos
   const teamPdvs = new Map<string, Set<string>>();
 
   (rotas || []).forEach((r) => {
@@ -68,22 +83,23 @@ export function calculateTeamsMetrics(
     const lojaCodigo = (r.loja_codigo || '').trim();
     if (!matricula || !lojaCodigo) return;
 
-    const teamKey = promoterToTeamMap.get(matricula);
-    if (!teamKey) return; // Rota de promotor sem equipe ou equipe desconhecida
+    const teamId = promoterToTeamIdMap.get(matricula);
+    if (!teamId) return; // Rota de promotor sem equipe ou equipe desconhecida
 
-    let set = teamPdvs.get(teamKey);
+    let set = teamPdvs.get(teamId);
     if (!set) {
       set = new Set<string>();
-      teamPdvs.set(teamKey, set);
+      teamPdvs.set(teamId, set);
     }
     set.add(lojaCodigo);
   });
 
   // 3. Montar lista de EquipeWithMetrics
   return equipes.map((eq) => {
-    const key = (eq.nome || '').trim().toUpperCase();
-    const promotoresCount = teamPromoterMatriculas.get(key)?.size || 0;
-    const pdvsCount = teamPdvs.get(key)?.size || 0;
+    const teamId = eq.id;
+    const fallbackKey = (eq.nome || '').trim().toUpperCase();
+    const promotoresCount = teamPromoterMatriculas.get(teamId)?.size ?? teamPromoterMatriculas.get(fallbackKey)?.size ?? 0;
+    const pdvsCount = teamPdvs.get(teamId)?.size ?? teamPdvs.get(fallbackKey)?.size ?? 0;
 
     return {
       ...eq,
@@ -313,6 +329,7 @@ export const equipesService = {
       const payload: Record<string, any> = {
         nome: dto.nome.trim(),
         regional: dto.regional ? dto.regional.trim() : null,
+        supervisor_id: dto.supervisor_id ? dto.supervisor_id.trim() : null,
         supervisor_nome: dto.supervisor_nome ? dto.supervisor_nome.trim() : null,
         status: dto.status || 'ativa'
       };
@@ -372,6 +389,10 @@ export const equipesService = {
         payload.regional = dto.regional ? dto.regional.trim() : null;
       }
 
+      if (dto.supervisor_id !== undefined) {
+        payload.supervisor_id = dto.supervisor_id ? dto.supervisor_id.trim() : null;
+      }
+
       if (dto.supervisor_nome !== undefined) {
         payload.supervisor_nome = dto.supervisor_nome ? dto.supervisor_nome.trim() : null;
       }
@@ -409,23 +430,33 @@ export const equipesService = {
   },
 
   /**
-   * Lista os promotores reais vinculados a uma determinada equipe pelo nome (public.promotores.equipe).
+   * Lista os promotores reais vinculados a uma determinada equipe pelo nome ou código da equipe.
    */
-  async listPromotoresByEquipe(equipeNome: string): Promise<ServiceResponse<{ id: string; matricula: string; nome: string; cidade: string; uf: string; supervisor: string | null; status: string }[]>> {
+  async listPromotoresByEquipe(equipeNome: string, equipeCodigo?: string | null): Promise<ServiceResponse<{ id: string; matricula: string; nome: string; cidade: string; uf: string; supervisor: string | null; status: string }[]>> {
     if (!supabase) {
       return { data: null, error: new Error('Cliente Supabase não inicializado.') };
     }
 
-    if (!equipeNome || !equipeNome.trim()) {
+    const cleanNome = (equipeNome || '').trim();
+    const cleanCodigo = (equipeCodigo || '').trim();
+
+    if (!cleanNome && !cleanCodigo) {
       return { data: [], error: null };
     }
 
     try {
-      const { data, error } = await supabase
+      let query = supabase
         .from('promotores')
         .select('id, matricula, nome, cidade, uf, supervisor, status')
-        .eq('equipe', equipeNome.trim())
         .order('nome', { ascending: true });
+
+      if (cleanNome && cleanCodigo && cleanNome.toLowerCase() !== cleanCodigo.toLowerCase()) {
+        query = query.or(`equipe.eq.${cleanNome},equipe.eq.${cleanCodigo}`);
+      } else {
+        query = query.eq('equipe', cleanNome || cleanCodigo);
+      }
+
+      const { data, error } = await query;
 
       if (error) {
         return { data: null, error: new Error(`Erro ao listar promotores da equipe: ${error.message}`) };
@@ -440,11 +471,13 @@ export const equipesService = {
   /**
    * Atualiza a equipe dos promotores selecionados em lote na tabela public.promotores.
    * Utiliza os IDs (UUIDs primários) dos promotores para garantir exatidão e sem ambiguidade.
-   * Atualiza public.promotores.equipe para o nome exato da equipe de destino e atualiza updated_at.
+   * Atualiza public.promotores.equipe para o nome exato da equipe de destino (ou null se desvincular).
+   * Opcionalmente sincroniza o campo supervisor do promotor com o supervisor da equipe.
    */
   async transferPromotoresToEquipe(
     promoterIds: string[],
-    targetEquipeNome: string
+    targetEquipeNome: string | null,
+    targetSupervisorNome?: string | null
   ): Promise<ServiceResponse<{ updatedCount: number }>> {
     if (!supabase) {
       return { data: null, error: new Error('Cliente Supabase não inicializado.') };
@@ -454,24 +487,26 @@ export const equipesService = {
       return { data: null, error: new Error('Nenhum promotor selecionado para transferência.') };
     }
 
-    if (!targetEquipeNome || !targetEquipeNome.trim()) {
-      return { data: null, error: new Error('Equipe de destino é obrigatória.') };
-    }
-
     try {
-      const cleanTarget = targetEquipeNome.trim();
+      const cleanTarget = targetEquipeNome ? targetEquipeNome.trim() : null;
       const cleanIds = promoterIds.map((id) => id.trim()).filter(Boolean);
 
       if (cleanIds.length === 0) {
         return { data: null, error: new Error('Lista de IDs de promotores inválida.') };
       }
 
+      const updatePayload: Record<string, any> = {
+        equipe: cleanTarget,
+        updated_at: new Date().toISOString()
+      };
+
+      if (targetSupervisorNome !== undefined) {
+        updatePayload.supervisor = targetSupervisorNome ? targetSupervisorNome.trim() : null;
+      }
+
       const { data, error } = await supabase
         .from('promotores')
-        .update({
-          equipe: cleanTarget,
-          updated_at: new Date().toISOString()
-        })
+        .update(updatePayload)
         .in('id', cleanIds)
         .select('id');
 
@@ -491,6 +526,15 @@ export const equipesService = {
     } catch (err: any) {
       return { data: null, error: new Error(err?.message || 'Falha inesperada ao transferir promotores.') };
     }
+  },
+
+  /**
+   * Desvincula promotores de qualquer equipe (define equipe = null e supervisor = null).
+   */
+  async desvincularPromotores(
+    promoterIds: string[]
+  ): Promise<ServiceResponse<{ updatedCount: number }>> {
+    return this.transferPromotoresToEquipe(promoterIds, null, null);
   },
 
   /**
@@ -535,10 +579,12 @@ export const equipesService = {
    * Aplica verificação condicional contra race condition:
    * Garante que os promotores só sejam vinculados se ainda estiverem sem equipe (ou com equipe nula/vazia/'Nenhum'),
    * impedindo que uma atribuição simultânea feita por outro usuário seja sobrescrita inadvertidamente.
+   * Opcionalmente sincroniza o campo supervisor do promotor com o supervisor da equipe.
    */
   async vincularPromotoresAEquipe(
     promoterIds: string[],
-    targetEquipeNome: string
+    targetEquipeNome: string,
+    targetSupervisorNome?: string | null
   ): Promise<ServiceResponse<{ updatedCount: number; skippedCount: number }>> {
     if (!supabase) {
       return { data: null, error: new Error('Cliente Supabase não inicializado.') };
@@ -590,13 +636,19 @@ export const equipesService = {
         };
       }
 
-      // 2. Atualizar somente os promotores elegíveis, sem alterar supervisor
+      // 2. Atualizar os promotores elegíveis, atribuindo equipe e opcionalmente o supervisor
+      const updatePayload: Record<string, any> = {
+        equipe: cleanTarget,
+        updated_at: new Date().toISOString()
+      };
+
+      if (targetSupervisorNome !== undefined) {
+        updatePayload.supervisor = targetSupervisorNome ? targetSupervisorNome.trim() : null;
+      }
+
       const { data: updatedData, error: updateErr } = await supabase
         .from('promotores')
-        .update({
-          equipe: cleanTarget,
-          updated_at: new Date().toISOString()
-        })
+        .update(updatePayload)
         .in('id', eligibleIds)
         .or('equipe.is.null,equipe.eq.,equipe.ilike.nenhum') // verificação atômica no UPDATE
         .select('id');

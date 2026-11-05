@@ -334,14 +334,14 @@ export const TeamsManagementView: React.FC<TeamsManagementViewProps> = ({
     return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
   };
 
-  // Carregar promotores da equipe selecionada
-  const fetchTeamPromoters = useCallback(async (equipeNome: string) => {
-    if (!equipeNome) {
+  // Carregar promotores da equipe selecionada (busca tanto por nome quanto por código)
+  const fetchTeamPromoters = useCallback(async (equipeNome: string, equipeCodigo?: string | null) => {
+    if (!equipeNome && !equipeCodigo) {
       setTeamPromoters([]);
       return;
     }
     setLoadingPromoters(true);
-    const res = await equipesService.listPromotoresByEquipe(equipeNome);
+    const res = await equipesService.listPromotoresByEquipe(equipeNome, equipeCodigo);
     if (res.data) {
       setTeamPromoters(res.data);
     } else {
@@ -351,14 +351,14 @@ export const TeamsManagementView: React.FC<TeamsManagementViewProps> = ({
   }, []);
 
   useEffect(() => {
-    if (selectedEquipe?.nome) {
+    if (selectedEquipe?.nome || selectedEquipe?.codigo) {
       setSelectedPromoterIds([]);
-      fetchTeamPromoters(selectedEquipe.nome);
+      fetchTeamPromoters(selectedEquipe.nome, selectedEquipe.codigo);
     } else {
       setTeamPromoters([]);
       setSelectedPromoterIds([]);
     }
-  }, [selectedEquipe?.nome, fetchTeamPromoters]);
+  }, [selectedEquipe?.nome, selectedEquipe?.codigo, fetchTeamPromoters]);
 
   const handleTogglePromoter = (id: string) => {
     setSelectedPromoterIds((prev) =>
@@ -446,8 +446,51 @@ export const TeamsManagementView: React.FC<TeamsManagementViewProps> = ({
 
     setSelectedPromoterIds([]);
     setTargetSquadTransfer('');
-    if (selectedEquipe?.nome) {
-      fetchTeamPromoters(selectedEquipe.nome);
+    if (selectedEquipe) {
+      fetchTeamPromoters(selectedEquipe.nome, selectedEquipe.codigo);
+    }
+    if (selectedEquipe?.id) {
+      fetchEquipes(selectedEquipe.id);
+    }
+  };
+
+  const handleDesvincularBatch = async () => {
+    if (selectedPromoterIds.length === 0) {
+      onShowToast({
+        title: 'Nenhum Promotor Selecionado',
+        message: 'Marque ao menos um promotor da lista para desvincular.',
+        type: 'warning'
+      });
+      return;
+    }
+
+    const confirmDesvincular = window.confirm(
+      `Deseja realmente desvincular ${selectedPromoterIds.length} promotor(es) da equipe atual? Eles ficarão disponíveis para nova alocação.`
+    );
+    if (!confirmDesvincular) return;
+
+    setTransferring(true);
+    const res = await equipesService.desvincularPromotores(selectedPromoterIds);
+    setTransferring(false);
+
+    if (res.error || !res.data) {
+      onShowToast({
+        title: 'Erro ao Desvincular',
+        message: res.error?.message || 'Falha ao desvincular promotores.',
+        type: 'error'
+      });
+      return;
+    }
+
+    onShowToast({
+      title: 'Promotores Desvinculados',
+      message: `${res.data.updatedCount} promotor(es) foram desvinculados com sucesso e agora constam como disponíveis.`,
+      type: 'success'
+    });
+
+    setSelectedPromoterIds([]);
+    if (selectedEquipe) {
+      fetchTeamPromoters(selectedEquipe.nome, selectedEquipe.codigo);
     }
     if (selectedEquipe?.id) {
       fetchEquipes(selectedEquipe.id);
@@ -503,7 +546,8 @@ export const TeamsManagementView: React.FC<TeamsManagementViewProps> = ({
     setSavingVinculacao(true);
     const res = await equipesService.vincularPromotoresAEquipe(
       selectedToVincularIds,
-      selectedEquipe.nome
+      selectedEquipe.nome,
+      selectedEquipe.supervisor_nome || null
     );
     setSavingVinculacao(false);
 
@@ -536,8 +580,8 @@ export const TeamsManagementView: React.FC<TeamsManagementViewProps> = ({
     // Fechar modal, limpar seleções e atualizar lista da equipe
     setModalVincularOpen(false);
     setSelectedToVincularIds([]);
-    if (selectedEquipe?.nome) {
-      fetchTeamPromoters(selectedEquipe.nome);
+    if (selectedEquipe) {
+      fetchTeamPromoters(selectedEquipe.nome, selectedEquipe.codigo);
     }
     if (selectedEquipe?.id) {
       fetchEquipes(selectedEquipe.id);
@@ -1210,14 +1254,25 @@ export const TeamsManagementView: React.FC<TeamsManagementViewProps> = ({
                           </option>
                         ))}
                     </select>
-                    <button
-                      disabled={transferring}
-                      onClick={handleTransferBatch}
-                      className="w-full sm:w-auto shrink-0 px-4 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs shadow-xs transition-all flex items-center justify-center gap-1 cursor-pointer disabled:opacity-50"
-                    >
-                      <span className="material-symbols-outlined text-sm">forward</span>
-                      {transferring ? 'Transferindo...' : 'Transferir'}
-                    </button>
+                    <div className="flex items-center gap-2 w-full sm:w-auto">
+                      <button
+                        disabled={transferring || selectedPromoterIds.length === 0}
+                        onClick={handleTransferBatch}
+                        className="flex-1 sm:flex-none shrink-0 px-3.5 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs shadow-xs transition-all flex items-center justify-center gap-1 cursor-pointer disabled:opacity-50"
+                      >
+                        <span className="material-symbols-outlined text-sm">forward</span>
+                        <span>{transferring ? 'Transferindo...' : 'Transferir'}</span>
+                      </button>
+                      <button
+                        disabled={transferring || selectedPromoterIds.length === 0}
+                        onClick={handleDesvincularBatch}
+                        title="Desvincular promotores da equipe (deixando-os disponíveis)"
+                        className="flex-1 sm:flex-none shrink-0 px-3 py-2 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-300 font-bold text-xs shadow-xs transition-all flex items-center justify-center gap-1 cursor-pointer disabled:opacity-50"
+                      >
+                        <span className="material-symbols-outlined text-sm">cancel</span>
+                        <span>Desvincular</span>
+                      </button>
+                    </div>
                   </div>
                 </div>
                 {/* Lista Real de Promotores Vinculados à Equipe */}

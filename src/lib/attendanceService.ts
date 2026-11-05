@@ -88,13 +88,9 @@ export async function fetchAttendance(date: string) {
   });
   const warnings = [];
   if (missing.length) warnings.push(`Estruturas indisponíveis: ${missing.join(', ')}. Verifique as migrations deste ambiente. Ausência de tabela não comprova ausência de jornadas; cadastros e ajustes desabilitados.`);
-  if (!rules.close || rules.tolerance == null || !official || !officialStart) warnings.push('Faltas automáticas desabilitadas: fechamento, tolerância ou início da operação oficial não configurados.');
   const noSupervisor = items.filter(i => ['Não atribuído', 'Supervisor indisponível', 'Vínculo de equipe ambíguo'].includes(i.supervisor));
-  if (noSupervisor.length) warnings.push(`${noSupervisor.length} promotor(es) com vínculo de supervisor pendente. Revise o responsável em Gerenciar equipes.`);
-  const noJourney = missing.includes('promoter_work_schedules') ? 0 : items.filter(i=>i.operationalStatus==='sem_expediente').length;
-  if (noJourney) warnings.push(`${noJourney} promotor(es) sem jornada cadastrada nesta data, fora dos indicadores. Programação de visitas não substitui jornada.`);
-  if (!approvedRules) warnings.push('Faltas automáticas desabilitadas: aprovação administrativa das regras ainda pendente.');
-  return { items, operationalSummary, routes, visits, fetchedAt: now, timezone: rules.timezone, warnings, promoters, missingDependencies: missing, canEdit: !missing.length && ['admin', 'gestor'].includes(profile.role) };
+  const noJourney = missing.includes('promoter_work_schedules') ? [] : items.filter(i => i.operationalStatus === 'sem_expediente' && operationalSummary.some(o => o.matricula === i.matricula && o.scheduledVisitsCount > 0) && !schedules.some(s => s.promotor_matricula === i.matricula && s.ativo && (!s.valid_from || s.valid_from <= date) && (!s.valid_to || s.valid_to >= date)));
+  return { pending: { supervisors: noSupervisor, journeys: noJourney }, items, operationalSummary, routes, visits, fetchedAt: now, timezone: rules.timezone, warnings, promoters, missingDependencies: missing, canEdit: !missing.length && ['admin', 'gestor'].includes(profile.role) };
 }
 export async function fetchAttendanceAudit(matricula: string,date: string) {
   if (!supabase) throw new Error('Cliente não configurado.');
