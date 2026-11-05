@@ -312,6 +312,43 @@ export const equipesService = {
   },
 
   /**
+   * Verifica se um código de equipe já está em uso por outra equipe no banco de dados.
+   * Se excludeEquipeId for fornecido, a equipe correspondente é desconsiderada (útil para edição).
+   */
+  async checkCodigoEmUso(codigo: string, excludeEquipeId?: string | null): Promise<ServiceResponse<boolean>> {
+    if (!supabase) {
+      return { data: null, error: new Error('Cliente Supabase não inicializado.') };
+    }
+
+    const normalized = normalizeOptionalCode(codigo);
+    if (!normalized) {
+      return { data: false, error: null };
+    }
+
+    try {
+      let query = supabase
+        .from('equipes')
+        .select('id')
+        .eq('codigo', normalized);
+
+      if (excludeEquipeId && excludeEquipeId.trim()) {
+        query = query.neq('id', excludeEquipeId.trim());
+      }
+
+      const { data, error } = await query;
+
+      if (error) {
+        return { data: null, error: new Error(`Erro ao verificar disponibilidade do código: ${error.message}`) };
+      }
+
+      const emUso = Array.isArray(data) && data.length > 0;
+      return { data: emUso, error: null };
+    } catch (err: any) {
+      return { data: null, error: new Error(err?.message || 'Falha inesperada ao verificar código da equipe.') };
+    }
+  },
+
+  /**
    * Cria uma nova equipe na tabela public.equipes.
    * Se o código manual for fornecido, ele é preservado (o trigger de banco aplica UPPER/TRIM).
    * Se for omitido ou vazio, o trigger set_equipe_codigo_trigger gera o código sequencial EQP-XXX automaticamente.
@@ -346,6 +383,12 @@ export const equipesService = {
         .single();
 
       if (error) {
+        if ((error as any).code === '23505' || error.message.includes('duplicate key') || error.message.includes('equipes_codigo_key')) {
+          return {
+            data: null,
+            error: new Error(`O código "${payload.codigo || ''}" já está em uso por outra equipe. Escolha um código diferente.`)
+          };
+        }
         return { data: null, error: new Error(`Erro ao cadastrar equipe: ${error.message}`) };
       }
 
@@ -413,6 +456,12 @@ export const equipesService = {
         .single();
 
       if (error) {
+        if ((error as any).code === '23505' || error.message.includes('duplicate key') || error.message.includes('equipes_codigo_key')) {
+          return {
+            data: null,
+            error: new Error(`O código "${payload.codigo || ''}" já está em uso por outra equipe. Escolha um código diferente.`)
+          };
+        }
         return { data: null, error: new Error(`Erro ao atualizar equipe: ${error.message}`) };
       }
 

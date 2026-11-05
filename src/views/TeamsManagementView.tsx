@@ -33,6 +33,7 @@ export const TeamsManagementView: React.FC<TeamsManagementViewProps> = ({
   // Modals & Forms State
   const [modalNewSquad, setModalNewSquad] = useState(false);
   const [modalEditSquad, setModalEditSquad] = useState(false);
+  const [editingEquipe, setEditingEquipe] = useState<Equipe | null>(null);
   const [suggestedCode, setSuggestedCode] = useState('');
   const [manualCode, setManualCode] = useState('');
   const [formName, setFormName] = useState('');
@@ -125,12 +126,14 @@ export const TeamsManagementView: React.FC<TeamsManagementViewProps> = ({
 
   // 3. Abrir Modal de Edição com dados da equipe selecionada
   const handleOpenEditModal = (equipe: Equipe) => {
+    setEditingEquipe(equipe);
     setFormName(equipe.nome);
     setFormRegion(equipe.regional || '');
     setFormSupervisorId(equipe.supervisor_id || '');
     setFormSupervisor(equipe.supervisor_nome || '');
     setFormStatus(equipe.status);
     setManualCode(equipe.codigo);
+    setSuggestedCode('');
     setModalEditSquad(true);
     fetchSupervisores();
   };
@@ -190,7 +193,8 @@ export const TeamsManagementView: React.FC<TeamsManagementViewProps> = ({
   // 5. Salvar Atualização da Equipe
   const handleUpdateSquad = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedEquipe) return;
+    const targetEquipe = editingEquipe || selectedEquipe;
+    if (!targetEquipe) return;
 
     if (!formName.trim()) {
       onShowToast({
@@ -202,13 +206,30 @@ export const TeamsManagementView: React.FC<TeamsManagementViewProps> = ({
     }
 
     const trimmedCode = manualCode.trim();
-    if (!trimmedCode && !selectedEquipe.codigo) {
-      onShowToast({
-        title: 'Código Obrigatório',
-        message: 'O código da equipe não pode ser vazio.',
-        type: 'warning'
-      });
-      return;
+    const finalCode = (trimmedCode || targetEquipe.codigo).toUpperCase();
+
+    // Se o código foi modificado em relação ao código original da equipe, verificar duplicidade previamente
+    if (finalCode !== targetEquipe.codigo.toUpperCase()) {
+      setSaving(true);
+      const checkRes = await equipesService.checkCodigoEmUso(finalCode, targetEquipe.id);
+      if (checkRes.error) {
+        setSaving(false);
+        onShowToast({
+          title: 'Erro de Validação',
+          message: checkRes.error.message,
+          type: 'error'
+        });
+        return;
+      }
+      if (checkRes.data) {
+        setSaving(false);
+        onShowToast({
+          title: 'Código Já Utilizado',
+          message: `O código "${finalCode}" já pertence a outra equipe cadastrada. Escolha um código único.`,
+          type: 'warning'
+        });
+        return;
+      }
     }
 
     // Se um supervisor_id foi selecionado, obter o nome correspondente
@@ -221,9 +242,9 @@ export const TeamsManagementView: React.FC<TeamsManagementViewProps> = ({
     }
 
     setSaving(true);
-    const res = await equipesService.updateEquipe(selectedEquipe.id, {
+    const res = await equipesService.updateEquipe(targetEquipe.id, {
       nome: formName.trim(),
-      codigo: trimmedCode || selectedEquipe.codigo,
+      codigo: finalCode,
       regional: formRegion.trim() ? formRegion.trim() : null,
       supervisor_id: formSupervisorId || null,
       supervisor_nome: resolvedSupervisorNome,
@@ -248,6 +269,7 @@ export const TeamsManagementView: React.FC<TeamsManagementViewProps> = ({
     });
 
     setModalEditSquad(false);
+    setEditingEquipe(null);
     fetchEquipes(res.data.id);
   };
 
@@ -999,6 +1021,7 @@ export const TeamsManagementView: React.FC<TeamsManagementViewProps> = ({
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
+                            setSelectedEquipe(equipe);
                             handleOpenEditModal(equipe);
                           }}
                           title="Editar Equipe"
@@ -1555,52 +1578,57 @@ export const TeamsManagementView: React.FC<TeamsManagementViewProps> = ({
       )}
 
       {/* Modal Editar Equipe */}
-      {modalEditSquad && selectedEquipe && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
-          <div className="relative w-full max-w-lg bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl shadow-2xl p-6 overflow-hidden">
-            <div className="flex items-center justify-between pb-4 border-b border-[#CFCDC5]">
-              <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-lg bg-purple-600/20 text-purple-700 border border-purple-500/30 flex items-center justify-center">
-                  <span className="material-symbols-outlined text-xl">edit</span>
+      {modalEditSquad && (editingEquipe || selectedEquipe) && (() => {
+        const currentEquipe = editingEquipe || selectedEquipe!;
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+            <div className="relative w-full max-w-lg bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl shadow-2xl p-6 overflow-hidden">
+              <div className="flex items-center justify-between pb-4 border-b border-[#CFCDC5]">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-lg bg-purple-600/20 text-purple-700 border border-purple-500/30 flex items-center justify-center">
+                    <span className="material-symbols-outlined text-xl">edit</span>
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-[#171717]">Editar Equipe Operacional</h3>
+                    <p className="text-[11px] text-[#77766F] font-mono">{currentEquipe.codigo}</p>
+                  </div>
                 </div>
-                <div>
-                  <h3 className="text-base font-bold text-[#171717]">Editar Equipe Operacional</h3>
-                  <p className="text-[11px] text-[#77766F] font-mono">{selectedEquipe.codigo}</p>
-                </div>
-              </div>
-              <button
-                disabled={saving}
-                onClick={() => setModalEditSquad(false)}
-                className="text-[#77766F] hover:text-[#171717] p-1 cursor-pointer"
-              >
-                <span className="material-symbols-outlined text-lg">close</span>
-              </button>
-            </div>
-
-            <form onSubmit={handleUpdateSquad} className="space-y-4 py-4 text-xs">
-              <div className="space-y-1">
-                <label className="font-bold text-[#171717]">Nome da Equipe / Squad *</label>
-                <input
-                  type="text"
-                  required
+                <button
                   disabled={saving}
-                  value={formName}
-                  onChange={(e) => setFormName(e.target.value)}
-                  className="w-full h-10 px-3 bg-[#E4E2DB] border border-[#CFCDC5] rounded-lg text-[#171717] focus:outline-none focus:border-purple-500 disabled:opacity-60 disabled:cursor-not-allowed"
-                />
+                  onClick={() => {
+                    setModalEditSquad(false);
+                    setEditingEquipe(null);
+                  }}
+                  className="text-[#77766F] hover:text-[#171717] p-1 cursor-pointer"
+                >
+                  <span className="material-symbols-outlined text-lg">close</span>
+                </button>
               </div>
 
-              <div className="space-y-1">
-                <label className="font-bold text-[#171717]">Código da Equipe</label>
-                <input
-                  type="text"
-                  value={manualCode}
-                  disabled={saving}
-                  onChange={(e) => setManualCode(e.target.value)}
-                  placeholder={suggestedCode || 'Deixe em branco para auto-gerar (EQP-XXX)'}
-                  className="w-full h-10 px-3 bg-[#E4E2DB] border border-[#CFCDC5] rounded-lg text-[#171717] font-mono focus:outline-none focus:border-purple-500 disabled:opacity-60 disabled:cursor-not-allowed"
-                />
-              </div>
+              <form onSubmit={handleUpdateSquad} className="space-y-4 py-4 text-xs">
+                <div className="space-y-1">
+                  <label className="font-bold text-[#171717]">Nome da Equipe / Squad *</label>
+                  <input
+                    type="text"
+                    required
+                    disabled={saving}
+                    value={formName}
+                    onChange={(e) => setFormName(e.target.value)}
+                    className="w-full h-10 px-3 bg-[#E4E2DB] border border-[#CFCDC5] rounded-lg text-[#171717] focus:outline-none focus:border-purple-500 disabled:opacity-60 disabled:cursor-not-allowed"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="font-bold text-[#171717]">Código da Equipe</label>
+                  <input
+                    type="text"
+                    value={manualCode}
+                    disabled={saving}
+                    onChange={(e) => setManualCode(e.target.value)}
+                    placeholder={currentEquipe.codigo || 'Código da equipe'}
+                    className="w-full h-10 px-3 bg-[#E4E2DB] border border-[#CFCDC5] rounded-lg text-[#171717] font-mono focus:outline-none focus:border-purple-500 disabled:opacity-60 disabled:cursor-not-allowed"
+                  />
+                </div>
 
               <div className="space-y-1">
                 <label className="font-bold text-[#171717]">Praça / Regional de Atuação</label>
@@ -1689,7 +1717,10 @@ export const TeamsManagementView: React.FC<TeamsManagementViewProps> = ({
                 <button
                   type="button"
                   disabled={saving}
-                  onClick={() => setModalEditSquad(false)}
+                  onClick={() => {
+                    setModalEditSquad(false);
+                    setEditingEquipe(null);
+                  }}
                   className="px-4 py-2 rounded-lg bg-[#EAE8E2] hover:bg-[#E4E2DB] text-[#171717] border border-[#CFCDC5] font-semibold cursor-pointer"
                 >
                   Cancelar
@@ -1705,7 +1736,8 @@ export const TeamsManagementView: React.FC<TeamsManagementViewProps> = ({
             </form>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* MODAL 3: VINCULAR PROMOTORES DISPONÍVEIS À EQUIPE */}
       {modalVincularOpen && selectedEquipe && (
