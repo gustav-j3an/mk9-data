@@ -8,6 +8,7 @@ import { isValidWhatsAppGroupLink, sanitizeWhatsAppGroupLink, openIndustryWhatsA
 import { analyzeRotasForContracts, contratosService, parseISODate, classificarParContratual } from '../lib/contratosService';
 import { StatCard, StatusBadge, DataTable, Column } from '../components/ui';
 import { ConfirmIndustryInactivationModal } from '../components/ConfirmIndustryInactivationModal';
+import { ConfirmIndustryRegularizationModal } from '../components/ConfirmIndustryRegularizationModal';
 import { supabaseIndustryRoutesGateway, type IndustryInactivationResult } from '../lib/industryRoutesSyncService';
 
 interface IndustriesViewProps {
@@ -103,6 +104,12 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
   const [activeRoutesCountToInactivate, setActiveRoutesCountToInactivate] = useState<number>(0);
   const [inactivatingLoading, setInactivatingLoading] = useState(false);
 
+  // Modal de Confirmação de Regularização de Rotas de Indústria Inativa (Missão 34)
+  const [regularizingIndustry, setRegularizingIndustry] = useState<IndustryItem | null>(null);
+  const [regularizingActiveRoutes, setRegularizingActiveRoutes] = useState<RouteItem[]>([]);
+  const [regularizingLoading, setRegularizingLoading] = useState(false);
+  const [regularizingRoutesCountMap, setRegularizingRoutesCountMap] = useState<Record<string, number>>({});
+
   // MODAL DE REVISÃO E AUTORIZAÇÃO INDIVIDUAL DE CONTRATO (ETAPA H3.5)
   // Somente protótipo e validação: NENHUM dado é gravado no banco
   const [reviewingContrato, setReviewingContrato] = useState<ContratoItemElegivel | null>(null);
@@ -194,7 +201,29 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
 
       if (fetchErr) throw fetchErr;
 
-      setIndustries((data as IndustryItem[]) || []);
+      const loadedIndustries = (data as IndustryItem[]) || [];
+      setIndustries(loadedIndustries);
+
+      // Auditar indústrias inativas com rotas ativas remanescentes (Missão 34)
+      const inativas = loadedIndustries.filter((i) => i.status === 'inativo');
+      if (inativas.length > 0) {
+        void Promise.all(
+          inativas.map(async (ind) => {
+            try {
+              const count = await supabaseIndustryRoutesGateway.getActiveRoutesCountForIndustry(ind.codigo);
+              return { codigo: ind.codigo, count };
+            } catch {
+              return { codigo: ind.codigo, count: 0 };
+            }
+          })
+        ).then((results) => {
+          const map: Record<string, number> = {};
+          results.forEach((r) => {
+            if (r.count > 0) map[r.codigo] = r.count;
+          });
+          setRegularizingRoutesCountMap(map);
+        });
+      }
     } catch (err: any) {
       console.error('Erro ao carregar indústrias:', err);
       setError(err.message || 'Falha ao carregar lista de indústrias.');
@@ -1212,6 +1241,18 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
               >
                 <span className="material-symbols-outlined text-[16px]">edit</span>
               </button>
+              {ind.status === 'inativo' && (regularizingRoutesCountMap[ind.codigo] || 0) > 0 && (
+                <button
+                  type="button"
+                  onClick={() => handleOpenRegularizeRoutes(ind)}
+                  className="px-2 py-1 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 cursor-pointer transition-colors flex items-center gap-1 text-[11px] font-bold"
+                  title="Regularizar rotas ativas remanescentes"
+                  aria-label={`Regularizar rotas ativas de ${ind.nome}`}
+                >
+                  <span className="material-symbols-outlined text-[14px] text-amber-700">sync_problem</span>
+                  <span>Regularizar ({regularizingRoutesCountMap[ind.codigo]})</span>
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => handleToggleStatus(ind)}
@@ -1352,6 +1393,12 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
       setIndustries((prev) =>
         prev.map((i) => (i.id === inactivatingIndustry.id ? { ...i, status: 'inativo' } : i))
       );
+      // Limpa contagem de rotas remanescentes se foi zerada
+      setRegularizingRoutesCountMap((prev) => {
+        const next = { ...prev };
+        delete next[inactivatingIndustry.codigo];
+        return next;
+      });
       setInactivatingIndustry(null);
       if (activeTab === 'frequencia') {
         fetchFrequencyData();
@@ -1365,6 +1412,72 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
       });
     } finally {
       setInactivatingLoading(false);
+    }
+  };
+
+  // Abrir Modal de Regularização de Rotas de Indústria já Inativa (Missão 34)
+  const handleOpenRegularizeRoutes = async (item: IndustryItem) => {
+    if (!canEdit) return;
+
+    setRegularizingLoading(true);
+    try {
+      const activeRoutes = await supabaseIndustryRoutesGateway.getActiveRoutesForIndustry(item.codigo);
+      setRegularizingActiveRoutes(activeRoutes);
+      setRegularizingIndustry(item);
+    } catch (err: any) {
+      console.error('Erro ao buscar rotas ativas da indústria inativa:', err);
+      onShowToast({
+        title: 'Erro de Consulta',
+        message: err.message || 'Falha ao consultar rotas ativas da indústria.',
+        type: 'error'
+      });
+    } finally {
+      setRegularizingLoading(false);
+    }
+  };
+
+  // Confirmar Regularização das Rotas da Indústria Inativa
+  const handleConfirmRegularizeRoutes = async () => {
+    if (!regularizingIndustry) return;
+
+    setRegularizingLoading(true);
+    try {
+      const result = await supabaseIndustryRoutesGateway.inactivateIndustryAndSuspendRoutes(
+        regularizingIndustry.id,
+        regularizingIndustry.codigo,
+        regularizingIndustry.nome,
+        regularizingActiveRoutes
+      );
+
+      onShowToast({
+        title: 'Rotas Regularizadas',
+        message: `Escalas da indústria ${regularizingIndustry.nome} foram regularizadas. ${result.routesSuspendedCount} ${
+          result.routesSuspendedCount === 1 ? 'rota ativa suspensa' : 'rotas ativas suspensas'
+        } com sucesso.`,
+        type: 'info'
+      });
+
+      // Atualiza mapa de rotas ativas remanescentes
+      setRegularizingRoutesCountMap((prev) => {
+        const next = { ...prev };
+        delete next[regularizingIndustry.codigo];
+        return next;
+      });
+
+      setRegularizingIndustry(null);
+      setRegularizingActiveRoutes([]);
+      if (activeTab === 'frequencia') {
+        fetchFrequencyData();
+      }
+    } catch (err: any) {
+      console.error('Erro ao regularizar rotas da indústria inativa:', err);
+      onShowToast({
+        title: 'Erro de Regularização',
+        message: err.message || 'Falha ao regularizar rotas no banco.',
+        type: 'error'
+      });
+    } finally {
+      setRegularizingLoading(false);
     }
   };
 
@@ -1409,6 +1522,19 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
       };
 
       if (editingItem) {
+        // Se a indústria foi alterada para 'inativo', suspender suas rotas ativas atomicamente via RPC
+        if (editingItem.status === 'ativo' && payload.status === 'inativo') {
+          const activeRoutes = await supabaseIndustryRoutesGateway.getActiveRoutesForIndustry(editingItem.codigo);
+          if (activeRoutes.length > 0) {
+            await supabaseIndustryRoutesGateway.inactivateIndustryAndSuspendRoutes(
+              editingItem.id,
+              editingItem.codigo,
+              payload.nome,
+              activeRoutes
+            );
+          }
+        }
+
         const result = await writeWithOptionalWhatsAppGroupLink(
           () => db.from('industrias').update(payload).eq('id', editingItem.id),
           () => db.from('industrias').update(omitWhatsAppGroupLink(payload)).eq('id', editingItem.id)
@@ -2806,6 +2932,25 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
             if (!inactivatingLoading) setInactivatingIndustry(null);
           }}
           onConfirm={handleConfirmInactivateIndustry}
+        />
+      )}
+
+      {/* MODAL DE CONFIRMAÇÃO DE REGULARIZAÇÃO DE ROTAS DE INDÚSTRIA INATIVA (MISSÃO 34) */}
+      {regularizingIndustry && (
+        <ConfirmIndustryRegularizationModal
+          industryName={regularizingIndustry.nome}
+          industryCode={regularizingIndustry.codigo}
+          activeRoutesCount={regularizingActiveRoutes.length}
+          promotoresCount={new Set(regularizingActiveRoutes.map((r) => r.promotor_matricula)).size}
+          storesCount={new Set(regularizingActiveRoutes.map((r) => r.loja_codigo)).size}
+          loading={regularizingLoading}
+          onCancel={() => {
+            if (!regularizingLoading) {
+              setRegularizingIndustry(null);
+              setRegularizingActiveRoutes([]);
+            }
+          }}
+          onConfirm={handleConfirmRegularizeRoutes}
         />
       )}
 

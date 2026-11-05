@@ -212,3 +212,63 @@ $$;
 
 REVOKE ALL ON FUNCTION public.reactivate_industry_routes(UUID, UUID[]) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.reactivate_industry_routes(UUID, UUID[]) TO authenticated;
+
+-- 4. Trigger de proteção automática no banco de dados (Missão 34)
+-- Impede contorno por UPDATE direto, importação ou mutações em lote:
+-- Quando qualquer indústria tiver seu status atualizado para 'inativo',
+-- todas as suas rotas ativas são automaticamente suspensas de forma atômica no PostgreSQL.
+CREATE OR REPLACE FUNCTION public.trg_auto_suspend_routes_on_industry_inactivation()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_closed_at TIMESTAMPTZ := NOW();
+  v_has_motivo_col BOOLEAN := FALSE;
+BEGIN
+  -- Se o status foi alterado para inativo (ou já era inativo e permanece inativo com rotas ainda ativas)
+  IF (NEW.status = 'inativo' AND (OLD.status IS DISTINCT FROM 'inativo' OR OLD.status = 'inativo')) THEN
+    SELECT EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'rotas' AND column_name = 'motivo_encerramento'
+    ) INTO v_has_motivo_col;
+
+    IF v_has_motivo_col THEN
+      EXECUTE '
+        UPDATE public.rotas
+        SET encerrada_em = $1,
+            motivo_encerramento = ''Inativação da indústria'',
+            observacao = CASE 
+              WHEN observacao IS NULL OR trim(observacao) = '''' THEN ''[SUSPENSO: INATIVAÇÃO DA INDÚSTRIA] Inativação da indústria''
+              WHEN observacao ILIKE ''%[SUSPENSO: INATIVAÇÃO DA INDÚSTRIA]%'' THEN observacao
+              ELSE observacao || '' | [SUSPENSO: INATIVAÇÃO DA INDÚSTRIA] Inativação da indústria''
+            END,
+            updated_at = $1
+        WHERE industria_codigo = $2
+          AND encerrada_em IS NULL
+      ' USING v_closed_at, NEW.codigo;
+    ELSE
+      UPDATE public.rotas
+      SET encerrada_em = v_closed_at,
+          observacao = CASE 
+            WHEN observacao IS NULL OR trim(observacao) = '' THEN '[SUSPENSO: INATIVAÇÃO DA INDÚSTRIA] Inativação da indústria'
+            WHEN observacao ILIKE '%[SUSPENSO: INATIVAÇÃO DA INDÚSTRIA]%' THEN observacao
+            ELSE observacao || ' | [SUSPENSO: INATIVAÇÃO DA INDÚSTRIA] Inativação da indústria'
+          END,
+          updated_at = v_closed_at
+      WHERE industria_codigo = NEW.codigo
+        AND encerrada_em IS NULL;
+    END IF;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_industrias_inactivation_sync_routes ON public.industrias;
+CREATE TRIGGER trg_industrias_inactivation_sync_routes
+AFTER UPDATE OF status ON public.industrias
+FOR EACH ROW
+EXECUTE FUNCTION public.trg_auto_suspend_routes_on_industry_inactivation();
+

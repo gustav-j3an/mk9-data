@@ -495,8 +495,9 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
       setIsAuthorized(authorized);
 
       const rawRoutes = (rotasRes.data as unknown as RouteItem[]) || [];
-      // Filtrar rotas de indústrias inativas para não projetar novas visitas operacionais
-      const activeIndustryRoutes = rawRoutes.filter((r) => r.industria?.status !== 'inativo');
+      // Filtrar rotas para garantir que SOMENTE indústrias efetivamente ativas gerem novas visitas
+      // Se a indústria estiver ausente ou seu status não for explicitamente 'ativo', a rota não é elegível para novos atendimentos
+      const activeIndustryRoutes = rawRoutes.filter((r) => r.industria?.status === 'ativo');
       setRoutes(activeIndustryRoutes.filter((r) => !r.encerrada_em));
       setOperationalRoutes(activeIndustryRoutes.filter((r) => !r.encerrada_em || String(r.encerrada_em).slice(0, 10) >= historyStartStr));
 
