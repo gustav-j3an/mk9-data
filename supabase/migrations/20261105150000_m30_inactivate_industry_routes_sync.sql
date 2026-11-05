@@ -35,6 +35,7 @@ CREATE OR REPLACE FUNCTION public.inactivate_industry_and_suspend_routes(
 RETURNS JSONB
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = public, pg_temp
 AS $$
 DECLARE
   v_industria RECORD;
@@ -122,6 +123,7 @@ CREATE OR REPLACE FUNCTION public.reactivate_industry_routes(
 RETURNS JSONB
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = public, pg_temp
 AS $$
 DECLARE
   v_industria RECORD;
