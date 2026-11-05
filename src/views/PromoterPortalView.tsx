@@ -365,7 +365,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
         const routesBaseQuery = (filterByClosure: boolean) => {
           const query = db.from('rotas').select(`
           *,
-          industria:industrias(codigo, nome),
+          industria:industrias(codigo, nome, status),
           loja:lojas(codigo, nome, cidade, uf, endereco),
           promotor:promotores(matricula, nome)
           `).eq('promotor_matricula', promotorMatricula);
@@ -495,8 +495,10 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
       setIsAuthorized(authorized);
 
       const rawRoutes = (rotasRes.data as unknown as RouteItem[]) || [];
-      setRoutes(rawRoutes.filter((r) => !r.encerrada_em));
-      setOperationalRoutes(rawRoutes.filter((r) => !r.encerrada_em || String(r.encerrada_em).slice(0, 10) >= historyStartStr));
+      // Filtrar rotas de indústrias inativas para não projetar novas visitas operacionais
+      const activeIndustryRoutes = rawRoutes.filter((r) => r.industria?.status !== 'inativo');
+      setRoutes(activeIndustryRoutes.filter((r) => !r.encerrada_em));
+      setOperationalRoutes(activeIndustryRoutes.filter((r) => !r.encerrada_em || String(r.encerrada_em).slice(0, 10) >= historyStartStr));
 
       const visits = (visitsRes.data as unknown as Visit[]) || [];
       const openVisits = selectPastVisitsFromAgenda(visits, todayStr);

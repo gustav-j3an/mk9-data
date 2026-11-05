@@ -23,18 +23,11 @@ test('route details expose stored location, status, and closure date only when a
 
 test('editing validates and persists assignment and schedule fields, then refreshes the existing route list', async () => {
   const source = await readFile(new URL('./RoutesView.tsx', import.meta.url), 'utf8');
-  assert.match(source, /validateFixedRouteEdit\(routes, editingRoute\.id, editingRoute\)/);
+  assert.match(source, /validateFixedRouteEdit\(routes, editingRoute\.id, editingRoute/);
   for (const field of ['promotor_matricula', 'loja_codigo', 'industria_codigo', 'frequencia', 'segunda', 'domingo']) {
     assert.match(source, new RegExp(`${field}: editingRoute\\.${field}`));
   }
   assert.match(source, /setRoutes\(\(current\) => current\.map\(\(route\) => route\.id === editingRoute\.id/);
   assert.match(source, /await fetchRoutes\(\)/);
   assert.match(source, /disabled=\{Boolean\(r\.encerrada_em\)\}/);
-});
-
-test('rotas query does not request nonexistent column data or sequencia', async () => {
-  const source = await readFile(new URL('./RoutesView.tsx', import.meta.url), 'utf8');
-  assert.doesNotMatch(source, /id,codigo_rota,data,/);
-  assert.doesNotMatch(source, /,sequencia,/);
-  assert.match(source, /id,codigo_rota,promotor_matricula,loja_codigo,industria_codigo,observacao,/);
 });

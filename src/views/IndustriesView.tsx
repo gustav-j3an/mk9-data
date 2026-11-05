@@ -7,6 +7,8 @@ import { omitWhatsAppGroupLink, writeWithOptionalWhatsAppGroupLink } from '../ut
 import { isValidWhatsAppGroupLink, sanitizeWhatsAppGroupLink, openIndustryWhatsAppGroup } from '../utils/whatsappShare';
 import { analyzeRotasForContracts, contratosService, parseISODate, classificarParContratual } from '../lib/contratosService';
 import { StatCard, StatusBadge, DataTable, Column } from '../components/ui';
+import { ConfirmIndustryInactivationModal } from '../components/ConfirmIndustryInactivationModal';
+import { supabaseIndustryRoutesGateway, type IndustryInactivationResult } from '../lib/industryRoutesSyncService';
 
 interface IndustriesViewProps {
   onShowToast: (toast: Omit<ToastMessage, 'id'>) => void;
@@ -95,6 +97,11 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
   const [editingItem, setEditingItem] = useState<IndustryItem | null>(null);
   const [viewingItem, setViewingItem] = useState<IndustryItem | null>(null);
   const [saving, setSaving] = useState(false);
+
+  // Modal de Confirmação de Inativação de Indústria (Missão 30)
+  const [inactivatingIndustry, setInactivatingIndustry] = useState<IndustryItem | null>(null);
+  const [activeRoutesCountToInactivate, setActiveRoutesCountToInactivate] = useState<number>(0);
+  const [inactivatingLoading, setInactivatingLoading] = useState(false);
 
   // MODAL DE REVISÃO E AUTORIZAÇÃO INDIVIDUAL DE CONTRATO (ETAPA H3.5)
   // Somente protótipo e validação: NENHUM dado é gravado no banco
@@ -1273,34 +1280,91 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
   // Alternar Status (Ativar / Inativar)
   const handleToggleStatus = async (item: IndustryItem) => {
     if (!canEdit) return;
-    const newStatus = item.status === 'ativo' ? 'inativo' : 'ativo';
 
+    // Se estiver ativa, abrir modal de confirmação com contagem de rotas ativas (Missão 30)
+    if (item.status === 'ativo') {
+      try {
+        setInactivatingLoading(true);
+        const count = await supabaseIndustryRoutesGateway.getActiveRoutesCountForIndustry(item.codigo);
+        setActiveRoutesCountToInactivate(count);
+        setInactivatingIndustry(item);
+      } catch (err: any) {
+        console.error('Erro ao verificar rotas ativas da indústria:', err);
+        // Fallback gracioso: abre o modal mesmo se contagem falhar
+        setActiveRoutesCountToInactivate(0);
+        setInactivatingIndustry(item);
+      } finally {
+        setInactivatingLoading(false);
+      }
+      return;
+    }
+
+    // Se estiver inativa, reativa a indústria SEM reativar rotas antigas automaticamente (Regra 13)
     try {
-      const db = supabase;
-      if (!db) throw new Error('Cliente Supabase indisponível.');
-
-      const { error: err } = await db
-        .from('industrias')
-        .update({ status: newStatus, updated_at: new Date().toISOString() })
-        .eq('id', item.id);
-
-      if (err) throw err;
+      await supabaseIndustryRoutesGateway.activateIndustry(item.id);
 
       onShowToast({
-        title: `Indústria ${newStatus === 'ativo' ? 'Ativada' : 'Inativada'}`,
-        message: `Status da indústria ${item.nome} alterado com sucesso.`,
+        title: 'Indústria Ativada',
+        message: `A indústria ${item.nome} foi reativada com sucesso. Suas rotas antigas permanecem suspensas até validação expressa.`,
         type: 'info'
       });
 
       setIndustries((prev) =>
-        prev.map((i) => (i.id === item.id ? { ...i, status: newStatus } : i))
+        prev.map((i) => (i.id === item.id ? { ...i, status: 'ativo' } : i))
       );
+      if (activeTab === 'frequencia') {
+        fetchFrequencyData();
+      }
     } catch (err: any) {
       onShowToast({
         title: 'Erro de Atualização',
-        message: err.message || 'Falha ao alterar status da indústria.',
+        message: err.message || 'Falha ao ativar status da indústria.',
         type: 'error'
       });
+    }
+  };
+
+  // Confirmar Inativação da Indústria e Suspensão das Rotas Ativas
+  const handleConfirmInactivateIndustry = async () => {
+    if (!inactivatingIndustry) return;
+
+    setInactivatingLoading(true);
+    try {
+      const activeRoutes = await supabaseIndustryRoutesGateway.getActiveRoutesForIndustry(
+        inactivatingIndustry.codigo
+      );
+
+      const result = await supabaseIndustryRoutesGateway.inactivateIndustryAndSuspendRoutes(
+        inactivatingIndustry.id,
+        inactivatingIndustry.codigo,
+        inactivatingIndustry.nome,
+        activeRoutes
+      );
+
+      onShowToast({
+        title: 'Indústria Inativada',
+        message: `Indústria ${inactivatingIndustry.nome} inativada e ${result.routesSuspendedCount} ${
+          result.routesSuspendedCount === 1 ? 'rota ativa suspensa' : 'rotas ativas suspensas'
+        } com sucesso.`,
+        type: 'info'
+      });
+
+      setIndustries((prev) =>
+        prev.map((i) => (i.id === inactivatingIndustry.id ? { ...i, status: 'inativo' } : i))
+      );
+      setInactivatingIndustry(null);
+      if (activeTab === 'frequencia') {
+        fetchFrequencyData();
+      }
+    } catch (err: any) {
+      console.error('Erro ao inativar indústria e suspender rotas:', err);
+      onShowToast({
+        title: 'Erro de Inativação',
+        message: err.message || 'Falha ao inativar a indústria.',
+        type: 'error'
+      });
+    } finally {
+      setInactivatingLoading(false);
     }
   };
 
@@ -2729,6 +2793,20 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
             </section>
           )}
         </div>
+      )}
+
+      {/* MODAL DE CONFIRMAÇÃO DE INATIVAÇÃO DE INDÚSTRIA (MISSÃO 30) */}
+      {inactivatingIndustry && (
+        <ConfirmIndustryInactivationModal
+          industryName={inactivatingIndustry.nome}
+          industryCode={inactivatingIndustry.codigo}
+          activeRoutesCount={activeRoutesCountToInactivate}
+          loading={inactivatingLoading}
+          onCancel={() => {
+            if (!inactivatingLoading) setInactivatingIndustry(null);
+          }}
+          onConfirm={handleConfirmInactivateIndustry}
+        />
       )}
 
       {/* MODAL CRIAR / EDITAR */}

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+﻿import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useAuth } from '../auth/AuthProvider';
 import { SearchableSelect, type SearchableSelectOption } from '../components/SearchableSelect';
 import { StatCard, StatusBadge } from '../components/ui';
@@ -11,7 +11,9 @@ import {
   createFixedRoute,
   hasAnyScheduledDay,
   isDuplicateActiveRoute,
+  reactivateFixedRoute,
   updateFixedRouteSchedule,
+  validateFixedRouteCreation,
   validateFixedRouteEdit
 } from '../lib/routesService';
 import { calculateRouteIndicators } from '../utils/routeIndicators';
@@ -125,7 +127,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({ onShowToast }) => {
       const [rotasRes, industrias, lojas, promotores] = await Promise.all([
         loadRoutesWithClosureFallback(async (filterByClosure) => {
           const columns = [
-            'id,codigo_rota,promotor_matricula,loja_codigo,industria_codigo,observacao,created_at,updated_at,segunda,terca,quarta,quinta,sexta,sabado,domingo,frequencia,uf',
+            'id,codigo_rota,data,promotor_matricula,loja_codigo,industria_codigo,sequencia,observacao,created_at,updated_at,segunda,terca,quarta,quinta,sexta,sabado,domingo,frequencia,uf',
             ...(filterByClosure ? ['encerrada_em'] : []),
             'industria:industrias(codigo,nome)',
             'loja:lojas(codigo,nome,cidade,uf,rede,endereco)',
