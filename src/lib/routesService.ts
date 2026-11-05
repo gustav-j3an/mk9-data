@@ -36,12 +36,51 @@ export type FixedRouteUpdateValues = Pick<RouteFormValues, 'frequencia' | RouteD
 export type FixedRouteEditValues = FixedRouteUpdateValues &
   Required<Pick<RouteFormValues, 'promotor_matricula' | 'loja_codigo' | 'industria_codigo'>>;
 
-export const validateFixedRouteEdit = (routes: RouteItem[], routeId: string, values: FixedRouteEditValues): string | null => {
+export interface IndustryStatusLookup {
+  codigo: string;
+  status: 'ativo' | 'inativo';
+}
+
+export const validateFixedRouteCreation = (
+  routes: RouteItem[],
+  values: RouteFormValues,
+  industries?: IndustryStatusLookup[]
+): string | null => {
+  if (!values.industria_codigo || !values.loja_codigo || !values.promotor_matricula) {
+    return 'Indústria, Loja e Promotor são campos obrigatórios.';
+  }
+  if (!hasAnyScheduledDay(values)) {
+    return 'Marque pelo menos um dia de atendimento para criar a rota.';
+  }
+  if (industries) {
+    const ind = industries.find((i) => i.codigo === values.industria_codigo);
+    if (ind && ind.status === 'inativo') {
+      return 'Não é permitido criar escalas para uma indústria inativa.';
+    }
+  }
+  if (isDuplicateActiveRoute(routes, values)) {
+    return 'Já existe uma escala ativa para este promotor, loja e indústria.';
+  }
+  return null;
+};
+
+export const validateFixedRouteEdit = (
+  routes: RouteItem[],
+  routeId: string,
+  values: FixedRouteEditValues,
+  industries?: IndustryStatusLookup[]
+): string | null => {
   const route = routes.find((item) => item.id === routeId);
   if (!route) return 'A escala não foi encontrada.';
   if (!isActiveFixedRoute(route)) return 'Escalas encerradas não podem ser editadas.';
   if (!values.industria_codigo || !values.loja_codigo || !values.promotor_matricula) {
     return 'Indústria, loja e promotor são campos obrigatórios.';
+  }
+  if (industries) {
+    const ind = industries.find((i) => i.codigo === values.industria_codigo);
+    if (ind && ind.status === 'inativo') {
+      return 'Não é permitido vincular ou manter rota ativa para uma indústria inativa.';
+    }
   }
   if (!hasAnyScheduledDay(values)) return 'Marque pelo menos um dia de atendimento.';
   if (isDuplicateActiveRoute(routes, values, routeId)) return 'Já existe uma escala ativa para este promotor, loja e indústria.';
@@ -94,7 +133,8 @@ export interface FixedRouteGateway {
     routeId: string,
     schedule: FixedRouteUpdateValues
   ) => Promise<void>;
-  close: (routeId: string, closedAt: string) => Promise<void>;
+  close: (routeId: string, closedAt: string, reason?: string) => Promise<void>;
+  reactivate?: (routeId: string) => Promise<void>;
 }
 
 const requireSupabase = () => {
@@ -132,10 +172,17 @@ export const supabaseFixedRouteGateway: FixedRouteGateway = {
     if (error) throw error;
     if (!data) throw new Error('A escala não foi encontrada ou você não tem permissão para alterá-la.');
   },
-  async close(routeId, closedAt) {
+  async close(routeId, closedAt, reason) {
+    const payload: Record<string, any> = {
+      encerrada_em: closedAt,
+      updated_at: closedAt
+    };
+    if (reason) {
+      payload.observacao = reason;
+    }
     const { data, error } = await requireSupabase()
       .from('rotas')
-      .update({ encerrada_em: closedAt, updated_at: closedAt })
+      .update(payload)
       .eq('id', routeId)
       .select('id')
       .maybeSingle();
@@ -150,6 +197,17 @@ export const supabaseFixedRouteGateway: FixedRouteGateway = {
       throw error;
     }
     if (!data) throw new Error('A escala não está mais ativa ou você não tem permissão para encerrá-la.');
+  },
+  async reactivate(routeId) {
+    const { data, error } = await requireSupabase()
+      .from('rotas')
+      .update({ encerrada_em: null, updated_at: new Date().toISOString() })
+      .eq('id', routeId)
+      .select('id')
+      .maybeSingle();
+
+    if (error) throw error;
+    if (!data) throw new Error('A escala não foi encontrada ou você não tem permissão para reativá-la.');
   }
 };
 
@@ -167,5 +225,16 @@ export const updateFixedRouteSchedule = (
 export const closeFixedRoute = (
   routeId: string,
   gateway: FixedRouteGateway = supabaseFixedRouteGateway,
-  closedAt = new Date().toISOString()
-): Promise<void> => gateway.close(routeId, closedAt);
+  closedAt = new Date().toISOString(),
+  reason?: string
+): Promise<void> => gateway.close(routeId, closedAt, reason);
+
+export const reactivateFixedRoute = (
+  routeId: string,
+  gateway: FixedRouteGateway = supabaseFixedRouteGateway
+): Promise<void> => {
+  if (!gateway.reactivate) {
+    throw new Error('Reativação não suportada pelo gateway.');
+  }
+  return gateway.reactivate(routeId);
+};

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+﻿import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useAuth } from '../auth/AuthProvider';
 import { SearchableSelect, type SearchableSelectOption } from '../components/SearchableSelect';
 import { StatCard, StatusBadge } from '../components/ui';
@@ -11,7 +11,9 @@ import {
   createFixedRoute,
   hasAnyScheduledDay,
   isDuplicateActiveRoute,
+  reactivateFixedRoute,
   updateFixedRouteSchedule,
+  validateFixedRouteCreation,
   validateFixedRouteEdit
 } from '../lib/routesService';
 import { calculateRouteIndicators } from '../utils/routeIndicators';
