@@ -120,14 +120,6 @@ BEGIN
     RAISE EXCEPTION 'Route is not active or is outside promoter assignment' USING ERRCODE = '42501';
   END IF;
 
-  -- Ensure the industry is active at execution time (MISSÃO 30.4)
-  IF EXISTS (
-    SELECT 1 FROM public.industrias ind
-    WHERE ind.codigo = v_route.industria_codigo AND ind.status = 'inativo'
-  ) THEN
-    RAISE EXCEPTION 'Industry is inactive' USING ERRCODE = '42501';
-  END IF;
-
   v_route_day_active := CASE extract(dow FROM p_scheduled_date)::integer
     WHEN 0 THEN coalesce(v_route.domingo, false)
     WHEN 1 THEN coalesce(v_route.segunda, false)
