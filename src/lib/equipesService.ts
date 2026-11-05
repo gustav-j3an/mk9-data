@@ -494,18 +494,12 @@ export const equipesService = {
     }
 
     try {
-      let query = supabase
+      const candidates = Array.from(new Set([cleanNome, cleanCodigo].filter(Boolean)));
+      const { data, error } = await supabase
         .from('promotores')
         .select('id, matricula, nome, cidade, uf, supervisor, status')
+        .in('equipe', candidates)
         .order('nome', { ascending: true });
-
-      if (cleanNome && cleanCodigo && cleanNome.toLowerCase() !== cleanCodigo.toLowerCase()) {
-        query = query.or(`equipe.eq.${cleanNome},equipe.eq.${cleanCodigo}`);
-      } else {
-        query = query.eq('equipe', cleanNome || cleanCodigo);
-      }
-
-      const { data, error } = await query;
 
       if (error) {
         return { data: null, error: new Error(`Erro ao listar promotores da equipe: ${error.message}`) };

@@ -47,6 +47,7 @@ export const TeamsManagementView: React.FC<TeamsManagementViewProps> = ({
   const [targetSquadTransfer, setTargetSquadTransfer] = useState('');
   const [teamPromoters, setTeamPromoters] = useState<{ id: string; matricula: string; nome: string; cidade: string; uf: string; supervisor: string | null; status: string }[]>([]);
   const [loadingPromoters, setLoadingPromoters] = useState(false);
+  const [promotersError, setPromotersError] = useState<string | null>(null);
   const [transferring, setTransferring] = useState(false);
 
   // Modal Vincular Promotores Disponíveis (sem equipe)
@@ -360,14 +361,21 @@ export const TeamsManagementView: React.FC<TeamsManagementViewProps> = ({
   const fetchTeamPromoters = useCallback(async (equipeNome: string, equipeCodigo?: string | null) => {
     if (!equipeNome && !equipeCodigo) {
       setTeamPromoters([]);
+      setPromotersError(null);
       return;
     }
     setLoadingPromoters(true);
+    setPromotersError(null);
     const res = await equipesService.listPromotoresByEquipe(equipeNome, equipeCodigo);
-    if (res.data) {
+    if (res.error) {
+      setPromotersError(res.error.message || 'Falha ao carregar promotores da equipe.');
+      setTeamPromoters([]);
+    } else if (res.data) {
       setTeamPromoters(res.data);
+      setPromotersError(null);
     } else {
       setTeamPromoters([]);
+      setPromotersError(null);
     }
     setLoadingPromoters(false);
   }, []);
@@ -971,10 +979,10 @@ export const TeamsManagementView: React.FC<TeamsManagementViewProps> = ({
                 <div
                   key={equipe.id}
                   onClick={() => setSelectedEquipe(equipe)}
-                  className={`cursor-pointer bg-[#F7F6F2] border rounded-xl p-5 shadow-lg relative overflow-hidden transition-all group ${
+                  className={`cursor-pointer bg-[#F7F6F2] border rounded-xl p-3.5 shadow-sm relative overflow-hidden transition-all group ${
                     isSelected
-                      ? 'border-purple-500 ring-1 ring-purple-500/40 shadow-[0_0_20px_rgba(147,51,234,0.15)]'
-                      : 'border-[#CFCDC5] hover:border-slate-500'
+                      ? 'border-purple-600 ring-2 ring-purple-500/30 bg-purple-50/20 shadow-md'
+                      : 'border-[#CFCDC5] hover:border-slate-400'
                   }`}
                 >
                   {/* Top Accent Strip */}
@@ -983,21 +991,21 @@ export const TeamsManagementView: React.FC<TeamsManagementViewProps> = ({
                       equipe.status === 'reestruturacao'
                         ? 'bg-amber-500'
                         : equipe.status === 'arquivada'
-                        ? 'bg-slate-500'
+                        ? 'bg-slate-400'
                         : 'bg-gradient-to-r from-purple-600 via-indigo-500 to-cyan-500'
                     }`}
                   />
 
-                  <div className="flex flex-col gap-4">
-                    {/* Top Row */}
+                  <div className="flex flex-col gap-2.5 pt-0.5">
+                    {/* Top Row: Nome, Status, Codigo e Ações */}
                     <div className="flex items-start justify-between gap-2">
-                      <div className="flex flex-col">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <h2 className="text-base font-bold text-[#171717] group-hover:text-purple-700 transition-colors">
+                      <div className="flex flex-col min-w-0">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <h2 className="text-sm font-bold text-[#171717] group-hover:text-purple-700 transition-colors truncate">
                             {equipe.nome}
                           </h2>
                           <span
-                            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-mono text-[10px] font-bold ${
+                            className={`inline-flex items-center gap-1 px-1.5 py-0.2 rounded-full font-mono text-[9px] font-bold ${
                               equipe.status === 'ativa'
                                 ? 'bg-emerald-500/15 text-emerald-700 border border-emerald-500/30'
                                 : equipe.status === 'reestruturacao'
@@ -1008,16 +1016,16 @@ export const TeamsManagementView: React.FC<TeamsManagementViewProps> = ({
                             <span className="w-1.5 h-1.5 rounded-full bg-current" />
                             {equipe.status.toUpperCase()}
                           </span>
-                          <span className="px-1.5 py-0.2 rounded bg-[#EAE8E2] text-cyan-800 font-mono text-[10px] border border-cyan-500/30">
+                          <span className="px-1.5 py-0.2 rounded bg-[#EAE8E2] text-cyan-800 font-mono text-[9px] font-bold border border-cyan-500/30">
                             {equipe.codigo}
                           </span>
                         </div>
-                        <span className="text-xs text-[#77766F] mt-0.5">
+                        <span className="text-[11px] text-[#77766F] mt-0.5 truncate">
                           Regional: <strong className="text-[#171717]">{equipe.regional || 'Não definida'}</strong>
                         </span>
                       </div>
 
-                      <div className="flex items-center gap-1">
+                      <div className="flex items-center gap-1 shrink-0">
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
@@ -1027,7 +1035,7 @@ export const TeamsManagementView: React.FC<TeamsManagementViewProps> = ({
                           title="Editar Equipe"
                           className="p-1 rounded text-[#77766F] hover:text-[#171717] hover:bg-[#EAE8E2]"
                         >
-                          <span className="material-symbols-outlined text-lg">edit</span>
+                          <span className="material-symbols-outlined text-base">edit</span>
                         </button>
                         {equipe.status !== 'arquivada' && (
                           <button
@@ -1038,68 +1046,40 @@ export const TeamsManagementView: React.FC<TeamsManagementViewProps> = ({
                             title="Arquivar Equipe"
                             className="p-1 rounded text-[#77766F] hover:text-red-600 hover:bg-[#EAE8E2]"
                           >
-                            <span className="material-symbols-outlined text-lg">archive</span>
+                            <span className="material-symbols-outlined text-base">archive</span>
                           </button>
                         )}
                       </div>
                     </div>
 
-                    {/* Supervisor Block */}
-                    <div className="flex items-center justify-between p-3 rounded-lg bg-[#EAE8E2] border border-[#CFCDC5]">
-                      <div className="flex items-center gap-3">
-                        <div className="w-9 h-9 rounded-full bg-purple-600/20 text-purple-700 border border-purple-500/30 flex items-center justify-center font-bold text-xs">
+                    {/* Middle Row: Supervisor inline e Métricas compactas */}
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2 rounded-lg bg-[#EAE8E2] border border-[#CFCDC5] text-xs">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <div className="w-6 h-6 rounded-full bg-purple-600/20 text-purple-700 border border-purple-500/30 flex items-center justify-center font-bold text-[10px] shrink-0">
                           {getInitials(equipe.supervisor_nome)}
                         </div>
-                        <div className="flex flex-col">
-                          <span className="text-xs font-bold text-[#171717] flex items-center gap-1">
+                        <div className="truncate">
+                          <span className="text-[11px] font-bold text-[#171717] block truncate">
                             {equipe.supervisor_nome || 'Supervisor não atribuído'}
-                            {equipe.supervisor_nome && (
-                              <span className="material-symbols-outlined text-emerald-600 text-xs">verified</span>
-                            )}
-                          </span>
-                          <span className="text-[11px] text-[#77766F]">
-                            {equipe.supervisor_nome ? 'Supervisor Regional' : 'Aguardando designação de líder'}
                           </span>
                         </div>
                       </div>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setSelectedEquipe(equipe);
-                          handleOpenEditModal(equipe);
-                        }}
-                        className="text-xs text-purple-700 hover:underline flex items-center gap-1 font-semibold"
-                      >
-                        <span className="material-symbols-outlined text-sm">edit</span> Editar
-                      </button>
-                    </div>
 
-                    {/* Operational Metrics Block */}
-                    <div className="grid grid-cols-2 gap-2 text-xs">
-                      <div className="flex items-center gap-2 p-2.5 rounded-lg bg-[#EAE8E2] border border-[#CFCDC5]">
-                        <span className="material-symbols-outlined text-purple-600 text-lg">badge</span>
-                        <div className="flex flex-col">
-                          <span className="font-bold text-[#171717]">
-                            {equipe.promotoresCount} {equipe.promotoresCount === 1 ? 'Promotor' : 'Promotores'}
-                          </span>
-                          <span className="text-[10px] text-[#77766F]">Alocados na equipe</span>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-2 p-2.5 rounded-lg bg-[#EAE8E2] border border-[#CFCDC5]">
-                        <span className="material-symbols-outlined text-cyan-600 text-lg">storefront</span>
-                        <div className="flex flex-col">
-                          <span className="font-bold text-[#171717]">
-                            {equipe.pdvsCount} {equipe.pdvsCount === 1 ? 'PDV Atendido' : 'PDVs Atendidos'}
-                          </span>
-                          <span className="text-[10px] text-[#77766F]">Lojas distintas na grade</span>
-                        </div>
+                      <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto font-mono text-[11px]">
+                        <span className="px-2 py-0.5 rounded bg-[#F7F6F2] border border-[#CFCDC5] text-[#171717] font-semibold flex items-center gap-1">
+                          <span className="material-symbols-outlined text-xs text-purple-600">badge</span>
+                          <span>{equipe.promotoresCount} {equipe.promotoresCount === 1 ? 'promotor' : 'promotores'}</span>
+                        </span>
+                        <span className="px-2 py-0.5 rounded bg-[#F7F6F2] border border-[#CFCDC5] text-[#171717] font-semibold flex items-center gap-1">
+                          <span className="material-symbols-outlined text-xs text-cyan-600">storefront</span>
+                          <span>{equipe.pdvsCount} PDVs</span>
+                        </span>
                       </div>
                     </div>
 
-                    {/* Footer Card */}
-                    <div className="flex items-center justify-between pt-1 text-xs">
-                      <span className="text-[#77766F] font-mono text-[11px]">
+                    {/* Footer Row: Ver Detalhes */}
+                    <div className="flex items-center justify-between pt-0.5 text-xs">
+                      <span className="text-[#77766F] font-mono text-[10px]">
                         ID: {equipe.id.slice(0, 8)}...
                       </span>
 
@@ -1107,12 +1087,16 @@ export const TeamsManagementView: React.FC<TeamsManagementViewProps> = ({
                         onClick={(e) => {
                           e.stopPropagation();
                           setSelectedEquipe(equipe);
-                          setDrawerTab('dados');
+                          setDrawerTab('promotores');
                         }}
-                        className="px-3 py-1.5 rounded-lg bg-purple-50 hover:bg-purple-100 text-purple-700 text-xs font-semibold flex items-center gap-1.5 transition-all border border-purple-200"
+                        className={`px-3 py-1 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+                          isSelected
+                            ? 'bg-purple-700 hover:bg-purple-800 text-white shadow-xs'
+                            : 'bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200'
+                        }`}
                       >
-                        <span className="material-symbols-outlined text-sm">tune</span>
-                        <span>Ver Detalhes</span>
+                        <span className="material-symbols-outlined text-sm">group</span>
+                        <span>Ver Integrantes</span>
                       </button>
                     </div>
                   </div>
@@ -1124,7 +1108,7 @@ export const TeamsManagementView: React.FC<TeamsManagementViewProps> = ({
 
         {/* Interactive Drawer / Slide-Over: Gestão & Detalhes da Equipe Selecionada (5 cols) */}
         {selectedEquipe && (
-          <aside className="xl:col-span-5 bg-[#F7F6F2] border border-[#CFCDC5] rounded-2xl shadow-2xl p-5 flex flex-col gap-4 sticky top-20">
+          <aside className="xl:col-span-5 bg-[#F7F6F2] border-2 border-purple-500/40 rounded-2xl shadow-xl p-5 flex flex-col gap-4 sticky top-20">
             {/* Drawer Top Bar */}
             <div className="flex items-center justify-between pb-3 border-b border-[#CFCDC5]">
               <div className="flex flex-col">
@@ -1335,6 +1319,21 @@ export const TeamsManagementView: React.FC<TeamsManagementViewProps> = ({
                       <span className="material-symbols-outlined animate-spin text-purple-600 text-base">sync</span>
                       <span>Carregando promotores da equipe...</span>
                     </div>
+                  ) : promotersError ? (
+                    <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-900 text-xs space-y-2">
+                      <div className="flex items-center gap-1.5 font-bold text-amber-800">
+                        <span className="material-symbols-outlined text-base">error</span>
+                        <span>Não foi possível carregar os integrantes</span>
+                      </div>
+                      <p className="text-[11px] text-[#5F5F5F]">{promotersError}</p>
+                      <button
+                        type="button"
+                        onClick={() => fetchTeamPromoters(selectedEquipe.nome, selectedEquipe.codigo)}
+                        className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-md text-[11px] font-semibold cursor-pointer"
+                      >
+                        Tentar novamente
+                      </button>
+                    </div>
                   ) : teamPromoters.length === 0 ? (
                     <div className="p-6 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] text-center text-[#77766F] space-y-2">
                       <span className="material-symbols-outlined text-3xl text-[#77766F]">groups</span>
@@ -1353,7 +1352,7 @@ export const TeamsManagementView: React.FC<TeamsManagementViewProps> = ({
                       </button>
                     </div>
                   ) : (
-                    <div className="space-y-1.5 max-h-[300px] overflow-y-auto pr-1">
+                    <div className="space-y-1.5 max-h-[380px] overflow-y-auto pr-1">
                       {teamPromoters.map((p) => {
                         const isChecked = selectedPromoterIds.includes(p.id);
                         return (
@@ -1371,22 +1370,35 @@ export const TeamsManagementView: React.FC<TeamsManagementViewProps> = ({
                                 type="checkbox"
                                 checked={isChecked}
                                 onChange={() => {}}
-                                className="w-4 h-4 rounded text-purple-600 bg-[#F7F6F2] border-slate-600 focus:ring-0 cursor-pointer"
+                                className="w-4 h-4 rounded text-purple-600 bg-[#F7F6F2] border-slate-600 focus:ring-0 cursor-pointer shrink-0"
                               />
                               <div className="flex flex-col min-w-0">
-                                <div className="flex items-center gap-2">
-                                  <span className="text-xs font-bold truncate">{p.nome}</span>
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="text-xs font-bold text-[#171717] truncate">{p.nome}</span>
                                   <span className="px-1.5 py-0.2 rounded bg-[#F7F6F2] text-cyan-800 font-mono text-[9px] font-bold border border-cyan-500/20">
                                     {p.matricula}
                                   </span>
+                                  <span
+                                    className={`px-1.5 py-0.2 rounded text-[9px] font-bold uppercase font-mono ${
+                                      p.status === 'ativo'
+                                        ? 'bg-emerald-500/15 text-emerald-800 border border-emerald-500/30'
+                                        : 'bg-slate-200 text-[#77766F] border border-[#CFCDC5]'
+                                    }`}
+                                  >
+                                    {p.status || 'ativo'}
+                                  </span>
                                 </div>
-                                <span className="text-[11px] text-[#77766F] truncate font-mono">
-                                  {p.cidade} - {p.uf} {p.supervisor ? `• Sup: ${p.supervisor}` : ''}
-                                </span>
+                                <div className="flex items-center gap-1.5 text-[11px] text-[#77766F] truncate mt-0.5">
+                                  <span>{p.cidade} - {p.uf}</span>
+                                  <span>•</span>
+                                  <span className="truncate font-semibold text-[#5F5F5F]">
+                                    Sup: {p.supervisor || 'Não atribuído'}
+                                  </span>
+                                </div>
                               </div>
                             </div>
                             {isChecked && (
-                              <span className="px-2 py-0.5 rounded bg-purple-600/20 text-purple-800 font-mono text-[10px] font-bold">
+                              <span className="px-2 py-0.5 rounded bg-purple-600/20 text-purple-800 font-mono text-[10px] font-bold shrink-0 ml-2">
                                 Selecionado
                               </span>
                             )}
