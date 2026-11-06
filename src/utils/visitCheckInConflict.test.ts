@@ -4,6 +4,7 @@ import {
   canReviewOldOpenVisits,
   createRequestGate,
   findOwnOpenVisit,
+  findReusableActiveCheckInVisit,
   formatOpenVisitConflictMessage,
   getOldOpenVisitCheckInBlockMessage,
   getOldOpenVisitsLabel,
@@ -91,6 +92,14 @@ test('regularized visits are excluded from active and promoter-open queries', ()
   assert.equal(isOpenVisitFromToday(visit, now), false);
   assert.equal(findOwnOpenVisit([visit], 'P-1'), undefined);
   assert.equal(getPromoterOpenVisitAction(visit, now), 'administrative_regularization');
+});
+
+test('check-in retry never reuses completed or administratively regularized visits', () => {
+  const completed = { ...openVisit, status: 'concluida' };
+  const regularized = { ...openVisit, regularization_status: 'closed_without_execution_proof' };
+  assert.equal(findReusableActiveCheckInVisit([completed]), undefined);
+  assert.equal(findReusableActiveCheckInVisit([regularized]), undefined);
+  assert.equal(findReusableActiveCheckInVisit([completed, regularized, openVisit])?.id, openVisit.id);
 });
 
 test('operationally completed visits are not considered open', () => {

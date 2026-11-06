@@ -141,6 +141,26 @@ describe('Portal do Promotor - Visualizacao Semanal e Escala Fixa', () => {
     assert.equal(visits.some((visit) => visit.dataStr === '2026-10-16' && visit.visitObj?.id === delayedVisit.id), false);
   });
 
+  it('Missão 37.2: recuperação em 06/11 preserva 04/11 como data programada e 06/11 como data real', () => {
+    const route = { ...mockRouteSegQua };
+    const visit: Visit = {
+      id: 'synthetic-recovery-37-2', rota_id: route.id,
+      promotor_matricula: route.promotor_matricula, loja_codigo: route.loja_codigo, industria_codigo: route.industria_codigo,
+      scheduled_date: '2026-11-04', data_visita: '2026-11-06', status: 'concluida',
+      started_at: '2026-11-06T12:00:00Z', completed_at: '2026-11-06T13:00:00Z'
+    };
+    const days = getWeekDaysRange(new Date('2026-11-06T12:00:00Z'), 0);
+    const visits = calculateOperationalVisits({
+      routes: [route], visits: [visit], daysRange: days, todayStr: '2026-11-06',
+      classifyPastScheduledAsNotDone: true, deduplicateScheduledOccurrences: true
+    });
+    const originalOccurrence = visits.find((item) => item.dataStr === '2026-11-04');
+    assert.equal(originalOccurrence?.status, 'concluida');
+    assert.equal(originalOccurrence?.visitObj?.scheduled_date, '2026-11-04');
+    assert.equal(originalOccurrence?.visitObj?.data_visita, '2026-11-06');
+    assert.equal(visits.filter((item) => item.visitObj?.id === visit.id).length, 1);
+  });
+
   it('7. Atendimento iniciado em outro dia continua em andamento na data originalmente programada', () => {
     const route = { ...mockRouteSegQua, quarta: false };
     const activeVisit: Visit = {

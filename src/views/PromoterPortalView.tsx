@@ -54,8 +54,8 @@ import { isWhatsAppShareableVisit } from '../utils/whatsappShare';
 import { loadRoutesWithClosureFallback } from '../utils/routeClosureCompatibility';
 import { filterPromoterAppointments, getMetricDisplayValue, getRegularizationCounts, getRegularizationPresentation, getWeeklyPromoterMetricCounts, isUnresolvedVisitInProgress, PROMOTER_APPOINTMENT_TABS, type PromoterAppointmentsTab } from '../utils/promoterPortalPresentation';
 import { getPromoterPortalViewStateKey, readPromoterPortalViewState, writePromoterPortalViewState } from '../utils/promoterPortalViewState';
-import { getScheduledVisitAction, isScheduledVisitActionRpcReady, type ScheduledVisitAction } from '../utils/scheduledVisitActions';
-import { canReviewOldOpenVisits, createRequestGate, findOwnOpenVisit, formatOpenVisitConflictMessage, getOldOpenVisitCheckInBlockMessage, getOldOpenVisitsLabel, getPromoterOpenVisitAction, isAnotherVisitInProgressError, isOpenVisitFromToday } from '../utils/visitCheckInConflict';
+import { getScheduledRouteEligibility, getScheduledVisitAction, isRouteVisibleInOperationalHistory, isScheduledVisitActionRpcReady, type ScheduledVisitAction } from '../utils/scheduledVisitActions';
+import { canReviewOldOpenVisits, createRequestGate, findOwnOpenVisit, findReusableActiveCheckInVisit, formatOpenVisitConflictMessage, getOldOpenVisitCheckInBlockMessage, getOldOpenVisitsLabel, getPromoterOpenVisitAction, isAnotherVisitInProgressError, isOpenVisitFromToday } from '../utils/visitCheckInConflict';
 
 interface PromoterPortalViewProps {
   onNavigate: (screen: ScreenId) => void;
@@ -499,7 +499,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
       // Rotas com indústria inexistente, status nulo ou diferente de 'ativo' não podem gerar novas visitas
       const activeIndustryRoutes = rawRoutes.filter((r) => r.industria && r.industria.status === 'ativo');
       setRoutes(activeIndustryRoutes.filter((r) => !r.encerrada_em));
-      setOperationalRoutes(activeIndustryRoutes.filter((r) => !r.encerrada_em || String(r.encerrada_em).slice(0, 10) >= historyStartStr));
+      setOperationalRoutes(rawRoutes.filter((route) => isRouteVisibleInOperationalHistory(route, historyStartStr)));
 
       const visits = (visitsRes.data as unknown as Visit[]) || [];
       const openVisits = selectPastVisitsFromAgenda(visits, todayStr);
@@ -1117,8 +1117,9 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
               .eq('industria_codigo', route.industria_codigo)
               .eq('data_visita', todayStr);
 
-            if (fallbackVisits && fallbackVisits.length > 0) {
-              visitData = fallbackVisits[0] as Visit;
+            const reusableVisit = findReusableActiveCheckInVisit((fallbackVisits || []) as Visit[]);
+            if (reusableVisit) {
+              visitData = reusableVisit;
               onShowToast({
                 title: 'Visita em Andamento',
                 message: `Visita recuperada com sucesso para a loja ${route.loja?.nome || route.loja_codigo}.`,
@@ -1914,7 +1915,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
       weekEnd: currentWeekEndStr,
       authorized: !isImplantacaoMode || isAuthorized,
       hasActiveVisit: Boolean(activeVisit),
-      routeEndedAt: operationalRoutes.find((route) => route.id === scheduledAction.item.routeId)?.encerrada_em
+      routeEligibility: getScheduledRouteEligibility(operationalRoutes.find((route) => route.id === scheduledAction.item.routeId))
     });
     if (!decision.allowed || decision.action !== scheduledAction.action) {
       onShowToast({ title: 'Programação indisponível', message: decision.reason || 'A programação mudou e precisa ser carregada novamente.', type: 'warning' });
@@ -3252,7 +3253,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
               <div className="space-y-3">
                 {displayedWeekVisits.map((item, idx) => {
                   const isTodayItem = item.dataStr === getLocalDateString(new Date());
-                  const actionDecision = getScheduledVisitAction({ item, today: todayStr, weekStart: currentWeekStartStr, weekEnd: currentWeekEndStr, authorized: !isImplantacaoMode || isAuthorized, hasActiveVisit: Boolean(activeVisit), routeEndedAt: operationalRoutes.find((route) => route.id === item.routeId)?.encerrada_em });
+                  const actionDecision = getScheduledVisitAction({ item, today: todayStr, weekStart: currentWeekStartStr, weekEnd: currentWeekEndStr, authorized: !isImplantacaoMode || isAuthorized, hasActiveVisit: Boolean(activeVisit), routeEligibility: getScheduledRouteEligibility(operationalRoutes.find((route) => route.id === item.routeId)) });
                   const regularizationLabel = getRegularizationPresentation(item.visitObj?.regularization_status);
                   const actualVisitDate = item.visitObj?.data_visita || null;
                   const isCompletedLate = item.status === 'concluida' && Boolean(actualVisitDate && actualVisitDate > item.dataStr);

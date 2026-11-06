@@ -1,12 +1,26 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { getScheduledVisitAction, isScheduledVisitActionRpcReady } from './scheduledVisitActions';
+import { getScheduledRouteEligibility, getScheduledVisitAction, isRouteVisibleInOperationalHistory, isScheduledVisitActionRpcReady } from './scheduledVisitActions';
 import type { OperationalVisitItem } from './routePlanner';
 
 const base = {
   routeId: 'route-1', dataStr: '2026-10-23', status: 'planejada', frequencia: 'SEMANAL', visitObj: null
 } as Pick<OperationalVisitItem, 'routeId' | 'dataStr' | 'status' | 'frequencia' | 'visitObj'>;
-const common = { today: '2026-10-22', weekStart: '2026-10-19', weekEnd: '2026-10-25', authorized: true, hasActiveVisit: false };
+const common = { today: '2026-10-22', weekStart: '2026-10-19', weekEnd: '2026-10-25', authorized: true, hasActiveVisit: false, routeEligibility: 'active' as const };
+
+test('elegibilidade da rota exige vínculo confirmado com indústria ativa e rota aberta', () => {
+  assert.equal(getScheduledRouteEligibility(undefined), 'unavailable');
+  assert.equal(getScheduledRouteEligibility({ encerrada_em: null, industria: null }), 'unavailable');
+  assert.equal(getScheduledRouteEligibility({ encerrada_em: null, industria: { codigo: 'I-1', nome: 'Teste', status: 'inativo' } }), 'unavailable');
+  assert.equal(getScheduledRouteEligibility({ encerrada_em: '2026-11-04T12:00:00Z', industria: { codigo: 'I-1', nome: 'Teste', status: 'ativo' } }), 'closed');
+  assert.equal(getScheduledRouteEligibility({ encerrada_em: null, industria: { codigo: 'I-1', nome: 'Teste', status: 'ativo' } }), 'active');
+});
+
+test('rotas encerradas continuam disponíveis no histórico dentro da janela carregada', () => {
+  assert.equal(isRouteVisibleInOperationalHistory({ encerrada_em: '2026-11-03T12:00:00Z' }, '2026-08-08'), true);
+  assert.equal(isRouteVisibleInOperationalHistory({ encerrada_em: '2026-08-07T12:00:00Z' }, '2026-08-08'), false);
+  assert.equal(isRouteVisibleInOperationalHistory({ encerrada_em: null }, '2026-08-08'), true);
+});
 
 test('programação virtual semanal sem linha em visits pode ser antecipada', () => {
   assert.deepEqual(getScheduledVisitAction({ item: base, ...common }), { allowed: true, action: 'advance' });
@@ -26,8 +40,22 @@ test('visita de 04/11 pode ser recuperada em 06/11 dentro da mesma semana', () =
     weekStart: '2026-11-02',
     weekEnd: '2026-11-08',
     authorized: true,
-    hasActiveVisit: false
+    hasActiveVisit: false,
+    routeEligibility: 'active'
   }), { allowed: true, action: 'recover' });
+});
+
+test('visita de 04/11 deixa de ser recuperável depois do fim da semana em 08/11', () => {
+  const item = { ...base, dataStr: '2026-11-04', status: 'nao_realizada' } as typeof base;
+  assert.equal(getScheduledVisitAction({
+    item,
+    today: '2026-11-09',
+    weekStart: '2026-11-09',
+    weekEnd: '2026-11-15',
+    authorized: true,
+    hasActiveVisit: false,
+    routeEligibility: 'active'
+  }).allowed, false);
 });
 
 test('rota atualmente encerrada bloqueia recuperação independentemente da data de encerramento', () => {
@@ -35,7 +63,7 @@ test('rota atualmente encerrada bloqueia recuperação independentemente da data
   const closedDates = ['2026-11-03', plannedDate, '2026-11-05'];
   closedDates.forEach((routeEndedAt) => {
     const item = { ...base, dataStr: plannedDate, status: 'nao_realizada' } as typeof base;
-    const result = getScheduledVisitAction({ ...common, item, routeEndedAt });
+    const result = getScheduledVisitAction({ ...common, item, routeEligibility: getScheduledRouteEligibility({ encerrada_em: routeEndedAt, industria: { codigo: 'I-1', nome: 'Teste', status: 'ativo' } }) });
     assert.equal(result.allowed, false);
     assert.match(result.reason || '', /rota foi encerrada/);
   });
@@ -56,6 +84,7 @@ test('concluída, em andamento, escala quinzenal, operação sem permissão e co
     { item: base, ...common, hasActiveVisit: true }
   ];
   denied.forEach(input => assert.equal(getScheduledVisitAction(input).allowed, false));
+  assert.equal(getScheduledVisitAction({ item: base, ...common, routeEligibility: 'unavailable' }).allowed, false);
 });
 
 test('duplicidade é evitada por ocorrência única e nunca abre uma segunda ação para concluída', () => {
