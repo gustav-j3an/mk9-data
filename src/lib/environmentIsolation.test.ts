@@ -60,5 +60,10 @@ describe('Isolamento de Ambientes — Homologação vs Produção', () => {
     assert.ok(sql.includes('trg_rotas_prevent_inactive_industry'), 'Deve conter o trigger trg_rotas_prevent_inactive_industry');
     assert.ok(sql.includes('trg_prevent_active_route_for_inactive_industry'), 'Deve conter a função trg_prevent_active_route_for_inactive_industry');
     assert.ok(sql.includes('ERRCODE = \'22023\''), 'Deve lançar erro 22023 caso se tente criar ou reativar rota de indústria inativa');
+    assert.ok(sql.includes('ERRCODE = \'23503\''), 'Deve lançar erro 23503 caso indústria não exista');
+
+    // Atomicidade comprovada da migration
+    assert.ok(sql.startsWith('--') && sql.includes('\nBEGIN;\n'), 'Migration deve conter BEGIN explícito para atomicidade universal');
+    assert.ok(sql.includes('\nCOMMIT;\n') || sql.endsWith('COMMIT;\n') || sql.endsWith('COMMIT;'), 'Migration deve conter COMMIT explícito');
   });
 });

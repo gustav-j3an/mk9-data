@@ -1,7 +1,8 @@
 -- ==============================================================================
--- MISSÃO 30 / 34 / 36A — MK9 DATE | SINCRONIZAÇÃO DE INDÚSTRIAS INATIVAS COM ROTAS FIXAS
+-- MISSÃO 30 / 34 / 36A / 36B — MK9 DATE | SINCRONIZAÇÃO DE INDÚSTRIAS INATIVAS COM ROTAS FIXAS
 -- ==============================================================================
--- Migration de referência para revisão e homologação.
+-- Migration de referência para homologação e implantação assistida.
+-- ATOMICIDADE TRANSACIONAL GARANTIDA: Bloco BEGIN ... COMMIT com timeouts seguros.
 -- NÃO APLICAR AUTOMATICAMENTE SEM AUTORIZAÇÃO EXPRESSA.
 --
 -- Objetivos:
@@ -16,8 +17,15 @@
 -- 4. Trigger automático 'trg_industrias_inactivation_sync_routes' para suspender rotas
 --    caso a indústria seja inativada diretamente (com verificação de pré-existência para evitar redundância).
 -- 5. Trigger de proteção transacional 'trg_rotas_prevent_inactive_industry' para
---    bloquear criação (INSERT) e reativação (UPDATE encerrada_em) de rotas vinculadas a indústrias inativas.
+--    bloquear criação (INSERT) e reativação (UPDATE encerrada_em) de rotas vinculadas a indústrias
+--    inexistentes, inativas ou com status não operacional (status distinto de 'ativo').
 -- ==============================================================================
+
+BEGIN;
+
+-- Configurações defensivas de tempo limite de sessão e lock
+SET LOCAL lock_timeout = '3s';
+SET LOCAL statement_timeout = '60s';
 
 -- 1. Coluna motivo_encerramento (opcional / evolutiva)
 DO $$
@@ -291,11 +299,11 @@ EXECUTE FUNCTION public.trg_auto_suspend_routes_on_industry_inactivation();
 REVOKE ALL ON FUNCTION public.trg_auto_suspend_routes_on_industry_inactivation() FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.trg_auto_suspend_routes_on_industry_inactivation() TO authenticated;
 
--- 5. Trigger de proteção transacional contra criação e reativação de rotas para indústrias inativas (Missão 36A)
+-- 5. Trigger de proteção transacional contra criação e reativação de rotas para indústrias inativas (Missão 36A / 36B)
 -- Garante proteção estrita em nível de banco de dados contra:
--- a) INSERT de rota ativa (encerrada_em IS NULL) vinculada a indústria inativa.
--- b) UPDATE reativando rota (encerrada_em tornando-se NULL) cuja indústria esteja inativa.
--- c) UPDATE alterando o industria_codigo de rota ativa para indústria inativa.
+-- a) INSERT de rota ativa (encerrada_em IS NULL) vinculada a indústria inexistente ou com status não-ativo.
+-- b) UPDATE reativando rota (encerrada_em tornando-se NULL) cuja indústria não esteja ativa.
+-- c) UPDATE alterando o industria_codigo de rota ativa para indústria inativa ou inexistente.
 CREATE OR REPLACE FUNCTION public.trg_prevent_active_route_for_inactive_industry()
 RETURNS TRIGGER
 LANGUAGE plpgsql
@@ -304,15 +312,21 @@ SET search_path = public, pg_temp
 AS $$
 DECLARE
   v_ind_status TEXT;
+  v_ind_exists BOOLEAN := FALSE;
 BEGIN
-  -- A verificação aplica-se apenas quando a rota for ou se tornar ativa
+  -- A verificação aplica-se exclusivamente quando a rota resultante for ou se tornar ativa
   IF NEW.encerrada_em IS NULL THEN
-    SELECT status INTO v_ind_status
+    SELECT true, status INTO v_ind_exists, v_ind_status
     FROM public.industrias
     WHERE codigo = NEW.industria_codigo;
 
-    IF FOUND AND v_ind_status = 'inativo' THEN
-      RAISE EXCEPTION 'Operação bloqueada: não é permitido criar ou reativar rotas vinculadas a uma indústria inativa (indústria: %).', NEW.industria_codigo
+    IF NOT FOUND OR NOT v_ind_exists THEN
+      RAISE EXCEPTION 'Operação bloqueada: indústria inexistente para rota ativa (código: %).', NEW.industria_codigo
+        USING ERRCODE = '23503';
+    END IF;
+
+    IF v_ind_status IS DISTINCT FROM 'ativo' THEN
+      RAISE EXCEPTION 'Operação bloqueada: não é permitido criar ou reativar rotas vinculadas a uma indústria inativa ou de status não ativo (indústria: %, status: %).', NEW.industria_codigo, COALESCE(v_ind_status, 'desconhecido')
         USING ERRCODE = '22023';
     END IF;
   END IF;
@@ -329,3 +343,5 @@ EXECUTE FUNCTION public.trg_prevent_active_route_for_inactive_industry();
 
 REVOKE ALL ON FUNCTION public.trg_prevent_active_route_for_inactive_industry() FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.trg_prevent_active_route_for_inactive_industry() TO authenticated;
+
+COMMIT;
