@@ -18,6 +18,29 @@ test('recuperação aceita programação não realizada somente dentro da semana
   assert.equal(getScheduledVisitAction({ item: { ...item, dataStr: '2026-10-18' }, ...common }).allowed, false);
 });
 
+test('visita de 04/11 pode ser recuperada em 06/11 dentro da mesma semana', () => {
+  const item = { ...base, dataStr: '2026-11-04', status: 'nao_realizada' } as typeof base;
+  assert.deepEqual(getScheduledVisitAction({
+    item,
+    today: '2026-11-06',
+    weekStart: '2026-11-02',
+    weekEnd: '2026-11-08',
+    authorized: true,
+    hasActiveVisit: false
+  }), { allowed: true, action: 'recover' });
+});
+
+test('rota atualmente encerrada bloqueia recuperação independentemente da data de encerramento', () => {
+  const plannedDate = '2026-11-04';
+  const closedDates = ['2026-11-03', plannedDate, '2026-11-05'];
+  closedDates.forEach((routeEndedAt) => {
+    const item = { ...base, dataStr: plannedDate, status: 'nao_realizada' } as typeof base;
+    const result = getScheduledVisitAction({ ...common, item, routeEndedAt });
+    assert.equal(result.allowed, false);
+    assert.match(result.reason || '', /rota foi encerrada/);
+  });
+});
+
 test('dia futuro não vira não realizado e semana futura não pode ser antecipada', () => {
   const item = { ...base, dataStr: '2026-10-26' } as typeof base;
   assert.equal(getScheduledVisitAction({ item, ...common }).allowed, false);

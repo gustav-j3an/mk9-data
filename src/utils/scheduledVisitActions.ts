@@ -19,11 +19,13 @@ export function getScheduledVisitAction(input: {
   weekEnd: string;
   authorized: boolean;
   hasActiveVisit: boolean;
+  routeEndedAt?: string | null;
 }): ScheduledActionDecision {
   const { item } = input;
   if (!input.authorized) return { allowed: false, reason: 'A operação ainda não está autorizada.' };
   if (input.hasActiveVisit) return { allowed: false, reason: 'Finalize o atendimento atual antes de iniciar outra visita.' };
   if (!item.routeId) return { allowed: false, reason: 'A programação não está vinculada a uma rota fixa.' };
+  if (input.routeEndedAt) return { allowed: false, reason: 'Esta rota foi encerrada e não pode iniciar novos atendimentos.' };
   if ((item.frequencia || '').toUpperCase() !== 'SEMANAL') {
     return { allowed: false, reason: 'Esta frequência ainda não pode ser validada pelo servidor para antecipação ou recuperação.' };
   }

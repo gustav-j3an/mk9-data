@@ -68,7 +68,7 @@ export interface RouteItem {
   created_at?: string;
   updated_at?: string;
   // Relacionamentos com joins
-  industria?: { codigo: string; nome: string } | null;
+  industria?: { codigo: string; nome: string; status?: 'ativo' | 'inativo' } | null;
   loja?: { codigo: string; nome: string; cidade?: string; uf?: string; rede?: string; endereco?: string; bairro?: string } | null;
   promotor?: { matricula: string; nome: string; supervisor?: string; equipe?: string } | null;
 }

@@ -365,7 +365,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
         const routesBaseQuery = (filterByClosure: boolean) => {
           const query = db.from('rotas').select(`
           *,
-          industria:industrias(codigo, nome),
+          industria:industrias(codigo, nome, status),
           loja:lojas(codigo, nome, cidade, uf, endereco),
           promotor:promotores(matricula, nome)
           `).eq('promotor_matricula', promotorMatricula);
@@ -495,8 +495,11 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
       setIsAuthorized(authorized);
 
       const rawRoutes = (rotasRes.data as unknown as RouteItem[]) || [];
-      setRoutes(rawRoutes.filter((r) => !r.encerrada_em));
-      setOperationalRoutes(rawRoutes.filter((r) => !r.encerrada_em || String(r.encerrada_em).slice(0, 10) >= historyStartStr));
+      // Filtrar rotas para aceitar estritamente indústrias com status exatamente igual a 'ativo' (Missão 30.6)
+      // Rotas com indústria inexistente, status nulo ou diferente de 'ativo' não podem gerar novas visitas
+      const activeIndustryRoutes = rawRoutes.filter((r) => r.industria && r.industria.status === 'ativo');
+      setRoutes(activeIndustryRoutes.filter((r) => !r.encerrada_em));
+      setOperationalRoutes(activeIndustryRoutes.filter((r) => !r.encerrada_em || String(r.encerrada_em).slice(0, 10) >= historyStartStr));
 
       const visits = (visitsRes.data as unknown as Visit[]) || [];
       const openVisits = selectPastVisitsFromAgenda(visits, todayStr);
@@ -1910,7 +1913,8 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
       weekStart: currentWeekStartStr,
       weekEnd: currentWeekEndStr,
       authorized: !isImplantacaoMode || isAuthorized,
-      hasActiveVisit: Boolean(activeVisit)
+      hasActiveVisit: Boolean(activeVisit),
+      routeEndedAt: operationalRoutes.find((route) => route.id === scheduledAction.item.routeId)?.encerrada_em
     });
     if (!decision.allowed || decision.action !== scheduledAction.action) {
       onShowToast({ title: 'Programação indisponível', message: decision.reason || 'A programação mudou e precisa ser carregada novamente.', type: 'warning' });
@@ -3248,7 +3252,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
               <div className="space-y-3">
                 {displayedWeekVisits.map((item, idx) => {
                   const isTodayItem = item.dataStr === getLocalDateString(new Date());
-                  const actionDecision = getScheduledVisitAction({ item, today: todayStr, weekStart: currentWeekStartStr, weekEnd: currentWeekEndStr, authorized: !isImplantacaoMode || isAuthorized, hasActiveVisit: Boolean(activeVisit) });
+                  const actionDecision = getScheduledVisitAction({ item, today: todayStr, weekStart: currentWeekStartStr, weekEnd: currentWeekEndStr, authorized: !isImplantacaoMode || isAuthorized, hasActiveVisit: Boolean(activeVisit), routeEndedAt: operationalRoutes.find((route) => route.id === item.routeId)?.encerrada_em });
                   const regularizationLabel = getRegularizationPresentation(item.visitObj?.regularization_status);
                   const actualVisitDate = item.visitObj?.data_visita || null;
                   const isCompletedLate = item.status === 'concluida' && Boolean(actualVisitDate && actualVisitDate > item.dataStr);
