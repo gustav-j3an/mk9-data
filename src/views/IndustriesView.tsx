@@ -1330,15 +1330,10 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
 
     setInactivatingLoading(true);
     try {
-      const activeRoutes = await supabaseIndustryRoutesGateway.getActiveRoutesForIndustry(
-        inactivatingIndustry.codigo
-      );
-
       const result = await supabaseIndustryRoutesGateway.inactivateIndustryAndSuspendRoutes(
         inactivatingIndustry.id,
         inactivatingIndustry.codigo,
-        inactivatingIndustry.nome,
-        activeRoutes
+        inactivatingIndustry.nome
       );
 
       onShowToast({

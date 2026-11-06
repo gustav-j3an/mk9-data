@@ -1,11 +1,5 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  isRouteSuspendedByIndustry,
-  formatIndustrySuspensionObservation,
-  INDUSTRY_SUSPENSION_OBS_TAG,
-  INDUSTRY_SUSPENSION_REASON
-} from '../lib/industryRoutesSyncService';
 import type { RouteItem } from '../types';
 
 export interface DryRunIndustryRouteSyncResult {
@@ -21,7 +15,7 @@ export interface DryRunIndustryRouteSyncResult {
     codigo_rota: string;
     promotor_matricula: string;
     loja_codigo: string;
-    simulatedObservacao: string;
+    auditEventWillBeCreated: boolean;
   }[];
 }
 
@@ -38,7 +32,7 @@ export const simulateIndustryInactivation = (
     codigo_rota: r.codigo_rota,
     promotor_matricula: r.promotor_matricula,
     loja_codigo: r.loja_codigo,
-    simulatedObservacao: formatIndustrySuspensionObservation(r.observacao)
+    auditEventWillBeCreated: true
   }));
 
   return {
@@ -143,10 +137,8 @@ describe('Dry-run / Diagnóstico Idempotente de Indústrias Inativas', () => {
     // Não afeta IND-999
     assert.ok(!simulation.routesToSuspend.some((r) => r.id === 'rot-other'));
 
-    // Observação recebe tag
-    assert.ok(
-      simulation.routesToSuspend[0].simulatedObservacao.includes(INDUSTRY_SUSPENSION_OBS_TAG)
-    );
+    // A observação existente é preservada; a suspensão usa auditoria estruturada.
+    assert.equal(simulation.routesToSuspend[0].auditEventWillBeCreated, true);
   });
 
   it('é idempotente: executar simulação repetidas vezes não duplica nem altera o resultado', () => {
