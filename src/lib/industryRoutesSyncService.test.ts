@@ -15,6 +15,13 @@ describe('industryRoutesSyncService - RPC fail-closed', () => {
     );
   });
 
+  it('throws when the RPC returns no result and no error', () => {
+    assert.throws(
+      () => unwrapIndustrySyncRpc('inativação', null, null),
+      /não confirmou/
+    );
+  });
+
   it('throws when the RPC does not confirm success', () => {
     assert.throws(
       () => unwrapIndustrySyncRpc('reativação', { success: false }, null),
