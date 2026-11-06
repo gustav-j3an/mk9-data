@@ -2,7 +2,8 @@
 -- MISSÃO 30.9 — MK9 DATE | SERIALIZAÇÃO ENTRE CHECK-IN E INATIVAÇÃO
 -- ==============================================================================
 -- Impede que um check-in passe pela validação de status e grave depois da inativação.
--- Ambos os caminhos adquirem lock da indústria antes dos locks de rota.
+-- Ambos os caminhos usam FOR SHARE na indústria antes dos locks de rota.
+-- FOR KEY SHARE não conflita com FOR NO KEY UPDATE, lock usado por UPDATE de status.
 -- ==============================================================================
 
 -- 1. Hardening do attendance_check_in
@@ -39,7 +40,7 @@ BEGIN
   SELECT i.status INTO v_ind_status
   FROM public.industrias i
   WHERE i.codigo = p_industry
-  FOR KEY SHARE;
+  FOR SHARE;
 
   IF NOT FOUND OR v_ind_status IS NULL OR v_ind_status <> 'ativo' THEN
     RAISE EXCEPTION 'Industry is not active or does not exist' USING ERRCODE = '42501';
@@ -269,7 +270,7 @@ BEGIN
   SELECT i.status INTO v_ind_status
   FROM public.industrias i
   WHERE i.codigo = v_industry_code
-  FOR KEY SHARE;
+  FOR SHARE;
 
   IF NOT FOUND OR v_ind_status IS NULL OR v_ind_status <> 'ativo' THEN
     RAISE EXCEPTION 'Industry is not active or does not exist' USING ERRCODE = '42501';
