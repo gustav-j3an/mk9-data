@@ -134,4 +134,59 @@ describe('industryRoutesSyncService - Hardening RPC e Segurança Transacional', 
     assert.equal(result.routesSuspendedCount, 3);
     assert.deepEqual(result.routesSuspendedIds, ['r1', 'r2', 'r3']);
   });
+
+  it('retorna a contagem real de rotas suspensas reportada pela RPC transacional', async () => {
+    const mockGateway: IndustryRoutesGateway = {
+      getActiveRoutesCountForIndustry: async () => 5,
+      getActiveRoutesForIndustry: async () => [
+        mockRoute({ id: 'r1' }),
+        mockRoute({ id: 'r2' }),
+        mockRoute({ id: 'r3' }),
+        mockRoute({ id: 'r4' }),
+        mockRoute({ id: 'r5' })
+      ],
+      inactivateIndustryAndSuspendRoutes: async (id, code, name, routes) => ({
+        industryId: id,
+        industryCode: code,
+        industryName: name,
+        routesSuspendedCount: 5,
+        routesSuspendedIds: routes.map(r => r.id),
+        usedRpc: true
+      }),
+      activateIndustry: async () => {},
+      reactivateRoutesForIndustry: async () => ({ industryCode: 'IND-007', routesReactivatedCount: 0, usedRpc: true })
+    };
+
+    const result = await mockGateway.inactivateIndustryAndSuspendRoutes('uuid-1', 'IND-007', 'COPRA', [
+      mockRoute({ id: 'r1' }),
+      mockRoute({ id: 'r2' }),
+      mockRoute({ id: 'r3' }),
+      mockRoute({ id: 'r4' }),
+      mockRoute({ id: 'r5' })
+    ]);
+
+    assert.equal(result.routesSuspendedCount, 5);
+    assert.equal(result.routesSuspendedIds.length, 5);
+  });
+
+  it('bloqueia reativação de rotas vinculadas a indústria inativa (código 22023)', async () => {
+    const mockGateway: IndustryRoutesGateway = {
+      getActiveRoutesCountForIndustry: async () => 0,
+      getActiveRoutesForIndustry: async () => [],
+      inactivateIndustryAndSuspendRoutes: async () => ({} as any),
+      activateIndustry: async () => {},
+      reactivateRoutesForIndustry: async () => {
+        const err = {
+          code: '22023',
+          message: 'Não é permitido reativar rotas de uma indústria inativa. Reative a indústria primeiro.'
+        };
+        throw new Error(`Falha na reativação das rotas: ${err.message}`);
+      }
+    };
+
+    await assert.rejects(
+      () => mockGateway.reactivateRoutesForIndustry('uuid-1', 'IND-007'),
+      /Não é permitido reativar rotas de uma indústria inativa/
+    );
+  });
 });

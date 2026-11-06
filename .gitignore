@@ -7,6 +7,7 @@ coverage/
 *.log
 .env*
 !.env.example
+!.env.homologation.example
 /scratch/attendance-homologation/
 supabase/backups/
 *.dump
