@@ -4,7 +4,8 @@ BEGIN;
 INSERT INTO public.industrias(codigo,nome,status) VALUES
  ('M37IA','Synthetic active','ativo'),
  ('M37II','Synthetic inactive','inativo'),
- ('M37IC','Synthetic concurrent','ativo');
+ ('M37IC1','Synthetic concurrent order 1','ativo'),
+ ('M37IC2','Synthetic concurrent order 2','ativo');
 INSERT INTO public.lojas(codigo,nome,cidade,uf,endereco,status) VALUES
  ('M37L1','Synthetic 1','Teste','SP','Teste','ativo'),
  ('M37L2','Synthetic 2','Teste','SP','Teste','ativo'),
@@ -22,7 +23,8 @@ INSERT INTO public.lojas(codigo,nome,cidade,uf,endereco,status) VALUES
  ('M37L14','Synthetic 14','Teste','SP','Teste','ativo'),
  ('M37L15','Synthetic 15','Teste','SP','Teste','ativo'),
  ('M37L16','Synthetic 16','Teste','SP','Teste','ativo'),
- ('M37L17','Synthetic 17','Teste','SP','Teste','ativo');
+ ('M37L17','Synthetic 17','Teste','SP','Teste','ativo'),
+ ('M37L18','Synthetic 18','Teste','SP','Teste','ativo');
 INSERT INTO public.promotores(matricula,nome,cidade,uf,status) VALUES
  ('M37P1','Synthetic promoter 1','Teste','SP','ativo'),
  ('M37P2','Synthetic promoter 2','Teste','SP','ativo'),
@@ -64,7 +66,8 @@ VALUES
   (((clock_timestamp() AT TIME ZONE 'America/Sao_Paulo')::date + 5)::timestamp AT TIME ZONE 'America/Sao_Paulo')),
  ('37000000-0000-4000-8000-000000000015','M37R15','M37P4','M37L15','M37IA','SEMANAL',true,true,true,true,true,true,true,NULL),
  ('37000000-0000-4000-8000-000000000016','M37R16','M37P3','M37L16','M37IA','SEMANAL',true,true,true,true,true,true,true,NULL),
- ('37000000-0000-4000-8000-000000000017','M37R17','M37P1','M37L17','M37IC','SEMANAL',true,true,true,true,true,true,true,NULL);
+ ('37000000-0000-4000-8000-000000000017','M37R17','M37P1','M37L17','M37IC1','SEMANAL',true,true,true,true,true,true,true,NULL),
+ ('37000000-0000-4000-8000-000000000018','M37R18','M37P1','M37L18','M37IC2','SEMANAL',true,true,true,true,true,true,true,NULL);
 INSERT INTO public.visits(id,rota_id,promotor_matricula,loja_codigo,industria_codigo,data_visita,scheduled_date,status,started_at,completed_at)
 VALUES ('37000000-0000-4000-8000-000000000101','37000000-0000-4000-8000-000000000006',
  'M37P1','M37L6','M37IA',(clock_timestamp() AT TIME ZONE 'America/Sao_Paulo')::date - 1,

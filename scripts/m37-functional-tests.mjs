@@ -1,8 +1,36 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 
 const pg = (sql) => execFileSync('psql', ['-X', '-A', '-t', '-v', 'ON_ERROR_STOP=1', '-c', sql], { encoding: 'utf8' }).trim();
+const runAsyncPsql = (sql) => {
+  const child = spawn('psql', ['-X', '-v', 'ON_ERROR_STOP=1'], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env: process.env
+  });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.on('data', d => { stdout += d.toString(); });
+  child.stderr.on('data', d => { stderr += d.toString(); });
+  child.stdin.write(sql);
+  child.stdin.end();
+  return {
+    child,
+    done: new Promise((resolve, reject) => {
+      child.on('close', code => {
+        if (code === 0) resolve(stdout.trim());
+        else reject(new Error(`psql process exited with ${code}: ${stderr}`));
+      });
+    })
+  };
+};
+const waitForCondition = async (fn, desc = 'condition', timeoutMs = 8000) => {
+  const start = Date.now();
+  while (!fn()) {
+    if (Date.now() - start > timeoutMs) throw new Error(`Timeout after ${timeoutMs}ms waiting for: ${desc}`);
+    await new Promise(r => setTimeout(r, 20));
+  }
+};
 const status = execFileSync('supabase', ['status', '-o', 'env'], {
   cwd: process.env.SUPABASE_TEST_WORKDIR, encoding: 'utf8'
 });
@@ -111,9 +139,89 @@ await denied('visit with product validity evidence', () => scheduled(users[3], 1
 await denied('visit with prior check-in', () => scheduled(users[3], 13, yesterday), '23505');
 await denied('route-less check-in with closed route', () => checkin(users[0], 'M37L2','M37IA'), '42501');
 
-// Inativação concorrente de indústria
-pg("UPDATE public.industrias SET status='inativo' WHERE codigo='M37IC'");
-await denied('inactivated industry', () => scheduled(users[0], 17, yesterday), '42501');
+// Teste de concorrência real — Ordem 1: Inativação concorre com check-in
+// Sessão B1 (Admin) inicia transação, atualiza status da indústria M37IC1 para 'inativo' e retém commit via advisory lock 99901.
+// Sessão A1 (Promotor) tenta check-in e entra em lock wait comprovado no catálogo pg_locks (NOT granted).
+// Liberação da Sessão B1 -> COMMIT -> Sessão A1 é desbloqueada e aborta com 42501 sem criar visita.
+pg("SELECT pg_advisory_lock(99901)");
+const sessionB1 = runAsyncPsql(`
+  BEGIN;
+  UPDATE public.industrias SET status = 'inativo' WHERE codigo = 'M37IC1';
+  SELECT pg_advisory_lock(99901);
+  COMMIT;
+  SELECT pg_advisory_unlock(99901);
+`);
+
+await waitForCondition(
+  () => Number(pg("SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND objid = 99901 AND NOT granted")) > 0,
+  'sessionB1 holding exclusive tuple lock on industry M37IC1'
+);
+
+const checkinOrder1Promise = scheduled(users[0], 17, yesterday);
+
+await waitForCondition(
+  () => Number(pg("SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid WHERE NOT l.granted AND a.query LIKE '%attendance_%'")) > 0,
+  'sessionA1 blocked by sessionB1 tuple lock on industry'
+);
+
+pg("SELECT pg_advisory_unlock(99901)");
+await sessionB1.done;
+
+const resOrder1 = await checkinOrder1Promise;
+assert.ok(resOrder1.status >= 400, 'Order 1: check-in was unexpectedly accepted during inactivation');
+assert.equal(resOrder1.data?.code, '42501', 'Order 1: expected 42501 for inactivated industry');
+assert.equal(count('visits', `rota_id='${route(17)}'`), 0, 'Order 1: no visit must be created');
+assert.equal(count('visit_schedule_actions', `route_id='${route(17)}'`), 0, 'Order 1: no audit action must be created');
+assert.equal(pg("SELECT status FROM public.industrias WHERE codigo = 'M37IC1'"), 'inativo', 'Order 1: industry must be inactive');
+console.log('PASS concurrent industry inactivation order 1: lock contention verified in pg_locks, check-in denied (42501), no visits');
+cases++;
+
+// Teste de concorrência real — Ordem 2: Check-in inicia antes e segura lock FOR SHARE na indústria M37IC2
+// Sessão B2 (Admin) tenta UPDATE public.industrias SET status='inativo' e entra em lock wait comprovado via pg_locks.
+// Liberação da Sessão A2 -> COMMIT grava a visita -> Sessão B2 é desbloqueada e inativa a indústria.
+// Check-in subsequente na indústria agora inativa é barrado com 42501.
+pg("SELECT pg_advisory_lock(99902)");
+const sessionA2 = runAsyncPsql(`
+  BEGIN;
+  SET LOCAL ROLE authenticated;
+  SET LOCAL "request.jwt.claim.sub" = '${users[0].id}';
+  SELECT public.attendance_start_scheduled_occurrence(
+    '${route(18)}'::uuid,
+    '${iso(yesterday)}'::date,
+    'recover'
+  );
+  SELECT pg_advisory_lock(99902);
+  COMMIT;
+  SELECT pg_advisory_unlock(99902);
+`);
+
+await waitForCondition(
+  () => Number(pg("SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND objid = 99902 AND NOT granted")) > 0,
+  'sessionA2 holding FOR SHARE lock on industry M37IC2'
+);
+
+const sessionB2 = runAsyncPsql(`
+  UPDATE public.industrias SET status = 'inativo' WHERE codigo = 'M37IC2';
+`);
+
+await waitForCondition(
+  () => Number(pg("SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid WHERE NOT l.granted AND a.query LIKE '%UPDATE public.industrias%M37IC2%'")) > 0,
+  'sessionB2 blocked by sessionA2 FOR SHARE lock on industry M37IC2'
+);
+
+pg("SELECT pg_advisory_unlock(99902)");
+await sessionA2.done;
+await sessionB2.done;
+
+assert.equal(count('visits', `rota_id='${route(18)}' AND scheduled_date='${iso(yesterday)}'`), 1, 'Order 2: visit must exist');
+assert.equal(count('visit_schedule_actions', `route_id='${route(18)}' AND scheduled_date='${iso(yesterday)}'`), 1, 'Order 2: audit must exist');
+assert.equal(pg("SELECT status FROM public.industrias WHERE codigo = 'M37IC2'"), 'inativo', 'Order 2: industry must be inactive');
+
+const postInactivationCheckin = await scheduled(users[0], 18, yesterday);
+assert.ok(postInactivationCheckin.status >= 400, 'Order 2: subsequent check-in must be rejected');
+assert.equal(postInactivationCheckin.data?.code, '42501', 'Order 2: subsequent check-in code 42501');
+console.log('PASS concurrent industry inactivation order 2: lock contention verified, serialization respected, check-in saved, subsequent check-in denied (42501)');
+cases++;
 
 // Validações do modo OPERACAO_OFICIAL
 pg("UPDATE public.system_settings SET value='\"OPERACAO_OFICIAL\"'::jsonb WHERE key='operation_mode'");
@@ -215,4 +323,5 @@ assert.equal(count('visits', `rota_id='${route(16)}' AND scheduled_date='${iso(y
 assert.equal(count('visit_schedule_actions', `route_id='${route(16)}' AND scheduled_date='${iso(yesterday)}'`), 1);
 console.log('PASS concurrent materialized pending recovery: exactly one visit and action'); cases++;
 
-console.log(`Functional cases passed: ${cases}`);
+assert.equal(cases, 32, `Expected exactly 32 functional scenarios, but got ${cases}`);
+console.log(`All ${cases} functional scenarios passed successfully.`);
