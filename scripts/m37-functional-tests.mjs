@@ -400,6 +400,9 @@ try {
   assert.ok(postInactivationCheckin.status >= 400, 'Ordem B: subsequent check-in must be rejected');
   assert.equal(postInactivationCheckin.data?.code, '42501', 'Ordem B: subsequent check-in code 42501');
 
+  // Conclui a visita da rota 18 para restaurar o estado operacional do promotor para os próximos cenários
+  pg(`UPDATE public.visits SET status = 'concluida', completed_at = clock_timestamp() WHERE rota_id = '${route(18)}' AND status = 'em_andamento'`);
+
   console.log('PASS Ordem B (check-in primeiro): pg_blocking_pids comprovou serialização, visita gravada, indústria inativada, subsequente rejeitado (42501)');
   cases++;
 } finally {
@@ -427,7 +430,7 @@ assert.ok(auditRead.status >= 400, 'Direct audit SELECT was accepted');
 console.log(`PASS direct audit SELECT denied: ${auditRead.status}`); cases++;
 
 const recovered = await scheduled(users[0], 1, yesterday);
-assert.equal(recovered.status, 200, `Recovery failed: ${recovered.data?.code ?? recovered.status}`);
+assert.equal(recovered.status, 200, `Recovery failed: ${recovered.data?.code ?? recovered.status} - ${recovered.data?.message ?? ''}`);
 assert.equal(recovered.data?.scheduled_date, iso(yesterday));
 assert.equal(recovered.data?.data_visita, iso(today));
 assert.equal(recovered.data?.status, 'em_andamento');
@@ -461,6 +464,8 @@ assert.equal(concurrent.filter(r => r.status === 200).length, 1);
 assert.equal(concurrent.filter(r => r.status >= 400).length, 1);
 assert.equal(count('visits', `rota_id='${route(9)}' AND scheduled_date='${iso(yesterday)}'`), 1);
 assert.equal(count('visit_schedule_actions', `route_id='${route(9)}' AND scheduled_date='${iso(yesterday)}'`), 1);
+// Conclui a visita da rota 9 para restaurar o estado operacional do promotor para os próximos cenários
+pg(`UPDATE public.visits SET status = 'concluida', completed_at = clock_timestamp() WHERE rota_id = '${route(9)}' AND status = 'em_andamento'`);
 console.log('PASS concurrent independent authenticated requests: one visit and action'); cases++;
 
 assert.equal(snapshot(), historyBefore, 'Unrelated historical visits changed');
@@ -468,7 +473,7 @@ console.log('PASS unrelated historical visits unchanged'); cases++;
 
 const pendingRecovery = await scheduled(users[3], 10, yesterday);
 assert.equal(pendingRecovery.status, 200,
-  `Materialized pending recovery failed: ${pendingRecovery.data?.code ?? pendingRecovery.status}`);
+  `Materialized pending recovery failed: ${pendingRecovery.data?.code ?? pendingRecovery.status} - ${pendingRecovery.data?.message ?? ''}`);
 assert.equal(pendingRecovery.data?.scheduled_date, iso(yesterday));
 assert.equal(pendingRecovery.data?.data_visita, iso(today));
 assert.equal(pendingRecovery.data?.id, '37000000-0000-4000-8000-000000000103');
@@ -487,9 +492,12 @@ const directPatchOther = await request('/rest/v1/visits?id=eq.37000000-0000-4000
 assert.ok(directPatchOther.status >= 400, 'Direct PATCH on other promoter visit unexpectedly accepted');
 console.log('PASS direct update of another promoter visit blocked'); cases++;
 
+// Conclui a visita da rota 10 para restaurar o estado operacional do promotor antes da próxima recuperação
+pg(`UPDATE public.visits SET status = 'concluida', completed_at = clock_timestamp() WHERE rota_id = '${route(10)}' AND status = 'em_andamento'`);
+
 const unperformedRecovery = await scheduled(users[3], 11, yesterday);
 assert.equal(unperformedRecovery.status, 200,
-  `Materialized unperformed recovery failed: ${unperformedRecovery.data?.code ?? unperformedRecovery.status}`);
+  `Materialized unperformed recovery failed: ${unperformedRecovery.data?.code ?? unperformedRecovery.status} - ${unperformedRecovery.data?.message ?? ''}`);
 assert.equal(unperformedRecovery.data?.scheduled_date, iso(yesterday));
 assert.equal(unperformedRecovery.data?.data_visita, iso(today));
 assert.equal(unperformedRecovery.data?.id, '37000000-0000-4000-8000-000000000104');
