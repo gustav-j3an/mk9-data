@@ -28,12 +28,26 @@ const createPsqlSession = (name = 'session') => {
       const q = activeQuery;
       activeQuery = null;
       if (q.timer) clearTimeout(q.timer);
-      q.resolve(output);
+      setImmediate(() => {
+        if (q.queryStderr.includes('ERROR:')) {
+          const err = new Error(`PsqlSession [${name}] query failed: ${q.queryStderr.trim()}`);
+          err.stderr = q.queryStderr.trim();
+          err.stdout = output;
+          const match = q.queryStderr.match(/ERROR:\s+([A-Z0-9]{5}):/);
+          err.sqlstate = match ? match[1] : null;
+          q.reject(err);
+        } else {
+          q.resolve(output);
+        }
+      });
     }
   });
 
   child.stderr.on('data', (chunk) => {
     stderrData += chunk;
+    if (activeQuery) {
+      activeQuery.queryStderr += chunk;
+    }
   });
 
   child.on('close', (code) => {
@@ -92,18 +106,13 @@ const createPsqlSession = (name = 'session') => {
           sql,
           sentinel,
           timer,
+          queryStderr: '',
           resolve,
           reject
         };
 
         child.stdin.write(`${sql.trim()};\n\\echo ${sentinel}\n`);
       });
-    },
-    send(sql) {
-      if (isClosed || child.exitCode !== null) {
-        throw new Error(`PsqlSession [${name}] is closed, cannot send command`);
-      }
-      child.stdin.write(`${sql.trim()};\n`);
     },
     async close() {
       if (isClosed) return;
@@ -280,12 +289,12 @@ try {
   await promoterA.query(`SET LOCAL "request.jwt.claim.sub" = '${users[0].id}';`);
 
   // Disparo assíncrono do check-in que entrará em lock wait no PostgreSQL
-  promoterA.send(`
+  const promoterPromise = promoterA.query(`
     SELECT public.attendance_start_scheduled_occurrence(
       '${route(17)}'::uuid,
       '${iso(yesterday)}'::date,
       'recover'
-    )
+    );
   `);
 
   // 3. Sincronização explícita e verificação formal no catálogo do PostgreSQL:
@@ -305,11 +314,15 @@ try {
   await adminA.query('COMMIT;');
 
   // 5. promoterA é liberado e aborta com erro 42501
-  await waitForCondition(() => {
-    const act = pg(`SELECT state FROM pg_stat_activity WHERE pid = ${promoterPid}`);
-    return act === 'idle in transaction (aborted)' || act === 'idle';
-  }, 'promoterA aborted due to inactive industry', 8000);
-
+  let promoterError = null;
+  try {
+    await promoterPromise;
+  } catch (err) {
+    promoterError = err;
+  }
+  assert.ok(promoterError, 'promoterA must reject with error');
+  assert.equal(promoterError.sqlstate, '42501', 'promoterA must reject with SQLSTATE 42501');
+  assert.match(promoterError.stderr || promoterError.message, /Industry is not active or does not exist/, 'promoterA error message');
   assert.match(promoterA.stderr, /Industry is not active or does not exist|42501/, 'promoterA must reject with 42501');
   await promoterA.query('ROLLBACK;');
 
@@ -357,7 +370,7 @@ try {
   // Transação permanece ABERTA! O lock FOR SHARE na indústria M37IC2 está ativo.
 
   // 2. Sessão administrativa tenta inativar a indústria M37IC2
-  adminB.send("UPDATE public.industrias SET status = 'inativo' WHERE codigo = 'M37IC2'");
+  const adminPromise = adminB.query("UPDATE public.industrias SET status = 'inativo' WHERE codigo = 'M37IC2';");
 
   // 3. Sincronização explícita e verificação formal no catálogo do PostgreSQL:
   await waitForCondition(() => {
@@ -375,10 +388,7 @@ try {
   await promoterB.query('COMMIT;');
 
   // 5. adminB é desbloqueado e completa o UPDATE
-  await waitForCondition(() => {
-    const act = pg(`SELECT state FROM pg_stat_activity WHERE pid = ${adminPid}`);
-    return act === 'idle';
-  }, 'adminB update completed', 8000);
+  await adminPromise;
 
   // 6. Verificações do estado final:
   assert.equal(count('visits', `rota_id='${route(18)}' AND scheduled_date='${iso(yesterday)}'`), 1, 'Ordem B: visita deve existir');

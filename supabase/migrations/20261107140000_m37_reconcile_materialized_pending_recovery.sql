@@ -79,7 +79,7 @@ BEGIN
   RETURN NEW;
 END;
 $$;
-REVOKE ALL ON FUNCTION public.check_visit_promotor_update_integrity() FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.check_visit_promotor_update_integrity() FROM PUBLIC, anon, authenticated, service_role;
 
 -- 3. Atualização de attendance_private.attendance_start_scheduled_occurrence
 CREATE OR REPLACE FUNCTION attendance_private.attendance_start_scheduled_occurrence(
