@@ -52,4 +52,3 @@ JOIN pg_proc p ON p.pronamespace=n.oid AND p.proname=e.function_name;
 " | grep -qx t
 
 echo 'Recovery catalog checks passed on PostgreSQL 17.'
-

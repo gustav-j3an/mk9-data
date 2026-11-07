@@ -1,13 +1,6 @@
 name: M37 recovery on PostgreSQL 17
 
 on:
-  push:
-    branches: [feat/m37-1-pending-visits-safety]
-    paths:
-      - '.github/workflows/m37-recovery-postgres17.yml'
-      - 'docs/m37.4-homologation-function-recovery.sql'
-      - 'scripts/m37-recovery-postgres17.sh'
-      - 'supabase/migrations/**'
   workflow_dispatch:
 
 permissions:
@@ -37,4 +30,3 @@ jobs:
       - uses: actions/checkout@v4
       - name: Check PostgreSQL version and run isolated migration recovery
         run: bash scripts/m37-recovery-postgres17.sh
-
