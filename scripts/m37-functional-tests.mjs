@@ -144,6 +144,8 @@ assert.equal(pendingRecovery.status, 200,
   `Materialized pending recovery failed: ${pendingRecovery.data?.code ?? pendingRecovery.status}`);
 assert.equal(pendingRecovery.data?.scheduled_date, iso(yesterday));
 assert.equal(pendingRecovery.data?.data_visita, iso(today));
+assert.equal(pendingRecovery.data?.id, '37000000-0000-4000-8000-000000000103');
+assert.equal(count('visits', `rota_id='${route(10)}'`), 1);
 assert.equal(count('visit_schedule_actions', `route_id='${route(10)}' AND scheduled_date='${iso(yesterday)}'`), 1);
 console.log('PASS materialized pending visit recovery'); cases++;
 assert.equal(snapshot(), historyBefore, 'Unrelated historical visits changed');
