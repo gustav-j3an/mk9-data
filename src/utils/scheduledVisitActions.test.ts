@@ -126,7 +126,7 @@ test('cenário 1: visita pendente sem conflito hoje pode ser recuperada', () => 
   assert.equal(result.isSameDayConflict, undefined);
 });
 
-test('cenário 2: visita concluída hoje para mesma loja e indústria bloqueia recuperação', () => {
+test('cenário 2: mesma ocorrência (mesma scheduled_date) já atendida hoje bloqueia recuperação duplicada', () => {
   const pendingItem = {
     ...base,
     dataStr: '2026-11-04',
@@ -144,17 +144,17 @@ test('cenário 2: visita concluída hoje para mesma loja e indústria bloqueia r
     hasActiveVisit: false,
     routeEligibility: 'active',
     todayVisits: [
-      { loja_codigo: 'L-101', industria_codigo: 'IND-01', status: 'concluida' } as any
+      { loja_codigo: 'L-101', industria_codigo: 'IND-01', status: 'concluida', scheduled_date: '2026-11-04' } as any
     ]
   });
 
   assert.equal(result.allowed, false);
   assert.equal(result.action, 'recover');
   assert.equal(result.isSameDayConflict, true);
-  assert.equal(result.reason, 'Já existe um atendimento para esta loja e indústria hoje.');
+  assert.equal(result.reason, 'Esta ocorrência programada já foi atendida hoje.');
 });
 
-test('cenário 3: visita em andamento hoje para mesma loja e indústria bloqueia recuperação', () => {
+test('cenário 3: mesma ocorrência em andamento hoje bloqueia nova recuperação simultânea', () => {
   const pendingItem = {
     ...base,
     dataStr: '2026-11-04',
@@ -172,14 +172,14 @@ test('cenário 3: visita em andamento hoje para mesma loja e indústria bloqueia
     hasActiveVisit: false,
     routeEligibility: 'active',
     todayVisits: [
-      { loja_codigo: 'L-101', industria_codigo: 'IND-01', status: 'em_andamento' } as any
+      { loja_codigo: 'L-101', industria_codigo: 'IND-01', status: 'em_andamento', scheduled_date: '2026-11-04' } as any
     ]
   });
 
   assert.equal(result.allowed, false);
   assert.equal(result.action, 'recover');
   assert.equal(result.isSameDayConflict, true);
-  assert.equal(result.reason, 'Já existe um atendimento para esta loja e indústria hoje.');
+  assert.equal(result.reason, 'Esta ocorrência programada já foi atendida hoje.');
 });
 
 test('cenário 4: visita hoje para outra indústria na mesma loja NÃO causa conflito', () => {
@@ -283,4 +283,159 @@ test('cenário 7: tentativa concorrente com atendimento ativo no promotor é blo
 
   assert.equal(result.allowed, false);
   assert.match(result.reason || '', /Finalize o atendimento atual/);
+});
+
+// Casos específicos da Missão 37.52 - Recuperação integral de múltiplas ocorrências na semana
+test('cenário 37.52-1: segunda-feira (02/11) pode ser recuperada no sábado (07/11)', () => {
+  const itemSegunda = {
+    ...base,
+    dataStr: '2026-11-02',
+    status: 'nao_realizada',
+    lojaCodigo: 'L-101',
+    industriaCodigo: 'IND-01'
+  } as typeof base;
+
+  const result = getScheduledVisitAction({
+    item: itemSegunda,
+    today: '2026-11-07',
+    weekStart: '2026-11-02',
+    weekEnd: '2026-11-08',
+    authorized: true,
+    hasActiveVisit: false,
+    routeEligibility: 'active',
+    todayVisits: []
+  });
+
+  assert.equal(result.allowed, true);
+  assert.equal(result.action, 'recover');
+});
+
+test('cenário 37.52-2: quarta-feira (04/11) pode ser recuperada no sábado (07/11)', () => {
+  const itemQuarta = {
+    ...base,
+    dataStr: '2026-11-04',
+    status: 'nao_realizada',
+    lojaCodigo: 'L-101',
+    industriaCodigo: 'IND-01'
+  } as typeof base;
+
+  const result = getScheduledVisitAction({
+    item: itemQuarta,
+    today: '2026-11-07',
+    weekStart: '2026-11-02',
+    weekEnd: '2026-11-08',
+    authorized: true,
+    hasActiveVisit: false,
+    routeEligibility: 'active',
+    todayVisits: []
+  });
+
+  assert.equal(result.allowed, true);
+  assert.equal(result.action, 'recover');
+});
+
+test('cenário 37.52-3: quinta-feira (05/11) pode ser recuperada no sábado (07/11)', () => {
+  const itemQuinta = {
+    ...base,
+    dataStr: '2026-11-05',
+    status: 'nao_realizada',
+    lojaCodigo: 'L-101',
+    industriaCodigo: 'IND-01'
+  } as typeof base;
+
+  const result = getScheduledVisitAction({
+    item: itemQuinta,
+    today: '2026-11-07',
+    weekStart: '2026-11-02',
+    weekEnd: '2026-11-08',
+    authorized: true,
+    hasActiveVisit: false,
+    routeEligibility: 'active',
+    todayVisits: []
+  });
+
+  assert.equal(result.allowed, true);
+  assert.equal(result.action, 'recover');
+});
+
+test('cenário 37.52-4: recuperar três ocorrências da mesma loja e indústria no sábado separadamente', () => {
+  // Simulando que a segunda (02/11) já foi recuperada e concluída hoje no sábado
+  const visitsConcluidasHoje = [
+    { loja_codigo: 'L-101', industria_codigo: 'IND-01', status: 'concluida', scheduled_date: '2026-11-02' } as any
+  ];
+
+  // A quarta (04/11) NÃO deve ser bloqueada pela segunda ter sido feita hoje
+  const itemQuarta = {
+    ...base,
+    dataStr: '2026-11-04',
+    status: 'nao_realizada',
+    lojaCodigo: 'L-101',
+    industriaCodigo: 'IND-01'
+  } as typeof base;
+
+  const resultQuarta = getScheduledVisitAction({
+    item: itemQuarta,
+    today: '2026-11-07',
+    weekStart: '2026-11-02',
+    weekEnd: '2026-11-08',
+    authorized: true,
+    hasActiveVisit: false,
+    routeEligibility: 'active',
+    todayVisits: visitsConcluidasHoje
+  });
+
+  assert.equal(resultQuarta.allowed, true);
+  assert.equal(resultQuarta.action, 'recover');
+
+  // A quinta (05/11) também permanece habilitada para recuperação
+  const itemQuinta = {
+    ...base,
+    dataStr: '2026-11-05',
+    status: 'nao_realizada',
+    lojaCodigo: 'L-101',
+    industriaCodigo: 'IND-01'
+  } as typeof base;
+
+  const resultQuinta = getScheduledVisitAction({
+    item: itemQuinta,
+    today: '2026-11-07',
+    weekStart: '2026-11-02',
+    weekEnd: '2026-11-08',
+    authorized: true,
+    hasActiveVisit: false,
+    routeEligibility: 'active',
+    todayVisits: visitsConcluidasHoje
+  });
+
+  assert.equal(resultQuinta.allowed, true);
+  assert.equal(resultQuinta.action, 'recover');
+});
+
+test('cenário 37.52-5: bloquear execução duplicada da mesma ocorrência já recuperada hoje', () => {
+  const visitsConcluidasHoje = [
+    { loja_codigo: 'L-101', industria_codigo: 'IND-01', status: 'concluida', scheduled_date: '2026-11-02' } as any
+  ];
+
+  const itemSegundaRepetida = {
+    ...base,
+    dataStr: '2026-11-02',
+    status: 'pendente',
+    lojaCodigo: 'L-101',
+    industriaCodigo: 'IND-01'
+  } as typeof base;
+
+  const result = getScheduledVisitAction({
+    item: itemSegundaRepetida,
+    today: '2026-11-07',
+    weekStart: '2026-11-02',
+    weekEnd: '2026-11-08',
+    authorized: true,
+    hasActiveVisit: false,
+    routeEligibility: 'active',
+    todayVisits: visitsConcluidasHoje
+  });
+
+  assert.equal(result.allowed, false);
+  assert.equal(result.isSameDayConflict, true);
+  assert.equal(result.reason, 'Esta ocorrência programada já foi atendida hoje.');
 });

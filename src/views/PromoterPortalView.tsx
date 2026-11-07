@@ -3427,14 +3427,14 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                                   type="button"
                                   disabled
                                   aria-disabled="true"
-                                  title={actionDecision.reason || 'Já existe um atendimento para esta loja e indústria hoje'}
+                                  title={actionDecision.reason || 'Esta ocorrência programada já foi atendida hoje.'}
                                   className="min-h-10 rounded-xl bg-slate-200 px-4 py-2 text-xs font-bold text-slate-500 cursor-not-allowed opacity-80 border border-slate-300"
                                 >
                                   <span className="material-symbols-outlined mr-1 align-middle text-sm">{actionDecision.action === 'advance' ? 'event_upcoming' : 'replay'}</span>
                                   <span>{actionDecision.action === 'advance' ? 'Antecipar visita' : 'Realizar hoje'}</span>
                                 </button>
                                 <span className="max-w-60 text-[11px] font-semibold leading-snug text-amber-800">
-                                  {actionDecision.reason || 'Já existe um atendimento para esta loja e indústria hoje.'}
+                                  {actionDecision.reason || 'Esta ocorrência programada já foi atendida hoje.'}
                                 </span>
                               </div>
                             )}
@@ -4367,9 +4367,12 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
               <p>Loja: <strong>{scheduledAction.item.lojaNome}</strong></p>
               <p>Indústria: <strong>{scheduledAction.item.industriaNome}</strong></p>
               <p>Programada para: <strong>{scheduledAction.item.dataStr.split('-').reverse().join('/')} · {scheduledAction.item.dayOfWeekLabel}</strong></p>
+              <p>Data efetiva: <strong>{todayStr.split('-').reverse().join('/')} (Hoje)</strong></p>
               <p>Frequência contratada: <strong>{scheduledAction.item.frequencia}</strong></p>
             </div>
-            <p className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs leading-relaxed text-amber-950">A data original da escala será preservada. O servidor validará a ocorrência e registrará esta ação para auditoria; nenhuma programação extra será criada.</p>
+            <p className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs leading-relaxed text-amber-950">
+              Confirmação da recuperação: A data original da escala ({scheduledAction.item.dataStr.split('-').reverse().join('/')}) será preservada e o atendimento será registrado com a data efetiva de hoje ({todayStr.split('-').reverse().join('/')}). Nenhuma programação extra será criada.
+            </p>
             <div className="flex flex-col-reverse justify-end gap-2 border-t border-[#CFCDC5] pt-3 sm:flex-row">
               <button type="button" onClick={() => setScheduledAction(null)} disabled={savingScheduledAction} className="min-h-10 rounded-xl border border-[#CFCDC5] bg-[#EAE8E2] px-4 py-2 text-sm font-semibold text-[#171717] focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600">Cancelar</button>
               <button type="button" onClick={handleConfirmScheduledAction} disabled={savingScheduledAction} className="min-h-10 rounded-xl bg-purple-700 px-4 py-2 text-sm font-bold text-white hover:bg-purple-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600 disabled:opacity-50">

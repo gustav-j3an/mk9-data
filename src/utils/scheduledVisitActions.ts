@@ -34,7 +34,7 @@ export function getScheduledVisitAction(input: {
   authorized: boolean;
   hasActiveVisit: boolean;
   routeEligibility: ScheduledRouteEligibility;
-  todayVisits?: Pick<Visit, 'loja_codigo' | 'industria_codigo' | 'status'>[];
+  todayVisits?: Pick<Visit, 'loja_codigo' | 'industria_codigo' | 'status' | 'scheduled_date'>[];
 }): ScheduledActionDecision {
   const { item, todayVisits = [] } = input;
   if (!input.authorized) return { allowed: false, reason: 'A operação ainda não está autorizada.' };
@@ -52,21 +52,24 @@ export function getScheduledVisitAction(input: {
     return { allowed: false, reason: 'Esta ocorrência já possui atendimento iniciado ou concluído.' };
   }
 
-  // Prevenção de duplicidade: se já existe atendimento efetivo (concluído ou em andamento) para a mesma loja e indústria hoje
+  // Prevenção de duplicidade: a mesma ocorrência programada (scheduled_date) não pode ser executada duas vezes.
+  // Múltiplas ocorrências programadas distintas (ex: segunda, quarta, quinta) para a mesma loja/indústria
+  // podem ser recuperadas e concluídas separadamente no mesmo dia efetivo (Missão 37.52).
   if (item.lojaCodigo && item.industriaCodigo && todayVisits.length > 0) {
-    const hasConflictToday = todayVisits.some(
+    const isSameOccurrenceExecutedToday = todayVisits.some(
       (v) =>
         v.loja_codigo === item.lojaCodigo &&
         v.industria_codigo === item.industriaCodigo &&
-        (v.status === 'concluida' || v.status === 'em_andamento')
+        (v.status === 'concluida' || v.status === 'em_andamento') &&
+        (v.scheduled_date === item.dataStr)
     );
-    if (hasConflictToday) {
+    if (isSameOccurrenceExecutedToday) {
       const isRecovery = item.dataStr >= input.weekStart && item.dataStr < input.today;
       const isAdvance = item.dataStr > input.today && item.dataStr <= input.weekEnd;
       return {
         allowed: false,
         action: isRecovery ? 'recover' : isAdvance ? 'advance' : undefined,
-        reason: 'Já existe um atendimento para esta loja e indústria hoje.',
+        reason: 'Esta ocorrência programada já foi atendida hoje.',
         isSameDayConflict: true
       };
     }

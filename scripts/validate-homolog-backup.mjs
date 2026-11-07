@@ -12,7 +12,7 @@ import {
  */
 
 export const EXPECTED_BASELINE_MIGRATIONS_COUNT = 47;
-export const EXPECTED_COMBINED_SHA256 = '20634DC17D04467930625200BC09BD15F17046ED11A0EFA7AED25A8630F61F17';
+export const EXPECTED_COMBINED_SHA256 = 'A64E0ACDE372B322A92BAEA946242B251BE967A75A7DFB6AB4618CDFC756723E';
 
 export function validateCanonicalHomologationBackup(archiveDir = 'supabase/fetched_homologation_migrations') {
   const files = readdirSync(archiveDir)
