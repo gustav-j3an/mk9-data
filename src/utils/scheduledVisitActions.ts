@@ -1,4 +1,5 @@
 import type { OperationalVisitStatus, OperationalVisitItem } from './routePlanner';
+import type { RouteItem } from '../types';
 
 export type ScheduledVisitAction = 'advance' | 'recover';
 
@@ -6,6 +7,18 @@ export interface ScheduledActionDecision {
   allowed: boolean;
   action?: ScheduledVisitAction;
   reason?: string;
+}
+
+export type ScheduledRouteEligibility = 'active' | 'closed' | 'unavailable';
+
+export function getScheduledRouteEligibility(route: Pick<RouteItem, 'encerrada_em' | 'industria'> | null | undefined): ScheduledRouteEligibility {
+  if (!route || route.industria?.status !== 'ativo') return 'unavailable';
+  if (route.encerrada_em) return 'closed';
+  return 'active';
+}
+
+export function isRouteVisibleInOperationalHistory(route: Pick<RouteItem, 'encerrada_em'>, historyStart: string): boolean {
+  return !route.encerrada_em || String(route.encerrada_em).slice(0, 10) >= historyStart;
 }
 
 export function isScheduledVisitActionRpcReady(error: { code?: unknown; message?: unknown } | null | undefined): boolean {
@@ -19,11 +32,14 @@ export function getScheduledVisitAction(input: {
   weekEnd: string;
   authorized: boolean;
   hasActiveVisit: boolean;
+  routeEligibility: ScheduledRouteEligibility;
 }): ScheduledActionDecision {
   const { item } = input;
   if (!input.authorized) return { allowed: false, reason: 'A operação ainda não está autorizada.' };
   if (input.hasActiveVisit) return { allowed: false, reason: 'Finalize o atendimento atual antes de iniciar outra visita.' };
   if (!item.routeId) return { allowed: false, reason: 'A programação não está vinculada a uma rota fixa.' };
+  if (input.routeEligibility === 'closed') return { allowed: false, reason: 'Esta rota foi encerrada e não pode iniciar novos atendimentos.' };
+  if (input.routeEligibility !== 'active') return { allowed: false, reason: 'Não foi possível confirmar que a rota e a indústria estão ativas.' };
   if ((item.frequencia || '').toUpperCase() !== 'SEMANAL') {
     return { allowed: false, reason: 'Esta frequência ainda não pode ser validada pelo servidor para antecipação ou recuperação.' };
   }
