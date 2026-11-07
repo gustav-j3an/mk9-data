@@ -137,7 +137,8 @@ for migration in "${migrations[@]}"; do
   expected_ver="$(echo "$mig_basename" | cut -d_ -f1)"
   echo "--- Applying migration via Supabase CLI in isolation: $mig_basename ---"
 
-  # Adicionar cumulativamente a migration atual no diretório de migrations do workdir isolado
+  # Garantir existência e adicionar cumulativamente a migration atual no diretório de migrations do workdir isolado
+  mkdir -p "$cli_test_dir/supabase/migrations"
   cp "$migration" "$cli_test_dir/supabase/migrations/"
 
   # Validar que o arquivo foi copiado para o workdir
