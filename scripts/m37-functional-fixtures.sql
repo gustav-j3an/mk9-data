@@ -42,10 +42,10 @@ VALUES
  ('37000000-0000-4000-8000-000000000007','M37R7','M37P1','M37L7','M37IA','SEMANAL',true,true,true,true,true,true,true,NULL),
  ('37000000-0000-4000-8000-000000000008','M37R8','M37P2','M37L8','M37IA','SEMANAL',true,true,true,true,true,true,true,NULL),
  ('37000000-0000-4000-8000-000000000009','M37R9','M37P3','M37L9','M37IA','SEMANAL',true,true,true,true,true,true,true,NULL);
-INSERT INTO public.visits(id,rota_id,promotor_matricula,loja_codigo,industria_codigo,data_visita,scheduled_date,status,completed_at)
+INSERT INTO public.visits(id,rota_id,promotor_matricula,loja_codigo,industria_codigo,data_visita,scheduled_date,status,started_at,completed_at)
 VALUES ('37000000-0000-4000-8000-000000000101','37000000-0000-4000-8000-000000000006',
  'M37P1','M37L6','M37IA',(clock_timestamp() AT TIME ZONE 'America/Sao_Paulo')::date - 1,
- (clock_timestamp() AT TIME ZONE 'America/Sao_Paulo')::date - 1,'concluida',clock_timestamp());
+ (clock_timestamp() AT TIME ZONE 'America/Sao_Paulo')::date - 1,'concluida',clock_timestamp() - interval '1 hour',clock_timestamp());
 INSERT INTO public.visits(id,rota_id,promotor_matricula,loja_codigo,industria_codigo,data_visita,scheduled_date,status,regularization_status)
 VALUES ('37000000-0000-4000-8000-000000000102','37000000-0000-4000-8000-000000000007',
  'M37P1','M37L7','M37IA',(clock_timestamp() AT TIME ZONE 'America/Sao_Paulo')::date - 1,
