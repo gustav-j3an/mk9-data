@@ -49,6 +49,7 @@ execFileSync('psql', [
   '-f', 'scripts/m37-functional-fixtures.sql'
 ], { stdio: ['ignore', 'pipe', 'pipe'] });
 console.log('Privileged synthetic fixture setup completed.');
+assert.equal(pg("SELECT count(*) FROM public.profiles WHERE role='promotor' AND status='ativo' AND promotor_matricula IN ('M37P1','M37P2','M37P3')"), '3');
 
 const today = (() => {
   const parts = new Intl.DateTimeFormat('en-US', {

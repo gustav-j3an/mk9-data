@@ -17,11 +17,12 @@ INSERT INTO public.promotores(matricula,nome,cidade,uf,status) VALUES
  ('M37P1','Synthetic promoter 1','Teste','SP','ativo'),
  ('M37P2','Synthetic promoter 2','Teste','SP','ativo'),
  ('M37P3','Synthetic promoter 3','Teste','SP','ativo');
-INSERT INTO public.profiles(id,email,name,role,status,promotor_matricula)
-VALUES
- (:'user1','m37p1@example.test','Synthetic promoter 1','promotor','ativo','M37P1'),
- (:'user2','m37p2@example.test','Synthetic promoter 2','promotor','ativo','M37P2'),
- (:'user3','m37p3@example.test','Synthetic promoter 3','promotor','ativo','M37P3');
+UPDATE public.profiles SET role='promotor', status='ativo', promotor_matricula='M37P1'
+WHERE id=:'user1';
+UPDATE public.profiles SET role='promotor', status='ativo', promotor_matricula='M37P2'
+WHERE id=:'user2';
+UPDATE public.profiles SET role='promotor', status='ativo', promotor_matricula='M37P3'
+WHERE id=:'user3';
 INSERT INTO public.promoter_operation_authorizations(promotor_matricula,status,justification)
 VALUES ('M37P1','liberado','Isolated functional test'),
  ('M37P2','liberado','Isolated functional test'),
