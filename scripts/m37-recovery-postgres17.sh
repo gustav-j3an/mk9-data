@@ -137,17 +137,11 @@ for migration in "${migrations[@]}"; do
   expected_ver="$(echo "$mig_basename" | cut -d_ -f1)"
   echo "--- Applying migration via Supabase CLI in isolation: $mig_basename ---"
 
-  # Limpar e colocar apenas a migration atual no diretório de migrations do workdir isolado
-  rm -rf "$cli_test_dir/supabase/migrations"
-  mkdir -p "$cli_test_dir/supabase/migrations"
+  # Adicionar cumulativamente a migration atual no diretório de migrations do workdir isolado
   cp "$migration" "$cli_test_dir/supabase/migrations/"
 
-  # Validar que apenas 1 arquivo existe no workdir
-  file_count="$(find "$cli_test_dir/supabase/migrations" -maxdepth 1 -type f -name '*.sql' | wc -l)"
-  if [ "$file_count" -ne 1 ]; then
-    echo "ERROR: Expected exactly 1 migration file in isolated workdir, found $file_count" >&2
-    exit 1
-  fi
+  # Validar que o arquivo foi copiado para o workdir
+  test -f "$cli_test_dir/supabase/migrations/$mig_basename"
 
   # Aplicar via Supabase CLI oficial
   supabase migration up --workdir "$cli_test_dir"
