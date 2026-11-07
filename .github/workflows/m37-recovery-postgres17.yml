@@ -1,4 +1,4 @@
-name: M37 recovery on PostgreSQL 17
+name: M37 recovery on Supabase PostgreSQL 17
 
 on:
   workflow_dispatch:
@@ -9,24 +9,36 @@ permissions:
 jobs:
   recovery:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:17
-        env:
-          POSTGRES_PASSWORD: postgres
-        ports: ['5432:5432']
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    env:
-      PGHOST: localhost
-      PGPORT: '5432'
-      PGUSER: postgres
-      PGPASSWORD: postgres
-      PGDATABASE: postgres
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - name: Check PostgreSQL version and run isolated migration recovery
+      - name: Install pinned Supabase CLI
+        run: |
+          curl -fsSL https://github.com/supabase/cli/releases/download/v3.0.0/supabase_3.0.0_linux_amd64.tar.gz -o /tmp/supabase-cli.tar.gz
+          tar -xzf /tmp/supabase-cli.tar.gz -C /tmp supabase
+          sudo install /tmp/supabase /usr/local/bin/supabase
+          test "$(supabase --version)" = "3.0.0"
+          supabase start --help >/dev/null
+          supabase init --help >/dev/null
+      - name: Start isolated official Supabase stack
+        run: |
+          mkdir -p "$RUNNER_TEMP/mk9-m37"
+          cd "$RUNNER_TEMP/mk9-m37"
+          supabase init
+          sed -i 's/^major_version = .*/major_version = 17/' supabase/config.toml
+          supabase start -x realtime,storage-api,imgproxy,mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor >/dev/null
+      - name: Apply real baseline, four migrations and recovery
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: '54322'
+          PGUSER: postgres
+          PGPASSWORD: postgres
+          PGDATABASE: postgres
         run: bash scripts/m37-recovery-postgres17.sh
+      - name: Stop isolated stack
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/mk9-m37/supabase/config.toml" ]; then
+            cd "$RUNNER_TEMP/mk9-m37"
+            supabase stop --no-backup >/dev/null
+          fi

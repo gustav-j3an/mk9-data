@@ -13,11 +13,26 @@ baseline=(
 )
 while IFS= read -r migration; do
   baseline+=("$migration")
-done < <(find supabase/migrations -maxdepth 1 -type f -name '*.sql' | sort | awk -F/ '$NF < "20261101" && $NF !~ /^20260930_/')
+done < <(find supabase/migrations -maxdepth 1 -type f -name '*.sql' | sort | awk -F/ '$NF < "20261024" && $NF !~ /^20260930_/')
 for migration in "${baseline[@]}"; do
   echo "Baseline: $(basename "$migration")"
   psql -X -v ON_ERROR_STOP=1 -1 -f "$migration" >/dev/null
 done
+
+# Establish the exact pre-migration function state from the captured homologation
+# definitions, then compare it with the post-recovery state on this same server.
+psql -X -v ON_ERROR_STOP=1 -f docs/m37.4-homologation-function-recovery.sql >/dev/null
+snapshot_query="SELECT n.nspname, p.proname, pg_get_function_identity_arguments(p.oid),
+ pg_get_userbyid(p.proowner), p.prosecdef, p.proconfig, p.proacl,
+ md5(p.prosrc), md5(pg_get_functiondef(p.oid))
+ FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+ WHERE (n.nspname='public' AND p.proname='attendance_check_in')
+ OR (n.nspname='attendance_private' AND p.proname='attendance_start_scheduled_occurrence')
+ ORDER BY n.nspname, p.proname"
+before_snapshot="$(mktemp)"
+trap 'rm -f "$before_snapshot"' EXIT
+psql -X -v ON_ERROR_STOP=1 -Atqc "$snapshot_query" > "$before_snapshot"
+test "$(wc -l < "$before_snapshot")" -eq 2
 
 migrations=(
   supabase/migrations/20261105165500_m30_harden_industry_active_checkin.sql
@@ -33,6 +48,7 @@ for migration in "${migrations[@]}"; do
 done
 
 psql -X -v ON_ERROR_STOP=1 -f docs/m37.4-homologation-function-recovery.sql >/dev/null
+psql -X -v ON_ERROR_STOP=1 -Atqc "$snapshot_query" | diff -u "$before_snapshot" -
 psql -X -v ON_ERROR_STOP=1 -Atqc "
 WITH expected(schema_name, function_name, expected_md5, expected_acl) AS (
  VALUES
