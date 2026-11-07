@@ -4,7 +4,7 @@ import { randomBytes } from 'node:crypto';
 
 const pg = (sql) => execFileSync('psql', ['-X', '-A', '-t', '-v', 'ON_ERROR_STOP=1', '-c', sql], { encoding: 'utf8' }).trim();
 const createPsqlSession = (name = 'session') => {
-  const child = spawn('psql', ['-X', '-v', 'ON_ERROR_STOP=0', '-q', '-A', '-t'], {
+  const child = spawn('psql', ['-X', '-v', 'ON_ERROR_STOP=0', '-v', 'VERBOSITY=verbose', '-q', '-A', '-t'], {
     stdio: ['pipe', 'pipe', 'pipe'],
     env: process.env
   });
@@ -12,9 +12,8 @@ const createPsqlSession = (name = 'session') => {
   let serverPid = null;
   let stdoutData = '';
   let stderrData = '';
-  let currentResolver = null;
-  let currentRejecter = null;
-  let currentSentinel = null;
+  let activeQuery = null;
+  let isClosed = false;
   let seq = 0;
 
   child.stdout.setEncoding('utf8');
@@ -22,15 +21,14 @@ const createPsqlSession = (name = 'session') => {
 
   child.stdout.on('data', (chunk) => {
     stdoutData += chunk;
-    if (currentSentinel && stdoutData.includes(currentSentinel)) {
-      const idx = stdoutData.indexOf(currentSentinel);
+    if (activeQuery && stdoutData.includes(activeQuery.sentinel)) {
+      const idx = stdoutData.indexOf(activeQuery.sentinel);
       const output = stdoutData.slice(0, idx).trim();
-      stdoutData = stdoutData.slice(idx + currentSentinel.length);
-      const resolve = currentResolver;
-      currentResolver = null;
-      currentRejecter = null;
-      currentSentinel = null;
-      if (resolve) resolve(output);
+      stdoutData = stdoutData.slice(idx + activeQuery.sentinel.length);
+      const q = activeQuery;
+      activeQuery = null;
+      if (q.timer) clearTimeout(q.timer);
+      q.resolve(output);
     }
   });
 
@@ -39,8 +37,22 @@ const createPsqlSession = (name = 'session') => {
   });
 
   child.on('close', (code) => {
-    if (currentRejecter) {
-      currentRejecter(new Error(`PsqlSession [${name}] closed with code ${code}. Stderr: ${stderrData}`));
+    isClosed = true;
+    if (activeQuery) {
+      const q = activeQuery;
+      activeQuery = null;
+      if (q.timer) clearTimeout(q.timer);
+      q.reject(new Error(`PsqlSession [${name}] terminated unexpectedly with code ${code}. Stderr: ${stderrData}`));
+    }
+  });
+
+  child.on('error', (err) => {
+    isClosed = true;
+    if (activeQuery) {
+      const q = activeQuery;
+      activeQuery = null;
+      if (q.timer) clearTimeout(q.timer);
+      q.reject(new Error(`PsqlSession [${name}] process error: ${err.message}`));
     }
   });
 
@@ -49,6 +61,7 @@ const createPsqlSession = (name = 'session') => {
     get pid() { return serverPid; },
     get proc() { return child; },
     get stderr() { return stderrData; },
+    get isClosed() { return isClosed; },
     async init() {
       const out = await this.query('SELECT pg_backend_pid();');
       serverPid = Number(out);
@@ -57,33 +70,50 @@ const createPsqlSession = (name = 'session') => {
     },
     query(sql, timeoutMs = 8000) {
       return new Promise((resolve, reject) => {
-        if (currentResolver) {
-          return reject(new Error(`PsqlSession [${name}] busy with ongoing query`));
+        if (isClosed || child.exitCode !== null) {
+          return reject(new Error(`PsqlSession [${name}] is closed`));
+        }
+        if (activeQuery) {
+          return reject(new Error(`PsqlSession [${name}] busy with ongoing query: ${activeQuery.sql}`));
         }
         seq++;
         const sentinel = `__SENTINEL_${name}_${seq}__`;
-        currentSentinel = sentinel;
 
         const timer = setTimeout(() => {
-          if (currentResolver === resolve) {
-            currentResolver = null;
-            currentRejecter = null;
-            currentSentinel = null;
-            reject(new Error(`PsqlSession [${name}] timed out after ${timeoutMs}ms executing: ${sql}`));
+          if (activeQuery && activeQuery.id === seq) {
+            const q = activeQuery;
+            activeQuery = null;
+            q.reject(new Error(`PsqlSession [${name}] query timed out after ${timeoutMs}ms: ${sql}`));
           }
         }, timeoutMs);
 
-        currentResolver = (val) => { clearTimeout(timer); resolve(val); };
-        currentRejecter = (err) => { clearTimeout(timer); reject(err); };
+        activeQuery = {
+          id: seq,
+          sql,
+          sentinel,
+          timer,
+          resolve,
+          reject
+        };
 
         child.stdin.write(`${sql.trim()};\n\\echo ${sentinel}\n`);
       });
     },
     send(sql) {
+      if (isClosed || child.exitCode !== null) {
+        throw new Error(`PsqlSession [${name}] is closed, cannot send command`);
+      }
       child.stdin.write(`${sql.trim()};\n`);
     },
     async close() {
-      if (child.exitCode !== null) return;
+      if (isClosed) return;
+      isClosed = true;
+      if (activeQuery) {
+        const q = activeQuery;
+        activeQuery = null;
+        if (q.timer) clearTimeout(q.timer);
+        q.reject(new Error(`PsqlSession [${name}] closed while query was active: ${q.sql}`));
+      }
       try {
         child.stdin.write('\\q\n');
         child.stdin.end();
