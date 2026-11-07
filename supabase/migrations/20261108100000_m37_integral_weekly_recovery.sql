@@ -236,6 +236,18 @@ BEGIN
 
   -- Executar check-in ou atualizar visita pendente
   IF v_existing.id IS NOT NULL THEN
+    -- Inserir autorização transacional consumida pelo trigger check_visit_promotor_update_integrity
+    IF to_regclass('attendance_private.scheduled_recovery_authorizations') IS NOT NULL THEN
+      INSERT INTO attendance_private.scheduled_recovery_authorizations (
+        visit_id, promotor_matricula, data_visita, scheduled_date
+      ) VALUES (
+        v_existing.id, v_matricula, v_effective_date, p_scheduled_date
+      ) ON CONFLICT (visit_id) DO UPDATE SET
+        data_visita = EXCLUDED.data_visita,
+        scheduled_date = EXCLUDED.scheduled_date,
+        authorized_at = clock_timestamp();
+    END IF;
+
     UPDATE public.visits SET
       scheduled_date = p_scheduled_date,
       data_visita = v_effective_date,
