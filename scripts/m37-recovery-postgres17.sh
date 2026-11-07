@@ -2,6 +2,24 @@
 set -euo pipefail
 
 psql -X -v ON_ERROR_STOP=1 -Atqc "SELECT current_setting('server_version_num')::int BETWEEN 170000 AND 179999" | grep -qx t
+echo "PostgreSQL $(psql -X -v ON_ERROR_STOP=1 -Atqc 'SHOW server_version')"
+
+apply_migration() {
+  local migration="$1"
+  echo "Migration: $(basename "$migration")"
+  if grep -Eq '^[[:space:]]*BEGIN;[[:space:]]*$' "$migration"; then
+    # Files with their own BEGIN/COMMIT must contain no SQL after COMMIT.
+    grep -Eq '^[[:space:]]*COMMIT;[[:space:]]*$' "$migration"
+    if awk '/^[[:space:]]*COMMIT;[[:space:]]*$/ { ended=1; next } ended && $0 !~ /^[[:space:]]*($|--)/ { exit 1 }' "$migration"; then
+      psql -X -v ON_ERROR_STOP=1 -f "$migration" >/dev/null
+    else
+      echo "SQL follows COMMIT in $migration" >&2
+      return 1
+    fi
+  else
+    psql -X -v ON_ERROR_STOP=1 -1 -f "$migration" >/dev/null
+  fi
+}
 
 # Use the actual repository migrations. A missing Supabase dependency is a hard failure;
 # this runner deliberately does not fabricate auth/storage objects or disable body checks.
@@ -15,8 +33,7 @@ while IFS= read -r migration; do
   baseline+=("$migration")
 done < <(find supabase/migrations -maxdepth 1 -type f -name '*.sql' | sort | awk -F/ '$NF < "20261024" && $NF !~ /^20260930_/')
 for migration in "${baseline[@]}"; do
-  echo "Baseline: $(basename "$migration")"
-  psql -X -v ON_ERROR_STOP=1 -1 -f "$migration" >/dev/null
+  apply_migration "$migration"
 done
 
 # Establish the exact pre-migration function state from the captured homologation
@@ -30,8 +47,10 @@ snapshot_query="SELECT n.nspname, p.proname, pg_get_function_identity_arguments(
  OR (n.nspname='attendance_private' AND p.proname='attendance_start_scheduled_occurrence')
  ORDER BY n.nspname, p.proname"
 before_snapshot="$(mktemp)"
-trap 'rm -f "$before_snapshot"' EXIT
+before_schema="$(mktemp)"
+trap 'rm -f "$before_snapshot" "$before_schema"' EXIT
 psql -X -v ON_ERROR_STOP=1 -Atqc "$snapshot_query" > "$before_snapshot"
+psql -X -v ON_ERROR_STOP=1 -Atqc "SELECT n.nspname,p.relname,p.relkind FROM pg_class p JOIN pg_namespace n ON n.oid=p.relnamespace WHERE n.nspname IN ('public','attendance_private') ORDER BY 1,2,3" > "$before_schema"
 test "$(wc -l < "$before_snapshot")" -eq 2
 
 migrations=(
@@ -41,14 +60,27 @@ migrations=(
   supabase/migrations/20261106150000_m37_checkin_route_and_conflict_guard.sql
 )
 for migration in "${migrations[@]}"; do
-  echo "Target: $(basename "$migration")"
-  # Each file is atomic; on failure stop without treating its stage as applied.
-  psql -X -v ON_ERROR_STOP=1 -1 -f "$migration" >/dev/null
+  apply_migration "$migration"
   psql -X -v ON_ERROR_STOP=1 -Atqc "SELECT count(*) = 2 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE (n.nspname='public' AND p.proname='attendance_check_in') OR (n.nspname='attendance_private' AND p.proname='attendance_start_scheduled_occurrence')" | grep -qx t
 done
+if psql -X -v ON_ERROR_STOP=1 -Atqc "$snapshot_query" | cmp -s "$before_snapshot" -; then
+  echo 'Target migrations did not change captured functions' >&2
+  exit 1
+fi
+
+# A real authenticated role with no promoter identity must be denied.
+psql -X -v ON_ERROR_STOP=1 -Atqc "BEGIN; SET LOCAL ROLE authenticated;
+ DO \$\$ BEGIN
+  PERFORM public.attendance_check_in('synthetic-store','synthetic-industry',NULL,NULL,NULL,NULL);
+  RAISE EXCEPTION 'Unauthorized check-in was accepted';
+ EXCEPTION WHEN insufficient_privilege THEN NULL;
+ END \$\$;
+ ROLLBACK;" >/dev/null
+echo 'Unauthorized check-in rejected.'
 
 psql -X -v ON_ERROR_STOP=1 -f docs/m37.4-homologation-function-recovery.sql >/dev/null
 psql -X -v ON_ERROR_STOP=1 -Atqc "$snapshot_query" | diff -u "$before_snapshot" -
+psql -X -v ON_ERROR_STOP=1 -Atqc "SELECT n.nspname,p.relname,p.relkind FROM pg_class p JOIN pg_namespace n ON n.oid=p.relnamespace WHERE n.nspname IN ('public','attendance_private') ORDER BY 1,2,3" | diff -u "$before_schema" -
 psql -X -v ON_ERROR_STOP=1 -Atqc "
 WITH expected(schema_name, function_name, expected_md5, expected_acl) AS (
  VALUES
