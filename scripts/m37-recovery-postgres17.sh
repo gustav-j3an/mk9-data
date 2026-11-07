@@ -55,15 +55,30 @@ WITH expected(schema_name, function_name, expected_md5, expected_acl) AS (
  ('attendance_private','attendance_start_scheduled_occurrence','f7741ffc813a80dc10c86e90ec634a6e','{postgres=X/postgres,authenticated=X/postgres}'),
  ('public','attendance_check_in','39dd2b79c48b4e808d81e22aa1140e3e','{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}')
 )
-SELECT count(*) = 2 AND bool_and(
-  pg_get_userbyid(p.proowner)='postgres'
-  AND p.prosecdef
-  AND p.proconfig = ARRAY['search_path=\"\"']::text[]
-  AND p.proacl::text=e.expected_acl
-  AND md5(pg_get_functiondef(p.oid))=e.expected_md5
-  AND NOT has_function_privilege('anon',p.oid,'EXECUTE')
-  AND has_function_privilege('authenticated',p.oid,'EXECUTE')
-) FROM expected e JOIN pg_namespace n ON n.nspname=e.schema_name
+SELECT e.schema_name || '.' || e.function_name,
+  'catalog=' || (pg_get_userbyid(p.proowner)='postgres'
+    AND p.prosecdef
+    AND p.proconfig = ARRAY['search_path=\"\"']::text[]
+    AND p.proacl::text=e.expected_acl
+    AND NOT has_function_privilege('anon',p.oid,'EXECUTE')
+    AND has_function_privilege('authenticated',p.oid,'EXECUTE'))::text,
+  'homologation_text_hash=' || (md5(pg_get_functiondef(p.oid))=e.expected_md5)::text,
+  'actual_hash=' || md5(pg_get_functiondef(p.oid))
+FROM expected e JOIN pg_namespace n ON n.nspname=e.schema_name
+JOIN pg_proc p ON p.pronamespace=n.oid AND p.proname=e.function_name;
+"
+psql -X -v ON_ERROR_STOP=1 -Atqc "
+WITH expected(schema_name, function_name, expected_acl) AS (
+ VALUES
+ ('attendance_private','attendance_start_scheduled_occurrence','{postgres=X/postgres,authenticated=X/postgres}'),
+ ('public','attendance_check_in','{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}')
+)
+SELECT count(*) = 2 AND bool_and(pg_get_userbyid(p.proowner)='postgres'
+ AND p.prosecdef AND p.proconfig = ARRAY['search_path=\"\"']::text[]
+ AND p.proacl::text=e.expected_acl
+ AND NOT has_function_privilege('anon',p.oid,'EXECUTE')
+ AND has_function_privilege('authenticated',p.oid,'EXECUTE'))
+FROM expected e JOIN pg_namespace n ON n.nspname=e.schema_name
 JOIN pg_proc p ON p.pronamespace=n.oid AND p.proname=e.function_name;
 " | grep -qx t
 
