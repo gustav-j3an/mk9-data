@@ -101,7 +101,8 @@ psql -X -v ON_ERROR_STOP=1 -Atqc "BEGIN; SET LOCAL ROLE authenticated;
 echo 'Unauthorized check-in rejected.'
 psql -X -v ON_ERROR_STOP=1 -Atqc "SELECT NOT has_table_privilege('authenticated','public.visit_schedule_actions','SELECT')" | grep -qx t
 echo 'Authenticated role has no direct audit table SELECT.'
-node scripts/m37-functional-tests.mjs
+functional_status=0
+node scripts/m37-functional-tests.mjs || functional_status=$?
 
 psql -X -v ON_ERROR_STOP=1 -f docs/m37.4-homologation-function-recovery.sql >/dev/null
 psql -X -v ON_ERROR_STOP=1 -Atqc "$snapshot_query" | diff -u "$before_snapshot" -
@@ -140,3 +141,4 @@ JOIN pg_proc p ON p.pronamespace=n.oid AND p.proname=e.function_name;
 " | grep -qx t
 
 echo 'Recovery catalog checks passed on PostgreSQL 17.'
+exit "$functional_status"

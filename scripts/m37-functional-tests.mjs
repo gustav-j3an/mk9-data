@@ -74,9 +74,8 @@ assert.ok(yesterday >= weekStart, 'No earlier date in current week; recovery cas
 const previousWeek = new Date(weekStart.getTime() - 86400000);
 const route = n => `37000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const count = (table, where = 'true') => Number(pg(`SELECT count(*) FROM public.${table} WHERE ${where}`));
-const snapshot = () => pg(`SELECT id || '|' || coalesce(status,'') || '|' || coalesce(regularization_status,'')
-  FROM public.visits WHERE id IN ('37000000-0000-4000-8000-000000000101','37000000-0000-4000-8000-000000000102')
-  ORDER BY id`);
+const snapshot = () => pg(`SELECT jsonb_agg(to_jsonb(v) ORDER BY v.id) FROM public.visits v
+  WHERE v.id IN ('37000000-0000-4000-8000-000000000101','37000000-0000-4000-8000-000000000102')`);
 const historyBefore = snapshot();
 const rpc = (user, name, args) => request(`/rest/v1/rpc/${name}`, anonKey, user.token, 'POST', args);
 const scheduled = (user, n, date) => rpc(user, 'attendance_start_scheduled_occurrence',
@@ -118,6 +117,10 @@ assert.equal(recovered.data?.status, 'em_andamento');
 assert.equal(count('visits', `rota_id='${route(1)}' AND scheduled_date='${iso(yesterday)}'`), 1);
 assert.equal(count('visit_schedule_actions', `route_id='${route(1)}' AND scheduled_date='${iso(yesterday)}'`), 1);
 console.log('PASS current-week recovery, dates and single audit action'); cases++;
+const foreignRead = await request(`/rest/v1/visits?select=id&id=eq.${recovered.data.id}`, anonKey, users[1].token);
+assert.equal(foreignRead.status, 200);
+assert.deepEqual(foreignRead.data, [], 'Other promoter could read recovered visit');
+console.log('PASS other promoter cannot read visit through RLS'); cases++;
 await denied('repeated recovery', () => scheduled(users[0], 1, yesterday), '23505');
 const repeatCheckin = await checkin(users[0], 'M37L1','M37IA',route(1));
 assert.equal(repeatCheckin.status, 200);
@@ -139,7 +142,14 @@ assert.equal(concurrent.filter(r => r.status >= 400).length, 1);
 assert.equal(count('visits', `rota_id='${route(9)}' AND scheduled_date='${iso(yesterday)}'`), 1);
 assert.equal(count('visit_schedule_actions', `route_id='${route(9)}' AND scheduled_date='${iso(yesterday)}'`), 1);
 console.log('PASS concurrent independent authenticated requests: one visit and action'); cases++;
+assert.equal(snapshot(), historyBefore, 'Unrelated historical visits changed');
+console.log('PASS unrelated historical visits unchanged'); cases++;
 const pendingRecovery = await scheduled(users[3], 10, yesterday);
+if (pendingRecovery.status !== 200) {
+  assert.equal(count('visits', `rota_id='${route(10)}'`), 1);
+  assert.equal(count('visit_schedule_actions', `route_id='${route(10)}'`), 0);
+  console.log(`FAIL materialized pending recovery: ${pendingRecovery.data?.code ?? pendingRecovery.status} ${pendingRecovery.data?.message ?? ''}; tables unchanged`);
+}
 assert.equal(pendingRecovery.status, 200,
   `Materialized pending recovery failed: ${pendingRecovery.data?.code ?? pendingRecovery.status}`);
 assert.equal(pendingRecovery.data?.scheduled_date, iso(yesterday));
@@ -148,7 +158,5 @@ assert.equal(pendingRecovery.data?.id, '37000000-0000-4000-8000-000000000103');
 assert.equal(count('visits', `rota_id='${route(10)}'`), 1);
 assert.equal(count('visit_schedule_actions', `route_id='${route(10)}' AND scheduled_date='${iso(yesterday)}'`), 1);
 console.log('PASS materialized pending visit recovery'); cases++;
-assert.equal(snapshot(), historyBefore, 'Unrelated historical visits changed');
-console.log('PASS unrelated historical visits unchanged'); cases++;
 console.log(`Functional cases passed: ${cases}`);
 

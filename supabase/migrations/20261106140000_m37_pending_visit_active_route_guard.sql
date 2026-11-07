@@ -25,7 +25,6 @@ DECLARE
   v_week_end date;
   v_route_day_active boolean;
   v_existing public.visits;
-  v_pending public.visits;
   v_result public.visits;
   v_operation_mode text;
   v_official_start_date text;
@@ -158,10 +157,9 @@ BEGIN
   SELECT v.* INTO v_existing FROM public.visits v
   WHERE v.promotor_matricula = v_matricula AND v.rota_id = p_route
     AND (v.scheduled_date = p_scheduled_date OR (v.scheduled_date IS NULL AND v.data_visita = p_scheduled_date))
-  ORDER BY v.created_at DESC NULLS LAST LIMIT 1 FOR UPDATE;
+  ORDER BY v.created_at DESC NULLS LAST LIMIT 1;
 
-  IF FOUND AND (v_existing.status IN ('concluida', 'em_andamento')
-    OR v_existing.started_at IS NOT NULL OR v_existing.completed_at IS NOT NULL) THEN
+  IF FOUND AND (v_existing.status IN ('concluida', 'em_andamento') OR v_existing.started_at IS NOT NULL) THEN
     RAISE EXCEPTION 'This scheduled occurrence already has an execution' USING ERRCODE = '23505';
   END IF;
 
@@ -177,10 +175,6 @@ BEGIN
     RAISE EXCEPTION 'Only a missed occurrence can be recovered' USING ERRCODE = '22023';
   END IF;
 
-  IF FOUND THEN
-    v_pending := v_existing;
-  END IF;
-
   SELECT v.* INTO v_existing FROM public.visits v
   WHERE v.promotor_matricula = v_matricula
     AND v.loja_codigo = v_route.loja_codigo
@@ -188,51 +182,11 @@ BEGIN
     AND v.data_visita = v_effective_date
   FOR UPDATE;
 
-  IF FOUND AND v_existing.id IS DISTINCT FROM v_pending.id THEN
+  IF FOUND THEN
     RAISE EXCEPTION 'A visit for this store and industry already exists today' USING ERRCODE = '23505';
   END IF;
 
-  IF v_pending.id IS NOT NULL THEN
-    -- An existing pending occurrence must be started in place. Creating another
-    -- visit would collide with its unique scheduled occurrence and leave it stale.
-    IF (p_lat IS NULL) <> (p_lng IS NULL)
-       OR p_lat NOT BETWEEN -90 AND 90
-       OR p_lng NOT BETWEEN -180 AND 180
-       OR p_accuracy < 0
-       OR p_accuracy = 'NaN'::numeric THEN
-      RAISE EXCEPTION 'Invalid GPS';
-    END IF;
-    IF EXISTS (
-      SELECT 1 FROM public.visits v
-      WHERE v.promotor_matricula = v_matricula
-        AND v.status = 'em_andamento'
-        AND v.regularization_status IS NULL
-        AND v.data_visita = v_effective_date
-        AND v.id IS DISTINCT FROM v_pending.id
-    ) THEN
-      RAISE EXCEPTION 'Another visit is in progress';
-    END IF;
-    UPDATE public.visits SET
-      scheduled_date = p_scheduled_date,
-      data_visita = v_effective_date,
-      status = 'em_andamento',
-      started_at = clock_timestamp(),
-      latitude = p_lat,
-      longitude = p_lng,
-      gps_accuracy_meters = p_accuracy,
-      work_schedule_id = v_work_schedule.id
-    WHERE id = v_pending.id
-      AND status IN ('pendente', 'nao_realizada')
-      AND regularization_status IS NULL
-      AND started_at IS NULL
-      AND completed_at IS NULL
-    RETURNING * INTO v_result;
-    IF NOT FOUND THEN
-      RAISE EXCEPTION 'This scheduled occurrence changed before check-in' USING ERRCODE = '23505';
-    END IF;
-  ELSE
-    v_result := public.attendance_check_in(v_route.loja_codigo, v_route.industria_codigo, p_route, p_lat, p_lng, p_accuracy);
-  END IF;
+  v_result := public.attendance_check_in(v_route.loja_codigo, v_route.industria_codigo, p_route, p_lat, p_lng, p_accuracy);
 
   IF v_result.promotor_matricula IS DISTINCT FROM v_matricula
      OR v_result.rota_id IS DISTINCT FROM p_route
@@ -240,10 +194,8 @@ BEGIN
     RAISE EXCEPTION 'Check-in did not create the expected route occurrence' USING ERRCODE = '23505';
   END IF;
 
-  IF v_pending.id IS NULL THEN
-    UPDATE public.visits SET scheduled_date = p_scheduled_date
-    WHERE id = v_result.id RETURNING * INTO v_result;
-  END IF;
+  UPDATE public.visits SET scheduled_date = p_scheduled_date
+  WHERE id = v_result.id RETURNING * INTO v_result;
 
   INSERT INTO public.visit_schedule_actions(route_id, visit_id, promotor_matricula, scheduled_date, action, performed_by)
   VALUES (p_route, v_result.id, v_matricula, p_scheduled_date, p_action, auth.uid());
