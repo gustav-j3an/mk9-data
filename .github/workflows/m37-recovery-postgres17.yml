@@ -29,6 +29,7 @@ jobs:
           supabase start -x realtime,storage-api,imgproxy,mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor >/dev/null
       - name: Apply real baseline, four migrations and recovery
         env:
+          SUPABASE_TEST_WORKDIR: ${{ runner.temp }}/mk9-m37
           PGHOST: 127.0.0.1
           PGPORT: '54322'
           PGUSER: postgres
