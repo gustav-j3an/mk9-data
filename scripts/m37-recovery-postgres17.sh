@@ -24,24 +24,57 @@ psql -X -v ON_ERROR_STOP=1 -Atqc "
     name text
   );
 "
-# Inserir no ledger as versões do histórico remoto da homologação para provar
-# que versões remotas pré-existentes ausentes do workdir temporário NÃO bloqueiam o CLI.
+# Inserir no ledger as 47 versões exatas do histórico remoto da homologação (M37.21)
+# para reproduzir com fidelidade absoluta o estado do ledger remoto.
 psql -X -v ON_ERROR_STOP=1 -Atqc "
   INSERT INTO supabase_migrations.schema_migrations(version, name) VALUES
-    ('20261018235500', 'soft_delete_fixed_routes'),
-    ('20261019001109', 'lock_attendance_telemetry_and_scope'),
-    ('20261019001848', 'validate_attendance_schedule_overlaps'),
-    ('20261019004947', 'add_attendance_work_location'),
-    ('20261019011832', 'secure_attendance_photos_and_release_contract'),
-    ('20261019013007', 'complete_attendance_operational_setup'),
-    ('20261019151754', 'mk9_rh_explicit_bindings'),
-    ('20261019175853', 'mk9_rh_admin_binding_preparation'),
-    ('20261020160000', 'add_whatsapp_group_link_to_industrias'),
-    ('20261020170000', 'mk9_absence_records_outbox'),
-    ('20261021100000', 'mk9_rh_reconciliation'),
-    ('20261021120000', 'mk9_absence_attachments'),
-    ('20261022152449', 'mk9_date_visit_regularization_and_checkin_scope'),
-    ('20261023142837', 'promoter_scheduled_visit_actions')
+    ('20261027194528', 'm15_20260930_create_import_tables'),
+    ('20261027194554', 'm15_20260930_create_profiles'),
+    ('20261027194557', 'm15_20260930_add_status_to_profiles'),
+    ('20261027194600', 'm15_20260930_update_rotas_structure'),
+    ('20261027194603', 'm15_20261001_create_visits_tables'),
+    ('20261027194606', 'm15_20261006_add_visits_unique_constraint'),
+    ('20261027194616', 'm15_20261006_harden_rbac_rls'),
+    ('20261027194620', 'm15_20261006_harden_storage_visit_photos'),
+    ('20261027194624', 'm15_20261007_add_delete_user_function'),
+    ('20261027194627', 'm15_20261007_allow_admin_insert_profiles'),
+    ('20261027194630', 'm15_20261007_create_visit_product_validity'),
+    ('20261027194639', 'm15_20261008_auto_generate_store_code'),
+    ('20261027194646', 'm15_20261008_clean_legacy_duplicate_visits'),
+    ('20261027194650', 'm15_20261008_create_notifications_table'),
+    ('20261027194655', 'm15_20261008_industry_client_access'),
+    ('20261027194658', 'm15_20261009144200_add_visits_unique_constraint'),
+    ('20261027194708', 'm15_20261010_create_system_settings_and_audit'),
+    ('20261027194711', 'm15_20261011120000_create_promoter_authorizations'),
+    ('20261027194714', 'm15_20261011140000_auto_generate_industry_code'),
+    ('20261027194718', 'm15_20261015100000_create_equipes_table'),
+    ('20261027194722', 'm15_20261016100000_create_supervisores_table'),
+    ('20261027194731', 'm15_20261017_create_avatars_storage_policies'),
+    ('20261027194734', 'm15_20261017120000_create_contratos_lojas_table'),
+    ('20261027194737', 'm15_20261018150000_add_data_inicio_operacao_to_industrias'),
+    ('20261027194740', 'm15_20261018220000_create_promoter_attendance_audit'),
+    ('20261027194744', 'm15_20261018230000_create_promoter_schedules_and_absences'),
+    ('20261027194754', 'm15_20261018232256_harden_attendance_audit_permissions'),
+    ('20261027194801', 'm15_20261018234153_finalize_attendance_journeys_privacy_telemetry'),
+    ('20261027194805', 'm15_20261018235500_soft_delete_fixed_routes'),
+    ('20261027194808', 'm15_20261019001109_lock_attendance_telemetry_and_scope'),
+    ('20261027194811', 'm15_20261019001848_validate_attendance_schedule_overlaps'),
+    ('20261027194819', 'm15_20261019004947_add_attendance_work_location'),
+    ('20261027194822', 'm15_20261019011832_secure_attendance_photos_and_release_contract'),
+    ('20261027194825', 'm15_20261019013007_complete_attendance_operational_setup'),
+    ('20261027194904', 'm15_20261019151754_mk9_rh_explicit_bindings'),
+    ('20261027194914', 'm15_20261019175853_mk9_rh_admin_binding_preparation'),
+    ('20261027194917', 'm15_20261020160000_add_whatsapp_group_link_to_industrias'),
+    ('20261027194919', 'm15_20261020160000_mk9_faltas_atestados_prepare_permission'),
+    ('20261027194922', 'm15_20261020170000_mk9_absence_records_outbox'),
+    ('20261027194925', 'm15_20261021100000_mk9_rh_reconciliation'),
+    ('20261027194934', 'm15_20261021120000_mk9_absence_attachments'),
+    ('20261027194937', 'm15_20261022152449_mk9_date_visit_regularization_and_checkin_scope'),
+    ('20261027194940', 'm15_20261023142837_promoter_scheduled_visit_actions'),
+    ('20261030152933', 'm18_homologation_security'),
+    ('20261030153146', 'm18_active_session_guard'),
+    ('20261030153303', 'm18_industry_route_projection'),
+    ('20261030153702', 'm18_photo_upsert_permission')
   ON CONFLICT (version) DO NOTHING;
 "
 echo "Homologation baseline ledger simulated with $(psql -X -v ON_ERROR_STOP=1 -Atqc 'SELECT count(*) FROM supabase_migrations.schema_migrations;') recorded versions."
@@ -119,16 +152,16 @@ for failure_case in external internal; do
 done
 
 # -----------------------------------------------------------------------------
-# MISSÃO 37.16: RECONCILIAÇÃO SEGURA DE HISTÓRICO COM O SUPABASE CLI 3.0.0
-# Popula o workdir com as migrations canônicas já reconhecidas no ledger da homologação
+# MISSÃO 37.21: RECONCILIAÇÃO SEGURA COM AS 47 MIGRATIONS HISTÓRICAS DA HOMOLOGAÇÃO
+# Popula o workdir com as 47 migrations canônicas recuperadas da homologação
 # e adiciona cumulativamente as 5 novas migrations M30/M37.
 # Isso garante que:
-#  1. O Supabase CLI encontra todas as versões remotas pré-existentes do ledger.
+#  1. O Supabase CLI encontra todas as 47 versões remotas pré-existentes do ledger.
 #  2. Nenhuma migration histórica é reaplicada (o CLI reconhece que já estão no ledger).
 #  3. Nenhuma migration legada divergente/irregular entra no workspace.
 #  4. Exclusivamente as 5 migrations M30/M37 são executadas e registradas.
 # -----------------------------------------------------------------------------
-echo "=== SUPABASE CLI RECONCILED HISTORICAL WORKDIR (M37.16) ==="
+echo "=== SUPABASE CLI RECONCILED HISTORICAL WORKDIR (M37.21) ==="
 cli_test_dir="$(mktemp -d)"
 echo "Created temporary CLI isolated root: $cli_test_dir"
 
@@ -143,39 +176,19 @@ echo "Created temporary CLI isolated root: $cli_test_dir"
 
 mkdir -p "$cli_test_dir/supabase/migrations"
 
-# Copiar estritamente as 14 migrations históricas reconhecidas pelo ledger da homologação
-# Exclui 20261020160000_mk9_faltas_atestados_prepare_permission.sql para evitar colisão de versão.
-historical_migrations=(
-  supabase/migrations/20261018235500_soft_delete_fixed_routes.sql
-  supabase/migrations/20261019001109_lock_attendance_telemetry_and_scope.sql
-  supabase/migrations/20261019001848_validate_attendance_schedule_overlaps.sql
-  supabase/migrations/20261019004947_add_attendance_work_location.sql
-  supabase/migrations/20261019011832_secure_attendance_photos_and_release_contract.sql
-  supabase/migrations/20261019013007_complete_attendance_operational_setup.sql
-  supabase/migrations/20261019151754_mk9_rh_explicit_bindings.sql
-  supabase/migrations/20261019175853_mk9_rh_admin_binding_preparation.sql
-  supabase/migrations/20261020160000_add_whatsapp_group_link_to_industrias.sql
-  supabase/migrations/20261020170000_mk9_absence_records_outbox.sql
-  supabase/migrations/20261021100000_mk9_rh_reconciliation.sql
-  supabase/migrations/20261021120000_mk9_absence_attachments.sql
-  supabase/migrations/20261022152449_mk9_date_visit_regularization_and_checkin_scope.sql
-  supabase/migrations/20261023142837_promoter_scheduled_visit_actions.sql
-)
+# Copiar estritamente as 47 migrations canônicas recuperadas da homologação
+cp supabase/fetched_homologation_migrations/*.sql "$cli_test_dir/supabase/migrations/"
 
-for hist in "${historical_migrations[@]}"; do
-  cp "$hist" "$cli_test_dir/supabase/migrations/"
-done
-
-# Validar que existem exatamente 14 arquivos históricos e que nenhuma versão se repete
+# Validar que existem exatamente 47 arquivos históricos e que nenhuma versão se repete
 hist_count="$(ls "$cli_test_dir/supabase/migrations" | wc -l)"
-if [ "$hist_count" -ne 14 ]; then
-  echo "ERROR: Expected exactly 14 historical migrations in workdir, found $hist_count" >&2
+if [ "$hist_count" -ne 47 ]; then
+  echo "ERROR: Expected exactly 47 historical migrations in workdir, found $hist_count" >&2
   exit 1
 fi
 
 unique_hist_versions="$(ls "$cli_test_dir/supabase/migrations" | cut -d_ -f1 | sort -u | wc -l)"
-if [ "$unique_hist_versions" -ne 14 ]; then
-  echo "ERROR: Duplicate version detected among historical migrations! Unique: $unique_hist_versions vs Total: 14" >&2
+if [ "$unique_hist_versions" -ne 47 ]; then
+  echo "ERROR: Duplicate version detected among historical migrations! Unique: $unique_hist_versions vs Total: 47" >&2
   exit 1
 fi
 
@@ -218,6 +231,14 @@ rm -rf "$cli_test_dir"
 echo "All 5 target migrations successfully applied via native Supabase CLI."
 echo "Current ledger entries for target migrations:"
 psql -X -v ON_ERROR_STOP=1 -c "SELECT version, name FROM supabase_migrations.schema_migrations WHERE version >= '20261105165500' ORDER BY version;"
+
+# Validação do total de versões no ledger: exatamente 47 pré-existentes + 5 novas = 52
+total_ledger="$(psql -X -v ON_ERROR_STOP=1 -Atqc "SELECT count(*) FROM supabase_migrations.schema_migrations;")"
+if [ "$total_ledger" -ne 52 ]; then
+  echo "ERROR: Expected 52 total migrations in ledger (47 baseline + 5 new), found $total_ledger" >&2
+  exit 1
+fi
+echo "Verified exact ledger count: $total_ledger total versions (47 historical + 5 new)."
 
 if psql -X -v ON_ERROR_STOP=1 -Atqc "$snapshot_query" | cmp -s "$before_snapshot" -; then
   echo 'Target migrations did not change captured functions' >&2
