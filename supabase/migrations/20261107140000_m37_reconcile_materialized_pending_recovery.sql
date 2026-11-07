@@ -109,6 +109,8 @@ DECLARE
   v_route_day_active boolean;
   v_operation_mode text;
   v_official_start_date text;
+  v_ind_status text;
+  v_industry_code text;
 BEGIN
   SELECT p.promotor_matricula INTO v_matricula
   FROM public.profiles p
@@ -162,19 +164,38 @@ BEGIN
         END;
   END IF;
 
+  -- 1. Lock transacional do promotor
   PERFORM pg_advisory_xact_lock(hashtextextended(v_matricula, 1));
 
-  SELECT r.* INTO v_route
+  -- 2. Identificação da indústria vinculada à rota sem lock prévio
+  SELECT r.industria_codigo INTO v_industry_code
   FROM public.rotas r
-  WHERE r.id = p_route AND r.promotor_matricula = v_matricula
-  FOR UPDATE;
+  WHERE r.id = p_route AND r.promotor_matricula = v_matricula;
 
   IF NOT FOUND THEN
     RAISE EXCEPTION 'Route is not active or is outside promoter assignment' USING ERRCODE = '42501';
   END IF;
 
-  IF v_route.encerrada_em IS NOT NULL AND v_route.encerrada_em::date <= v_effective_date THEN
-    RAISE EXCEPTION 'Route is closed' USING ERRCODE = '42501';
+  -- 3. Validação e bloqueio da indústria ativa com FOR SHARE (ordem segura M30.9)
+  SELECT i.status INTO v_ind_status
+  FROM public.industrias i
+  WHERE i.codigo = v_industry_code
+  FOR SHARE;
+
+  IF NOT FOUND OR v_ind_status IS NULL OR v_ind_status <> 'ativo' THEN
+    RAISE EXCEPTION 'Industry is not active or does not exist' USING ERRCODE = '42501';
+  END IF;
+
+  -- 4. Validação e bloqueio da rota correspondente com regra estrita de encerramento
+  SELECT r.* INTO v_route
+  FROM public.rotas r
+  WHERE r.id = p_route AND r.promotor_matricula = v_matricula
+    AND r.industria_codigo = v_industry_code
+    AND r.encerrada_em IS NULL
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Route is not active or is outside promoter assignment' USING ERRCODE = '42501';
   END IF;
 
   v_route_day_active := CASE extract(dow FROM p_scheduled_date)::integer
@@ -195,6 +216,7 @@ BEGIN
     RAISE EXCEPTION 'Quinzenal occurrences require an authoritative server schedule before they can be advanced or recovered' USING ERRCODE = '22023';
   END IF;
 
+  -- 5. Validação de modo de operação
   SELECT s.value #>> '{}' INTO v_operation_mode
   FROM public.system_settings s
   WHERE s.key = 'operation_mode';
@@ -203,19 +225,15 @@ BEGIN
     RAISE EXCEPTION 'Promoter not released for operation' USING ERRCODE = '42501';
   END IF;
 
-  SELECT s.value #>> '{}' INTO v_official_start_date
-  FROM public.system_settings s
-  WHERE s.key = 'official_start_date';
+  IF v_operation_mode = 'OPERACAO_OFICIAL' THEN
+    SELECT s.value #>> '{}' INTO v_official_start_date
+    FROM public.system_settings s
+    WHERE s.key = 'official_start_date';
 
-  IF v_official_start_date IS NOT NULL AND p_scheduled_date < v_official_start_date::date THEN
-    RAISE EXCEPTION 'Occurrences prior to official start cannot be operated' USING ERRCODE = '22023';
-  END IF;
-
-  IF NOT EXISTS (
-    SELECT 1 FROM public.industrias ind
-    WHERE ind.codigo = v_route.industria_codigo AND ind.status = 'ativo'
-  ) THEN
-    RAISE EXCEPTION 'Industry is not active' USING ERRCODE = '42501';
+    IF v_official_start_date IS NULL OR v_official_start_date !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+       OR p_scheduled_date < v_official_start_date::date THEN
+      RAISE EXCEPTION 'Scheduled occurrence is before the official operation start' USING ERRCODE = '22023';
+    END IF;
   END IF;
 
   IF EXISTS (
@@ -240,10 +258,12 @@ BEGIN
     RAISE EXCEPTION 'This scheduled occurrence was already regularized' USING ERRCODE = '23505';
   END IF;
 
+  -- Verificação ampla de evidências em todas as tabelas relacionadas
   IF FOUND AND (
     EXISTS (SELECT 1 FROM public.visit_checklist_items ci WHERE ci.visit_id = v_existing.id)
     OR EXISTS (SELECT 1 FROM public.visit_photos ph WHERE ph.visit_id = v_existing.id)
     OR EXISTS (SELECT 1 FROM public.visit_occurrences vo WHERE vo.visit_id = v_existing.id)
+    OR EXISTS (SELECT 1 FROM public.visit_product_validity pv WHERE pv.visit_id = v_existing.id)
   ) THEN
     RAISE EXCEPTION 'This scheduled occurrence already has recorded evidence' USING ERRCODE = '23505';
   END IF;

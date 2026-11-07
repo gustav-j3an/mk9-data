@@ -96,17 +96,40 @@ const denied = async (label, call, expectedCode) => {
   console.log(`PASS ${label}: rejected ${result.data?.code ?? result.status}; tables unchanged`);
   cases++;
 };
+
 await denied('outside current week', () => scheduled(users[0], 1, previousWeek), '22023');
-for (const [n, label] of [[2,'closed before'],[3,'closed on'],[4,'closed after']])
+for (const [n, label] of [[2,'closed before'],[3,'closed on'],[4,'closed after'],[14,'closed future']])
   await denied(label, () => scheduled(users[0], n, yesterday), '42501');
+
 await denied('inactive industry', () => scheduled(users[0], 5, yesterday), '42501');
 await denied('missing industry', () => checkin(users[0], 'M37L1', 'M37MISSING', route(1)), '42501');
 await denied('other promoter route', () => scheduled(users[1], 1, yesterday), '42501');
 await denied('completed visit', () => scheduled(users[0], 6, yesterday), '23505');
 await denied('regularized visit', () => scheduled(users[0], 7, yesterday), '23505');
 await denied('visit with checklist evidence', () => scheduled(users[3], 12, yesterday), '23505');
+await denied('visit with product validity evidence', () => scheduled(users[3], 15, yesterday), '23505');
 await denied('visit with prior check-in', () => scheduled(users[3], 13, yesterday), '23505');
 await denied('route-less check-in with closed route', () => checkin(users[0], 'M37L2','M37IA'), '42501');
+
+// Inativação concorrente de indústria
+pg("UPDATE public.industrias SET status='inativo' WHERE codigo='M37IC'");
+await denied('inactivated industry', () => scheduled(users[0], 17, yesterday), '42501');
+
+// Validações do modo OPERACAO_OFICIAL
+pg("UPDATE public.system_settings SET value='\"OPERACAO_OFICIAL\"'::jsonb WHERE key='operation_mode'");
+pg("DELETE FROM public.system_settings WHERE key='official_start_date'");
+await denied('official mode missing start date', () => scheduled(users[0], 1, yesterday), '22023');
+
+pg("INSERT INTO public.system_settings(key, value) VALUES ('official_start_date', '\"invalid-date\"'::jsonb) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value");
+await denied('official mode invalid start date', () => scheduled(users[0], 1, yesterday), '22023');
+
+pg(`UPDATE public.system_settings SET value=to_jsonb('${iso(today)}'::text) WHERE key='official_start_date'`);
+await denied('official mode visit prior to start', () => scheduled(users[0], 1, yesterday), '22023');
+
+// Restauração do modo de operação para os demais testes
+pg("UPDATE public.system_settings SET value='\"IMPLANTACAO\"'::jsonb WHERE key='operation_mode'");
+pg("DELETE FROM public.system_settings WHERE key='official_start_date'");
+
 const auditRead = await request('/rest/v1/visit_schedule_actions?select=id', anonKey, users[0].token);
 assert.ok(auditRead.status >= 400, 'Direct audit SELECT was accepted');
 console.log(`PASS direct audit SELECT denied: ${auditRead.status}`); cases++;
@@ -119,11 +142,14 @@ assert.equal(recovered.data?.status, 'em_andamento');
 assert.equal(count('visits', `rota_id='${route(1)}' AND scheduled_date='${iso(yesterday)}'`), 1);
 assert.equal(count('visit_schedule_actions', `route_id='${route(1)}' AND scheduled_date='${iso(yesterday)}'`), 1);
 console.log('PASS current-week recovery, dates and single audit action'); cases++;
+
 const foreignRead = await request(`/rest/v1/visits?select=id&id=eq.${recovered.data.id}`, anonKey, users[1].token);
 assert.equal(foreignRead.status, 200);
 assert.deepEqual(foreignRead.data, [], 'Other promoter could read recovered visit');
 console.log('PASS other promoter cannot read visit through RLS'); cases++;
+
 await denied('repeated recovery', () => scheduled(users[0], 1, yesterday), '23505');
+
 const repeatCheckin = await checkin(users[0], 'M37L1','M37IA',route(1));
 assert.equal(repeatCheckin.status, 200);
 assert.equal(repeatCheckin.data?.id, recovered.data?.id);
@@ -144,8 +170,10 @@ assert.equal(concurrent.filter(r => r.status >= 400).length, 1);
 assert.equal(count('visits', `rota_id='${route(9)}' AND scheduled_date='${iso(yesterday)}'`), 1);
 assert.equal(count('visit_schedule_actions', `route_id='${route(9)}' AND scheduled_date='${iso(yesterday)}'`), 1);
 console.log('PASS concurrent independent authenticated requests: one visit and action'); cases++;
+
 assert.equal(snapshot(), historyBefore, 'Unrelated historical visits changed');
 console.log('PASS unrelated historical visits unchanged'); cases++;
+
 const pendingRecovery = await scheduled(users[3], 10, yesterday);
 assert.equal(pendingRecovery.status, 200,
   `Materialized pending recovery failed: ${pendingRecovery.data?.code ?? pendingRecovery.status}`);
@@ -177,5 +205,14 @@ assert.equal(count('visits', `rota_id='${route(11)}'`), 1);
 assert.equal(count('visit_schedule_actions', `route_id='${route(11)}' AND scheduled_date='${iso(yesterday)}'`), 1);
 console.log('PASS materialized unperformed visit recovery'); cases++;
 
-console.log(`Functional cases passed: ${cases}`);
+const concurrentPending = await Promise.all([
+  scheduled(users[2], 16, yesterday),
+  scheduled({ token: users[2].secondToken }, 16, yesterday)
+]);
+assert.equal(concurrentPending.filter(r => r.status === 200).length, 1);
+assert.equal(concurrentPending.filter(r => r.status >= 400).length, 1);
+assert.equal(count('visits', `rota_id='${route(16)}' AND scheduled_date='${iso(yesterday)}'`), 1);
+assert.equal(count('visit_schedule_actions', `route_id='${route(16)}' AND scheduled_date='${iso(yesterday)}'`), 1);
+console.log('PASS concurrent materialized pending recovery: exactly one visit and action'); cases++;
 
+console.log(`Functional cases passed: ${cases}`);
