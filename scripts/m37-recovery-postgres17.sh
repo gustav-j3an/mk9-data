@@ -53,6 +53,28 @@ psql -X -v ON_ERROR_STOP=1 -Atqc "$snapshot_query" > "$before_snapshot"
 psql -X -v ON_ERROR_STOP=1 -Atqc "SELECT n.nspname,p.relname,p.relkind FROM pg_class p JOIN pg_namespace n ON n.oid=p.relnamespace WHERE n.nspname IN ('public','attendance_private') ORDER BY 1,2,3" > "$before_schema"
 test "$(wc -l < "$before_snapshot")" -eq 2
 
+# Inject a deterministic error into disposable copies to verify both transaction
+# forms: an external psql transaction (M30) and an explicit SQL transaction (M37).
+for failure_case in external internal; do
+  failed_copy="$(mktemp)"
+  if [ "$failure_case" = external ]; then
+    cat supabase/migrations/20261105165500_m30_harden_industry_active_checkin.sql > "$failed_copy"
+    printf '\nSELECT 1/0;\n' >> "$failed_copy"
+    if psql -X -v ON_ERROR_STOP=1 -1 -f "$failed_copy" >/dev/null 2>&1; then
+      echo 'Expected M30 failure was accepted' >&2; exit 1
+    fi
+  else
+    awk '/^[[:space:]]*COMMIT;[[:space:]]*$/ { print "SELECT 1/0;" } { print }' \
+      supabase/migrations/20261106140000_m37_pending_visit_active_route_guard.sql > "$failed_copy"
+    if psql -X -v ON_ERROR_STOP=1 -f "$failed_copy" >/dev/null 2>&1; then
+      echo 'Expected M37 failure was accepted' >&2; exit 1
+    fi
+  fi
+  rm -f "$failed_copy"
+  psql -X -v ON_ERROR_STOP=1 -Atqc "$snapshot_query" | diff -u "$before_snapshot" -
+  echo "Intermediate $failure_case failure rolled back."
+done
+
 migrations=(
   supabase/migrations/20261105165500_m30_harden_industry_active_checkin.sql
   supabase/migrations/20261106131614_m30_serialize_industry_checkin.sql
@@ -77,6 +99,8 @@ psql -X -v ON_ERROR_STOP=1 -Atqc "BEGIN; SET LOCAL ROLE authenticated;
  END \$\$;
  ROLLBACK;" >/dev/null
 echo 'Unauthorized check-in rejected.'
+psql -X -v ON_ERROR_STOP=1 -Atqc "SELECT NOT has_table_privilege('authenticated','public.visit_schedule_actions','SELECT')" | grep -qx t
+echo 'Authenticated role has no direct audit table SELECT.'
 
 psql -X -v ON_ERROR_STOP=1 -f docs/m37.4-homologation-function-recovery.sql >/dev/null
 psql -X -v ON_ERROR_STOP=1 -Atqc "$snapshot_query" | diff -u "$before_snapshot" -
