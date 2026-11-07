@@ -12,21 +12,26 @@ INSERT INTO public.lojas(codigo,nome,cidade,uf,endereco,status) VALUES
  ('M37L6','Synthetic 6','Teste','SP','Teste','ativo'),
  ('M37L7','Synthetic 7','Teste','SP','Teste','ativo'),
  ('M37L8','Synthetic 8','Teste','SP','Teste','ativo'),
- ('M37L9','Synthetic 9','Teste','SP','Teste','ativo');
+ ('M37L9','Synthetic 9','Teste','SP','Teste','ativo'),
+ ('M37L10','Synthetic 10','Teste','SP','Teste','ativo');
 INSERT INTO public.promotores(matricula,nome,cidade,uf,status) VALUES
  ('M37P1','Synthetic promoter 1','Teste','SP','ativo'),
  ('M37P2','Synthetic promoter 2','Teste','SP','ativo'),
- ('M37P3','Synthetic promoter 3','Teste','SP','ativo');
+ ('M37P3','Synthetic promoter 3','Teste','SP','ativo'),
+ ('M37P4','Synthetic promoter 4','Teste','SP','ativo');
 UPDATE public.profiles SET role='promotor', status='ativo', promotor_matricula='M37P1'
 WHERE id=:'user1';
 UPDATE public.profiles SET role='promotor', status='ativo', promotor_matricula='M37P2'
 WHERE id=:'user2';
 UPDATE public.profiles SET role='promotor', status='ativo', promotor_matricula='M37P3'
 WHERE id=:'user3';
+UPDATE public.profiles SET role='promotor', status='ativo', promotor_matricula='M37P4'
+WHERE id=:'user4';
 INSERT INTO public.promoter_operation_authorizations(promotor_matricula,status,justification)
 VALUES ('M37P1','liberado','Isolated functional test'),
  ('M37P2','liberado','Isolated functional test'),
- ('M37P3','liberado','Isolated functional test');
+ ('M37P3','liberado','Isolated functional test'),
+ ('M37P4','liberado','Isolated functional test');
 INSERT INTO public.rotas(id,codigo_rota,promotor_matricula,loja_codigo,industria_codigo,frequencia,
  segunda,terca,quarta,quinta,sexta,sabado,domingo,encerrada_em)
 VALUES
@@ -41,7 +46,8 @@ VALUES
  ('37000000-0000-4000-8000-000000000006','M37R6','M37P1','M37L6','M37IA','SEMANAL',true,true,true,true,true,true,true,NULL),
  ('37000000-0000-4000-8000-000000000007','M37R7','M37P1','M37L7','M37IA','SEMANAL',true,true,true,true,true,true,true,NULL),
  ('37000000-0000-4000-8000-000000000008','M37R8','M37P2','M37L8','M37IA','SEMANAL',true,true,true,true,true,true,true,NULL),
- ('37000000-0000-4000-8000-000000000009','M37R9','M37P3','M37L9','M37IA','SEMANAL',true,true,true,true,true,true,true,NULL);
+ ('37000000-0000-4000-8000-000000000009','M37R9','M37P3','M37L9','M37IA','SEMANAL',true,true,true,true,true,true,true,NULL),
+ ('37000000-0000-4000-8000-000000000010','M37R10','M37P4','M37L10','M37IA','SEMANAL',true,true,true,true,true,true,true,NULL);
 INSERT INTO public.visits(id,rota_id,promotor_matricula,loja_codigo,industria_codigo,data_visita,scheduled_date,status,started_at,completed_at)
 VALUES ('37000000-0000-4000-8000-000000000101','37000000-0000-4000-8000-000000000006',
  'M37P1','M37L6','M37IA',(clock_timestamp() AT TIME ZONE 'America/Sao_Paulo')::date - 1,
@@ -50,5 +56,9 @@ INSERT INTO public.visits(id,rota_id,promotor_matricula,loja_codigo,industria_co
 VALUES ('37000000-0000-4000-8000-000000000102','37000000-0000-4000-8000-000000000007',
  'M37P1','M37L7','M37IA',(clock_timestamp() AT TIME ZONE 'America/Sao_Paulo')::date - 1,
  (clock_timestamp() AT TIME ZONE 'America/Sao_Paulo')::date - 1,'nao_realizada','closed_without_execution_proof');
+INSERT INTO public.visits(id,rota_id,promotor_matricula,loja_codigo,industria_codigo,data_visita,scheduled_date,status)
+VALUES ('37000000-0000-4000-8000-000000000103','37000000-0000-4000-8000-000000000010',
+ 'M37P4','M37L10','M37IA',(clock_timestamp() AT TIME ZONE 'America/Sao_Paulo')::date - 1,
+ (clock_timestamp() AT TIME ZONE 'America/Sao_Paulo')::date - 1,'pendente');
 COMMIT;
 

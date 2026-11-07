@@ -28,7 +28,7 @@ const request = async (path, key, token, method = 'GET', body) => {
   return { status: response.status, data };
 };
 const users = [];
-for (let i = 1; i <= 3; i++) {
+for (let i = 1; i <= 4; i++) {
   const email = `m37p${i}@example.test`;
   const password = randomBytes(18).toString('hex');
   const created = await request('/auth/v1/admin/users', serviceKey, serviceKey, 'POST',
@@ -40,16 +40,25 @@ for (let i = 1; i <= 3; i++) {
     { email, password });
   assert.equal(login.status, 200, `Auth user ${i} login failed: ${login.status}`);
   assert.ok(login.data?.access_token);
-  users.push({ id, token: login.data.access_token });
+  let secondToken;
+  if (i === 3) {
+    const secondLogin = await request('/auth/v1/token?grant_type=password', anonKey, anonKey, 'POST',
+      { email, password });
+    assert.equal(secondLogin.status, 200);
+    secondToken = secondLogin.data?.access_token;
+    assert.ok(secondToken && secondToken !== login.data.access_token, 'Independent Auth sessions required');
+  }
+  users.push({ id, token: login.data.access_token, secondToken });
 }
-console.log('Three synthetic users authenticated via local GoTrue.');
+console.log('Four synthetic users authenticated via local GoTrue; promoter 3 has two sessions.');
 execFileSync('psql', [
   '-X', '-v', 'ON_ERROR_STOP=1',
   '-v', `user1=${users[0].id}`, '-v', `user2=${users[1].id}`, '-v', `user3=${users[2].id}`,
+  '-v', `user4=${users[3].id}`,
   '-f', 'scripts/m37-functional-fixtures.sql'
 ], { stdio: ['ignore', 'pipe', 'pipe'] });
 console.log('Privileged synthetic fixture setup completed.');
-assert.equal(pg("SELECT count(*) FROM public.profiles WHERE role='promotor' AND status='ativo' AND promotor_matricula IN ('M37P1','M37P2','M37P3')"), '3');
+assert.equal(pg("SELECT count(*) FROM public.profiles WHERE role='promotor' AND status='ativo' AND promotor_matricula IN ('M37P1','M37P2','M37P3','M37P4')"), '4');
 
 const today = (() => {
   const parts = new Intl.DateTimeFormat('en-US', {
@@ -122,13 +131,21 @@ assert.equal(routeLess.data?.rota_id, null);
 console.log('PASS route-less check-in with active assignment'); cases++;
 
 const concurrent = await Promise.all([
-  scheduled(users[2], 9, yesterday), scheduled(users[2], 9, yesterday)
+  scheduled(users[2], 9, yesterday),
+  scheduled({ token: users[2].secondToken }, 9, yesterday)
 ]);
 assert.equal(concurrent.filter(r => r.status === 200).length, 1);
 assert.equal(concurrent.filter(r => r.status >= 400).length, 1);
 assert.equal(count('visits', `rota_id='${route(9)}' AND scheduled_date='${iso(yesterday)}'`), 1);
 assert.equal(count('visit_schedule_actions', `route_id='${route(9)}' AND scheduled_date='${iso(yesterday)}'`), 1);
 console.log('PASS concurrent independent authenticated requests: one visit and action'); cases++;
+const pendingRecovery = await scheduled(users[3], 10, yesterday);
+assert.equal(pendingRecovery.status, 200,
+  `Materialized pending recovery failed: ${pendingRecovery.data?.code ?? pendingRecovery.status}`);
+assert.equal(pendingRecovery.data?.scheduled_date, iso(yesterday));
+assert.equal(pendingRecovery.data?.data_visita, iso(today));
+assert.equal(count('visit_schedule_actions', `route_id='${route(10)}' AND scheduled_date='${iso(yesterday)}'`), 1);
+console.log('PASS materialized pending visit recovery'); cases++;
 assert.equal(snapshot(), historyBefore, 'Unrelated historical visits changed');
 console.log('PASS unrelated historical visits unchanged'); cases++;
 console.log(`Functional cases passed: ${cases}`);
