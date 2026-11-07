@@ -159,12 +159,13 @@ const anonKey = env.ANON_KEY ?? env.SUPABASE_ANON_KEY;
 const serviceKey = env.SERVICE_ROLE_KEY ?? env.SUPABASE_SERVICE_ROLE_KEY;
 assert.ok(anonKey && serviceKey, 'Local Supabase keys missing from CLI status');
 const base = 'http://127.0.0.1:54321';
-const request = async (path, key, token, method = 'GET', body) => {
+const request = async (path, key, token, method = 'GET', body, extraHeaders = {}) => {
   const response = await fetch(base + path, {
     method,
     headers: {
       apikey: key, Authorization: `Bearer ${token ?? key}`,
-      ...(body ? { 'Content-Type': 'application/json' } : {})
+      ...(body ? { 'Content-Type': 'application/json' } : {}),
+      ...extraHeaders
     },
     body: body ? JSON.stringify(body) : undefined
   });
@@ -488,8 +489,14 @@ assert.equal(directPatchOwn.data?.code, '42501');
 console.log('PASS direct promoter update of data_visita blocked (42501)'); cases++;
 
 const directPatchOther = await request('/rest/v1/visits?id=eq.37000000-0000-4000-8000-000000000104',
-  anonKey, users[0].token, 'PATCH', { data_visita: iso(today) });
-assert.ok(directPatchOther.status >= 400, 'Direct PATCH on other promoter visit unexpectedly accepted');
+  anonKey, users[0].token, 'PATCH', { data_visita: iso(today) }, { Prefer: 'return=representation' });
+// A política RLS (visits_update_policy) filtra a linha no WHERE implícito do UPDATE:
+// O PostgREST retorna 200 com array vazio (zero linhas afetadas) ou erro >= 400.
+if (directPatchOther.status < 400) {
+  assert.deepEqual(directPatchOther.data, [], 'Other promoter PATCH affected rows via RLS');
+}
+const visit104After = pg("SELECT data_visita FROM public.visits WHERE id = '37000000-0000-4000-8000-000000000104'");
+assert.equal(visit104After, iso(yesterday), 'Visit date was illegally modified by other promoter');
 console.log('PASS direct update of another promoter visit blocked'); cases++;
 
 // Conclui a visita da rota 10 para restaurar o estado operacional do promotor antes da próxima recuperação
