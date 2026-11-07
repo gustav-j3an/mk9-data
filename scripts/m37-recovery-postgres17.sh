@@ -45,13 +45,14 @@ snapshot_query="SELECT n.nspname, p.proname, pg_get_function_identity_arguments(
  FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
  WHERE (n.nspname='public' AND p.proname='attendance_check_in')
  OR (n.nspname='attendance_private' AND p.proname='attendance_start_scheduled_occurrence')
+ OR (n.nspname='public' AND p.proname='check_visit_promotor_update_integrity')
  ORDER BY n.nspname, p.proname"
 before_snapshot="$(mktemp)"
 before_schema="$(mktemp)"
 trap 'rm -f "$before_snapshot" "$before_schema"' EXIT
 psql -X -v ON_ERROR_STOP=1 -Atqc "$snapshot_query" > "$before_snapshot"
 psql -X -v ON_ERROR_STOP=1 -Atqc "SELECT n.nspname,p.relname,p.relkind FROM pg_class p JOIN pg_namespace n ON n.oid=p.relnamespace WHERE n.nspname IN ('public','attendance_private') ORDER BY 1,2,3" > "$before_schema"
-test "$(wc -l < "$before_snapshot")" -eq 2
+test "$(wc -l < "$before_snapshot")" -eq 3
 
 # Inject a deterministic error into disposable copies to verify both transaction
 # forms: an external psql transaction (M30) and an explicit SQL transaction (M37).
@@ -80,10 +81,11 @@ migrations=(
   supabase/migrations/20261106131614_m30_serialize_industry_checkin.sql
   supabase/migrations/20261106140000_m37_pending_visit_active_route_guard.sql
   supabase/migrations/20261106150000_m37_checkin_route_and_conflict_guard.sql
+  supabase/migrations/20261107140000_m37_reconcile_materialized_pending_recovery.sql
 )
 for migration in "${migrations[@]}"; do
   apply_migration "$migration"
-  psql -X -v ON_ERROR_STOP=1 -Atqc "SELECT count(*) = 2 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE (n.nspname='public' AND p.proname='attendance_check_in') OR (n.nspname='attendance_private' AND p.proname='attendance_start_scheduled_occurrence')" | grep -qx t
+  psql -X -v ON_ERROR_STOP=1 -Atqc "SELECT count(*) = 3 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE (n.nspname='public' AND p.proname='attendance_check_in') OR (n.nspname='attendance_private' AND p.proname='attendance_start_scheduled_occurrence') OR (n.nspname='public' AND p.proname='check_visit_promotor_update_integrity')" | grep -qx t
 done
 if psql -X -v ON_ERROR_STOP=1 -Atqc "$snapshot_query" | cmp -s "$before_snapshot" -; then
   echo 'Target migrations did not change captured functions' >&2
@@ -111,7 +113,8 @@ psql -X -v ON_ERROR_STOP=1 -Atqc "
 WITH expected(schema_name, function_name, expected_md5, expected_acl) AS (
  VALUES
  ('attendance_private','attendance_start_scheduled_occurrence','f7741ffc813a80dc10c86e90ec634a6e','{postgres=X/postgres,authenticated=X/postgres}'),
- ('public','attendance_check_in','39dd2b79c48b4e808d81e22aa1140e3e','{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}')
+ ('public','attendance_check_in','39dd2b79c48b4e808d81e22aa1140e3e','{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}'),
+ ('public','check_visit_promotor_update_integrity',NULL,'{postgres=X/postgres}')
 )
 SELECT e.schema_name || '.' || e.function_name,
   'catalog=' || (pg_get_userbyid(p.proowner)='postgres'
@@ -119,8 +122,8 @@ SELECT e.schema_name || '.' || e.function_name,
     AND p.proconfig = ARRAY['search_path=\"\"']::text[]
     AND p.proacl::text=e.expected_acl
     AND NOT has_function_privilege('anon',p.oid,'EXECUTE')
-    AND has_function_privilege('authenticated',p.oid,'EXECUTE'))::text,
-  'homologation_text_hash=' || (md5(pg_get_functiondef(p.oid))=e.expected_md5)::text,
+    AND (e.function_name='check_visit_promotor_update_integrity' OR has_function_privilege('authenticated',p.oid,'EXECUTE')))::text,
+  'homologation_text_hash=' || (e.expected_md5 IS NULL OR md5(pg_get_functiondef(p.oid))=e.expected_md5)::text,
   'actual_hash=' || md5(pg_get_functiondef(p.oid))
 FROM expected e JOIN pg_namespace n ON n.nspname=e.schema_name
 JOIN pg_proc p ON p.pronamespace=n.oid AND p.proname=e.function_name;
@@ -129,13 +132,14 @@ psql -X -v ON_ERROR_STOP=1 -Atqc "
 WITH expected(schema_name, function_name, expected_acl) AS (
  VALUES
  ('attendance_private','attendance_start_scheduled_occurrence','{postgres=X/postgres,authenticated=X/postgres}'),
- ('public','attendance_check_in','{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}')
+ ('public','attendance_check_in','{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}'),
+ ('public','check_visit_promotor_update_integrity','{postgres=X/postgres}')
 )
-SELECT count(*) = 2 AND bool_and(pg_get_userbyid(p.proowner)='postgres'
+SELECT count(*) = 3 AND bool_and(pg_get_userbyid(p.proowner)='postgres'
  AND p.prosecdef AND p.proconfig = ARRAY['search_path=\"\"']::text[]
  AND p.proacl::text=e.expected_acl
  AND NOT has_function_privilege('anon',p.oid,'EXECUTE')
- AND has_function_privilege('authenticated',p.oid,'EXECUTE'))
+ AND (e.function_name='check_visit_promotor_update_integrity' OR has_function_privilege('authenticated',p.oid,'EXECUTE')))
 FROM expected e JOIN pg_namespace n ON n.nspname=e.schema_name
 JOIN pg_proc p ON p.pronamespace=n.oid AND p.proname=e.function_name;
 " | grep -qx t

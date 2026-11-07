@@ -104,6 +104,8 @@ await denied('missing industry', () => checkin(users[0], 'M37L1', 'M37MISSING', 
 await denied('other promoter route', () => scheduled(users[1], 1, yesterday), '42501');
 await denied('completed visit', () => scheduled(users[0], 6, yesterday), '23505');
 await denied('regularized visit', () => scheduled(users[0], 7, yesterday), '23505');
+await denied('visit with checklist evidence', () => scheduled(users[3], 12, yesterday), '23505');
+await denied('visit with prior check-in', () => scheduled(users[3], 13, yesterday), '23505');
 await denied('route-less check-in with closed route', () => checkin(users[0], 'M37L2','M37IA'), '42501');
 const auditRead = await request('/rest/v1/visit_schedule_actions?select=id', anonKey, users[0].token);
 assert.ok(auditRead.status >= 400, 'Direct audit SELECT was accepted');
@@ -145,11 +147,6 @@ console.log('PASS concurrent independent authenticated requests: one visit and a
 assert.equal(snapshot(), historyBefore, 'Unrelated historical visits changed');
 console.log('PASS unrelated historical visits unchanged'); cases++;
 const pendingRecovery = await scheduled(users[3], 10, yesterday);
-if (pendingRecovery.status !== 200) {
-  assert.equal(count('visits', `rota_id='${route(10)}'`), 1);
-  assert.equal(count('visit_schedule_actions', `route_id='${route(10)}'`), 0);
-  console.log(`FAIL materialized pending recovery: ${pendingRecovery.data?.code ?? pendingRecovery.status} ${pendingRecovery.data?.message ?? ''}; tables unchanged`);
-}
 assert.equal(pendingRecovery.status, 200,
   `Materialized pending recovery failed: ${pendingRecovery.data?.code ?? pendingRecovery.status}`);
 assert.equal(pendingRecovery.data?.scheduled_date, iso(yesterday));
@@ -158,5 +155,27 @@ assert.equal(pendingRecovery.data?.id, '37000000-0000-4000-8000-000000000103');
 assert.equal(count('visits', `rota_id='${route(10)}'`), 1);
 assert.equal(count('visit_schedule_actions', `route_id='${route(10)}' AND scheduled_date='${iso(yesterday)}'`), 1);
 console.log('PASS materialized pending visit recovery'); cases++;
+
+const directPatchOwn = await request('/rest/v1/visits?id=eq.37000000-0000-4000-8000-000000000104',
+  anonKey, users[3].token, 'PATCH', { data_visita: iso(today) });
+assert.ok(directPatchOwn.status >= 400, 'Direct PATCH on data_visita unexpectedly accepted');
+assert.equal(directPatchOwn.data?.code, '42501');
+console.log('PASS direct promoter update of data_visita blocked (42501)'); cases++;
+
+const directPatchOther = await request('/rest/v1/visits?id=eq.37000000-0000-4000-8000-000000000104',
+  anonKey, users[0].token, 'PATCH', { data_visita: iso(today) });
+assert.ok(directPatchOther.status >= 400, 'Direct PATCH on other promoter visit unexpectedly accepted');
+console.log('PASS direct update of another promoter visit blocked'); cases++;
+
+const unperformedRecovery = await scheduled(users[3], 11, yesterday);
+assert.equal(unperformedRecovery.status, 200,
+  `Materialized unperformed recovery failed: ${unperformedRecovery.data?.code ?? unperformedRecovery.status}`);
+assert.equal(unperformedRecovery.data?.scheduled_date, iso(yesterday));
+assert.equal(unperformedRecovery.data?.data_visita, iso(today));
+assert.equal(unperformedRecovery.data?.id, '37000000-0000-4000-8000-000000000104');
+assert.equal(count('visits', `rota_id='${route(11)}'`), 1);
+assert.equal(count('visit_schedule_actions', `route_id='${route(11)}' AND scheduled_date='${iso(yesterday)}'`), 1);
+console.log('PASS materialized unperformed visit recovery'); cases++;
+
 console.log(`Functional cases passed: ${cases}`);
 

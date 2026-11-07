@@ -13,7 +13,10 @@ INSERT INTO public.lojas(codigo,nome,cidade,uf,endereco,status) VALUES
  ('M37L7','Synthetic 7','Teste','SP','Teste','ativo'),
  ('M37L8','Synthetic 8','Teste','SP','Teste','ativo'),
  ('M37L9','Synthetic 9','Teste','SP','Teste','ativo'),
- ('M37L10','Synthetic 10','Teste','SP','Teste','ativo');
+ ('M37L10','Synthetic 10','Teste','SP','Teste','ativo'),
+ ('M37L11','Synthetic 11','Teste','SP','Teste','ativo'),
+ ('M37L12','Synthetic 12','Teste','SP','Teste','ativo'),
+ ('M37L13','Synthetic 13','Teste','SP','Teste','ativo');
 INSERT INTO public.promotores(matricula,nome,cidade,uf,status) VALUES
  ('M37P1','Synthetic promoter 1','Teste','SP','ativo'),
  ('M37P2','Synthetic promoter 2','Teste','SP','ativo'),
@@ -47,7 +50,10 @@ VALUES
  ('37000000-0000-4000-8000-000000000007','M37R7','M37P1','M37L7','M37IA','SEMANAL',true,true,true,true,true,true,true,NULL),
  ('37000000-0000-4000-8000-000000000008','M37R8','M37P2','M37L8','M37IA','SEMANAL',true,true,true,true,true,true,true,NULL),
  ('37000000-0000-4000-8000-000000000009','M37R9','M37P3','M37L9','M37IA','SEMANAL',true,true,true,true,true,true,true,NULL),
- ('37000000-0000-4000-8000-000000000010','M37R10','M37P4','M37L10','M37IA','SEMANAL',true,true,true,true,true,true,true,NULL);
+ ('37000000-0000-4000-8000-000000000010','M37R10','M37P4','M37L10','M37IA','SEMANAL',true,true,true,true,true,true,true,NULL),
+ ('37000000-0000-4000-8000-000000000011','M37R11','M37P4','M37L11','M37IA','SEMANAL',true,true,true,true,true,true,true,NULL),
+ ('37000000-0000-4000-8000-000000000012','M37R12','M37P4','M37L12','M37IA','SEMANAL',true,true,true,true,true,true,true,NULL),
+ ('37000000-0000-4000-8000-000000000013','M37R13','M37P4','M37L13','M37IA','SEMANAL',true,true,true,true,true,true,true,NULL);
 INSERT INTO public.visits(id,rota_id,promotor_matricula,loja_codigo,industria_codigo,data_visita,scheduled_date,status,started_at,completed_at)
 VALUES ('37000000-0000-4000-8000-000000000101','37000000-0000-4000-8000-000000000006',
  'M37P1','M37L6','M37IA',(clock_timestamp() AT TIME ZONE 'America/Sao_Paulo')::date - 1,
@@ -60,5 +66,19 @@ INSERT INTO public.visits(id,rota_id,promotor_matricula,loja_codigo,industria_co
 VALUES ('37000000-0000-4000-8000-000000000103','37000000-0000-4000-8000-000000000010',
  'M37P4','M37L10','M37IA',(clock_timestamp() AT TIME ZONE 'America/Sao_Paulo')::date - 1,
  (clock_timestamp() AT TIME ZONE 'America/Sao_Paulo')::date - 1,'pendente');
+INSERT INTO public.visits(id,rota_id,promotor_matricula,loja_codigo,industria_codigo,data_visita,scheduled_date,status)
+VALUES ('37000000-0000-4000-8000-000000000104','37000000-0000-4000-8000-000000000011',
+ 'M37P4','M37L11','M37IA',(clock_timestamp() AT TIME ZONE 'America/Sao_Paulo')::date - 1,
+ (clock_timestamp() AT TIME ZONE 'America/Sao_Paulo')::date - 1,'nao_realizada');
+INSERT INTO public.visits(id,rota_id,promotor_matricula,loja_codigo,industria_codigo,data_visita,scheduled_date,status)
+VALUES ('37000000-0000-4000-8000-000000000105','37000000-0000-4000-8000-000000000012',
+ 'M37P4','M37L12','M37IA',(clock_timestamp() AT TIME ZONE 'America/Sao_Paulo')::date - 1,
+ (clock_timestamp() AT TIME ZONE 'America/Sao_Paulo')::date - 1,'pendente');
+INSERT INTO public.visit_checklist_items(id,visit_id,item_key,item_label,checked)
+VALUES ('37000000-0000-4000-8000-000000000201','37000000-0000-4000-8000-000000000105',
+ 'estoque_conferido','Conferencia de estoque',true);
+INSERT INTO public.visits(id,rota_id,promotor_matricula,loja_codigo,industria_codigo,data_visita,scheduled_date,status,started_at)
+VALUES ('37000000-0000-4000-8000-000000000106','37000000-0000-4000-8000-000000000013',
+ 'M37P4','M37L13','M37IA',(clock_timestamp() AT TIME ZONE 'America/Sao_Paulo')::date - 1,
+ (clock_timestamp() AT TIME ZONE 'America/Sao_Paulo')::date - 1,'em_andamento',clock_timestamp() - interval '24 hours');
 COMMIT;
-

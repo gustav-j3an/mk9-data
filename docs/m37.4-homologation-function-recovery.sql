@@ -197,6 +197,44 @@ BEGIN
  RETURNING * INTO result;
  RETURN result;
 END $function$;
+
+CREATE OR REPLACE FUNCTION public.check_visit_promotor_update_integrity()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
+BEGIN
+  IF auth.uid() IS NULL AND session_user IN ('postgres','supabase_admin') THEN RETURN NEW; END IF;
+  IF public.is_admin_or_gestor() THEN RETURN NEW; END IF;
+  IF OLD.promotor_matricula IS DISTINCT FROM public.get_auth_promotor_matricula()
+     OR public.get_auth_promotor_matricula() IS NULL THEN
+    RAISE EXCEPTION 'Visit not owned by authenticated promoter' USING ERRCODE='42501';
+  END IF;
+  IF OLD.started_at IS NOT NULL AND NOT attendance_private.is_visit_in_current_operational_day(OLD.id) THEN
+    RAISE EXCEPTION 'An old visit requires administrative regularization' USING ERRCODE='42501';
+  END IF;
+  IF (NEW.promotor_matricula,NEW.loja_codigo,NEW.industria_codigo,NEW.rota_id,NEW.data_visita)
+     IS DISTINCT FROM (OLD.promotor_matricula,OLD.loja_codigo,OLD.industria_codigo,OLD.rota_id,OLD.data_visita) THEN
+    RAISE EXCEPTION 'Visit identity is immutable' USING ERRCODE='42501';
+  END IF;
+  IF OLD.started_at IS NOT NULL AND NEW.started_at IS DISTINCT FROM OLD.started_at THEN
+    RAISE EXCEPTION 'Check-in is immutable' USING ERRCODE='42501';
+  END IF;
+  IF OLD.status IN ('concluida','nao_realizada') THEN
+    RAISE EXCEPTION 'Closed visits cannot be changed by promoter' USING ERRCODE='42501';
+  END IF;
+  IF NEW.status IS DISTINCT FROM OLD.status
+     AND NOT ((OLD.status='pendente' AND NEW.status='em_andamento' AND OLD.started_at IS NULL)
+       OR (OLD.status='em_andamento' AND NEW.status='concluida')) THEN
+    RAISE EXCEPTION 'Invalid visit transition';
+  END IF;
+  IF NEW.status='concluida'
+     AND (NEW.completed_at IS NULL OR NEW.started_at IS NULL OR NEW.completed_at<NEW.started_at) THEN
+    RAISE EXCEPTION 'Invalid checkout sequence';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.check_visit_promotor_update_integrity() FROM PUBLIC, anon;
+DROP TABLE IF EXISTS attendance_private.scheduled_recovery_authorizations;
+
 REVOKE ALL ON FUNCTION attendance_private.attendance_start_scheduled_occurrence(uuid, date, text, numeric, numeric, numeric) FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION attendance_private.attendance_start_scheduled_occurrence(uuid, date, text, numeric, numeric, numeric) TO authenticated;
 REVOKE ALL ON FUNCTION public.attendance_check_in(text, text, uuid, numeric, numeric, numeric) FROM PUBLIC, anon, authenticated, service_role;
