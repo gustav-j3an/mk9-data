@@ -1,5 +1,5 @@
 import type { OperationalVisitStatus, OperationalVisitItem } from './routePlanner';
-import type { RouteItem } from '../types';
+import type { RouteItem, Visit } from '../types';
 
 export type ScheduledVisitAction = 'advance' | 'recover';
 
@@ -7,6 +7,7 @@ export interface ScheduledActionDecision {
   allowed: boolean;
   action?: ScheduledVisitAction;
   reason?: string;
+  isSameDayConflict?: boolean;
 }
 
 export type ScheduledRouteEligibility = 'active' | 'closed' | 'unavailable';
@@ -26,15 +27,16 @@ export function isScheduledVisitActionRpcReady(error: { code?: unknown; message?
 }
 
 export function getScheduledVisitAction(input: {
-  item: Pick<OperationalVisitItem, 'routeId' | 'dataStr' | 'status' | 'frequencia' | 'visitObj'>;
+  item: Pick<OperationalVisitItem, 'routeId' | 'dataStr' | 'status' | 'frequencia' | 'visitObj'> & Partial<Pick<OperationalVisitItem, 'lojaCodigo' | 'industriaCodigo'>>;
   today: string;
   weekStart: string;
   weekEnd: string;
   authorized: boolean;
   hasActiveVisit: boolean;
   routeEligibility: ScheduledRouteEligibility;
+  todayVisits?: Pick<Visit, 'loja_codigo' | 'industria_codigo' | 'status'>[];
 }): ScheduledActionDecision {
-  const { item } = input;
+  const { item, todayVisits = [] } = input;
   if (!input.authorized) return { allowed: false, reason: 'A operação ainda não está autorizada.' };
   if (input.hasActiveVisit) return { allowed: false, reason: 'Finalize o atendimento atual antes de iniciar outra visita.' };
   if (!item.routeId) return { allowed: false, reason: 'A programação não está vinculada a uma rota fixa.' };
@@ -49,6 +51,27 @@ export function getScheduledVisitAction(input: {
   if (item.visitObj?.status === 'concluida' || item.visitObj?.status === 'em_andamento' || item.visitObj?.started_at) {
     return { allowed: false, reason: 'Esta ocorrência já possui atendimento iniciado ou concluído.' };
   }
+
+  // Prevenção de duplicidade: se já existe atendimento efetivo (concluído ou em andamento) para a mesma loja e indústria hoje
+  if (item.lojaCodigo && item.industriaCodigo && todayVisits.length > 0) {
+    const hasConflictToday = todayVisits.some(
+      (v) =>
+        v.loja_codigo === item.lojaCodigo &&
+        v.industria_codigo === item.industriaCodigo &&
+        (v.status === 'concluida' || v.status === 'em_andamento')
+    );
+    if (hasConflictToday) {
+      const isRecovery = item.dataStr >= input.weekStart && item.dataStr < input.today;
+      const isAdvance = item.dataStr > input.today && item.dataStr <= input.weekEnd;
+      return {
+        allowed: false,
+        action: isRecovery ? 'recover' : isAdvance ? 'advance' : undefined,
+        reason: 'Já existe um atendimento para esta loja e indústria hoje.',
+        isSameDayConflict: true
+      };
+    }
+  }
+
   if (item.dataStr > input.today && item.dataStr <= input.weekEnd && item.status === 'planejada') {
     return { allowed: true, action: 'advance' };
   }

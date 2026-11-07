@@ -99,3 +99,188 @@ test('ações de agenda só são habilitadas quando a RPC responde com a valida�
   assert.equal(isScheduledVisitActionRpcReady({ code: '08006', message: 'Network error' }), false);
   assert.equal(isScheduledVisitActionRpcReady(null), false);
 });
+
+// Casos de teste específicos da Missão 37.44 - Prevenção de duplicidade no mesmo dia
+test('cenário 1: visita pendente sem conflito hoje pode ser recuperada', () => {
+  const pendingItem = {
+    ...base,
+    dataStr: '2026-11-04',
+    status: 'pendente',
+    lojaCodigo: 'L-101',
+    industriaCodigo: 'IND-01'
+  } as typeof base;
+
+  const result = getScheduledVisitAction({
+    item: pendingItem,
+    today: '2026-11-07',
+    weekStart: '2026-11-02',
+    weekEnd: '2026-11-08',
+    authorized: true,
+    hasActiveVisit: false,
+    routeEligibility: 'active',
+    todayVisits: []
+  });
+
+  assert.equal(result.allowed, true);
+  assert.equal(result.action, 'recover');
+  assert.equal(result.isSameDayConflict, undefined);
+});
+
+test('cenário 2: visita concluída hoje para mesma loja e indústria bloqueia recuperação', () => {
+  const pendingItem = {
+    ...base,
+    dataStr: '2026-11-04',
+    status: 'pendente',
+    lojaCodigo: 'L-101',
+    industriaCodigo: 'IND-01'
+  } as typeof base;
+
+  const result = getScheduledVisitAction({
+    item: pendingItem,
+    today: '2026-11-07',
+    weekStart: '2026-11-02',
+    weekEnd: '2026-11-08',
+    authorized: true,
+    hasActiveVisit: false,
+    routeEligibility: 'active',
+    todayVisits: [
+      { loja_codigo: 'L-101', industria_codigo: 'IND-01', status: 'concluida' } as any
+    ]
+  });
+
+  assert.equal(result.allowed, false);
+  assert.equal(result.action, 'recover');
+  assert.equal(result.isSameDayConflict, true);
+  assert.equal(result.reason, 'Já existe um atendimento para esta loja e indústria hoje.');
+});
+
+test('cenário 3: visita em andamento hoje para mesma loja e indústria bloqueia recuperação', () => {
+  const pendingItem = {
+    ...base,
+    dataStr: '2026-11-04',
+    status: 'pendente',
+    lojaCodigo: 'L-101',
+    industriaCodigo: 'IND-01'
+  } as typeof base;
+
+  const result = getScheduledVisitAction({
+    item: pendingItem,
+    today: '2026-11-07',
+    weekStart: '2026-11-02',
+    weekEnd: '2026-11-08',
+    authorized: true,
+    hasActiveVisit: false,
+    routeEligibility: 'active',
+    todayVisits: [
+      { loja_codigo: 'L-101', industria_codigo: 'IND-01', status: 'em_andamento' } as any
+    ]
+  });
+
+  assert.equal(result.allowed, false);
+  assert.equal(result.action, 'recover');
+  assert.equal(result.isSameDayConflict, true);
+  assert.equal(result.reason, 'Já existe um atendimento para esta loja e indústria hoje.');
+});
+
+test('cenário 4: visita hoje para outra indústria na mesma loja NÃO causa conflito', () => {
+  const pendingItem = {
+    ...base,
+    dataStr: '2026-11-04',
+    status: 'pendente',
+    lojaCodigo: 'L-101',
+    industriaCodigo: 'IND-01'
+  } as typeof base;
+
+  const result = getScheduledVisitAction({
+    item: pendingItem,
+    today: '2026-11-07',
+    weekStart: '2026-11-02',
+    weekEnd: '2026-11-08',
+    authorized: true,
+    hasActiveVisit: false,
+    routeEligibility: 'active',
+    todayVisits: [
+      { loja_codigo: 'L-101', industria_codigo: 'IND-OUTRA', status: 'concluida' } as any
+    ]
+  });
+
+  assert.equal(result.allowed, true);
+  assert.equal(result.action, 'recover');
+  assert.equal(result.isSameDayConflict, undefined);
+});
+
+test('cenário 5: visita hoje para a mesma indústria em outra loja NÃO causa conflito', () => {
+  const pendingItem = {
+    ...base,
+    dataStr: '2026-11-04',
+    status: 'pendente',
+    lojaCodigo: 'L-101',
+    industriaCodigo: 'IND-01'
+  } as typeof base;
+
+  const result = getScheduledVisitAction({
+    item: pendingItem,
+    today: '2026-11-07',
+    weekStart: '2026-11-02',
+    weekEnd: '2026-11-08',
+    authorized: true,
+    hasActiveVisit: false,
+    routeEligibility: 'active',
+    todayVisits: [
+      { loja_codigo: 'L-OUTRA', industria_codigo: 'IND-01', status: 'concluida' } as any
+    ]
+  });
+
+  assert.equal(result.allowed, true);
+  assert.equal(result.action, 'recover');
+  assert.equal(result.isSameDayConflict, undefined);
+});
+
+test('cenário 6: recuperação fora da semana permitida permanece bloqueada independentemente de visitas do dia', () => {
+  const oldPendingItem = {
+    ...base,
+    dataStr: '2026-10-28', // semana anterior
+    status: 'pendente',
+    lojaCodigo: 'L-101',
+    industriaCodigo: 'IND-01'
+  } as typeof base;
+
+  const result = getScheduledVisitAction({
+    item: oldPendingItem,
+    today: '2026-11-07',
+    weekStart: '2026-11-02',
+    weekEnd: '2026-11-08',
+    authorized: true,
+    hasActiveVisit: false,
+    routeEligibility: 'active',
+    todayVisits: []
+  });
+
+  assert.equal(result.allowed, false);
+  assert.equal(result.isSameDayConflict, undefined);
+  assert.match(result.reason || '', /janela válida da semana atual/);
+});
+
+test('cenário 7: tentativa concorrente com atendimento ativo no promotor é bloqueada', () => {
+  const pendingItem = {
+    ...base,
+    dataStr: '2026-11-04',
+    status: 'pendente',
+    lojaCodigo: 'L-101',
+    industriaCodigo: 'IND-01'
+  } as typeof base;
+
+  const result = getScheduledVisitAction({
+    item: pendingItem,
+    today: '2026-11-07',
+    weekStart: '2026-11-02',
+    weekEnd: '2026-11-08',
+    authorized: true,
+    hasActiveVisit: true, // atendimento em curso em qualquer loja
+    routeEligibility: 'active',
+    todayVisits: []
+  });
+
+  assert.equal(result.allowed, false);
+  assert.match(result.reason || '', /Finalize o atendimento atual/);
+});

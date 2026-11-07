@@ -1915,7 +1915,8 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
       weekEnd: currentWeekEndStr,
       authorized: !isImplantacaoMode || isAuthorized,
       hasActiveVisit: Boolean(activeVisit),
-      routeEligibility: getScheduledRouteEligibility(operationalRoutes.find((route) => route.id === scheduledAction.item.routeId))
+      routeEligibility: getScheduledRouteEligibility(operationalRoutes.find((route) => route.id === scheduledAction.item.routeId)),
+      todayVisits
     });
     if (!decision.allowed || decision.action !== scheduledAction.action) {
       onShowToast({ title: 'Programação indisponível', message: decision.reason || 'A programação mudou e precisa ser carregada novamente.', type: 'warning' });
@@ -3253,7 +3254,16 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
               <div className="space-y-3">
                 {displayedWeekVisits.map((item, idx) => {
                   const isTodayItem = item.dataStr === getLocalDateString(new Date());
-                  const actionDecision = getScheduledVisitAction({ item, today: todayStr, weekStart: currentWeekStartStr, weekEnd: currentWeekEndStr, authorized: !isImplantacaoMode || isAuthorized, hasActiveVisit: Boolean(activeVisit), routeEligibility: getScheduledRouteEligibility(operationalRoutes.find((route) => route.id === item.routeId)) });
+                  const actionDecision = getScheduledVisitAction({
+                    item,
+                    today: todayStr,
+                    weekStart: currentWeekStartStr,
+                    weekEnd: currentWeekEndStr,
+                    authorized: !isImplantacaoMode || isAuthorized,
+                    hasActiveVisit: Boolean(activeVisit),
+                    routeEligibility: getScheduledRouteEligibility(operationalRoutes.find((route) => route.id === item.routeId)),
+                    todayVisits
+                  });
                   const regularizationLabel = getRegularizationPresentation(item.visitObj?.regularization_status);
                   const actualVisitDate = item.visitObj?.data_visita || null;
                   const isCompletedLate = item.status === 'concluida' && Boolean(actualVisitDate && actualVisitDate > item.dataStr);
@@ -3408,6 +3418,24 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                                     : scheduledActionRpcStatus === 'checking' ? 'Verificando disponibilidade…' : actionDecision.action === 'advance' ? 'Antecipar visita — Indisponível' : 'Realizar hoje — Indisponível'}
                                 </button>
                                 {scheduledActionRpcStatus !== 'ready' && <span id={`scheduled-action-help-${item.key}-${item.dataStr}`} className="max-w-60 text-[11px] leading-snug text-[#5F5F5F]">Funcionalidade aguardando atualização do servidor.</span>}
+                              </div>
+                            )}
+
+                            {!actionDecision.allowed && actionDecision.isSameDayConflict && (actionDecision.action === 'recover' || actionDecision.action === 'advance') && (
+                              <div className="flex flex-col items-start gap-1">
+                                <button
+                                  type="button"
+                                  disabled
+                                  aria-disabled="true"
+                                  title={actionDecision.reason || 'Já existe um atendimento para esta loja e indústria hoje'}
+                                  className="min-h-10 rounded-xl bg-slate-200 px-4 py-2 text-xs font-bold text-slate-500 cursor-not-allowed opacity-80 border border-slate-300"
+                                >
+                                  <span className="material-symbols-outlined mr-1 align-middle text-sm">{actionDecision.action === 'advance' ? 'event_upcoming' : 'replay'}</span>
+                                  <span>{actionDecision.action === 'advance' ? 'Antecipar visita' : 'Realizar hoje'}</span>
+                                </button>
+                                <span className="max-w-60 text-[11px] font-semibold leading-snug text-amber-800">
+                                  {actionDecision.reason || 'Já existe um atendimento para esta loja e indústria hoje.'}
+                                </span>
                               </div>
                             )}
                           </>
