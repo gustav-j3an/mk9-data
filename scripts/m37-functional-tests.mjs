@@ -3,27 +3,105 @@ import { execFileSync, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 
 const pg = (sql) => execFileSync('psql', ['-X', '-A', '-t', '-v', 'ON_ERROR_STOP=1', '-c', sql], { encoding: 'utf8' }).trim();
-const runAsyncPsql = (sql) => {
-  const child = spawn('psql', ['-X', '-v', 'ON_ERROR_STOP=1'], {
+const createPsqlSession = (name = 'session') => {
+  const child = spawn('psql', ['-X', '-v', 'ON_ERROR_STOP=0', '-q', '-A', '-t'], {
     stdio: ['pipe', 'pipe', 'pipe'],
     env: process.env
   });
-  let stdout = '';
-  let stderr = '';
-  child.stdout.on('data', d => { stdout += d.toString(); });
-  child.stderr.on('data', d => { stderr += d.toString(); });
-  child.stdin.write(sql);
-  child.stdin.end();
+
+  let serverPid = null;
+  let stdoutData = '';
+  let stderrData = '';
+  let currentResolver = null;
+  let currentRejecter = null;
+  let currentSentinel = null;
+  let seq = 0;
+
+  child.stdout.setEncoding('utf8');
+  child.stderr.setEncoding('utf8');
+
+  child.stdout.on('data', (chunk) => {
+    stdoutData += chunk;
+    if (currentSentinel && stdoutData.includes(currentSentinel)) {
+      const idx = stdoutData.indexOf(currentSentinel);
+      const output = stdoutData.slice(0, idx).trim();
+      stdoutData = stdoutData.slice(idx + currentSentinel.length);
+      const resolve = currentResolver;
+      currentResolver = null;
+      currentRejecter = null;
+      currentSentinel = null;
+      if (resolve) resolve(output);
+    }
+  });
+
+  child.stderr.on('data', (chunk) => {
+    stderrData += chunk;
+  });
+
+  child.on('close', (code) => {
+    if (currentRejecter) {
+      currentRejecter(new Error(`PsqlSession [${name}] closed with code ${code}. Stderr: ${stderrData}`));
+    }
+  });
+
   return {
-    child,
-    done: new Promise((resolve, reject) => {
-      child.on('close', code => {
-        if (code === 0) resolve(stdout.trim());
-        else reject(new Error(`psql process exited with ${code}: ${stderr}`));
+    name,
+    get pid() { return serverPid; },
+    get proc() { return child; },
+    get stderr() { return stderrData; },
+    async init() {
+      const out = await this.query('SELECT pg_backend_pid();');
+      serverPid = Number(out);
+      assert.ok(serverPid > 0, `PsqlSession [${name}]: invalid PID ${serverPid}`);
+      return serverPid;
+    },
+    query(sql, timeoutMs = 8000) {
+      return new Promise((resolve, reject) => {
+        if (currentResolver) {
+          return reject(new Error(`PsqlSession [${name}] busy with ongoing query`));
+        }
+        seq++;
+        const sentinel = `__SENTINEL_${name}_${seq}__`;
+        currentSentinel = sentinel;
+
+        const timer = setTimeout(() => {
+          if (currentResolver === resolve) {
+            currentResolver = null;
+            currentRejecter = null;
+            currentSentinel = null;
+            reject(new Error(`PsqlSession [${name}] timed out after ${timeoutMs}ms executing: ${sql}`));
+          }
+        }, timeoutMs);
+
+        currentResolver = (val) => { clearTimeout(timer); resolve(val); };
+        currentRejecter = (err) => { clearTimeout(timer); reject(err); };
+
+        child.stdin.write(`${sql.trim()};\n\\echo ${sentinel}\n`);
       });
-    })
+    },
+    send(sql) {
+      child.stdin.write(`${sql.trim()};\n`);
+    },
+    async close() {
+      if (child.exitCode !== null) return;
+      try {
+        child.stdin.write('\\q\n');
+        child.stdin.end();
+      } catch {}
+      await new Promise((resolve) => {
+        const t = setTimeout(() => {
+          try { child.kill('SIGKILL'); } catch {}
+          resolve();
+        }, 1500);
+        child.on('close', () => {
+          clearTimeout(t);
+          resolve();
+        });
+      });
+    }
   };
 };
+
 const waitForCondition = async (fn, desc = 'condition', timeoutMs = 8000) => {
   const start = Date.now();
   while (!fn()) {
@@ -98,7 +176,10 @@ const today = (() => {
 const iso = date => date.toISOString().slice(0, 10);
 const yesterday = new Date(today.getTime() - 86400000);
 const weekStart = new Date(today.getTime() - ((today.getUTCDay() + 6) % 7) * 86400000);
-assert.ok(yesterday >= weekStart, 'No earlier date in current week; recovery case cannot run today');
+// Caso especial de segunda-feira: em segundas-feiras (início da semana operacional), não existe dia anterior
+// elegível para recuperação dentro da mesma semana por definição da regra de negócio semanal [segunda..domingo].
+// A validação completa dos 32 cenários funcionais de recuperação exige execução entre terça e domingo.
+assert.ok(yesterday >= weekStart, 'No earlier date in current week (Monday execution cannot test intra-week recovery); execution must run Tuesday through Sunday');
 const previousWeek = new Date(weekStart.getTime() - 86400000);
 const route = n => `37000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const count = (table, where = 'true') => Number(pg(`SELECT count(*) FROM public.${table} WHERE ${where}`));
@@ -139,89 +220,152 @@ await denied('visit with product validity evidence', () => scheduled(users[3], 1
 await denied('visit with prior check-in', () => scheduled(users[3], 13, yesterday), '23505');
 await denied('route-less check-in with closed route', () => checkin(users[0], 'M37L2','M37IA'), '42501');
 
-// Teste de concorrência real — Ordem 1: Inativação concorre com check-in
-// Sessão B1 (Admin) inicia transação, atualiza status da indústria M37IC1 para 'inativo' e retém commit via advisory lock 99901.
-// Sessão A1 (Promotor) tenta check-in e entra em lock wait comprovado no catálogo pg_locks (NOT granted).
-// Liberação da Sessão B1 -> COMMIT -> Sessão A1 é desbloqueada e aborta com 42501 sem criar visita.
-pg("SELECT pg_advisory_lock(99901)");
-const sessionB1 = runAsyncPsql(`
-  BEGIN;
-  UPDATE public.industrias SET status = 'inativo' WHERE codigo = 'M37IC1';
-  SELECT pg_advisory_lock(99901);
-  COMMIT;
-  SELECT pg_advisory_unlock(99901);
-`);
+// ==============================================================================
+// TESTES DE CONCORRÊNCIA REAL COM COORDENAÇÃO DE CONEXÕES PERSISTENTES
+// ==============================================================================
 
-await waitForCondition(
-  () => Number(pg("SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND objid = 99901 AND NOT granted")) > 0,
-  'sessionB1 holding exclusive tuple lock on industry M37IC1'
-);
+// Ordem A — Inativação primeiro:
+// Conexão administrativa (adminA) inicia transação e inativa indústria M37IC1, mantendo transação aberta.
+// Conexão do promotor (promoterA) tenta attendance_start_scheduled_occurrence e é bloqueada pelo PostgreSQL.
+// Comprovação formal via pg_blocking_pids e pg_locks do lock contention real entre as sessões.
+// Conclusão da inativação via COMMIT em adminA.
+// promoterA é desbloqueado e aborta com 42501 (indústria inativa).
+// NOTA: O uso de SET LOCAL ROLE authenticated e claim de sub no promoterA simula o contexto
+// de autorização diretamente no banco PostgreSQL; testes HTTP reais adicionais cobrem o GoTrue.
+const adminA = createPsqlSession('adminA');
+const promoterA = createPsqlSession('promoterA');
 
-const checkinOrder1Promise = scheduled(users[0], 17, yesterday);
+try {
+  const adminPid = await adminA.init();
+  const promoterPid = await promoterA.init();
+  assert.ok(adminPid !== promoterPid, 'Independent PostgreSQL sessions required for Ordem A');
 
-await waitForCondition(
-  () => Number(pg("SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid WHERE NOT l.granted AND a.query LIKE '%attendance_%'")) > 0,
-  'sessionA1 blocked by sessionB1 tuple lock on industry'
-);
+  // 1. Sessão administrativa inicia transação e inativa a indústria M37IC1
+  await adminA.query('BEGIN;');
+  await adminA.query("UPDATE public.industrias SET status = 'inativo' WHERE codigo = 'M37IC1';");
 
-pg("SELECT pg_advisory_unlock(99901)");
-await sessionB1.done;
+  // 2. Sessão do promotor inicia transação autenticada e tenta atendimento
+  await promoterA.query('BEGIN;');
+  await promoterA.query('SET LOCAL ROLE authenticated;');
+  await promoterA.query(`SET LOCAL "request.jwt.claim.sub" = '${users[0].id}';`);
 
-const resOrder1 = await checkinOrder1Promise;
-assert.ok(resOrder1.status >= 400, 'Order 1: check-in was unexpectedly accepted during inactivation');
-assert.equal(resOrder1.data?.code, '42501', 'Order 1: expected 42501 for inactivated industry');
-assert.equal(count('visits', `rota_id='${route(17)}'`), 0, 'Order 1: no visit must be created');
-assert.equal(count('visit_schedule_actions', `route_id='${route(17)}'`), 0, 'Order 1: no audit action must be created');
-assert.equal(pg("SELECT status FROM public.industrias WHERE codigo = 'M37IC1'"), 'inativo', 'Order 1: industry must be inactive');
-console.log('PASS concurrent industry inactivation order 1: lock contention verified in pg_locks, check-in denied (42501), no visits');
-cases++;
+  // Disparo assíncrono do check-in que entrará em lock wait no PostgreSQL
+  promoterA.send(`
+    SELECT public.attendance_start_scheduled_occurrence(
+      '${route(17)}'::uuid,
+      '${iso(yesterday)}'::date,
+      'recover'
+    )
+  `);
 
-// Teste de concorrência real — Ordem 2: Check-in inicia antes e segura lock FOR SHARE na indústria M37IC2
-// Sessão B2 (Admin) tenta UPDATE public.industrias SET status='inativo' e entra em lock wait comprovado via pg_locks.
-// Liberação da Sessão A2 -> COMMIT grava a visita -> Sessão B2 é desbloqueada e inativa a indústria.
-// Check-in subsequente na indústria agora inativa é barrado com 42501.
-pg("SELECT pg_advisory_lock(99902)");
-const sessionA2 = runAsyncPsql(`
-  BEGIN;
-  SET LOCAL ROLE authenticated;
-  SET LOCAL "request.jwt.claim.sub" = '${users[0].id}';
-  SELECT public.attendance_start_scheduled_occurrence(
-    '${route(18)}'::uuid,
-    '${iso(yesterday)}'::date,
-    'recover'
-  );
-  SELECT pg_advisory_lock(99902);
-  COMMIT;
-  SELECT pg_advisory_unlock(99902);
-`);
+  // 3. Sincronização explícita e verificação formal no catálogo do PostgreSQL:
+  // Verifica que promoterA está com lock não concedido (NOT granted) especificamente bloqueado por adminA
+  await waitForCondition(() => {
+    const blockers = pg(`SELECT pg_blocking_pids(${promoterPid})::text`);
+    return blockers.includes(String(adminPid));
+  }, `promoterA (${promoterPid}) blocked by adminA (${adminPid}) in pg_blocking_pids`, 8000);
 
-await waitForCondition(
-  () => Number(pg("SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND objid = 99902 AND NOT granted")) > 0,
-  'sessionA2 holding FOR SHARE lock on industry M37IC2'
-);
+  const waitingLocks = pg(`
+    SELECT count(*) FROM pg_locks
+    WHERE pid = ${promoterPid} AND NOT granted
+  `);
+  assert.ok(Number(waitingLocks) > 0, 'promoterA must have ungranted lock in pg_locks');
 
-const sessionB2 = runAsyncPsql(`
-  UPDATE public.industrias SET status = 'inativo' WHERE codigo = 'M37IC2';
-`);
+  // 4. Conclui a inativação na sessão administrativa
+  await adminA.query('COMMIT;');
 
-await waitForCondition(
-  () => Number(pg("SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid WHERE NOT l.granted AND a.query LIKE '%UPDATE public.industrias%M37IC2%'")) > 0,
-  'sessionB2 blocked by sessionA2 FOR SHARE lock on industry M37IC2'
-);
+  // 5. promoterA é liberado e aborta com erro 42501
+  await waitForCondition(() => {
+    const act = pg(`SELECT state FROM pg_stat_activity WHERE pid = ${promoterPid}`);
+    return act === 'idle in transaction (aborted)' || act === 'idle';
+  }, 'promoterA aborted due to inactive industry', 8000);
 
-pg("SELECT pg_advisory_unlock(99902)");
-await sessionA2.done;
-await sessionB2.done;
+  assert.match(promoterA.stderr, /Industry is not active or does not exist|42501/, 'promoterA must reject with 42501');
+  await promoterA.query('ROLLBACK;');
 
-assert.equal(count('visits', `rota_id='${route(18)}' AND scheduled_date='${iso(yesterday)}'`), 1, 'Order 2: visit must exist');
-assert.equal(count('visit_schedule_actions', `route_id='${route(18)}' AND scheduled_date='${iso(yesterday)}'`), 1, 'Order 2: audit must exist');
-assert.equal(pg("SELECT status FROM public.industrias WHERE codigo = 'M37IC2'"), 'inativo', 'Order 2: industry must be inactive');
+  // 6. Verificações do estado final:
+  assert.equal(count('visits', `rota_id='${route(17)}'`), 0, 'Ordem A: zero visits created');
+  assert.equal(count('visit_schedule_actions', `route_id='${route(17)}'`), 0, 'Ordem A: zero audit actions created');
+  assert.equal(pg("SELECT status FROM public.industrias WHERE codigo = 'M37IC1'"), 'inativo', 'Ordem A: industry must be inactive');
 
-const postInactivationCheckin = await scheduled(users[0], 18, yesterday);
-assert.ok(postInactivationCheckin.status >= 400, 'Order 2: subsequent check-in must be rejected');
-assert.equal(postInactivationCheckin.data?.code, '42501', 'Order 2: subsequent check-in code 42501');
-console.log('PASS concurrent industry inactivation order 2: lock contention verified, serialization respected, check-in saved, subsequent check-in denied (42501)');
-cases++;
+  console.log('PASS Ordem A (inativação primeiro): pg_blocking_pids comprovou bloqueio mútuo, check-in abortou com 42501, zero visitas');
+  cases++;
+} finally {
+  await adminA.close();
+  await promoterA.close();
+}
+
+// Ordem B — Check-in primeiro:
+// Conexão do promotor (promoterB) inicia transação, autentica e executa attendance_start_scheduled_occurrence,
+// mantendo a transação aberta e segurando o lock FOR SHARE na linha da indústria M37IC2.
+// Conexão administrativa (adminB) tenta inativar M37IC2 e entra em lock wait no PostgreSQL.
+// Comprovação formal via pg_blocking_pids e pg_locks.
+// promoterB comita a transação (gravando a visita e a auditoria).
+// adminB é desbloqueado e conclui a inativação.
+// Chamada subsequente via HTTP REST GoTrue na indústria agora inativa é barrada com 42501.
+const promoterB = createPsqlSession('promoterB');
+const adminB = createPsqlSession('adminB');
+
+try {
+  const promoterPid = await promoterB.init();
+  const adminPid = await adminB.init();
+  assert.ok(promoterPid !== adminPid, 'Independent PostgreSQL sessions required for Ordem B');
+
+  // 1. Sessão do promotor inicia transação autenticada e executa recuperação
+  await promoterB.query('BEGIN;');
+  await promoterB.query('SET LOCAL ROLE authenticated;');
+  await promoterB.query(`SET LOCAL "request.jwt.claim.sub" = '${users[0].id}';`);
+
+  const visitExec = await promoterB.query(`
+    SELECT public.attendance_start_scheduled_occurrence(
+      '${route(18)}'::uuid,
+      '${iso(yesterday)}'::date,
+      'recover'
+    );
+  `);
+  assert.ok(visitExec.length > 0, 'promoterB: attendance_start_scheduled_occurrence must succeed');
+  // Transação permanece ABERTA! O lock FOR SHARE na indústria M37IC2 está ativo.
+
+  // 2. Sessão administrativa tenta inativar a indústria M37IC2
+  adminB.send("UPDATE public.industrias SET status = 'inativo' WHERE codigo = 'M37IC2'");
+
+  // 3. Sincronização explícita e verificação formal no catálogo do PostgreSQL:
+  await waitForCondition(() => {
+    const blockers = pg(`SELECT pg_blocking_pids(${adminPid})::text`);
+    return blockers.includes(String(promoterPid));
+  }, `adminB (${adminPid}) blocked by promoterB (${promoterPid}) in pg_blocking_pids`, 8000);
+
+  const adminWaiting = pg(`
+    SELECT count(*) FROM pg_locks
+    WHERE pid = ${adminPid} AND NOT granted
+  `);
+  assert.ok(Number(adminWaiting) > 0, 'adminB must be waiting on ungranted lock in pg_locks');
+
+  // 4. promoterB conclui a transação com sucesso (COMMIT)
+  await promoterB.query('COMMIT;');
+
+  // 5. adminB é desbloqueado e completa o UPDATE
+  await waitForCondition(() => {
+    const act = pg(`SELECT state FROM pg_stat_activity WHERE pid = ${adminPid}`);
+    return act === 'idle';
+  }, 'adminB update completed', 8000);
+
+  // 6. Verificações do estado final:
+  assert.equal(count('visits', `rota_id='${route(18)}' AND scheduled_date='${iso(yesterday)}'`), 1, 'Ordem B: visita deve existir');
+  assert.equal(count('visit_schedule_actions', `route_id='${route(18)}' AND scheduled_date='${iso(yesterday)}'`), 1, 'Ordem B: auditoria deve existir');
+  assert.equal(pg("SELECT status FROM public.industrias WHERE codigo = 'M37IC2'"), 'inativo', 'Ordem B: indústria deve estar inativa');
+
+  // 7. Chamada HTTP REST real pós-inativação comprova que novas operações são rejeitadas
+  const postInactivationCheckin = await scheduled(users[0], 18, yesterday);
+  assert.ok(postInactivationCheckin.status >= 400, 'Ordem B: subsequent check-in must be rejected');
+  assert.equal(postInactivationCheckin.data?.code, '42501', 'Ordem B: subsequent check-in code 42501');
+
+  console.log('PASS Ordem B (check-in primeiro): pg_blocking_pids comprovou serialização, visita gravada, indústria inativada, subsequente rejeitado (42501)');
+  cases++;
+} finally {
+  await promoterB.close();
+  await adminB.close();
+}
 
 // Validações do modo OPERACAO_OFICIAL
 pg("UPDATE public.system_settings SET value='\"OPERACAO_OFICIAL\"'::jsonb WHERE key='operation_mode'");
