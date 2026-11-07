@@ -11,7 +11,8 @@ BEGIN;
 SET LOCAL lock_timeout = '3s';
 SET LOCAL statement_timeout = '60s';
 
--- 1. Substituir a constraint rígida (promotor, loja, industria, data_visita)
+-- 1. Substituir a restrição rígida (promotor, loja, industria, data_visita)
+-- seja ela uma CONSTRAINT ou um UNIQUE INDEX independente,
 -- por índices únicos parciais que cobrem todas as 3 categorias possíveis de visita:
 -- A) Visitas avulsas / regulares do dia (sem scheduled_date): apenas 1 por promotor/loja/indústria/data_visita
 -- B) Visitas programadas vinculadas a rota (com rota_id e scheduled_date): apenas 1 por promotor/rota/scheduled_date
@@ -19,6 +20,7 @@ SET LOCAL statement_timeout = '60s';
 
 DO $$
 BEGIN
+  -- 1.1 Se existir como constraint vinculada à tabela public.visits, remove via ALTER TABLE DROP CONSTRAINT
   IF EXISTS (
     SELECT 1 FROM pg_constraint
     WHERE conrelid = 'public.visits'::regclass
@@ -26,6 +28,17 @@ BEGIN
   ) THEN
     ALTER TABLE public.visits
       DROP CONSTRAINT visits_promotor_loja_industria_data_unique;
+  END IF;
+
+  -- 1.2 Se existir como índice autônomo (independente de constraint de chave única formal), remove via DROP INDEX
+  IF EXISTS (
+    SELECT 1 FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public'
+      AND c.relname = 'visits_promotor_loja_industria_data_unique'
+      AND c.relkind = 'i'
+  ) THEN
+    DROP INDEX IF EXISTS public.visits_promotor_loja_industria_data_unique;
   END IF;
 END $$;
 
