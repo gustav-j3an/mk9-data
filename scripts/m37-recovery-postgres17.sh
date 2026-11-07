@@ -24,8 +24,27 @@ psql -X -v ON_ERROR_STOP=1 -Atqc "
     name text
   );
 "
-echo "supabase_migrations.schema_migrations structure verified."
-echo "============================================="
+# Inserir no ledger as versões do histórico remoto da homologação para provar
+# que versões remotas pré-existentes ausentes do workdir temporário NÃO bloqueiam o CLI.
+psql -X -v ON_ERROR_STOP=1 -Atqc "
+  INSERT INTO supabase_migrations.schema_migrations(version, name) VALUES
+    ('20261018235500', 'soft_delete_fixed_routes'),
+    ('20261019001109', 'lock_attendance_telemetry_and_scope'),
+    ('20261019001848', 'validate_attendance_schedule_overlaps'),
+    ('20261019004947', 'add_attendance_work_location'),
+    ('20261019011832', 'secure_attendance_photos_and_release_contract'),
+    ('20261019013007', 'complete_attendance_operational_setup'),
+    ('20261019151754', 'mk9_rh_explicit_bindings'),
+    ('20261019175853', 'mk9_rh_admin_binding_preparation'),
+    ('20261020160000', 'add_whatsapp_group_link_to_industrias'),
+    ('20261020170000', 'mk9_absence_records_outbox'),
+    ('20261021100000', 'mk9_rh_reconciliation'),
+    ('20261021120000', 'mk9_absence_attachments'),
+    ('20261022152449', 'mk9_date_visit_regularization_and_checkin_scope'),
+    ('20261023142837', 'promoter_scheduled_visit_actions')
+  ON CONFLICT (version) DO NOTHING;
+"
+echo "Homologation baseline ledger simulated with $(psql -X -v ON_ERROR_STOP=1 -Atqc 'SELECT count(*) FROM supabase_migrations.schema_migrations;') recorded versions."
 
 apply_migration() {
   local migration="$1"
