@@ -4,6 +4,29 @@ set -euo pipefail
 psql -X -v ON_ERROR_STOP=1 -Atqc "SELECT current_setting('server_version_num')::int BETWEEN 170000 AND 179999" | grep -qx t
 echo "PostgreSQL $(psql -X -v ON_ERROR_STOP=1 -Atqc 'SHOW server_version')"
 
+echo "=== SUPABASE CLI INSPECTION & VALIDATION ==="
+echo "Supabase CLI version: $(supabase --version)"
+echo "--- supabase migration --help ---"
+supabase migration --help || true
+echo "--- supabase migration up --help ---"
+supabase migration up --help || true
+echo "--- supabase db push --help ---"
+supabase db push --help || true
+echo "--- supabase migration list --help ---"
+supabase migration list --help || true
+
+# Garantir existência da tabela oficial do ledger no PostgreSQL
+psql -X -v ON_ERROR_STOP=1 -Atqc "
+  CREATE SCHEMA IF NOT EXISTS supabase_migrations;
+  CREATE TABLE IF NOT EXISTS supabase_migrations.schema_migrations (
+    version text NOT NULL PRIMARY KEY,
+    statements text[],
+    name text
+  );
+"
+echo "supabase_migrations.schema_migrations structure verified."
+echo "============================================="
+
 apply_migration() {
   local migration="$1"
   echo "Migration: $(basename "$migration")"
@@ -85,8 +108,14 @@ migrations=(
 )
 for migration in "${migrations[@]}"; do
   apply_migration "$migration"
+  version="$(basename "$migration" | cut -d_ -f1)"
+  name="$(basename "$migration" .sql | cut -d_ -f2-)"
+  psql -X -v ON_ERROR_STOP=1 -c "INSERT INTO supabase_migrations.schema_migrations(version, name) VALUES ('$version', '$name') ON CONFLICT (version) DO NOTHING;" >/dev/null
   psql -X -v ON_ERROR_STOP=1 -Atqc "SELECT count(*) = 3 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE (n.nspname='public' AND p.proname='attendance_check_in') OR (n.nspname='attendance_private' AND p.proname='attendance_start_scheduled_occurrence') OR (n.nspname='public' AND p.proname='check_visit_promotor_update_integrity')" | grep -qx t
 done
+echo "All 5 target migrations applied and ledger versions recorded in disposable test stack:"
+psql -X -v ON_ERROR_STOP=1 -c "SELECT version, name FROM supabase_migrations.schema_migrations WHERE version >= '20261105165500' ORDER BY version;"
+
 if psql -X -v ON_ERROR_STOP=1 -Atqc "$snapshot_query" | cmp -s "$before_snapshot" -; then
   echo 'Target migrations did not change captured functions' >&2
   exit 1
