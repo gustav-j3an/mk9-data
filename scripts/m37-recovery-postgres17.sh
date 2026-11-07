@@ -99,6 +99,31 @@ for failure_case in external internal; do
   echo "Intermediate $failure_case failure rolled back."
 done
 
+# -----------------------------------------------------------------------------
+# MISSÃO 37.13: PROVAR APLICAÇÃO ISOLADA DAS 5 MIGRATIONS VIA SUPABASE CLI 3.0.0
+# Utiliza subdiretórios de trabalho (--workdir) com supabase/config.toml inicializado,
+# contendo estritamente uma migration por etapa no diretório supabase/migrations.
+# Isso garante que:
+#  1. Nenhuma migration legada seja descoberta ou executada pelo CLI.
+#  2. O Supabase CLI registra automaticamente cada versão no ledger oficial.
+#  3. O teste não utiliza comandos psql manuais nem 'migration repair' para o ledger.
+# -----------------------------------------------------------------------------
+echo "=== SUPABASE CLI ISOLATED MIGRATION APPLICATION (M37.13) ==="
+cli_test_dir="$(mktemp -d)"
+echo "Created temporary CLI isolated root: $cli_test_dir"
+
+# Inicializar estrutura de projeto Supabase no diretório temporário
+(
+  cd "$cli_test_dir"
+  supabase init --force >/dev/null
+  # Ajustar a porta e versão no config.toml do workdir para corresponder ao stack local
+  sed -i "s/^major_version = .*/major_version = 17/" supabase/config.toml
+  sed -i "s/^port = 54322/port = ${PGPORT:-54322}/" supabase/config.toml
+)
+
+echo "Initial migration list in isolated workdir:"
+supabase migration list --workdir "$cli_test_dir" || true
+
 migrations=(
   supabase/migrations/20261105165500_m30_harden_industry_active_checkin.sql
   supabase/migrations/20261106131614_m30_serialize_industry_checkin.sql
@@ -106,14 +131,38 @@ migrations=(
   supabase/migrations/20261106150000_m37_checkin_route_and_conflict_guard.sql
   supabase/migrations/20261107140000_m37_reconcile_materialized_pending_recovery.sql
 )
+
 for migration in "${migrations[@]}"; do
-  apply_migration "$migration"
-  version="$(basename "$migration" | cut -d_ -f1)"
-  name="$(basename "$migration" .sql | cut -d_ -f2-)"
-  psql -X -v ON_ERROR_STOP=1 -c "INSERT INTO supabase_migrations.schema_migrations(version, name) VALUES ('$version', '$name') ON CONFLICT (version) DO NOTHING;" >/dev/null
+  mig_basename="$(basename "$migration")"
+  expected_ver="$(echo "$mig_basename" | cut -d_ -f1)"
+  echo "--- Applying migration via Supabase CLI in isolation: $mig_basename ---"
+
+  # Limpar e colocar apenas a migration atual no diretório de migrations do workdir isolado
+  rm -rf "$cli_test_dir/supabase/migrations"
+  mkdir -p "$cli_test_dir/supabase/migrations"
+  cp "$migration" "$cli_test_dir/supabase/migrations/"
+
+  # Validar que apenas 1 arquivo existe no workdir
+  file_count="$(find "$cli_test_dir/supabase/migrations" -maxdepth 1 -type f -name '*.sql' | wc -l)"
+  if [ "$file_count" -ne 1 ]; then
+    echo "ERROR: Expected exactly 1 migration file in isolated workdir, found $file_count" >&2
+    exit 1
+  fi
+
+  # Aplicar via Supabase CLI oficial
+  supabase migration up --workdir "$cli_test_dir"
+
+  # Verificar se a versão foi registrada nativamente pelo CLI no ledger
+  psql -X -v ON_ERROR_STOP=1 -Atqc "SELECT count(*) FROM supabase_migrations.schema_migrations WHERE version = '$expected_ver'" | grep -qx 1
+  echo "Version $expected_ver successfully recorded in ledger by Supabase CLI."
+
+  # Verificar existência das funções alvo
   psql -X -v ON_ERROR_STOP=1 -Atqc "SELECT count(*) = 3 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE (n.nspname='public' AND p.proname='attendance_check_in') OR (n.nspname='attendance_private' AND p.proname='attendance_start_scheduled_occurrence') OR (n.nspname='public' AND p.proname='check_visit_promotor_update_integrity')" | grep -qx t
 done
-echo "All 5 target migrations applied and ledger versions recorded in disposable test stack:"
+
+rm -rf "$cli_test_dir"
+echo "All 5 target migrations successfully applied via native Supabase CLI."
+echo "Current ledger entries for target migrations:"
 psql -X -v ON_ERROR_STOP=1 -c "SELECT version, name FROM supabase_migrations.schema_migrations WHERE version >= '20261105165500' ORDER BY version;"
 
 if psql -X -v ON_ERROR_STOP=1 -Atqc "$snapshot_query" | cmp -s "$before_snapshot" -; then
