@@ -143,8 +143,8 @@ echo "Created temporary CLI isolated root: $cli_test_dir"
 
 mkdir -p "$cli_test_dir/supabase/migrations"
 
-# Copiar estritamente as migrations históricas reconhecidas pelo ledger da homologação
-# (de 20261018235500 até 20261023142837)
+# Copiar estritamente as 14 migrations históricas reconhecidas pelo ledger da homologação
+# Exclui 20261020160000_mk9_faltas_atestados_prepare_permission.sql para evitar colisão de versão.
 historical_migrations=(
   supabase/migrations/20261018235500_soft_delete_fixed_routes.sql
   supabase/migrations/20261019001109_lock_attendance_telemetry_and_scope.sql
@@ -155,7 +155,6 @@ historical_migrations=(
   supabase/migrations/20261019151754_mk9_rh_explicit_bindings.sql
   supabase/migrations/20261019175853_mk9_rh_admin_binding_preparation.sql
   supabase/migrations/20261020160000_add_whatsapp_group_link_to_industrias.sql
-  supabase/migrations/20261020160000_mk9_faltas_atestados_prepare_permission.sql
   supabase/migrations/20261020170000_mk9_absence_records_outbox.sql
   supabase/migrations/20261021100000_mk9_rh_reconciliation.sql
   supabase/migrations/20261021120000_mk9_absence_attachments.sql
@@ -166,6 +165,19 @@ historical_migrations=(
 for hist in "${historical_migrations[@]}"; do
   cp "$hist" "$cli_test_dir/supabase/migrations/"
 done
+
+# Validar que existem exatamente 14 arquivos históricos e que nenhuma versão se repete
+hist_count="$(ls "$cli_test_dir/supabase/migrations" | wc -l)"
+if [ "$hist_count" -ne 14 ]; then
+  echo "ERROR: Expected exactly 14 historical migrations in workdir, found $hist_count" >&2
+  exit 1
+fi
+
+unique_hist_versions="$(ls "$cli_test_dir/supabase/migrations" | cut -d_ -f1 | sort -u | wc -l)"
+if [ "$unique_hist_versions" -ne 14 ]; then
+  echo "ERROR: Duplicate version detected among historical migrations! Unique: $unique_hist_versions vs Total: 14" >&2
+  exit 1
+fi
 
 echo "Historical migrations populated in workdir: $(ls "$cli_test_dir/supabase/migrations" | wc -l) files."
 echo "Migration list before new migrations:"
