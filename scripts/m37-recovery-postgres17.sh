@@ -119,15 +119,16 @@ for failure_case in external internal; do
 done
 
 # -----------------------------------------------------------------------------
-# MISSÃO 37.13: PROVAR APLICAÇÃO ISOLADA DAS 5 MIGRATIONS VIA SUPABASE CLI 3.0.0
-# Utiliza subdiretórios de trabalho (--workdir) com supabase/config.toml inicializado,
-# contendo estritamente uma migration por etapa no diretório supabase/migrations.
+# MISSÃO 37.16: RECONCILIAÇÃO SEGURA DE HISTÓRICO COM O SUPABASE CLI 3.0.0
+# Popula o workdir com as migrations canônicas já reconhecidas no ledger da homologação
+# e adiciona cumulativamente as 5 novas migrations M30/M37.
 # Isso garante que:
-#  1. Nenhuma migration legada seja descoberta ou executada pelo CLI.
-#  2. O Supabase CLI registra automaticamente cada versão no ledger oficial.
-#  3. O teste não utiliza comandos psql manuais nem 'migration repair' para o ledger.
+#  1. O Supabase CLI encontra todas as versões remotas pré-existentes do ledger.
+#  2. Nenhuma migration histórica é reaplicada (o CLI reconhece que já estão no ledger).
+#  3. Nenhuma migration legada divergente/irregular entra no workspace.
+#  4. Exclusivamente as 5 migrations M30/M37 são executadas e registradas.
 # -----------------------------------------------------------------------------
-echo "=== SUPABASE CLI ISOLATED MIGRATION APPLICATION (M37.13) ==="
+echo "=== SUPABASE CLI RECONCILED HISTORICAL WORKDIR (M37.16) ==="
 cli_test_dir="$(mktemp -d)"
 echo "Created temporary CLI isolated root: $cli_test_dir"
 
@@ -140,7 +141,34 @@ echo "Created temporary CLI isolated root: $cli_test_dir"
   sed -i "s/^port = 54322/port = ${PGPORT:-54322}/" supabase/config.toml
 )
 
-echo "Initial migration list in isolated workdir:"
+mkdir -p "$cli_test_dir/supabase/migrations"
+
+# Copiar estritamente as migrations históricas reconhecidas pelo ledger da homologação
+# (de 20261018235500 até 20261023142837)
+historical_migrations=(
+  supabase/migrations/20261018235500_soft_delete_fixed_routes.sql
+  supabase/migrations/20261019001109_lock_attendance_telemetry_and_scope.sql
+  supabase/migrations/20261019001848_validate_attendance_schedule_overlaps.sql
+  supabase/migrations/20261019004947_add_attendance_work_location.sql
+  supabase/migrations/20261019011832_secure_attendance_photos_and_release_contract.sql
+  supabase/migrations/20261019013007_complete_attendance_operational_setup.sql
+  supabase/migrations/20261019151754_mk9_rh_explicit_bindings.sql
+  supabase/migrations/20261019175853_mk9_rh_admin_binding_preparation.sql
+  supabase/migrations/20261020160000_add_whatsapp_group_link_to_industrias.sql
+  supabase/migrations/20261020160000_mk9_faltas_atestados_prepare_permission.sql
+  supabase/migrations/20261020170000_mk9_absence_records_outbox.sql
+  supabase/migrations/20261021100000_mk9_rh_reconciliation.sql
+  supabase/migrations/20261021120000_mk9_absence_attachments.sql
+  supabase/migrations/20261022152449_mk9_date_visit_regularization_and_checkin_scope.sql
+  supabase/migrations/20261023142837_promoter_scheduled_visit_actions.sql
+)
+
+for hist in "${historical_migrations[@]}"; do
+  cp "$hist" "$cli_test_dir/supabase/migrations/"
+done
+
+echo "Historical migrations populated in workdir: $(ls "$cli_test_dir/supabase/migrations" | wc -l) files."
+echo "Migration list before new migrations:"
 supabase migration list --workdir "$cli_test_dir" || true
 
 migrations=(
