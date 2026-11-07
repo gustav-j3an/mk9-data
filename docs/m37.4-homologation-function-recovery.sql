@@ -3,7 +3,7 @@
 -- Não executar automaticamente. Não altera o ledger de migrations.
 BEGIN;
 CREATE OR REPLACE FUNCTION attendance_private.attendance_start_scheduled_occurrence(p_route uuid, p_scheduled_date date, p_action text, p_lat numeric DEFAULT NULL::numeric, p_lng numeric DEFAULT NULL::numeric, p_accuracy numeric DEFAULT NULL::numeric)
- RETURNS visits
+ RETURNS public.visits
  LANGUAGE plpgsql
  SECURITY DEFINER
  SET search_path TO ''
@@ -162,7 +162,7 @@ BEGIN
 END;
 $function$;
 CREATE OR REPLACE FUNCTION public.attendance_check_in(p_store text, p_industry text, p_route uuid DEFAULT NULL::uuid, p_lat numeric DEFAULT NULL::numeric, p_lng numeric DEFAULT NULL::numeric, p_accuracy numeric DEFAULT NULL::numeric)
- RETURNS visits
+ RETURNS public.visits
  LANGUAGE plpgsql
  SECURITY DEFINER
  SET search_path TO ''
