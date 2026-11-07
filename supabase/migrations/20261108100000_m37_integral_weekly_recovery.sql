@@ -12,13 +12,13 @@ SET LOCAL lock_timeout = '3s';
 SET LOCAL statement_timeout = '60s';
 
 -- 1. Substituir a constraint rígida (promotor, loja, industria, data_visita)
--- por uma constraint com predicação ou índice único parcial que permita múltiplas
--- recuperações de datas programadas distintas no mesmo dia efetivo, mantendo a
--- proteção para visitas avulsas / regulares (onde scheduled_date IS NULL).
+-- por índices únicos parciais que cobrem todas as 3 categorias possíveis de visita:
+-- A) Visitas avulsas / regulares do dia (sem scheduled_date): apenas 1 por promotor/loja/indústria/data_visita
+-- B) Visitas programadas vinculadas a rota (com rota_id e scheduled_date): apenas 1 por promotor/rota/scheduled_date
+-- C) Visitas programadas avulsas sem rota (scheduled_date NOT NULL, rota_id IS NULL): apenas 1 por promotor/loja/indústria/scheduled_date
 
 DO $$
 BEGIN
-  -- Se a constraint de tabela única existir, ajustamos para suportar múltiplas recuperações
   IF EXISTS (
     SELECT 1 FROM pg_constraint
     WHERE conrelid = 'public.visits'::regclass
@@ -29,16 +29,20 @@ BEGIN
   END IF;
 END $$;
 
--- Índice para visitas regulares/avulsas do dia (sem scheduled_date): apenas 1 por loja/indústria/dia
+-- Categoria A: Visitas regulares/avulsas do dia (sem scheduled_date)
 CREATE UNIQUE INDEX IF NOT EXISTS visits_regular_promoter_store_industry_date_unique
   ON public.visits (promotor_matricula, loja_codigo, industria_codigo, data_visita)
   WHERE scheduled_date IS NULL;
 
--- Índice para visitas programadas/recuperadas: garante que a mesma ocorrência programada
--- de uma rota nunca seja duplicada, independentemente de quando foi executada.
+-- Categoria B: Visitas programadas/recuperadas vinculadas a uma rota fixa
 CREATE UNIQUE INDEX IF NOT EXISTS visits_promoter_route_scheduled_date_unique
   ON public.visits (promotor_matricula, rota_id, scheduled_date)
   WHERE scheduled_date IS NOT NULL AND rota_id IS NOT NULL;
+
+-- Categoria C: Visitas com scheduled_date mas sem rota_id (programações avulsas/legadas)
+CREATE UNIQUE INDEX IF NOT EXISTS visits_promoter_store_industry_scheduled_date_unique
+  ON public.visits (promotor_matricula, loja_codigo, industria_codigo, scheduled_date)
+  WHERE scheduled_date IS NOT NULL AND rota_id IS NULL;
 
 -- 2. Atualização da RPC attendance_private.attendance_start_scheduled_occurrence
 -- para não barrar outra ocorrência programada na mesma data efetiva quando a scheduled_date for distinta.
