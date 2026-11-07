@@ -1,6 +1,9 @@
 name: M37 recovery on Supabase PostgreSQL 17
 
 on:
+  push:
+    branches:
+      - feat/m37-1-pending-visits-safety
   workflow_dispatch:
 
 permissions:
