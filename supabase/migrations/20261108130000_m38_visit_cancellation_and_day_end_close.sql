@@ -242,8 +242,8 @@ BEGIN
        OR NEW.regularization_status IS DISTINCT FROM OLD.regularization_status
        OR NEW.observacao_geral IS DISTINCT FROM OLD.observacao_geral
        OR NEW.motivo_nao_realizada IS DISTINCT FROM
-          CASE WHEN v_lifecycle_action = 'auto_closed_at_day_end' THEN v_lifecycle_reason
-               ELSE 'Cancelada pelo promotor: ' || v_lifecycle_reason END THEN
+          (CASE WHEN v_lifecycle_action = 'auto_closed_at_day_end' THEN v_lifecycle_reason
+                ELSE 'Cancelada pelo promotor: ' || v_lifecycle_reason END) THEN
       RAISE EXCEPTION 'Invalid authorised visit cancellation transition' USING ERRCODE = '42501';
     END IF;
 
@@ -455,7 +455,7 @@ CREATE OR REPLACE FUNCTION public.attendance_start_scheduled_occurrence(
   p_lat numeric DEFAULT NULL, p_lng numeric DEFAULT NULL, p_accuracy numeric DEFAULT NULL
 )
 RETURNS public.visits
-LANGUAGE sql SECURITY DEFINER SET search_path = '' AS $$
+LANGUAGE sql SECURITY INVOKER SET search_path = '' AS $$
   SELECT attendance_private.attendance_start_scheduled_occurrence(
     p_route, p_scheduled_date, p_action, p_lat, p_lng, p_accuracy
   );

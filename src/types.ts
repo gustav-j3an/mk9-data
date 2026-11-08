@@ -259,6 +259,10 @@ export interface Visit {
   data_visita: string;
   /** Original planned route occurrence; data_visita remains the actual execution date. */
   scheduled_date?: string | null;
+  /** Attempt number within the original scheduled occurrence (M38 retry history). */
+  attempt_number?: number;
+  /** First visit row in the retry chain; null for attempt 1 and non-scheduled visits. */
+  occurrence_root_visit_id?: string | null;
   started_at?: string | null;
   gps_accuracy_meters?: number | null;
   checkout_latitude?: number | null;

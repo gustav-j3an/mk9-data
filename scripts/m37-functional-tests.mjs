@@ -148,17 +148,19 @@ const waitForCondition = async (fn, desc = 'condition', timeoutMs = 8000) => {
     await new Promise(r => setTimeout(r, 20));
   }
 };
-const status = execFileSync('supabase', ['status', '-o', 'env'], {
-  cwd: process.env.SUPABASE_TEST_WORKDIR, encoding: 'utf8'
-});
+const status = process.env.SUPABASE_TEST_ANON_KEY && process.env.SUPABASE_TEST_SERVICE_KEY
+  ? ''
+  : execFileSync('supabase', ['status', '-o', 'env'], {
+    cwd: process.env.SUPABASE_TEST_WORKDIR, encoding: 'utf8'
+  });
 const env = Object.fromEntries(status.split(/\r?\n/).map(line => {
   const match = line.match(/^([A-Z_]+)=(.*)$/);
   return match ? [match[1], match[2].replace(/^["']|["']$/g, '')] : [];
 }).filter(([key]) => key));
-const anonKey = env.ANON_KEY ?? env.SUPABASE_ANON_KEY;
-const serviceKey = env.SERVICE_ROLE_KEY ?? env.SUPABASE_SERVICE_ROLE_KEY;
+const anonKey = process.env.SUPABASE_TEST_ANON_KEY ?? env.ANON_KEY ?? env.SUPABASE_ANON_KEY;
+const serviceKey = process.env.SUPABASE_TEST_SERVICE_KEY ?? env.SERVICE_ROLE_KEY ?? env.SUPABASE_SERVICE_ROLE_KEY;
 assert.ok(anonKey && serviceKey, 'Local Supabase keys missing from CLI status');
-const base = 'http://127.0.0.1:54321';
+const base = process.env.SUPABASE_TEST_API_URL ?? 'http://127.0.0.1:54321';
 const request = async (path, key, token, method = 'GET', body, extraHeaders = {}) => {
   const response = await fetch(base + path, {
     method,
