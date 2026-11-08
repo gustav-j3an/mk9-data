@@ -57,6 +57,38 @@ CREATE UNIQUE INDEX IF NOT EXISTS visits_promoter_store_industry_scheduled_date_
   ON public.visits (promotor_matricula, loja_codigo, industria_codigo, scheduled_date)
   WHERE scheduled_date IS NOT NULL AND rota_id IS NULL;
 
+-- O check-in regular continua usando o índice parcial de visitas sem data
+-- programada. Visitas recuperadas ficam em outra categoria e não podem ser
+-- reutilizadas como se fossem o atendimento regular do dia.
+DO $$
+DECLARE
+  v_definition text;
+BEGIN
+  v_definition := pg_get_functiondef(
+    'public.attendance_check_in(text,text,uuid,numeric,numeric,numeric)'::regprocedure
+  );
+  -- pg_get_functiondef pode preservar CRLF da definição instalada.
+  v_definition := replace(v_definition, E'\r\n', E'\n');
+
+  v_definition := regexp_replace(
+    v_definition,
+    'AND data_visita = operational_date([[:space:]]+)FOR UPDATE;',
+    'AND data_visita = operational_date' || E'\n    AND scheduled_date IS NULL\n  FOR UPDATE;'
+  );
+  v_definition := replace(
+    v_definition,
+    E'ON CONFLICT (promotor_matricula, loja_codigo, industria_codigo, data_visita)\n  DO UPDATE',
+    E'ON CONFLICT (promotor_matricula, loja_codigo, industria_codigo, data_visita) WHERE scheduled_date IS NULL\n  DO UPDATE'
+  );
+
+  IF v_definition NOT LIKE '%AND scheduled_date IS NULL%'
+     OR v_definition NOT LIKE '%WHERE scheduled_date IS NULL%' THEN
+    RAISE EXCEPTION 'Could not adapt attendance_check_in to the partial regular-visit index';
+  END IF;
+
+  EXECUTE v_definition;
+END $$;
+
 -- 2. Atualização da RPC attendance_private.attendance_start_scheduled_occurrence
 -- para não barrar outra ocorrência programada na mesma data efetiva quando a scheduled_date for distinta.
 
@@ -87,6 +119,8 @@ DECLARE
   v_route_day_active boolean;
   v_operation_mode text;
   v_official_start_date text;
+  v_ind_status text;
+  v_industry_code text;
 BEGIN
   SELECT p.promotor_matricula INTO v_matricula
   FROM public.profiles p
@@ -140,18 +174,30 @@ BEGIN
 
   PERFORM pg_advisory_xact_lock(hashtextextended(v_matricula, 1));
 
-  -- Validar indústria ativa
-  IF NOT EXISTS (
-    SELECT 1 FROM public.industrias i
-    JOIN public.rotas r ON r.industria_codigo = i.codigo
-    WHERE r.id = p_route AND i.status = 'ativo'
-  ) THEN
-    RAISE EXCEPTION 'Industry is not active' USING ERRCODE = '42501';
+  -- Manter a ordem de locks M30.9: promotor -> indústria -> rota.
+  -- A identificação da indústria é feita sem lock para que o lock da indústria
+  -- seja adquirido antes do lock de atualização da rota.
+  SELECT r.industria_codigo INTO v_industry_code
+  FROM public.rotas r
+  WHERE r.id = p_route AND r.promotor_matricula = v_matricula;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Route is not active or is outside promoter assignment' USING ERRCODE = '42501';
+  END IF;
+
+  SELECT i.status INTO v_ind_status
+  FROM public.industrias i
+  WHERE i.codigo = v_industry_code
+  FOR SHARE;
+
+  IF NOT FOUND OR v_ind_status IS NULL OR v_ind_status <> 'ativo' THEN
+    RAISE EXCEPTION 'Industry is not active or does not exist' USING ERRCODE = '42501';
   END IF;
 
   SELECT r.* INTO v_route
   FROM public.rotas r
   WHERE r.id = p_route AND r.promotor_matricula = v_matricula
+    AND r.industria_codigo = v_industry_code
     AND r.encerrada_em IS NULL
   FOR UPDATE;
   IF NOT FOUND THEN
@@ -228,6 +274,17 @@ BEGIN
     RAISE EXCEPTION 'Only a missed occurrence can be recovered' USING ERRCODE = '22023';
   END IF;
 
+  -- attendance_check_in não recebe scheduled_date e mantém o upsert legado
+  -- por promotor/loja/indústria/data efetiva; validar GPS aqui e gravar a
+  -- ocorrência agendada diretamente evita colapsar datas programadas distintas.
+  IF (p_lat IS NULL) <> (p_lng IS NULL)
+     OR p_lat NOT BETWEEN -90 AND 90
+     OR p_lng NOT BETWEEN -180 AND 180
+     OR p_accuracy < 0
+     OR p_accuracy IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric) THEN
+    RAISE EXCEPTION 'Invalid GPS';
+  END IF;
+
   -- 3. Nova Regra de Unicidade: Bloqueia somente se já houver outra visita da MESMA ocorrência programada hoje
   -- Permite que outras ocorrências (ex: segunda, quarta) sejam realizadas no mesmo dia efetivo
   SELECT v.* INTO v_today_visit FROM public.visits v
@@ -241,12 +298,13 @@ BEGIN
     RAISE EXCEPTION 'This scheduled occurrence was already executed today' USING ERRCODE = '23505';
   END IF;
 
-  -- Bloquear início se o promotor já estiver com atendimento em andamento
+  -- Um promotor só pode manter um atendimento em andamento por vez.
   IF EXISTS (
     SELECT 1 FROM public.visits v
     WHERE v.promotor_matricula = v_matricula
       AND v.status = 'em_andamento'
       AND v.regularization_status IS NULL
+      AND v.id IS DISTINCT FROM v_existing.id
   ) THEN
     RAISE EXCEPTION 'Another visit is in progress' USING ERRCODE = '42501';
   END IF;
@@ -314,6 +372,15 @@ BEGIN
       v_work_schedule.id
     )
     RETURNING * INTO v_result;
+  END IF;
+
+  IF v_result.promotor_matricula IS DISTINCT FROM v_matricula
+     OR v_result.rota_id IS DISTINCT FROM p_route
+     OR v_result.scheduled_date IS DISTINCT FROM p_scheduled_date
+     OR v_result.data_visita IS DISTINCT FROM v_effective_date
+     OR v_result.loja_codigo IS DISTINCT FROM v_route.loja_codigo
+     OR v_result.industria_codigo IS DISTINCT FROM v_route.industria_codigo THEN
+    RAISE EXCEPTION 'Scheduled check-in did not preserve the expected occurrence identity' USING ERRCODE = '23505';
   END IF;
 
   INSERT INTO public.visit_schedule_actions(route_id, visit_id, promotor_matricula, scheduled_date, action, performed_by)
