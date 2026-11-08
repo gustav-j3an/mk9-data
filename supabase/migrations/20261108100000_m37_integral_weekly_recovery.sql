@@ -1,0 +1,396 @@
+-- ==============================================================================
+-- MK9 DATE - RECUPERAÇÃO INTEGRAL DE VISITAS PROGRAMADAS NA SEMANA
+-- Migration: supabase/migrations/20261108100000_m37_integral_weekly_recovery.sql
+-- Missão 37.52: Permite que múltiplas ocorrências programadas distintas da mesma
+-- loja e indústria (ex: segunda, quarta, quinta) sejam recuperadas no mesmo dia efetivo.
+-- Substitui a restrição genérica por loja/indústria/dia por uma restrição por ocorrência
+-- programada única (promotor_matricula, rota_id, scheduled_date).
+-- ==============================================================================
+
+BEGIN;
+SET LOCAL lock_timeout = '3s';
+SET LOCAL statement_timeout = '60s';
+
+-- 1. Substituir a restrição rígida (promotor, loja, industria, data_visita)
+-- seja ela uma CONSTRAINT ou um UNIQUE INDEX independente,
+-- por índices únicos parciais que cobrem todas as 3 categorias possíveis de visita:
+-- A) Visitas avulsas / regulares do dia (sem scheduled_date): apenas 1 por promotor/loja/indústria/data_visita
+-- B) Visitas programadas vinculadas a rota (com rota_id e scheduled_date): apenas 1 por promotor/rota/scheduled_date
+-- C) Visitas programadas avulsas sem rota (scheduled_date NOT NULL, rota_id IS NULL): apenas 1 por promotor/loja/indústria/scheduled_date
+
+DO $$
+BEGIN
+  -- 1.1 Se existir como constraint vinculada à tabela public.visits, remove via ALTER TABLE DROP CONSTRAINT
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'public.visits'::regclass
+      AND conname = 'visits_promotor_loja_industria_data_unique'
+  ) THEN
+    ALTER TABLE public.visits
+      DROP CONSTRAINT visits_promotor_loja_industria_data_unique;
+  END IF;
+
+  -- 1.2 Se existir como índice autônomo (independente de constraint de chave única formal), remove via DROP INDEX
+  IF EXISTS (
+    SELECT 1 FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public'
+      AND c.relname = 'visits_promotor_loja_industria_data_unique'
+      AND c.relkind = 'i'
+  ) THEN
+    DROP INDEX IF EXISTS public.visits_promotor_loja_industria_data_unique;
+  END IF;
+END $$;
+
+-- Categoria A: Visitas regulares/avulsas do dia (sem scheduled_date)
+CREATE UNIQUE INDEX IF NOT EXISTS visits_regular_promoter_store_industry_date_unique
+  ON public.visits (promotor_matricula, loja_codigo, industria_codigo, data_visita)
+  WHERE scheduled_date IS NULL;
+
+-- Categoria B: Visitas programadas/recuperadas vinculadas a uma rota fixa
+CREATE UNIQUE INDEX IF NOT EXISTS visits_promoter_route_scheduled_date_unique
+  ON public.visits (promotor_matricula, rota_id, scheduled_date)
+  WHERE scheduled_date IS NOT NULL AND rota_id IS NOT NULL;
+
+-- Categoria C: Visitas com scheduled_date mas sem rota_id (programações avulsas/legadas)
+CREATE UNIQUE INDEX IF NOT EXISTS visits_promoter_store_industry_scheduled_date_unique
+  ON public.visits (promotor_matricula, loja_codigo, industria_codigo, scheduled_date)
+  WHERE scheduled_date IS NOT NULL AND rota_id IS NULL;
+
+-- O check-in regular continua usando o índice parcial de visitas sem data
+-- programada. Visitas recuperadas ficam em outra categoria e não podem ser
+-- reutilizadas como se fossem o atendimento regular do dia.
+DO $$
+DECLARE
+  v_definition text;
+BEGIN
+  v_definition := pg_get_functiondef(
+    'public.attendance_check_in(text,text,uuid,numeric,numeric,numeric)'::regprocedure
+  );
+  -- pg_get_functiondef pode preservar CRLF da definição instalada.
+  v_definition := replace(v_definition, E'\r\n', E'\n');
+
+  v_definition := regexp_replace(
+    v_definition,
+    'AND data_visita = operational_date([[:space:]]+)FOR UPDATE;',
+    'AND data_visita = operational_date' || E'\n    AND scheduled_date IS NULL\n  FOR UPDATE;'
+  );
+  v_definition := replace(
+    v_definition,
+    E'ON CONFLICT (promotor_matricula, loja_codigo, industria_codigo, data_visita)\n  DO UPDATE',
+    E'ON CONFLICT (promotor_matricula, loja_codigo, industria_codigo, data_visita) WHERE scheduled_date IS NULL\n  DO UPDATE'
+  );
+
+  IF v_definition NOT LIKE '%AND scheduled_date IS NULL%'
+     OR v_definition NOT LIKE '%WHERE scheduled_date IS NULL%' THEN
+    RAISE EXCEPTION 'Could not adapt attendance_check_in to the partial regular-visit index';
+  END IF;
+
+  EXECUTE v_definition;
+END $$;
+
+-- 2. Atualização da RPC attendance_private.attendance_start_scheduled_occurrence
+-- para não barrar outra ocorrência programada na mesma data efetiva quando a scheduled_date for distinta.
+
+CREATE OR REPLACE FUNCTION attendance_private.attendance_start_scheduled_occurrence(
+  p_route uuid,
+  p_scheduled_date date,
+  p_action text,
+  p_lat numeric DEFAULT NULL,
+  p_lng numeric DEFAULT NULL,
+  p_accuracy numeric DEFAULT NULL
+)
+RETURNS public.visits
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_matricula text;
+  v_today date;
+  v_week_start date;
+  v_week_end date;
+  v_route public.rotas;
+  v_work_schedule public.promoter_work_schedules;
+  v_existing public.visits;
+  v_today_visit public.visits;
+  v_result public.visits;
+  v_effective_date date;
+  v_route_day_active boolean;
+  v_operation_mode text;
+  v_official_start_date text;
+  v_ind_status text;
+  v_industry_code text;
+BEGIN
+  SELECT p.promotor_matricula INTO v_matricula
+  FROM public.profiles p
+  WHERE p.id = auth.uid() AND p.role = 'promotor' AND p.status = 'ativo';
+  IF v_matricula IS NULL THEN
+    RAISE EXCEPTION 'Promoter identity required' USING ERRCODE = '42501';
+  END IF;
+
+  v_today := (clock_timestamp() AT TIME ZONE 'America/Sao_Paulo')::date;
+  v_effective_date := v_today;
+  v_week_start := v_today - (extract(isodow FROM v_today)::integer - 1);
+  v_week_end := v_week_start + 6;
+
+  IF p_action IS NULL OR p_action NOT IN ('advance', 'recover') THEN
+    RAISE EXCEPTION 'Invalid scheduled visit action' USING ERRCODE = '22023';
+  END IF;
+  IF p_route IS NULL OR p_scheduled_date IS NULL THEN
+    RAISE EXCEPTION 'Route and scheduled date are required' USING ERRCODE = '22023';
+  END IF;
+  IF (p_action = 'advance' AND (p_scheduled_date <= v_today OR p_scheduled_date > v_week_end))
+     OR (p_action = 'recover' AND (p_scheduled_date < v_week_start OR p_scheduled_date >= v_today)) THEN
+    RAISE EXCEPTION 'Scheduled date is outside the recoverable current week' USING ERRCODE = '22023';
+  END IF;
+
+  -- Obter horário de trabalho
+  SELECT s.* INTO v_work_schedule
+  FROM public.promoter_work_schedules s
+  CROSS JOIN LATERAL (
+    SELECT (clock_timestamp() AT TIME ZONE s.timezone)::date
+      - CASE
+          WHEN s.hora_fim < s.hora_inicio
+           AND (clock_timestamp() AT TIME ZONE s.timezone)::time < s.hora_fim THEN 1
+          ELSE 0
+        END AS operational_date
+  ) local_day
+  WHERE s.promotor_matricula = v_matricula
+    AND s.ativo
+    AND (s.valid_from IS NULL OR s.valid_from <= local_day.operational_date)
+    AND (s.valid_to IS NULL OR s.valid_to >= local_day.operational_date)
+    AND s.dia_semana = (ARRAY['domingo','segunda','terca','quarta','quinta','sexta','sabado'])[extract(dow FROM local_day.operational_date)::integer + 1]
+  ORDER BY s.is_exception DESC, s.valid_from DESC NULLS LAST
+  LIMIT 1;
+  IF v_work_schedule.id IS NOT NULL THEN
+    v_effective_date := (clock_timestamp() AT TIME ZONE v_work_schedule.timezone)::date
+      - CASE
+          WHEN v_work_schedule.hora_fim < v_work_schedule.hora_inicio
+           AND (clock_timestamp() AT TIME ZONE v_work_schedule.timezone)::time < v_work_schedule.hora_fim THEN 1
+          ELSE 0
+        END;
+  END IF;
+
+  PERFORM pg_advisory_xact_lock(hashtextextended(v_matricula, 1));
+
+  -- Manter a ordem de locks M30.9: promotor -> indústria -> rota.
+  -- A identificação da indústria é feita sem lock para que o lock da indústria
+  -- seja adquirido antes do lock de atualização da rota.
+  SELECT r.industria_codigo INTO v_industry_code
+  FROM public.rotas r
+  WHERE r.id = p_route AND r.promotor_matricula = v_matricula;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Route is not active or is outside promoter assignment' USING ERRCODE = '42501';
+  END IF;
+
+  SELECT i.status INTO v_ind_status
+  FROM public.industrias i
+  WHERE i.codigo = v_industry_code
+  FOR SHARE;
+
+  IF NOT FOUND OR v_ind_status IS NULL OR v_ind_status <> 'ativo' THEN
+    RAISE EXCEPTION 'Industry is not active or does not exist' USING ERRCODE = '42501';
+  END IF;
+
+  SELECT r.* INTO v_route
+  FROM public.rotas r
+  WHERE r.id = p_route AND r.promotor_matricula = v_matricula
+    AND r.industria_codigo = v_industry_code
+    AND r.encerrada_em IS NULL
+  FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Route is not active or is outside promoter assignment' USING ERRCODE = '42501';
+  END IF;
+
+  v_route_day_active := CASE extract(dow FROM p_scheduled_date)::integer
+    WHEN 0 THEN coalesce(v_route.domingo, false)
+    WHEN 1 THEN coalesce(v_route.segunda, false)
+    WHEN 2 THEN coalesce(v_route.terca, false)
+    WHEN 3 THEN coalesce(v_route.quarta, false)
+    WHEN 4 THEN coalesce(v_route.quinta, false)
+    WHEN 5 THEN coalesce(v_route.sexta, false)
+    WHEN 6 THEN coalesce(v_route.sabado, false)
+  END;
+  IF NOT coalesce(v_route_day_active, false) THEN
+    RAISE EXCEPTION 'Route is not scheduled for that weekday' USING ERRCODE = '22023';
+  END IF;
+  IF upper(coalesce(v_route.frequencia, 'SEMANAL')) <> 'SEMANAL' THEN
+    RAISE EXCEPTION 'Quinzenal occurrences require an authoritative server schedule before they can be advanced or recovered' USING ERRCODE = '22023';
+  END IF;
+
+  SELECT s.value #>> '{}' INTO v_operation_mode FROM public.system_settings s WHERE s.key = 'operation_mode';
+  IF v_operation_mode = 'IMPLANTACAO'
+     AND NOT public.is_promotor_authorized(v_matricula) THEN
+    RAISE EXCEPTION 'Promoter not released for operation' USING ERRCODE = '42501';
+  END IF;
+  IF v_operation_mode = 'OPERACAO_OFICIAL' THEN
+    SELECT s.value #>> '{}' INTO v_official_start_date FROM public.system_settings s WHERE s.key = 'official_start_date';
+    IF v_official_start_date IS NULL OR v_official_start_date !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+       OR p_scheduled_date < v_official_start_date::date THEN
+      RAISE EXCEPTION 'Scheduled occurrence is before the official operation start' USING ERRCODE = '22023';
+    END IF;
+  END IF;
+
+  -- 1. Verifica se esta mesma ocorrência específica (scheduled_date) já foi recuperada
+  IF EXISTS (
+    SELECT 1 FROM public.visit_schedule_actions a
+    WHERE a.promotor_matricula = v_matricula AND a.route_id = p_route
+      AND a.scheduled_date = p_scheduled_date
+  ) THEN
+    RAISE EXCEPTION 'This scheduled occurrence was already advanced or recovered' USING ERRCODE = '23505';
+  END IF;
+
+  -- 2. Verifica se a ocorrência programada já possui linha em visits
+  SELECT v.* INTO v_existing FROM public.visits v
+  WHERE v.promotor_matricula = v_matricula AND v.rota_id = p_route
+    AND (v.scheduled_date = p_scheduled_date OR (v.scheduled_date IS NULL AND v.data_visita = p_scheduled_date))
+  ORDER BY v.created_at DESC NULLS LAST LIMIT 1 FOR UPDATE;
+
+  IF FOUND AND (v_existing.status IN ('concluida', 'em_andamento')
+    OR v_existing.started_at IS NOT NULL OR v_existing.completed_at IS NOT NULL) THEN
+    RAISE EXCEPTION 'This scheduled occurrence already has an execution' USING ERRCODE = '23505';
+  END IF;
+
+  IF FOUND AND v_existing.regularization_status IS NOT NULL THEN
+    RAISE EXCEPTION 'This scheduled occurrence was already regularized' USING ERRCODE = '23505';
+  END IF;
+
+  IF FOUND AND (
+    EXISTS (SELECT 1 FROM public.visit_checklist_items ci WHERE ci.visit_id = v_existing.id)
+    OR EXISTS (SELECT 1 FROM public.visit_photos ph WHERE ph.visit_id = v_existing.id)
+    OR EXISTS (SELECT 1 FROM public.visit_occurrences vo WHERE vo.visit_id = v_existing.id)
+    OR EXISTS (SELECT 1 FROM public.visit_product_validity pv WHERE pv.visit_id = v_existing.id)
+  ) THEN
+    RAISE EXCEPTION 'This scheduled occurrence already has recorded evidence' USING ERRCODE = '23505';
+  END IF;
+
+  IF p_action = 'advance' AND FOUND AND v_existing.status = 'nao_realizada' THEN
+    RAISE EXCEPTION 'A future occurrence already marked as not performed cannot be advanced' USING ERRCODE = '23505';
+  END IF;
+
+  IF p_action = 'recover' AND FOUND AND (v_existing.status IS NULL OR v_existing.status NOT IN ('pendente', 'nao_realizada')) THEN
+    RAISE EXCEPTION 'Only a missed occurrence can be recovered' USING ERRCODE = '22023';
+  END IF;
+
+  -- attendance_check_in não recebe scheduled_date e mantém o upsert legado
+  -- por promotor/loja/indústria/data efetiva; validar GPS aqui e gravar a
+  -- ocorrência agendada diretamente evita colapsar datas programadas distintas.
+  IF (p_lat IS NULL) <> (p_lng IS NULL)
+     OR p_lat NOT BETWEEN -90 AND 90
+     OR p_lng NOT BETWEEN -180 AND 180
+     OR p_accuracy < 0
+     OR p_accuracy IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric) THEN
+    RAISE EXCEPTION 'Invalid GPS';
+  END IF;
+
+  -- 3. Nova Regra de Unicidade: Bloqueia somente se já houver outra visita da MESMA ocorrência programada hoje
+  -- Permite que outras ocorrências (ex: segunda, quarta) sejam realizadas no mesmo dia efetivo
+  SELECT v.* INTO v_today_visit FROM public.visits v
+  WHERE v.promotor_matricula = v_matricula
+    AND v.rota_id = p_route
+    AND v.scheduled_date = p_scheduled_date
+    AND v.data_visita = v_effective_date
+  FOR UPDATE;
+
+  IF FOUND AND (v_existing.id IS NULL OR v_today_visit.id IS DISTINCT FROM v_existing.id) THEN
+    RAISE EXCEPTION 'This scheduled occurrence was already executed today' USING ERRCODE = '23505';
+  END IF;
+
+  -- Um promotor só pode manter um atendimento em andamento por vez.
+  IF EXISTS (
+    SELECT 1 FROM public.visits v
+    WHERE v.promotor_matricula = v_matricula
+      AND v.status = 'em_andamento'
+      AND v.regularization_status IS NULL
+      AND v.id IS DISTINCT FROM v_existing.id
+  ) THEN
+    RAISE EXCEPTION 'Another visit is in progress' USING ERRCODE = '42501';
+  END IF;
+
+  -- Executar check-in ou atualizar visita pendente
+  IF v_existing.id IS NOT NULL THEN
+    -- Inserir autorização transacional consumida pelo trigger check_visit_promotor_update_integrity
+    IF to_regclass('attendance_private.scheduled_recovery_authorizations') IS NOT NULL THEN
+      INSERT INTO attendance_private.scheduled_recovery_authorizations (
+        visit_id, promotor_matricula, data_visita, scheduled_date
+      ) VALUES (
+        v_existing.id, v_matricula, v_effective_date, p_scheduled_date
+      ) ON CONFLICT (visit_id) DO UPDATE SET
+        data_visita = EXCLUDED.data_visita,
+        scheduled_date = EXCLUDED.scheduled_date,
+        authorized_at = clock_timestamp();
+    END IF;
+
+    UPDATE public.visits SET
+      scheduled_date = p_scheduled_date,
+      data_visita = v_effective_date,
+      status = 'em_andamento',
+      started_at = clock_timestamp(),
+      latitude = p_lat,
+      longitude = p_lng,
+      gps_accuracy_meters = p_accuracy,
+      work_schedule_id = v_work_schedule.id
+    WHERE id = v_existing.id
+      AND status IN ('pendente', 'nao_realizada')
+      AND regularization_status IS NULL
+      AND started_at IS NULL
+      AND completed_at IS NULL
+    RETURNING * INTO v_result;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'This scheduled occurrence changed before check-in' USING ERRCODE = '23505';
+    END IF;
+  ELSE
+    INSERT INTO public.visits(
+      promotor_matricula,
+      loja_codigo,
+      industria_codigo,
+      data_visita,
+      scheduled_date,
+      rota_id,
+      started_at,
+      latitude,
+      longitude,
+      gps_accuracy_meters,
+      status,
+      work_schedule_id
+    )
+    VALUES (
+      v_matricula,
+      v_route.loja_codigo,
+      v_route.industria_codigo,
+      v_effective_date,
+      p_scheduled_date,
+      p_route,
+      clock_timestamp(),
+      p_lat,
+      p_lng,
+      p_accuracy,
+      'em_andamento',
+      v_work_schedule.id
+    )
+    RETURNING * INTO v_result;
+  END IF;
+
+  IF v_result.promotor_matricula IS DISTINCT FROM v_matricula
+     OR v_result.rota_id IS DISTINCT FROM p_route
+     OR v_result.scheduled_date IS DISTINCT FROM p_scheduled_date
+     OR v_result.data_visita IS DISTINCT FROM v_effective_date
+     OR v_result.loja_codigo IS DISTINCT FROM v_route.loja_codigo
+     OR v_result.industria_codigo IS DISTINCT FROM v_route.industria_codigo THEN
+    RAISE EXCEPTION 'Scheduled check-in did not preserve the expected occurrence identity' USING ERRCODE = '23505';
+  END IF;
+
+  INSERT INTO public.visit_schedule_actions(route_id, visit_id, promotor_matricula, scheduled_date, action, performed_by)
+  VALUES (p_route, v_result.id, v_matricula, p_scheduled_date, p_action, auth.uid());
+
+  RETURN v_result;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION attendance_private.attendance_start_scheduled_occurrence(uuid, date, text, numeric, numeric, numeric) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION attendance_private.attendance_start_scheduled_occurrence(uuid, date, text, numeric, numeric, numeric) TO authenticated;
+
+COMMIT;

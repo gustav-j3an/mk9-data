@@ -3,6 +3,7 @@ import { useAuth } from '../auth/AuthProvider';
 import { supabase } from '../lib/supabase';
 import type { RouteItem, Visit, ToastMessage, PromoterOperationAuthorization, ScreenId } from '../types';
 import { fetchSystemSettings } from '../lib/systemSettings';
+import { cancelVisit } from '../lib/visitCancellationService';
 import {
   calculateOperationalVisits,
   getWeekDaysRange,
@@ -52,10 +53,10 @@ import {
 } from '../lib/routesService';
 import { isWhatsAppShareableVisit } from '../utils/whatsappShare';
 import { loadRoutesWithClosureFallback } from '../utils/routeClosureCompatibility';
-import { filterPromoterAppointments, getMetricDisplayValue, getRegularizationCounts, getRegularizationPresentation, getWeeklyPromoterMetricCounts, isUnresolvedVisitInProgress, PROMOTER_APPOINTMENT_TABS, type PromoterAppointmentsTab } from '../utils/promoterPortalPresentation';
+import { filterPromoterAppointments, getMetricDisplayValue, getRegularizationCounts, getRegularizationPresentation, getWeeklyPromoterMetricCounts, PROMOTER_APPOINTMENT_TABS, type PromoterAppointmentsTab } from '../utils/promoterPortalPresentation';
 import { getPromoterPortalViewStateKey, readPromoterPortalViewState, writePromoterPortalViewState } from '../utils/promoterPortalViewState';
-import { getScheduledVisitAction, isScheduledVisitActionRpcReady, type ScheduledVisitAction } from '../utils/scheduledVisitActions';
-import { canReviewOldOpenVisits, createRequestGate, findOwnOpenVisit, formatOpenVisitConflictMessage, getOldOpenVisitCheckInBlockMessage, getOldOpenVisitsLabel, getPromoterOpenVisitAction, isAnotherVisitInProgressError, isOpenVisitFromToday } from '../utils/visitCheckInConflict';
+import { getScheduledRouteEligibility, getScheduledVisitAction, isRouteVisibleInOperationalHistory, isScheduledVisitActionRpcReady, type ScheduledVisitAction } from '../utils/scheduledVisitActions';
+import { canReviewOldOpenVisits, createRequestGate, findOwnOpenVisit, findReusableActiveCheckInVisit, formatOpenVisitConflictMessage, getOldOpenVisitCheckInBlockMessage, getOldOpenVisitsLabel, getPromoterOpenVisitAction, getStaleOpenVisits, isAnotherVisitInProgressError, isOpenVisitFromToday } from '../utils/visitCheckInConflict';
 
 interface PromoterPortalViewProps {
   onNavigate: (screen: ScreenId) => void;
@@ -365,7 +366,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
         const routesBaseQuery = (filterByClosure: boolean) => {
           const query = db.from('rotas').select(`
           *,
-          industria:industrias(codigo, nome),
+          industria:industrias(codigo, nome, status),
           loja:lojas(codigo, nome, cidade, uf, endereco),
           promotor:promotores(matricula, nome)
           `).eq('promotor_matricula', promotorMatricula);
@@ -495,8 +496,11 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
       setIsAuthorized(authorized);
 
       const rawRoutes = (rotasRes.data as unknown as RouteItem[]) || [];
-      setRoutes(rawRoutes.filter((r) => !r.encerrada_em));
-      setOperationalRoutes(rawRoutes.filter((r) => !r.encerrada_em || String(r.encerrada_em).slice(0, 10) >= historyStartStr));
+      // Filtrar rotas para aceitar estritamente indústrias com status exatamente igual a 'ativo' (Missão 30.6)
+      // Rotas com indústria inexistente, status nulo ou diferente de 'ativo' não podem gerar novas visitas
+      const activeIndustryRoutes = rawRoutes.filter((r) => r.industria && r.industria.status === 'ativo');
+      setRoutes(activeIndustryRoutes.filter((r) => !r.encerrada_em));
+      setOperationalRoutes(rawRoutes.filter((route) => isRouteVisibleInOperationalHistory(route, historyStartStr)));
 
       const visits = (visitsRes.data as unknown as Visit[]) || [];
       const openVisits = selectPastVisitsFromAgenda(visits, todayStr);
@@ -512,11 +516,9 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
       setWeekVisits(allConsolidatedVisits);
       setTodayVisits(allConsolidatedVisits.filter((v) => v.data_visita === todayStr));
 
-      // Identificar visitas anteriores à data atual que não foram concluídas (Requisito 2)
-      // 1. Em andamento de dias anteriores (data < hoje e status = 'em_andamento')
-      const stalesInProgress = allConsolidatedVisits.filter(
-        (v) => isUnresolvedVisitInProgress(v) && !isOpenVisitFromToday(v, now)
-      );
+      // Visitas antigas ainda não regularizadas ficam fora do atendimento ativo de hoje,
+      // mas permanecem visíveis no histórico e bloqueiam novos check-ins até análise administrativa.
+      const stalesInProgress = getStaleOpenVisits(allConsolidatedVisits, now);
       setStaleInProgressVisits(stalesInProgress);
 
       // 2. Não realizadas de dias anteriores (data < hoje e status = 'nao_realizada')
@@ -998,15 +1000,8 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
       return;
     }
 
-    if (!isAdminUser && staleInProgressVisits.length > 0) {
-      if (!checkInGateRef.current.tryAcquire()) return;
-      onShowToast({ title: 'Check-in bloqueado', message: getOldOpenVisitCheckInBlockMessage(), type: 'warning' });
-      checkInGateRef.current.release();
-      return;
-    }
-
-    // Se já houver uma visita em andamento (hoje ou de dias anteriores), não permite iniciar outra silenciosamente.
-    // Exige decisão explícita: voltar para a atual ou interromper a anterior com justificativa.
+    // Visitas vencidas serão encerradas no backend antes do novo check-in.
+    // Uma visita ainda ativa hoje continua exigindo decisão explícita.
     if (activeVisit) {
       const isSameVisit = activeVisit.loja_codigo === route.loja_codigo && activeVisit.industria_codigo === route.industria_codigo;
       if (!isSameVisit) {
@@ -1114,8 +1109,9 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
               .eq('industria_codigo', route.industria_codigo)
               .eq('data_visita', todayStr);
 
-            if (fallbackVisits && fallbackVisits.length > 0) {
-              visitData = fallbackVisits[0] as Visit;
+            const reusableVisit = findReusableActiveCheckInVisit((fallbackVisits || []) as Visit[]);
+            if (reusableVisit) {
+              visitData = reusableVisit;
               onShowToast({
                 title: 'Visita em Andamento',
                 message: `Visita recuperada com sucesso para a loja ${route.loja?.nome || route.loja_codigo}.`,
@@ -1820,7 +1816,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
     }
   };
 
-  // 3. Interromper Atendimento em Andamento (Requisito 3)
+  // Cancelar visita em andamento com motivo e auditoria registrados no backend.
   // Permite abandonar uma execução iniciada por engano ou interrompida para atender outra loja.
   // Grava ocorrência de auditoria em visit_occurrences, define status 'nao_realizada',
   // preserva evidências e fotos existentes, e desocupa a visita ativa para permitir iniciar outra.
@@ -1828,10 +1824,10 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
     if (!interruptModalVisit || !interruptReason.trim() || !supabase) return;
 
     // Garantir que não permite modificar visitas já concluídas
-    if (interruptModalVisit.status === 'concluida') {
+    if (interruptModalVisit.status !== 'em_andamento' || interruptModalVisit.completed_at != null) {
       onShowToast({
         title: 'Operação Não Permitida',
-        message: 'Visitas já concluídas não podem ser alteradas ou interrompidas.',
+        message: 'Somente uma visita em andamento pode ser cancelada. Atualize a tela para ver o status atual.',
         type: 'warning'
       });
       setInterruptModalVisit(null);
@@ -1841,37 +1837,17 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
 
     setSavingInterrupt(true);
     try {
-      const nowIso = new Date().toISOString();
-      const justifText = interruptReason.trim();
-
-      // 1. Atualizar o status da visita para 'nao_realizada' com o motivo registrado
-      const { error: updateErr } = await supabase
-        .from('visits')
-        .update({
-          status: 'nao_realizada',
-          motivo_nao_realizada: `[Interrupção de Atendimento]: ${justifText}`,
-          updated_at: nowIso
-        })
-        .eq('id', interruptModalVisit.id);
-
-      if (updateErr) throw updateErr;
-
-      // 2. Registrar no mecanismo de histórico e auditoria (visit_occurrences)
-      try {
-        await supabase.from('visit_occurrences').insert([
-          {
-            visit_id: interruptModalVisit.id,
-            tipo: 'outro',
-            descricao: `Atendimento interrompido pelo promotor. Justificativa: ${justifText}`
-          }
-        ]);
-      } catch (occErr) {
-        console.warn('Aviso: Falha ao inserir ocorrência de auditoria da interrupção:', occErr);
-      }
+      const cancellationResult = await cancelVisit(interruptModalVisit.id, interruptReason);
+      const wasAlreadyExpired = cancellationResult !== null
+        && typeof cancellationResult === 'object'
+        && 'motivo_nao_realizada' in cancellationResult
+        && cancellationResult.motivo_nao_realizada === 'Não finalizada até o encerramento do dia operacional';
 
       onShowToast({
-        title: 'Atendimento Interrompido',
-        message: `Atendimento da loja ${interruptModalVisit.loja?.nome || interruptModalVisit.loja_codigo} foi cancelado com justificativa. Sua agenda está liberada.`,
+        title: wasAlreadyExpired ? 'Visita encerrada automaticamente' : 'Visita cancelada',
+        message: wasAlreadyExpired
+          ? `A visita da loja ${interruptModalVisit.loja?.nome || interruptModalVisit.loja_codigo} já venceu no fechamento do dia e foi registrada como não realizada.`
+          : `A visita da loja ${interruptModalVisit.loja?.nome || interruptModalVisit.loja_codigo} foi registrada como não realizada. Sua agenda está liberada.`,
         type: 'info'
       });
 
@@ -1883,13 +1859,9 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
       setInterruptModalVisit(null);
       setInterruptReason('');
       await loadPortalData();
-    } catch (err: any) {
-      console.error('Erro ao interromper atendimento:', err);
-      onShowToast({
-        title: 'Erro ao Interromper',
-        message: err.message || 'Falha ao atualizar status da visita no banco de dados.',
-        type: 'error'
-      });
+    } catch (err) {
+      console.error('Erro ao cancelar visita:', err);
+      onShowToast({ title: 'Erro ao cancelar visita', message: err instanceof Error ? err.message : 'Falha ao registrar o cancelamento.', type: 'error' });
     } finally {
       setSavingInterrupt(false);
     }
@@ -1910,7 +1882,9 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
       weekStart: currentWeekStartStr,
       weekEnd: currentWeekEndStr,
       authorized: !isImplantacaoMode || isAuthorized,
-      hasActiveVisit: Boolean(activeVisit)
+      hasActiveVisit: Boolean(activeVisit),
+      routeEligibility: getScheduledRouteEligibility(operationalRoutes.find((route) => route.id === scheduledAction.item.routeId)),
+      todayVisits
     });
     if (!decision.allowed || decision.action !== scheduledAction.action) {
       onShowToast({ title: 'Programação indisponível', message: decision.reason || 'A programação mudou e precisa ser carregada novamente.', type: 'warning' });
@@ -2157,7 +2131,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
         {!isAdminUser && staleInProgressVisits.length > 0 && (
           <div role="status" className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950">
             <strong>{getOldOpenVisitsLabel(staleInProgressVisits.length)}</strong>{' '}
-            <span>O servidor bloqueia novos check-ins até a regularização administrativa.</span>
+            <span>{getOldOpenVisitCheckInBlockMessage()}</span>
           </div>
         )}
 
@@ -2174,7 +2148,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                 </span>
               </div>
               <p className="text-[#171717] text-[11px] leading-relaxed">
-                Você possui uma visita aberta na loja <strong className="text-[#171717]">{activeVisit.loja?.nome || activeVisit.loja_codigo}</strong> ({activeVisit.industria?.nome || activeVisit.industria_codigo}). Conclua o preenchimento ou interrompa com justificativa para iniciar outra rota.
+                Você possui uma visita aberta na loja <strong className="text-[#171717]">{activeVisit.loja?.nome || activeVisit.loja_codigo}</strong> ({activeVisit.industria?.nome || activeVisit.industria_codigo}). Conclua o preenchimento ou cancele a visita com justificativa para iniciar outra rota.
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2 shrink-0">
@@ -2198,10 +2172,10 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                   setInterruptReason('');
                 }}
                 className="px-3 py-2 rounded-xl bg-white hover:bg-rose-50 text-rose-800 border border-rose-300 font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-colors"
-                title="Interromper atendimento com justificativa obrigatória"
+                title="Cancelar visita com justificativa obrigatória"
               >
                 <span className="material-symbols-outlined text-sm">close</span>
-                <span>Interromper com justificativa</span>
+                <span>Cancelar visita</span>
               </button>
             </div>
           </div>
@@ -2325,9 +2299,9 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                           <div className="flex flex-wrap items-center gap-1.5 w-full md:w-auto">
                             <button
                               onClick={() => handleStartVisit(routeObj)}
-                              disabled={Boolean(startingRouteId) || staleInProgressVisits.length > 0}
+                              disabled={Boolean(startingRouteId)}
                               className="px-3.5 py-2 rounded-xl bg-[#E4E2DB] hover:bg-[#CFCDC5] disabled:bg-[#CFCDC5] disabled:text-[#737373] disabled:cursor-not-allowed text-[#222222] border border-[#AAA79E] font-bold text-xs flex items-center justify-center gap-1 cursor-pointer transition-colors shadow-xs"
-                              title="Trocar para esta loja (exige finalizar ou interromper o atendimento atual)"
+                              title="Trocar para esta loja (exige finalizar ou cancelar a visita atual)"
                             >
                               <span className="material-symbols-outlined text-sm">play_arrow</span>
                               <span>Iniciar Esta</span>
@@ -2370,7 +2344,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                         >
                           <span className="material-symbols-outlined text-sm">edit_note</span>
                           <span>{isCurrentActive ? 'Preenchendo Abaixo' : 'Continuar Visita'}</span>
-                        </button> : <span className="text-xs text-amber-900">Visita antiga: solicite análise e regularização ao administrador ou supervisor.</span>}
+                        </button> : <span className="text-xs text-amber-900">Visita antiga: será encerrada como não realizada automaticamente.</span>}
                         {getPromoterOpenVisitAction(item.visitObj || { status: item.status, data_visita: item.dataStr }, new Date()) === 'continue_today' && <button
                           onClick={() => {
                             if (item.visitObj) {
@@ -2379,10 +2353,10 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                             }
                           }}
                           className="px-3 py-2.5 rounded-xl bg-[#F7F6F2] hover:bg-rose-500/20 text-[#171717] hover:text-rose-300 border border-[#CFCDC5] text-xs font-bold cursor-pointer transition-colors"
-                          title="Interromper atendimento desta loja"
+                title="Cancelar visita desta loja"
                         >
                           <span className="material-symbols-outlined text-sm text-rose-400">close</span>
-                          <span className="hidden sm:inline">Interromper</span>
+                          <span className="hidden sm:inline">Cancelar visita</span>
                         </button>}
                       </div>
                     )}
@@ -2984,7 +2958,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                 title="Abandonar ou cancelar esta execução para atender outra loja"
               >
                 <span className="material-symbols-outlined text-sm">close</span>
-                <span>Interromper Atendimento</span>
+                <span>Cancelar visita</span>
               </button>
               <button
                 onClick={handleCompleteVisit}
@@ -3248,7 +3222,16 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
               <div className="space-y-3">
                 {displayedWeekVisits.map((item, idx) => {
                   const isTodayItem = item.dataStr === getLocalDateString(new Date());
-                  const actionDecision = getScheduledVisitAction({ item, today: todayStr, weekStart: currentWeekStartStr, weekEnd: currentWeekEndStr, authorized: !isImplantacaoMode || isAuthorized, hasActiveVisit: Boolean(activeVisit) });
+                  const actionDecision = getScheduledVisitAction({
+                    item,
+                    today: todayStr,
+                    weekStart: currentWeekStartStr,
+                    weekEnd: currentWeekEndStr,
+                    authorized: !isImplantacaoMode || isAuthorized,
+                    hasActiveVisit: Boolean(activeVisit),
+                    routeEligibility: getScheduledRouteEligibility(operationalRoutes.find((route) => route.id === item.routeId)),
+                    todayVisits
+                  });
                   const regularizationLabel = getRegularizationPresentation(item.visitObj?.regularization_status);
                   const actualVisitDate = item.visitObj?.data_visita || null;
                   const isCompletedLate = item.status === 'concluida' && Boolean(actualVisitDate && actualVisitDate > item.dataStr);
@@ -3361,9 +3344,8 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                               ) : activeVisit ? (
                                 <button
                                   onClick={() => handleStartVisit(routeObj)}
-                                  disabled={staleInProgressVisits.length > 0}
                                   className="px-3 py-1.5 rounded-xl bg-[#EAE8E2] hover:bg-purple-600/30 disabled:bg-[#CFCDC5] disabled:text-[#737373] disabled:cursor-not-allowed text-purple-300 border border-purple-500/40 font-bold text-xs flex items-center gap-1 cursor-pointer transition-colors"
-                                  title="Trocar para esta loja (exige finalizar ou interromper o atendimento atual)"
+                                  title="Trocar para esta loja (exige finalizar ou cancelar a visita atual)"
                                 >
                                   <span className="material-symbols-outlined text-sm">play_arrow</span>
                                   <span>Iniciar Esta</span>
@@ -3372,7 +3354,6 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                                 <>
                                   <button
                                     onClick={() => handleStartVisit(routeObj)}
-                                    disabled={staleInProgressVisits.length > 0}
                                     className="px-4 py-2 rounded-xl bg-[#222222] hover:bg-black disabled:bg-[#CFCDC5] disabled:text-[#737373] disabled:cursor-not-allowed text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-md"
                                   >
                                     <span className="material-symbols-outlined text-sm">play_arrow</span>
@@ -3403,6 +3384,24 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                                     : scheduledActionRpcStatus === 'checking' ? 'Verificando disponibilidade…' : actionDecision.action === 'advance' ? 'Antecipar visita — Indisponível' : 'Realizar hoje — Indisponível'}
                                 </button>
                                 {scheduledActionRpcStatus !== 'ready' && <span id={`scheduled-action-help-${item.key}-${item.dataStr}`} className="max-w-60 text-[11px] leading-snug text-[#5F5F5F]">Funcionalidade aguardando atualização do servidor.</span>}
+                              </div>
+                            )}
+
+                            {!actionDecision.allowed && actionDecision.isSameDayConflict && (actionDecision.action === 'recover' || actionDecision.action === 'advance') && (
+                              <div className="flex flex-col items-start gap-1">
+                                <button
+                                  type="button"
+                                  disabled
+                                  aria-disabled="true"
+                                  title={actionDecision.reason || 'Esta ocorrência programada já foi atendida hoje.'}
+                                  className="min-h-10 rounded-xl bg-slate-200 px-4 py-2 text-xs font-bold text-slate-500 cursor-not-allowed opacity-80 border border-slate-300"
+                                >
+                                  <span className="material-symbols-outlined mr-1 align-middle text-sm">{actionDecision.action === 'advance' ? 'event_upcoming' : 'replay'}</span>
+                                  <span>{actionDecision.action === 'advance' ? 'Antecipar visita' : 'Realizar hoje'}</span>
+                                </button>
+                                <span className="max-w-60 text-[11px] font-semibold leading-snug text-amber-800">
+                                  {actionDecision.reason || 'Esta ocorrência programada já foi atendida hoje.'}
+                                </span>
                               </div>
                             )}
                           </>
@@ -4182,7 +4181,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
             <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-3">
               <h3 className="text-sm font-bold text-[#171717] font-mono flex items-center gap-2">
                 <span className="material-symbols-outlined text-rose-400">cancel</span>
-                Interromper Atendimento
+                Cancelar visita
               </h3>
               <button
                 onClick={() => {
@@ -4208,7 +4207,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
               </div>
 
               <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-200 text-[11px] leading-relaxed">
-                Esta ação cancelará a execução atual desta loja com registro de auditoria, preservando fotos e dados já salvos. Sua agenda será liberada para você iniciar o atendimento em outra loja programada.
+                A visita será marcada como não realizada com sua justificativa e identificação registradas na auditoria. O horário de início e as evidências salvas serão preservados, e sua agenda ficará liberada.
               </div>
 
               <div>
@@ -4246,7 +4245,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                 <span className={`material-symbols-outlined text-sm ${savingInterrupt ? 'animate-spin' : ''}`}>
                   {savingInterrupt ? 'sync' : 'close'}
                 </span>
-                <span>{savingInterrupt ? 'Cancelando...' : 'Confirmar Interrupção'}</span>
+                <span>{savingInterrupt ? 'Cancelando...' : 'Confirmar cancelamento'}</span>
               </button>
             </div>
           </div>
@@ -4311,7 +4310,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                 className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-[#EAE8E2] hover:bg-rose-500/20 text-rose-300 border border-rose-500/40 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
               >
                 <span className="material-symbols-outlined text-sm">close</span>
-                <span>Interromper com justificativa</span>
+                <span>Cancelar visita</span>
               </button>
             </div>
           </div>
@@ -4334,9 +4333,12 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
               <p>Loja: <strong>{scheduledAction.item.lojaNome}</strong></p>
               <p>Indústria: <strong>{scheduledAction.item.industriaNome}</strong></p>
               <p>Programada para: <strong>{scheduledAction.item.dataStr.split('-').reverse().join('/')} · {scheduledAction.item.dayOfWeekLabel}</strong></p>
+              <p>Data efetiva: <strong>{todayStr.split('-').reverse().join('/')} (Hoje)</strong></p>
               <p>Frequência contratada: <strong>{scheduledAction.item.frequencia}</strong></p>
             </div>
-            <p className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs leading-relaxed text-amber-950">A data original da escala será preservada. O servidor validará a ocorrência e registrará esta ação para auditoria; nenhuma programação extra será criada.</p>
+            <p className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs leading-relaxed text-amber-950">
+              Confirmação da recuperação: A data original da escala ({scheduledAction.item.dataStr.split('-').reverse().join('/')}) será preservada e o atendimento será registrado com a data efetiva de hoje ({todayStr.split('-').reverse().join('/')}). Nenhuma programação extra será criada.
+            </p>
             <div className="flex flex-col-reverse justify-end gap-2 border-t border-[#CFCDC5] pt-3 sm:flex-row">
               <button type="button" onClick={() => setScheduledAction(null)} disabled={savingScheduledAction} className="min-h-10 rounded-xl border border-[#CFCDC5] bg-[#EAE8E2] px-4 py-2 text-sm font-semibold text-[#171717] focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600">Cancelar</button>
               <button type="button" onClick={handleConfirmScheduledAction} disabled={savingScheduledAction} className="min-h-10 rounded-xl bg-purple-700 px-4 py-2 text-sm font-bold text-white hover:bg-purple-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600 disabled:opacity-50">
