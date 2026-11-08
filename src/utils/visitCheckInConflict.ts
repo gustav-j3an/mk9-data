@@ -18,7 +18,7 @@ export interface VisitWorkSchedule {
   hora_fim?: string | null;
 }
 
-interface OperationalVisit {
+export interface OperationalVisit {
   status: string;
   data_visita: string;
   started_at?: string | null;
@@ -88,6 +88,12 @@ export function isOpenVisitFromToday(visit: OperationalVisit, now: Date | string
     && visit.data_visita === getVisitOperationalDate(visit, now);
 }
 
+export function getStaleOpenVisits<T extends OperationalVisit>(visits: T[], now: Date | string = new Date()): T[] {
+  return visits.filter(visit => visit.status === 'em_andamento'
+    && !visit.regularization_status
+    && !isOpenVisitFromToday(visit, now));
+}
+
 export function formatOpenVisitConflictMessage(
   visit: OpenVisitConflict | undefined,
   now: Date | string = new Date()
@@ -103,7 +109,7 @@ export function getOldOpenVisitsLabel(count: number): string {
 }
 
 export function getOldOpenVisitCheckInBlockMessage(): string {
-  return 'Novos check-ins estão bloqueados pelo servidor enquanto houver visita antiga em aberto. A regularização é administrativa.';
+  return 'Peça ao gestor ou administrador para revisar a visita antiga na central Acompanhamento de Visitas e registrar a regularização. Novos check-ins ficam bloqueados até essa revisão; o sistema não encerra a visita nem a marca como concluída automaticamente.';
 }
 
 export function getPromoterOpenVisitAction(visit: OperationalVisit, now: Date | string = new Date()): 'continue_today' | 'administrative_regularization' {

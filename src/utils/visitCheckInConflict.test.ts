@@ -6,6 +6,7 @@ import {
   findOwnOpenVisit,
   findReusableActiveCheckInVisit,
   formatOpenVisitConflictMessage,
+  getStaleOpenVisits,
   getOldOpenVisitCheckInBlockMessage,
   getOldOpenVisitsLabel,
   getPromoterOpenVisitAction,
@@ -32,6 +33,14 @@ test('check-in com visita aberta hoje oferece continuar visita', () => {
   assert.equal(getPromoterOpenVisitAction(openVisit, now), 'continue_today');
 });
 
+test('visitas antigas não regularizadas ficam na fila de bloqueio, mas as regularizadas e as de hoje não', () => {
+  const oldOpen = { ...openVisit, id: 'old-open', data_visita: '2026-10-20', started_at: '2026-10-20T12:30:00.000Z' };
+  const oldRegularized = { ...oldOpen, id: 'old-regularized', regularization_status: 'closed_without_execution_proof' };
+  const completed = { ...oldOpen, id: 'old-completed', status: 'concluida' };
+
+  assert.deepEqual(getStaleOpenVisits([oldOpen, oldRegularized, completed, openVisit], now).map(visit => visit.id), ['old-open']);
+});
+
 test('check-in com visita antiga orienta regularização autorizada', () => {
   const message = formatOpenVisitConflictMessage({ ...openVisit, data_visita: '2026-10-20', started_at: '2026-10-20T12:30:00.000Z' }, now);
   assert.equal(getPromoterOpenVisitAction({ ...openVisit, data_visita: '2026-10-20', started_at: '2026-10-20T12:30:00.000Z' }, now), 'administrative_regularization');
@@ -43,7 +52,10 @@ test('converte a mensagem da RPC para uma explicação em português e não incl
   assert.equal(isAnotherVisitInProgressError({ message: 'Another visit is in progress' }), true);
   const message = formatOpenVisitConflictMessage(undefined, now);
   assert.match(message, /Não foi possível iniciar a visita/);
-  assert.match(getOldOpenVisitCheckInBlockMessage(), /bloqueados pelo servidor/);
+  const handoff = getOldOpenVisitCheckInBlockMessage();
+  assert.match(handoff, /gestor ou administrador/);
+  assert.match(handoff, /Acompanhamento de Visitas/);
+  assert.match(handoff, /não encerra a visita nem a marca como concluída automaticamente/);
   assert.doesNotMatch(message, /database|constraint|SQL/i);
 });
 

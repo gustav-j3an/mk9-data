@@ -52,10 +52,10 @@ import {
 } from '../lib/routesService';
 import { isWhatsAppShareableVisit } from '../utils/whatsappShare';
 import { loadRoutesWithClosureFallback } from '../utils/routeClosureCompatibility';
-import { filterPromoterAppointments, getMetricDisplayValue, getRegularizationCounts, getRegularizationPresentation, getWeeklyPromoterMetricCounts, isUnresolvedVisitInProgress, PROMOTER_APPOINTMENT_TABS, type PromoterAppointmentsTab } from '../utils/promoterPortalPresentation';
+import { filterPromoterAppointments, getMetricDisplayValue, getRegularizationCounts, getRegularizationPresentation, getWeeklyPromoterMetricCounts, PROMOTER_APPOINTMENT_TABS, type PromoterAppointmentsTab } from '../utils/promoterPortalPresentation';
 import { getPromoterPortalViewStateKey, readPromoterPortalViewState, writePromoterPortalViewState } from '../utils/promoterPortalViewState';
 import { getScheduledRouteEligibility, getScheduledVisitAction, isRouteVisibleInOperationalHistory, isScheduledVisitActionRpcReady, type ScheduledVisitAction } from '../utils/scheduledVisitActions';
-import { canReviewOldOpenVisits, createRequestGate, findOwnOpenVisit, findReusableActiveCheckInVisit, formatOpenVisitConflictMessage, getOldOpenVisitCheckInBlockMessage, getOldOpenVisitsLabel, getPromoterOpenVisitAction, isAnotherVisitInProgressError, isOpenVisitFromToday } from '../utils/visitCheckInConflict';
+import { canReviewOldOpenVisits, createRequestGate, findOwnOpenVisit, findReusableActiveCheckInVisit, formatOpenVisitConflictMessage, getOldOpenVisitCheckInBlockMessage, getOldOpenVisitsLabel, getPromoterOpenVisitAction, getStaleOpenVisits, isAnotherVisitInProgressError, isOpenVisitFromToday } from '../utils/visitCheckInConflict';
 
 interface PromoterPortalViewProps {
   onNavigate: (screen: ScreenId) => void;
@@ -515,11 +515,9 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
       setWeekVisits(allConsolidatedVisits);
       setTodayVisits(allConsolidatedVisits.filter((v) => v.data_visita === todayStr));
 
-      // Identificar visitas anteriores à data atual que não foram concluídas (Requisito 2)
-      // 1. Em andamento de dias anteriores (data < hoje e status = 'em_andamento')
-      const stalesInProgress = allConsolidatedVisits.filter(
-        (v) => isUnresolvedVisitInProgress(v) && !isOpenVisitFromToday(v, now)
-      );
+      // Visitas antigas ainda não regularizadas ficam fora do atendimento ativo de hoje,
+      // mas permanecem visíveis no histórico e bloqueiam novos check-ins até análise administrativa.
+      const stalesInProgress = getStaleOpenVisits(allConsolidatedVisits, now);
       setStaleInProgressVisits(stalesInProgress);
 
       // 2. Não realizadas de dias anteriores (data < hoje e status = 'nao_realizada')
@@ -2163,7 +2161,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
         {!isAdminUser && staleInProgressVisits.length > 0 && (
           <div role="status" className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950">
             <strong>{getOldOpenVisitsLabel(staleInProgressVisits.length)}</strong>{' '}
-            <span>O servidor bloqueia novos check-ins até a regularização administrativa.</span>
+            <span>{getOldOpenVisitCheckInBlockMessage()}</span>
           </div>
         )}
 
