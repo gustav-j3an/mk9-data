@@ -33,7 +33,7 @@ test('check-in com visita aberta hoje oferece continuar visita', () => {
   assert.equal(getPromoterOpenVisitAction(openVisit, now), 'continue_today');
 });
 
-test('visitas antigas não regularizadas ficam na fila de bloqueio, mas as regularizadas e as de hoje não', () => {
+test('visitas antigas não regularizadas são sinalizadas sem bloquear novo check-in', () => {
   const oldOpen = { ...openVisit, id: 'old-open', data_visita: '2026-10-20', started_at: '2026-10-20T12:30:00.000Z' };
   const oldRegularized = { ...oldOpen, id: 'old-regularized', regularization_status: 'closed_without_execution_proof' };
   const completed = { ...oldOpen, id: 'old-completed', status: 'concluida' };
@@ -41,10 +41,10 @@ test('visitas antigas não regularizadas ficam na fila de bloqueio, mas as regul
   assert.deepEqual(getStaleOpenVisits([oldOpen, oldRegularized, completed, openVisit], now).map(visit => visit.id), ['old-open']);
 });
 
-test('check-in com visita antiga orienta regularização autorizada', () => {
+test('check-in com visita antiga informa o encerramento automático e preservação do histórico', () => {
   const message = formatOpenVisitConflictMessage({ ...openVisit, data_visita: '2026-10-20', started_at: '2026-10-20T12:30:00.000Z' }, now);
-  assert.equal(getPromoterOpenVisitAction({ ...openVisit, data_visita: '2026-10-20', started_at: '2026-10-20T12:30:00.000Z' }, now), 'administrative_regularization');
-  assert.match(message, /regularização administrativa/);
+  assert.equal(getPromoterOpenVisitAction({ ...openVisit, data_visita: '2026-10-20', started_at: '2026-10-20T12:30:00.000Z' }, now), 'automatic_expiry');
+  assert.match(message, /encerrada como não realizada/);
   assert.doesNotMatch(message, /Another visit is in progress/);
 });
 
@@ -53,9 +53,9 @@ test('converte a mensagem da RPC para uma explicação em português e não incl
   const message = formatOpenVisitConflictMessage(undefined, now);
   assert.match(message, /Não foi possível iniciar a visita/);
   const handoff = getOldOpenVisitCheckInBlockMessage();
-  assert.match(handoff, /gestor ou administrador/);
-  assert.match(handoff, /Acompanhamento de Visitas/);
-  assert.match(handoff, /não encerra a visita nem a marca como concluída automaticamente/);
+  assert.match(handoff, /não realizada automaticamente/);
+  assert.match(handoff, /Você pode iniciar outro atendimento/);
+  assert.match(handoff, /evidências permanecem no histórico/);
   assert.doesNotMatch(message, /database|constraint|SQL/i);
 });
 
@@ -86,7 +86,7 @@ test('visita aberta de hoje permanece elegível para o fluxo existente de contin
 });
 
 test('múltiplas visitas antigas aparecem como uma contagem compacta, sem listar os registros', () => {
-  assert.equal(getOldOpenVisitsLabel(4), '4 visitas antigas aguardando regularização administrativa.');
+  assert.equal(getOldOpenVisitsLabel(4), '4 visitas antigas aguardando encerramento automático.');
 });
 
 test('acesso à revisão administrativa permanece restrito a admin e gestor', () => {
@@ -96,14 +96,14 @@ test('acesso à revisão administrativa permanece restrito a admin e gestor', ()
 });
 
 test('promotor não recebe ação de regularização para visita antiga', () => {
-  assert.equal(getPromoterOpenVisitAction({ ...openVisit, data_visita: '2026-10-20', started_at: '2026-10-20T12:30:00.000Z' }, now), 'administrative_regularization');
+  assert.equal(getPromoterOpenVisitAction({ ...openVisit, data_visita: '2026-10-20', started_at: '2026-10-20T12:30:00.000Z' }, now), 'automatic_expiry');
 });
 
 test('regularized visits are excluded from active and promoter-open queries', () => {
   const visit = { ...openVisit, regularization_status: 'closed_without_execution_proof' };
   assert.equal(isOpenVisitFromToday(visit, now), false);
   assert.equal(findOwnOpenVisit([visit], 'P-1'), undefined);
-  assert.equal(getPromoterOpenVisitAction(visit, now), 'administrative_regularization');
+  assert.equal(getPromoterOpenVisitAction(visit, now), 'automatic_expiry');
 });
 
 test('check-in retry never reuses completed or administratively regularized visits', () => {

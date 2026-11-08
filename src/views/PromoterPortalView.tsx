@@ -3,6 +3,7 @@ import { useAuth } from '../auth/AuthProvider';
 import { supabase } from '../lib/supabase';
 import type { RouteItem, Visit, ToastMessage, PromoterOperationAuthorization, ScreenId } from '../types';
 import { fetchSystemSettings } from '../lib/systemSettings';
+import { cancelVisit } from '../lib/visitCancellationService';
 import {
   calculateOperationalVisits,
   getWeekDaysRange,
@@ -999,15 +1000,8 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
       return;
     }
 
-    if (!isAdminUser && staleInProgressVisits.length > 0) {
-      if (!checkInGateRef.current.tryAcquire()) return;
-      onShowToast({ title: 'Check-in bloqueado', message: getOldOpenVisitCheckInBlockMessage(), type: 'warning' });
-      checkInGateRef.current.release();
-      return;
-    }
-
-    // Se já houver uma visita em andamento (hoje ou de dias anteriores), não permite iniciar outra silenciosamente.
-    // Exige decisão explícita: voltar para a atual ou interromper a anterior com justificativa.
+    // Visitas vencidas serão encerradas no backend antes do novo check-in.
+    // Uma visita ainda ativa hoje continua exigindo decisão explícita.
     if (activeVisit) {
       const isSameVisit = activeVisit.loja_codigo === route.loja_codigo && activeVisit.industria_codigo === route.industria_codigo;
       if (!isSameVisit) {
@@ -1822,7 +1816,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
     }
   };
 
-  // 3. Interromper Atendimento em Andamento (Requisito 3)
+  // Cancelar visita em andamento com motivo e auditoria registrados no backend.
   // Permite abandonar uma execução iniciada por engano ou interrompida para atender outra loja.
   // Grava ocorrência de auditoria em visit_occurrences, define status 'nao_realizada',
   // preserva evidências e fotos existentes, e desocupa a visita ativa para permitir iniciar outra.
@@ -1830,10 +1824,10 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
     if (!interruptModalVisit || !interruptReason.trim() || !supabase) return;
 
     // Garantir que não permite modificar visitas já concluídas
-    if (interruptModalVisit.status === 'concluida') {
+    if (interruptModalVisit.status !== 'em_andamento' || interruptModalVisit.completed_at != null) {
       onShowToast({
         title: 'Operação Não Permitida',
-        message: 'Visitas já concluídas não podem ser alteradas ou interrompidas.',
+        message: 'Somente uma visita em andamento pode ser cancelada. Atualize a tela para ver o status atual.',
         type: 'warning'
       });
       setInterruptModalVisit(null);
@@ -1843,37 +1837,17 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
 
     setSavingInterrupt(true);
     try {
-      const nowIso = new Date().toISOString();
-      const justifText = interruptReason.trim();
-
-      // 1. Atualizar o status da visita para 'nao_realizada' com o motivo registrado
-      const { error: updateErr } = await supabase
-        .from('visits')
-        .update({
-          status: 'nao_realizada',
-          motivo_nao_realizada: `[Interrupção de Atendimento]: ${justifText}`,
-          updated_at: nowIso
-        })
-        .eq('id', interruptModalVisit.id);
-
-      if (updateErr) throw updateErr;
-
-      // 2. Registrar no mecanismo de histórico e auditoria (visit_occurrences)
-      try {
-        await supabase.from('visit_occurrences').insert([
-          {
-            visit_id: interruptModalVisit.id,
-            tipo: 'outro',
-            descricao: `Atendimento interrompido pelo promotor. Justificativa: ${justifText}`
-          }
-        ]);
-      } catch (occErr) {
-        console.warn('Aviso: Falha ao inserir ocorrência de auditoria da interrupção:', occErr);
-      }
+      const cancellationResult = await cancelVisit(interruptModalVisit.id, interruptReason);
+      const wasAlreadyExpired = cancellationResult !== null
+        && typeof cancellationResult === 'object'
+        && 'motivo_nao_realizada' in cancellationResult
+        && cancellationResult.motivo_nao_realizada === 'Não finalizada até o encerramento do dia operacional';
 
       onShowToast({
-        title: 'Atendimento Interrompido',
-        message: `Atendimento da loja ${interruptModalVisit.loja?.nome || interruptModalVisit.loja_codigo} foi cancelado com justificativa. Sua agenda está liberada.`,
+        title: wasAlreadyExpired ? 'Visita encerrada automaticamente' : 'Visita cancelada',
+        message: wasAlreadyExpired
+          ? `A visita da loja ${interruptModalVisit.loja?.nome || interruptModalVisit.loja_codigo} já venceu no fechamento do dia e foi registrada como não realizada.`
+          : `A visita da loja ${interruptModalVisit.loja?.nome || interruptModalVisit.loja_codigo} foi registrada como não realizada. Sua agenda está liberada.`,
         type: 'info'
       });
 
@@ -1885,13 +1859,9 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
       setInterruptModalVisit(null);
       setInterruptReason('');
       await loadPortalData();
-    } catch (err: any) {
-      console.error('Erro ao interromper atendimento:', err);
-      onShowToast({
-        title: 'Erro ao Interromper',
-        message: err.message || 'Falha ao atualizar status da visita no banco de dados.',
-        type: 'error'
-      });
+    } catch (err) {
+      console.error('Erro ao cancelar visita:', err);
+      onShowToast({ title: 'Erro ao cancelar visita', message: err instanceof Error ? err.message : 'Falha ao registrar o cancelamento.', type: 'error' });
     } finally {
       setSavingInterrupt(false);
     }
@@ -2178,7 +2148,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                 </span>
               </div>
               <p className="text-[#171717] text-[11px] leading-relaxed">
-                Você possui uma visita aberta na loja <strong className="text-[#171717]">{activeVisit.loja?.nome || activeVisit.loja_codigo}</strong> ({activeVisit.industria?.nome || activeVisit.industria_codigo}). Conclua o preenchimento ou interrompa com justificativa para iniciar outra rota.
+                Você possui uma visita aberta na loja <strong className="text-[#171717]">{activeVisit.loja?.nome || activeVisit.loja_codigo}</strong> ({activeVisit.industria?.nome || activeVisit.industria_codigo}). Conclua o preenchimento ou cancele a visita com justificativa para iniciar outra rota.
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2 shrink-0">
@@ -2202,10 +2172,10 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                   setInterruptReason('');
                 }}
                 className="px-3 py-2 rounded-xl bg-white hover:bg-rose-50 text-rose-800 border border-rose-300 font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-colors"
-                title="Interromper atendimento com justificativa obrigatória"
+                title="Cancelar visita com justificativa obrigatória"
               >
                 <span className="material-symbols-outlined text-sm">close</span>
-                <span>Interromper com justificativa</span>
+                <span>Cancelar visita</span>
               </button>
             </div>
           </div>
@@ -2329,9 +2299,9 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                           <div className="flex flex-wrap items-center gap-1.5 w-full md:w-auto">
                             <button
                               onClick={() => handleStartVisit(routeObj)}
-                              disabled={Boolean(startingRouteId) || staleInProgressVisits.length > 0}
+                              disabled={Boolean(startingRouteId)}
                               className="px-3.5 py-2 rounded-xl bg-[#E4E2DB] hover:bg-[#CFCDC5] disabled:bg-[#CFCDC5] disabled:text-[#737373] disabled:cursor-not-allowed text-[#222222] border border-[#AAA79E] font-bold text-xs flex items-center justify-center gap-1 cursor-pointer transition-colors shadow-xs"
-                              title="Trocar para esta loja (exige finalizar ou interromper o atendimento atual)"
+                              title="Trocar para esta loja (exige finalizar ou cancelar a visita atual)"
                             >
                               <span className="material-symbols-outlined text-sm">play_arrow</span>
                               <span>Iniciar Esta</span>
@@ -2374,7 +2344,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                         >
                           <span className="material-symbols-outlined text-sm">edit_note</span>
                           <span>{isCurrentActive ? 'Preenchendo Abaixo' : 'Continuar Visita'}</span>
-                        </button> : <span className="text-xs text-amber-900">Visita antiga: solicite análise e regularização ao administrador ou supervisor.</span>}
+                        </button> : <span className="text-xs text-amber-900">Visita antiga: será encerrada como não realizada automaticamente.</span>}
                         {getPromoterOpenVisitAction(item.visitObj || { status: item.status, data_visita: item.dataStr }, new Date()) === 'continue_today' && <button
                           onClick={() => {
                             if (item.visitObj) {
@@ -2383,10 +2353,10 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                             }
                           }}
                           className="px-3 py-2.5 rounded-xl bg-[#F7F6F2] hover:bg-rose-500/20 text-[#171717] hover:text-rose-300 border border-[#CFCDC5] text-xs font-bold cursor-pointer transition-colors"
-                          title="Interromper atendimento desta loja"
+                title="Cancelar visita desta loja"
                         >
                           <span className="material-symbols-outlined text-sm text-rose-400">close</span>
-                          <span className="hidden sm:inline">Interromper</span>
+                          <span className="hidden sm:inline">Cancelar visita</span>
                         </button>}
                       </div>
                     )}
@@ -2988,7 +2958,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                 title="Abandonar ou cancelar esta execução para atender outra loja"
               >
                 <span className="material-symbols-outlined text-sm">close</span>
-                <span>Interromper Atendimento</span>
+                <span>Cancelar visita</span>
               </button>
               <button
                 onClick={handleCompleteVisit}
@@ -3374,9 +3344,8 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                               ) : activeVisit ? (
                                 <button
                                   onClick={() => handleStartVisit(routeObj)}
-                                  disabled={staleInProgressVisits.length > 0}
                                   className="px-3 py-1.5 rounded-xl bg-[#EAE8E2] hover:bg-purple-600/30 disabled:bg-[#CFCDC5] disabled:text-[#737373] disabled:cursor-not-allowed text-purple-300 border border-purple-500/40 font-bold text-xs flex items-center gap-1 cursor-pointer transition-colors"
-                                  title="Trocar para esta loja (exige finalizar ou interromper o atendimento atual)"
+                                  title="Trocar para esta loja (exige finalizar ou cancelar a visita atual)"
                                 >
                                   <span className="material-symbols-outlined text-sm">play_arrow</span>
                                   <span>Iniciar Esta</span>
@@ -3385,7 +3354,6 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                                 <>
                                   <button
                                     onClick={() => handleStartVisit(routeObj)}
-                                    disabled={staleInProgressVisits.length > 0}
                                     className="px-4 py-2 rounded-xl bg-[#222222] hover:bg-black disabled:bg-[#CFCDC5] disabled:text-[#737373] disabled:cursor-not-allowed text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-md"
                                   >
                                     <span className="material-symbols-outlined text-sm">play_arrow</span>
@@ -4213,7 +4181,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
             <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-3">
               <h3 className="text-sm font-bold text-[#171717] font-mono flex items-center gap-2">
                 <span className="material-symbols-outlined text-rose-400">cancel</span>
-                Interromper Atendimento
+                Cancelar visita
               </h3>
               <button
                 onClick={() => {
@@ -4239,7 +4207,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
               </div>
 
               <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-200 text-[11px] leading-relaxed">
-                Esta ação cancelará a execução atual desta loja com registro de auditoria, preservando fotos e dados já salvos. Sua agenda será liberada para você iniciar o atendimento em outra loja programada.
+                A visita será marcada como não realizada com sua justificativa e identificação registradas na auditoria. O horário de início e as evidências salvas serão preservados, e sua agenda ficará liberada.
               </div>
 
               <div>
@@ -4277,7 +4245,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                 <span className={`material-symbols-outlined text-sm ${savingInterrupt ? 'animate-spin' : ''}`}>
                   {savingInterrupt ? 'sync' : 'close'}
                 </span>
-                <span>{savingInterrupt ? 'Cancelando...' : 'Confirmar Interrupção'}</span>
+                <span>{savingInterrupt ? 'Cancelando...' : 'Confirmar cancelamento'}</span>
               </button>
             </div>
           </div>
@@ -4342,7 +4310,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                 className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-[#EAE8E2] hover:bg-rose-500/20 text-rose-300 border border-rose-500/40 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
               >
                 <span className="material-symbols-outlined text-sm">close</span>
-                <span>Interromper com justificativa</span>
+                <span>Cancelar visita</span>
               </button>
             </div>
           </div>
