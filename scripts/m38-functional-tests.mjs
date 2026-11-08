@@ -1,11 +1,22 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 
 const pg = sql => execFileSync('psql', ['-X','-A','-t','-v','ON_ERROR_STOP=1','-c',sql], { encoding:'utf8' }).trim();
-const anonKey = process.env.SUPABASE_TEST_ANON_KEY;
-const serviceKey = process.env.SUPABASE_TEST_SERVICE_KEY;
+const status = process.env.SUPABASE_TEST_ANON_KEY && process.env.SUPABASE_TEST_SERVICE_KEY
+  ? ''
+  : execFileSync('supabase', ['status', '-o', 'env'], { cwd: process.env.SUPABASE_TEST_WORKDIR, encoding: 'utf8' });
+const localEnv = Object.fromEntries(status.split(/\r?\n/).map(line => {
+  const match = line.match(/^([A-Z_]+)=(.*)$/);
+  return match ? [match[1], match[2].replace(/^["']|["']$/g, '')] : [];
+}).filter(([key]) => key));
+const anonKey = process.env.SUPABASE_TEST_ANON_KEY ?? localEnv.ANON_KEY ?? localEnv.SUPABASE_ANON_KEY;
+const serviceKey = process.env.SUPABASE_TEST_SERVICE_KEY ?? localEnv.SERVICE_ROLE_KEY ?? localEnv.SUPABASE_SERVICE_ROLE_KEY;
 const base = process.env.SUPABASE_TEST_API_URL || 'http://127.0.0.1:54321';
+const testTag = randomBytes(2).toString('hex').toUpperCase();
+const m38 = `M38${testTag}`;
+const testUuidPrefix = `38000000-${testTag.toLowerCase()}-4000-8000`;
 assert.ok(anonKey && serviceKey, 'Set synthetic local Supabase keys before running this isolated integration suite');
 
 const request = async (path, key, token, method='GET', body, headers={}) => {
@@ -26,8 +37,8 @@ const request = async (path, key, token, method='GET', body, headers={}) => {
 const rpc = (user, args) => request('/rest/v1/rpc/attendance_start_scheduled_occurrence', anonKey, user.token, 'POST', args);
 const cancel = (user, visitId, reason='Teste funcional M38: interrupção justificada.') =>
   request('/rest/v1/rpc/attendance_cancel_visit', anonKey, user.token, 'POST', {p_visit_id:visitId,p_reason:reason});
-const route = n => `38000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
-const visit = n => `38000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
+const route = n => `${testUuidPrefix}-${String(n).padStart(12,'0')}`;
+const visit = n => `${testUuidPrefix}-${String(n).padStart(12,'0')}`;
 const count = (table, where) => Number(pg(`SELECT count(*) FROM public.${table} WHERE ${where}`));
 const readVisit = id => JSON.parse(pg(`SELECT row_to_json(v)::text FROM public.visits v WHERE v.id='${id}'`));
 const today = (() => {
@@ -40,8 +51,8 @@ const yesterday = new Date(today.getTime()-86400000);
 const scheduledDate = dateString(yesterday);
 
 const users=[];
-for(let i=1;i<=6;i++){
-  const email=`mission38-${i}@example.test`;
+for(let i=1;i<=7;i++){
+  const email=`mission38-${i}-${randomBytes(8).toString('hex')}@example.test`;
   const password=randomBytes(24).toString('hex');
   const created=await request('/auth/v1/admin/users',serviceKey,serviceKey,'POST',{email,password,email_confirm:true});
   assert.ok([200,201].includes(created.status),`Synthetic auth user ${i} creation failed: ${created.status}`);
@@ -52,18 +63,27 @@ for(let i=1;i<=6;i++){
   if(second) assert.equal(second.status,200,'Second independent authenticated session failed');
   users.push({id:created.data.id,token:first.data.access_token,secondToken:second?.data.access_token});
 }
-console.log('PASS local GoTrue authentication for six synthetic promoters.');
+console.log('PASS local GoTrue authentication for six synthetic promoters and one manager.');
 
+const fixtureSql = readFileSync('scripts/m38-functional-fixtures.sql','utf8')
+  .replaceAll('M38',m38)
+  .replaceAll('38000000-0000-4000-8000',testUuidPrefix);
 execFileSync('psql',[
   '-X','-v','ON_ERROR_STOP=1',
   ...users.flatMap((user,index)=>['-v',`user${index+1}=${user.id}`]),
-  '-f','scripts/m38-functional-fixtures.sql'
-],{stdio:['ignore','pipe','pipe']});
+  '-f','-'
+],{input:fixtureSql,stdio:['pipe','pipe','pipe']});
 console.log('PASS isolated promoter, route, attempt, evidence and day-boundary fixtures.');
 
 // Promoter ownership, atomic cancellation and evidence/audit preservation.
 const otherOwnerBefore=readVisit(visit(103));
 const firstBeforeCancel=readVisit(visit(101));
+const anonymousCancel=await cancel({},visit(101));
+assert.ok(anonymousCancel.status>=400,'Anonymous caller cancelled a visit');
+assert.deepEqual(readVisit(visit(101)),firstBeforeCancel,'Anonymous cancellation changed a visit');
+const managerCancel=await cancel(users[6],visit(101));
+assert.ok(managerCancel.status>=400,'Manager used promoter cancellation RPC');
+assert.deepEqual(readVisit(visit(101)),firstBeforeCancel,'Manager cancellation changed a visit');
 const foreignCancel=await cancel(users[0],visit(103));
 assert.ok(foreignCancel.status>=400,'Promoter cancelled another promoter visit');
 assert.deepEqual(readVisit(visit(103)),otherOwnerBefore,'Foreign cancellation changed another promoter visit');
@@ -128,7 +148,7 @@ console.log('PASS concurrent weekly retries serialize to one new attempt and one
 // and completed rows are not touched.
 const completedSnapshot=readVisit(visit(105));
 const fallback=await request('/rest/v1/rpc/attendance_check_in',anonKey,users[5].token,'POST',
-  {p_store:'M38L8',p_industry:'M38IA',p_route:route(8),p_lat:null,p_lng:null,p_accuracy:null});
+  {p_store:`${m38}L8`,p_industry:`${m38}IA`,p_route:route(8),p_lat:null,p_lng:null,p_accuracy:null});
 assert.equal(fallback.status,200,`Check-in fallback failed: ${fallback.data?.message||fallback.status}`);
 assert.equal(readVisit(visit(107)).status,'nao_realizada');
 assert.equal(readVisit(visit(107)).completed_at,null);

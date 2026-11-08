@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 
 const pg = (sql) => execFileSync('psql', ['-X', '-A', '-t', '-v', 'ON_ERROR_STOP=1', '-c', sql], { encoding: 'utf8' }).trim();
@@ -161,6 +162,9 @@ const anonKey = process.env.SUPABASE_TEST_ANON_KEY ?? env.ANON_KEY ?? env.SUPABA
 const serviceKey = process.env.SUPABASE_TEST_SERVICE_KEY ?? env.SERVICE_ROLE_KEY ?? env.SUPABASE_SERVICE_ROLE_KEY;
 assert.ok(anonKey && serviceKey, 'Local Supabase keys missing from CLI status');
 const base = process.env.SUPABASE_TEST_API_URL ?? 'http://127.0.0.1:54321';
+const testTag = randomBytes(2).toString('hex').toUpperCase();
+const m37 = `M37${testTag}`;
+const testUuidPrefix = `37000000-${testTag.toLowerCase()}-4000-8000`;
 const request = async (path, key, token, method = 'GET', body, extraHeaders = {}) => {
   const response = await fetch(base + path, {
     method,
@@ -177,7 +181,7 @@ const request = async (path, key, token, method = 'GET', body, extraHeaders = {}
 };
 const users = [];
 for (let i = 1; i <= 4; i++) {
-  const email = `m37p${i}@example.test`;
+  const email = `m37p${i}-${randomBytes(8).toString('hex')}@example.test`;
   const password = randomBytes(18).toString('hex');
   const created = await request('/auth/v1/admin/users', serviceKey, serviceKey, 'POST',
     { email, password, email_confirm: true });
@@ -199,14 +203,14 @@ for (let i = 1; i <= 4; i++) {
   users.push({ id, token: login.data.access_token, secondToken });
 }
 console.log('Four synthetic users authenticated via local GoTrue; promoter 3 has two sessions.');
-execFileSync('psql', [
-  '-X', '-v', 'ON_ERROR_STOP=1',
-  '-v', `user1=${users[0].id}`, '-v', `user2=${users[1].id}`, '-v', `user3=${users[2].id}`,
-  '-v', `user4=${users[3].id}`,
-  '-f', 'scripts/m37-functional-fixtures.sql'
-], { stdio: ['ignore', 'pipe', 'pipe'] });
+const fixtureSql = readFileSync('scripts/m37-functional-fixtures.sql', 'utf8')
+  .replaceAll('M37', m37)
+  .replaceAll('37000000-0000-4000-8000', testUuidPrefix);
+execFileSync('psql', ['-X', '-v', 'ON_ERROR_STOP=1',
+  '-v', `user1=${users[0].id}`, '-v', `user2=${users[1].id}`, '-v', `user3=${users[2].id}`, '-v', `user4=${users[3].id}`, '-f', '-'
+], { input: fixtureSql, stdio: ['pipe', 'pipe', 'pipe'] });
 console.log('Privileged synthetic fixture setup completed.');
-assert.equal(pg("SELECT count(*) FROM public.profiles WHERE role='promotor' AND status='ativo' AND promotor_matricula IN ('M37P1','M37P2','M37P3','M37P4')"), '4');
+assert.equal(pg(`SELECT count(*) FROM public.profiles WHERE role='promotor' AND status='ativo' AND promotor_matricula IN ('${m37}P1','${m37}P2','${m37}P3','${m37}P4')`), '4');
 
 const today = (() => {
   const parts = new Intl.DateTimeFormat('en-US', {
@@ -223,10 +227,11 @@ const weekStart = new Date(today.getTime() - ((today.getUTCDay() + 6) % 7) * 864
 // A validação completa dos 32 cenários funcionais de recuperação exige execução entre terça e domingo.
 assert.ok(yesterday >= weekStart, 'No earlier date in current week (Monday execution cannot test intra-week recovery); execution must run Tuesday through Sunday');
 const previousWeek = new Date(weekStart.getTime() - 86400000);
-const route = n => `37000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+const route = n => `${testUuidPrefix}-${String(n).padStart(12, '0')}`;
+const visit = n => `${testUuidPrefix}-${String(n).padStart(12, '0')}`;
 const count = (table, where = 'true') => Number(pg(`SELECT count(*) FROM public.${table} WHERE ${where}`));
 const snapshot = () => pg(`SELECT jsonb_agg(to_jsonb(v) ORDER BY v.id) FROM public.visits v
-  WHERE v.id IN ('37000000-0000-4000-8000-000000000101','37000000-0000-4000-8000-000000000102')`);
+  WHERE v.id IN ('${visit(101)}','${visit(102)}')`);
 const historyBefore = snapshot();
 const rpc = (user, name, args) => request(`/rest/v1/rpc/${name}`, anonKey, user.token, 'POST', args);
 const scheduled = (user, n, date) => rpc(user, 'attendance_start_scheduled_occurrence',
@@ -253,14 +258,22 @@ for (const [n, label] of [[2,'closed before'],[3,'closed on'],[4,'closed after']
   await denied(label, () => scheduled(users[0], n, yesterday), '42501');
 
 await denied('inactive industry', () => scheduled(users[0], 5, yesterday), '42501');
-await denied('missing industry', () => checkin(users[0], 'M37L1', 'M37MISSING', route(1)), '42501');
+await denied('missing industry', () => checkin(users[0], `${m37}L1`, `${m37}MISSING`, route(1)), '42501');
 await denied('other promoter route', () => scheduled(users[1], 1, yesterday), '42501');
 await denied('completed visit', () => scheduled(users[0], 6, yesterday), '23505');
 await denied('regularized visit', () => scheduled(users[0], 7, yesterday), '23505');
 await denied('visit with checklist evidence', () => scheduled(users[3], 12, yesterday), '23505');
 await denied('visit with product validity evidence', () => scheduled(users[3], 15, yesterday), '23505');
-await denied('visit with prior check-in', () => scheduled(users[3], 13, yesterday), '23505');
-await denied('route-less check-in with closed route', () => checkin(users[0], 'M37L2','M37IA'), '42501');
+const priorCheckinRetry = await scheduled(users[3], 13, yesterday);
+assert.equal(priorCheckinRetry.status, 200,
+  `Expired visit recovery failed: ${priorCheckinRetry.data?.code ?? priorCheckinRetry.status} - ${priorCheckinRetry.data?.message ?? ''}`);
+assert.equal(priorCheckinRetry.data?.attempt_number, 2);
+assert.equal(priorCheckinRetry.data?.occurrence_root_visit_id, visit(106));
+assert.equal(pg(`SELECT status FROM public.visits WHERE id='${visit(106)}'`), 'nao_realizada');
+assert.equal(count('visit_lifecycle_audit', `visit_id='${visit(106)}' AND action='auto_closed_at_day_end'`), 1);
+pg(`UPDATE public.visits SET status='concluida', completed_at=clock_timestamp() WHERE id='${priorCheckinRetry.data.id}'`);
+console.log('PASS prior check-in is auto-closed and recovered as a linked attempt'); cases++;
+await denied('route-less check-in with closed route', () => checkin(users[0], `${m37}L2`,`${m37}IA`), '42501');
 
 // ==============================================================================
 // TESTES DE CONCORRÊNCIA REAL COM COORDENAÇÃO DE CONEXÕES PERSISTENTES
@@ -284,7 +297,7 @@ try {
 
   // 1. Sessão administrativa inicia transação e inativa a indústria M37IC1
   await adminA.query('BEGIN;');
-  await adminA.query("UPDATE public.industrias SET status = 'inativo' WHERE codigo = 'M37IC1';");
+  await adminA.query(`UPDATE public.industrias SET status = 'inativo' WHERE codigo = '${m37}IC1';`);
 
   // 2. Sessão do promotor inicia transação autenticada e tenta atendimento
   await promoterA.query('BEGIN;');
@@ -332,7 +345,7 @@ try {
   // 6. Verificações do estado final:
   assert.equal(count('visits', `rota_id='${route(17)}'`), 0, 'Ordem A: zero visits created');
   assert.equal(count('visit_schedule_actions', `route_id='${route(17)}'`), 0, 'Ordem A: zero audit actions created');
-  assert.equal(pg("SELECT status FROM public.industrias WHERE codigo = 'M37IC1'"), 'inativo', 'Ordem A: industry must be inactive');
+  assert.equal(pg(`SELECT status FROM public.industrias WHERE codigo = '${m37}IC1'`), 'inativo', 'Ordem A: industry must be inactive');
 
   console.log('PASS Ordem A (inativação primeiro): pg_blocking_pids comprovou bloqueio mútuo, check-in abortou com 42501, zero visitas');
   cases++;
@@ -373,7 +386,7 @@ try {
   // Transação permanece ABERTA! O lock FOR SHARE na indústria M37IC2 está ativo.
 
   // 2. Sessão administrativa tenta inativar a indústria M37IC2
-  const adminPromise = adminB.query("UPDATE public.industrias SET status = 'inativo' WHERE codigo = 'M37IC2';");
+  const adminPromise = adminB.query(`UPDATE public.industrias SET status = 'inativo' WHERE codigo = '${m37}IC2';`);
 
   // 3. Sincronização explícita e verificação formal no catálogo do PostgreSQL:
   await waitForCondition(() => {
@@ -396,7 +409,7 @@ try {
   // 6. Verificações do estado final:
   assert.equal(count('visits', `rota_id='${route(18)}' AND scheduled_date='${iso(yesterday)}'`), 1, 'Ordem B: visita deve existir');
   assert.equal(count('visit_schedule_actions', `route_id='${route(18)}' AND scheduled_date='${iso(yesterday)}'`), 1, 'Ordem B: auditoria deve existir');
-  assert.equal(pg("SELECT status FROM public.industrias WHERE codigo = 'M37IC2'"), 'inativo', 'Ordem B: indústria deve estar inativa');
+  assert.equal(pg(`SELECT status FROM public.industrias WHERE codigo = '${m37}IC2'`), 'inativo', 'Ordem B: indústria deve estar inativa');
 
   // 7. Chamada HTTP REST real pós-inativação comprova que novas operações são rejeitadas
   const postInactivationCheckin = await scheduled(users[0], 18, yesterday);
@@ -448,13 +461,13 @@ console.log('PASS other promoter cannot read visit through RLS'); cases++;
 
 await denied('repeated recovery', () => scheduled(users[0], 1, yesterday), '23505');
 
-const repeatCheckin = await checkin(users[0], 'M37L1','M37IA',route(1));
-assert.equal(repeatCheckin.status, 200);
+const repeatCheckin = await checkin(users[0], `${m37}L1`,`${m37}IA`,route(1));
+assert.equal(repeatCheckin.status, 200, `Repeat check-in failed: ${repeatCheckin.data?.code ?? repeatCheckin.status} - ${repeatCheckin.data?.message ?? ''}`);
 assert.equal(repeatCheckin.data?.id, recovered.data?.id);
 assert.equal(count('visits', `rota_id='${route(1)}' AND scheduled_date='${iso(yesterday)}'`), 1);
 console.log('PASS active-route check-in reused same in-progress visit'); cases++;
 
-const routeLess = await checkin(users[1], 'M37L8','M37IA');
+const routeLess = await checkin(users[1], `${m37}L8`,`${m37}IA`);
 assert.equal(routeLess.status, 200, `Route-less active check-in failed: ${routeLess.data?.code ?? routeLess.status}`);
 assert.equal(routeLess.data?.rota_id, null);
 console.log('PASS route-less check-in with active assignment'); cases++;
@@ -479,25 +492,25 @@ assert.equal(pendingRecovery.status, 200,
   `Materialized pending recovery failed: ${pendingRecovery.data?.code ?? pendingRecovery.status} - ${pendingRecovery.data?.message ?? ''}`);
 assert.equal(pendingRecovery.data?.scheduled_date, iso(yesterday));
 assert.equal(pendingRecovery.data?.data_visita, iso(today));
-assert.equal(pendingRecovery.data?.id, '37000000-0000-4000-8000-000000000103');
+assert.equal(pendingRecovery.data?.id, visit(103));
 assert.equal(count('visits', `rota_id='${route(10)}'`), 1);
 assert.equal(count('visit_schedule_actions', `route_id='${route(10)}' AND scheduled_date='${iso(yesterday)}'`), 1);
 console.log('PASS materialized pending visit recovery'); cases++;
 
-const directPatchOwn = await request('/rest/v1/visits?id=eq.37000000-0000-4000-8000-000000000104',
+const directPatchOwn = await request(`/rest/v1/visits?id=eq.${visit(104)}`,
   anonKey, users[3].token, 'PATCH', { data_visita: iso(today) });
 assert.ok(directPatchOwn.status >= 400, 'Direct PATCH on data_visita unexpectedly accepted');
 assert.equal(directPatchOwn.data?.code, '42501');
 console.log('PASS direct promoter update of data_visita blocked (42501)'); cases++;
 
-const directPatchOther = await request('/rest/v1/visits?id=eq.37000000-0000-4000-8000-000000000104',
+const directPatchOther = await request(`/rest/v1/visits?id=eq.${visit(104)}`,
   anonKey, users[0].token, 'PATCH', { data_visita: iso(today) }, { Prefer: 'return=representation' });
 // A política RLS (visits_update_policy) filtra a linha no WHERE implícito do UPDATE:
 // O PostgREST retorna 200 com array vazio (zero linhas afetadas) ou erro >= 400.
 if (directPatchOther.status < 400) {
   assert.deepEqual(directPatchOther.data, [], 'Other promoter PATCH affected rows via RLS');
 }
-const visit104After = pg("SELECT data_visita FROM public.visits WHERE id = '37000000-0000-4000-8000-000000000104'");
+const visit104After = pg(`SELECT data_visita FROM public.visits WHERE id = '${visit(104)}'`);
 assert.equal(visit104After, iso(yesterday), 'Visit date was illegally modified by other promoter');
 console.log('PASS direct update of another promoter visit blocked'); cases++;
 
@@ -509,7 +522,7 @@ assert.equal(unperformedRecovery.status, 200,
   `Materialized unperformed recovery failed: ${unperformedRecovery.data?.code ?? unperformedRecovery.status} - ${unperformedRecovery.data?.message ?? ''}`);
 assert.equal(unperformedRecovery.data?.scheduled_date, iso(yesterday));
 assert.equal(unperformedRecovery.data?.data_visita, iso(today));
-assert.equal(unperformedRecovery.data?.id, '37000000-0000-4000-8000-000000000104');
+assert.equal(unperformedRecovery.data?.id, visit(104));
 assert.equal(count('visits', `rota_id='${route(11)}'`), 1);
 assert.equal(count('visit_schedule_actions', `route_id='${route(11)}' AND scheduled_date='${iso(yesterday)}'`), 1);
 console.log('PASS materialized unperformed visit recovery'); cases++;

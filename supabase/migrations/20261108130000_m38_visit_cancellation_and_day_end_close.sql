@@ -465,6 +465,16 @@ GRANT EXECUTE ON FUNCTION public.attendance_start_scheduled_occurrence(uuid, dat
 
 -- One minute cadence bounds rollover delay and uses the function's Sao Paulo
 -- date comparison, so the job's own timezone does not change semantics.
+DO $$
+DECLARE
+  v_job_id bigint;
+BEGIN
+  FOR v_job_id IN SELECT jobid FROM cron.job WHERE jobname = 'm38-expire-old-open-visits' LOOP
+    PERFORM cron.unschedule(v_job_id);
+  END LOOP;
+END;
+$$;
+
 SELECT cron.schedule(
   'm38-expire-old-open-visits',
   '* * * * *',

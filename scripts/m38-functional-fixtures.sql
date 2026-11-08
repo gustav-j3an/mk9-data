@@ -30,6 +30,7 @@ UPDATE public.profiles SET role='promotor', status='ativo', promotor_matricula='
 UPDATE public.profiles SET role='promotor', status='ativo', promotor_matricula='M38P4' WHERE id=:'user4';
 UPDATE public.profiles SET role='promotor', status='ativo', promotor_matricula='M38P5' WHERE id=:'user5';
 UPDATE public.profiles SET role='promotor', status='ativo', promotor_matricula='M38P6' WHERE id=:'user6';
+UPDATE public.profiles SET role='gestor', status='ativo', promotor_matricula=NULL WHERE id=:'user7';
 
 INSERT INTO public.promoter_operation_authorizations(promotor_matricula, status, justification)
 SELECT 'M38P' || n, 'liberado', 'Isolated Mission 38 integration test' FROM generate_series(1,6) n;
@@ -39,17 +40,17 @@ SELECT 'M38P' || n, d.day_name, '22:00', '06:00', true, 'America/Sao_Paulo'
 FROM generate_series(1,2) n
 CROSS JOIN (VALUES ('segunda'),('terca'),('quarta'),('quinta'),('sexta'),('sabado'),('domingo')) d(day_name);
 
-INSERT INTO public.rotas(id,codigo_rota,data,promotor_matricula,loja_codigo,industria_codigo,frequencia,
+INSERT INTO public.rotas(id,codigo_rota,promotor_matricula,loja_codigo,industria_codigo,frequencia,
   segunda,terca,quarta,quinta,sexta,sabado,domingo,encerrada_em)
 VALUES
- ('38000000-0000-4000-8000-000000000001','M38R1',CURRENT_DATE,'M38P1','M38L1','M38IA','SEMANAL',true,true,true,true,true,true,true,NULL),
- ('38000000-0000-4000-8000-000000000002','M38R2',CURRENT_DATE,'M38P1','M38L2','M38IA','SEMANAL',true,true,true,true,true,true,true,NULL),
- ('38000000-0000-4000-8000-000000000003','M38R3',CURRENT_DATE,'M38P2','M38L3','M38IA','SEMANAL',true,true,true,true,true,true,true,NULL),
- ('38000000-0000-4000-8000-000000000004','M38R4',CURRENT_DATE,'M38P3','M38L4','M38IA','SEMANAL',true,true,true,true,true,true,true,NULL),
- ('38000000-0000-4000-8000-000000000005','M38R5',CURRENT_DATE,'M38P4','M38L5','M38IA','SEMANAL',true,true,true,true,true,true,true,NULL),
- ('38000000-0000-4000-8000-000000000006','M38R6',CURRENT_DATE,'M38P5','M38L6','M38IA','SEMANAL',true,true,true,true,true,true,true,NULL),
- ('38000000-0000-4000-8000-000000000007','M38R7',CURRENT_DATE,'M38P6','M38L7','M38IA','SEMANAL',true,true,true,true,true,true,true,NULL),
- ('38000000-0000-4000-8000-000000000008','M38R8',CURRENT_DATE,'M38P6','M38L8','M38IA','SEMANAL',true,true,true,true,true,true,true,NULL);
+ ('38000000-0000-4000-8000-000000000001','M38R1','M38P1','M38L1','M38IA','SEMANAL',true,true,true,true,true,true,true,NULL),
+ ('38000000-0000-4000-8000-000000000002','M38R2','M38P1','M38L2','M38IA','SEMANAL',true,true,true,true,true,true,true,NULL),
+ ('38000000-0000-4000-8000-000000000003','M38R3','M38P2','M38L3','M38IA','SEMANAL',true,true,true,true,true,true,true,NULL),
+ ('38000000-0000-4000-8000-000000000004','M38R4','M38P3','M38L4','M38IA','SEMANAL',true,true,true,true,true,true,true,NULL),
+ ('38000000-0000-4000-8000-000000000005','M38R5','M38P4','M38L5','M38IA','SEMANAL',true,true,true,true,true,true,true,NULL),
+ ('38000000-0000-4000-8000-000000000006','M38R6','M38P5','M38L6','M38IA','SEMANAL',true,true,true,true,true,true,true,NULL),
+ ('38000000-0000-4000-8000-000000000007','M38R7','M38P6','M38L7','M38IA','SEMANAL',true,true,true,true,true,true,true,NULL),
+ ('38000000-0000-4000-8000-000000000008','M38R8','M38P6','M38L8','M38IA','SEMANAL',true,true,true,true,true,true,true,NULL);
 
 INSERT INTO public.system_settings(key,value)
 VALUES ('operation_mode','"IMPLANTACAO"'::jsonb)
