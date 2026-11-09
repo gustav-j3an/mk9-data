@@ -273,6 +273,7 @@ migrations=(
   supabase/migrations/20261106140000_m37_pending_visit_active_route_guard.sql
   supabase/migrations/20261106150000_m37_checkin_route_and_conflict_guard.sql
   supabase/migrations/20261107140000_m37_reconcile_materialized_pending_recovery.sql
+  supabase/migrations/20261108100000_m37_integral_weekly_recovery.sql
   supabase/migrations/20261108130000_m38_visit_cancellation_and_day_end_close.sql
   supabase/migrations/20261108170619_m38_retry_attempt_history.sql
   supabase/migrations/20261108174150_m38_checkin_reuses_active_scheduled_attempt.sql
@@ -282,6 +283,46 @@ for migration in "${migrations[@]}"; do
   mig_basename="$(basename "$migration")"
   expected_ver="$(echo "$mig_basename" | cut -d_ -f1)"
   echo "--- Applying migration to isolated PostgreSQL: $mig_basename ---"
+  if [ "$mig_basename" = "20261108174150_m38_checkin_reuses_active_scheduled_attempt.sql" ]; then
+    # This final M38 migration rewrites the M37 check-in lookup. Refuse it unless
+    # the integral M37 migration and its effective SQL/index prerequisites are present.
+    m37_prerequisites="$(psql -X -v ON_ERROR_STOP=1 -Atqc "
+WITH checkin AS (
+  SELECT p.prosrc FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = 'public' AND p.proname = 'attendance_check_in'
+    AND p.oid = 'public.attendance_check_in(text,text,uuid,numeric,numeric,numeric)'::regprocedure
+),
+m37_base AS (
+  SELECT p.prosrc FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = 'attendance_private'
+    AND p.proname = 'attendance_start_scheduled_occurrence_m37_base'
+)
+SELECT
+  EXISTS (SELECT 1 FROM supabase_migrations.schema_migrations WHERE version = '20261108100000')
+  AND (SELECT position('AND scheduled_date IS NULL' IN prosrc) > 0
+            AND position('ON CONFLICT (promotor_matricula, loja_codigo, industria_codigo, data_visita) WHERE scheduled_date IS NULL' IN prosrc) > 0
+       FROM checkin)
+  AND EXISTS (SELECT 1 FROM m37_base WHERE prosrc LIKE '%v_today_visit%')
+  AND (SELECT count(*) = 2
+       FROM pg_index i JOIN pg_class idx ON idx.oid = i.indexrelid
+       JOIN pg_namespace n ON n.oid = idx.relnamespace
+       WHERE n.nspname = 'public' AND idx.relname IN (
+         'visits_regular_promoter_store_industry_date_unique',
+         'visits_promoter_store_industry_scheduled_date_unique')
+         AND i.indisunique AND i.indisvalid)
+  AND (SELECT count(*) = 1
+       FROM pg_index i JOIN pg_class idx ON idx.oid = i.indexrelid
+       JOIN pg_namespace n ON n.oid = idx.relnamespace
+       WHERE n.nspname = 'public' AND idx.relname = 'visits_promoter_route_scheduled_attempt_unique'
+         AND i.indisunique AND i.indisvalid)
+")"
+    if [ "$m37_prerequisites" != "t" ]; then
+      echo "Refusing final M38 migration: M37 integral check-in/function/index prerequisites are missing." >&2
+      exit 1
+    fi
+    echo "M37 integral prerequisites verified before final M38 migration."
+  fi
+
 
   # Garantir existência e adicionar cumulativamente a migration atual no diretório de migrations do workdir isolado
   mkdir -p "$cli_test_dir/supabase/migrations"
@@ -304,17 +345,17 @@ for migration in "${migrations[@]}"; do
 done
 
 rm -rf "$cli_test_dir"
-echo "All 8 target migrations successfully applied from checked-in SQL files."
+echo "All 9 target migrations successfully applied from checked-in SQL files."
 echo "Current ledger entries for target migrations:"
 psql -X -v ON_ERROR_STOP=1 -c "SELECT version, name FROM supabase_migrations.schema_migrations WHERE version >= '20261105165500' ORDER BY version;"
 
-# Ledger sintético descartável: 47 historical aliases + 8 target migrations = 55
+# Ledger sintético descartável: 47 historical aliases + 9 target migrations = 56
 total_ledger="$(psql -X -v ON_ERROR_STOP=1 -Atqc "SELECT count(*) FROM supabase_migrations.schema_migrations;")"
-if [ "$total_ledger" -ne 55 ]; then
-  echo "ERROR: Expected 55 test-ledger migrations (47 baseline + 8 target), found $total_ledger" >&2
+if [ "$total_ledger" -ne 56 ]; then
+  echo "ERROR: Expected 56 test-ledger migrations (47 baseline + 9 target), found $total_ledger" >&2
   exit 1
 fi
-echo "Verified exact disposable ledger count: $total_ledger total versions (47 historical + 8 target)."
+echo "Verified exact disposable ledger count: $total_ledger total versions (47 historical + 9 target)."
 
 if psql -X -v ON_ERROR_STOP=1 -Atqc "$snapshot_query" | cmp -s "$before_snapshot" -; then
   echo 'Target migrations did not change captured functions' >&2
