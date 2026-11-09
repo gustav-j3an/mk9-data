@@ -12,10 +12,10 @@ SUPABASE_TEST_API_URL="${SUPABASE_TEST_API_URL:-http://127.0.0.1:54321}"
 case "$SUPABASE_TEST_API_URL" in http://127.0.0.1:54321|http://localhost:54321) ;;
   *) echo "Refusing non-loopback Supabase API URL: $SUPABASE_TEST_API_URL" >&2; exit 1 ;;
 esac
-for forbidden in SUPABASE_ACCESS_TOKEN SUPABASE_DB_PASSWORD SUPABASE_PROJECT_REF SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY; do
+for forbidden in SUPABASE_ACCESS_TOKEN SUPABASE_DB_PASSWORD SUPABASE_PROJECT_REF SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY SUPABASE_ANON_KEY SUPABASE_TEST_ANON_KEY SUPABASE_TEST_SERVICE_KEY ANON_KEY SERVICE_ROLE_KEY; do
   if [ -n "${!forbidden:-}" ]; then echo "Refusing remote Supabase credential/configuration: $forbidden" >&2; exit 1; fi
 done
-unset SUPABASE_ACCESS_TOKEN SUPABASE_DB_PASSWORD SUPABASE_PROJECT_REF SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY
+unset SUPABASE_ACCESS_TOKEN SUPABASE_DB_PASSWORD SUPABASE_PROJECT_REF SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY SUPABASE_ANON_KEY SUPABASE_TEST_ANON_KEY SUPABASE_TEST_SERVICE_KEY ANON_KEY SERVICE_ROLE_KEY
 export SUPABASE_TEST_API_URL
 
 psql -X -v ON_ERROR_STOP=1 -c "CREATE EXTENSION IF NOT EXISTS pg_cron WITH SCHEMA pg_catalog;" >/dev/null
@@ -282,9 +282,10 @@ psql -X -v ON_ERROR_STOP=1 -Atqc "BEGIN; SET LOCAL ROLE authenticated;
 echo 'Unauthorized check-in rejected.'
 psql -X -v ON_ERROR_STOP=1 -Atqc "SELECT NOT has_table_privilege('authenticated','public.visit_schedule_actions','SELECT')" | grep -qx t
 echo 'Authenticated role has no direct audit table SELECT.'
+psql -X -v ON_ERROR_STOP=1 -f scripts/m38-cron-idempotence.sql >/dev/null
+echo "M38 pg_cron registration and execution verified in disposable PostgreSQL."
 functional_status=0
-node scripts/m37-functional-tests.mjs || functional_status=$?
-node scripts/m38-functional-tests.mjs || functional_status=$?
+bash scripts/run-m37-m38-functional-tests.sh || functional_status=$?
 
 psql -X -v ON_ERROR_STOP=1 -f docs/m37.4-homologation-function-recovery.sql >/dev/null
 psql -X -v ON_ERROR_STOP=1 -Atqc "$snapshot_query" | diff -u "$before_snapshot" -
