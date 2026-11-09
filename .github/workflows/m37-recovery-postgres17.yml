@@ -1,0 +1,106 @@
+name: MK9 DATE M37/M38 isolated tests (PostgreSQL 17)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  m37-m38:
+    if: github.ref == 'refs/heads/codex/m38-cloud-validation'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout work branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: codex/m38-cloud-validation
+
+      - name: Verify manual branch and clean remote Supabase environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/codex/m38-cloud-validation"
+          for name in SUPABASE_ACCESS_TOKEN SUPABASE_DB_PASSWORD SUPABASE_PROJECT_REF SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY SUPABASE_DB_URL SUPABASE_ANON_KEY SUPABASE_TEST_ANON_KEY SUPABASE_TEST_SERVICE_KEY ANON_KEY SERVICE_ROLE_KEY; do
+            if [ -n "${!name:-}" ]; then
+              echo "Unexpected remote Supabase variable present: $name" >&2
+              exit 1
+            fi
+          done
+          echo "Remote Supabase credentials/configuration are absent."
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install project dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Typecheck, unit tests, and production build
+        run: |
+          npm run typecheck
+          npm test
+          npm run build
+
+      - name: Install pinned Supabase CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL https://github.com/supabase/cli/releases/download/v3.0.0/supabase_3.0.0_linux_amd64.tar.gz -o "$RUNNER_TEMP/supabase-cli.tar.gz"
+          tar -xzf "$RUNNER_TEMP/supabase-cli.tar.gz" -C "$RUNNER_TEMP" supabase
+          sudo install "$RUNNER_TEMP/supabase" /usr/local/bin/supabase
+          test "$(supabase --version)" = "3.0.0"
+
+      - name: Start isolated Supabase PostgreSQL 17 stack
+        shell: bash
+        run: |
+          set -euo pipefail
+          stack_dir="$RUNNER_TEMP/mk9-date-m38-cloud"
+          mkdir -p "$stack_dir"
+          cd "$stack_dir"
+          supabase init --force >/dev/null
+          sed -i 's/^major_version = .*/major_version = 17/' supabase/config.toml
+          supabase start -x realtime,storage-api,imgproxy,mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor >/dev/null
+          test -f supabase/config.toml
+          echo "Disposable Supabase stack started without linking a project."
+
+      - name: Mask disposable local Supabase credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/mk9-date-m38-cloud"
+          supabase status -o env | while IFS='=' read -r name value; do
+            case "$name" in
+              ANON_KEY|SUPABASE_ANON_KEY|SERVICE_ROLE_KEY|SUPABASE_SERVICE_ROLE_KEY|JWT_SECRET|POSTGRES_PASSWORD)
+                value="${value%\"}"
+                value="${value#\"}"
+                [ -z "$value" ] || echo "::add-mask::$value"
+                ;;
+            esac
+          done
+
+      - name: Apply checked-in migrations and run isolated M37/M38 suites
+        shell: bash
+        env:
+          SUPABASE_TEST_WORKDIR: ${{ runner.temp }}/mk9-date-m38-cloud
+          SUPABASE_TEST_API_URL: http://127.0.0.1:54321
+          PGHOST: 127.0.0.1
+          PGPORT: '54322'
+          PGUSER: postgres
+          PGPASSWORD: postgres
+          PGDATABASE: postgres
+        run: bash scripts/m37-recovery-postgres17.sh
+
+      - name: Stop isolated stack and remove temporary files
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          if [ -f "$RUNNER_TEMP/mk9-date-m38-cloud/supabase/config.toml" ]; then
+            cd "$RUNNER_TEMP/mk9-date-m38-cloud"
+            supabase stop --no-backup >/dev/null 2>&1
+          fi
+          rm -rf "$RUNNER_TEMP/mk9-date-m38-cloud" "$RUNNER_TEMP/supabase" "$RUNNER_TEMP/supabase-cli.tar.gz"
