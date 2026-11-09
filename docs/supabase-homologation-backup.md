@@ -6,7 +6,7 @@ The job is available only on `codex/m38-backup-actions`. It requires the protect
 
 ## GitHub configuration
 
-Create Environment `homologation-backup` in repository settings. Require at least one reviewer, restrict deployments to `codex/m38-backup-actions`, and keep the following values in that Environment (not repository-wide settings):
+Create Environment `homologation-backup` in repository settings. Require at least one reviewer, restrict deployments to `codex/m38-backup-actions`, and protect that branch with reviewed changes. Keep the following values in the Environment (not repository-wide settings):
 
 **Environment variables**
 
@@ -22,7 +22,7 @@ Create Environment `homologation-backup` in repository settings. Require at leas
 - `SUPABASE_DB_URL` — direct PostgreSQL connection string for staging only, username `postgres`, database `postgres`, TLS required.
 - `SUPABASE_SERVICE_ROLE_KEY` — staging `service_role` JWT whose `ref` claim matches the staging project.
 - `BACKUP_GPG_PASSPHRASE` — unique passphrase of at least 32 characters; store its recovery copy separately from the bucket.
-- `BACKUP_S3_ACCESS_KEY_ID` and `BACKUP_S3_SECRET_ACCESS_KEY` — credentials scoped to write/read objects only in this one bucket/prefix.
+- `BACKUP_S3_ACCESS_KEY_ID` and `BACKUP_S3_SECRET_ACCESS_KEY` — credentials scoped to write/read objects only in this one bucket, and to the prefix too if the provider supports prefix-scoped keys.
 
 Configure the bucket private, enable versioning or equivalent retention if available, and restrict access to the backup operators. The workflow cannot independently prove provider-side public-access and retention settings; the run requires a manual confirmation. Do not place any production URL/key in these settings.
 
