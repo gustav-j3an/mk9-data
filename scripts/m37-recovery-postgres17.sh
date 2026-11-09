@@ -1,6 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# The runner and every database/API target must be disposable loopback services.
+case "${PGHOST:-}" in 127.0.0.1|localhost|::1) ;; *)
+  echo "Refusing non-loopback PostgreSQL host: ${PGHOST:-<unset>}" >&2; exit 1 ;;
+esac
+if [ "${PGPORT:-54322}" != "54322" ]; then
+  echo "Refusing unexpected PostgreSQL port: ${PGPORT}" >&2; exit 1
+fi
+SUPABASE_TEST_API_URL="${SUPABASE_TEST_API_URL:-http://127.0.0.1:54321}"
+case "$SUPABASE_TEST_API_URL" in http://127.0.0.1:54321|http://localhost:54321) ;;
+  *) echo "Refusing non-loopback Supabase API URL: $SUPABASE_TEST_API_URL" >&2; exit 1 ;;
+esac
+for forbidden in SUPABASE_ACCESS_TOKEN SUPABASE_DB_PASSWORD SUPABASE_PROJECT_REF SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY; do
+  if [ -n "${!forbidden:-}" ]; then echo "Refusing remote Supabase credential/configuration: $forbidden" >&2; exit 1; fi
+done
+unset SUPABASE_ACCESS_TOKEN SUPABASE_DB_PASSWORD SUPABASE_PROJECT_REF SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY
+export SUPABASE_TEST_API_URL
+
+psql -X -v ON_ERROR_STOP=1 -c "CREATE EXTENSION IF NOT EXISTS pg_cron WITH SCHEMA pg_catalog;" >/dev/null
+psql -X -v ON_ERROR_STOP=1 -Atqc "SELECT count(*) FROM pg_extension WHERE extname='pg_cron'" | grep -qx 1
+echo "pg_cron enabled only in the disposable PostgreSQL database."
+
 psql -X -v ON_ERROR_STOP=1 -Atqc "SELECT current_setting('server_version_num')::int BETWEEN 170000 AND 179999" | grep -qx t
 echo "PostgreSQL $(psql -X -v ON_ERROR_STOP=1 -Atqc 'SHOW server_version')"
 

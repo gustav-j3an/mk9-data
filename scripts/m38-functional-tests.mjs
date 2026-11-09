@@ -41,6 +41,22 @@ const route = n => `${testUuidPrefix}-${String(n).padStart(12,'0')}`;
 const visit = n => `${testUuidPrefix}-${String(n).padStart(12,'0')}`;
 const count = (table, where) => Number(pg(`SELECT count(*) FROM public.${table} WHERE ${where}`));
 const readVisit = id => JSON.parse(pg(`SELECT row_to_json(v)::text FROM public.visits v WHERE v.id='${id}'`));
+const assertTestClockMatchesDatabase = () => {
+  if (process.env.MK9_TEST_CLOCK_SOURCE !== 'runner-host') return;
+  const databaseNowMs = Number(pg('SELECT floor(extract(epoch FROM clock_timestamp()) * 1000)::bigint'));
+  assert.ok(Math.abs(Date.now() - databaseNowMs) <= 120_000,
+    'JavaScript and disposable PostgreSQL test clocks differ by more than two minutes');
+  const databaseToday = pg("SELECT (clock_timestamp() AT TIME ZONE 'America/Sao_Paulo')::date::text");
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit'
+  }).formatToParts(new Date());
+  const part = type => parts.find(item => item.type === type).value;
+  const javascriptToday = `${part('year')}-${part('month')}-${part('day')}`;
+  assert.equal(databaseToday, javascriptToday,
+    'JavaScript and disposable PostgreSQL do not share the same Sao Paulo test date');
+};
+assertTestClockMatchesDatabase();
+
 const today = (() => {
   const parts = new Intl.DateTimeFormat('en-US',{timeZone:'America/Sao_Paulo',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());
   const value = type => Number(parts.find(part => part.type===type).value);

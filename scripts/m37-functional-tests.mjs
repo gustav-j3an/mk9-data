@@ -212,6 +212,22 @@ execFileSync('psql', ['-X', '-v', 'ON_ERROR_STOP=1',
 console.log('Privileged synthetic fixture setup completed.');
 assert.equal(pg(`SELECT count(*) FROM public.profiles WHERE role='promotor' AND status='ativo' AND promotor_matricula IN ('${m37}P1','${m37}P2','${m37}P3','${m37}P4')`), '4');
 
+const assertTestClockMatchesDatabase = () => {
+  if (process.env.MK9_TEST_CLOCK_SOURCE !== 'runner-host') return;
+  const databaseNowMs = Number(pg('SELECT floor(extract(epoch FROM clock_timestamp()) * 1000)::bigint'));
+  assert.ok(Math.abs(Date.now() - databaseNowMs) <= 120_000,
+    'JavaScript and disposable PostgreSQL test clocks differ by more than two minutes');
+  const databaseToday = pg("SELECT (clock_timestamp() AT TIME ZONE 'America/Sao_Paulo')::date::text");
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit'
+  }).formatToParts(new Date());
+  const part = type => parts.find(item => item.type === type).value;
+  const javascriptToday = `${part('year')}-${part('month')}-${part('day')}`;
+  assert.equal(databaseToday, javascriptToday,
+    'JavaScript and disposable PostgreSQL do not share the same Sao Paulo test date');
+};
+assertTestClockMatchesDatabase();
+
 const today = (() => {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit'
