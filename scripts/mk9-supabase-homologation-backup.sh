@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 077
+
+ROOT="${RUNNER_TEMP:?}/mk9-homologation-backup"
+mkdir -p "$ROOT/export" "$ROOT/restore" "$ROOT/logs"
+chmod 700 "$ROOT" "$ROOT/export" "$ROOT/restore" "$ROOT/logs"
+
+cleanup() {
+  if [[ -d "$ROOT/supabase" ]]; then
+    (cd "$ROOT/supabase" && supabase stop --no-backup >/dev/null 2>&1) || true
+  fi
+  rm -rf "$ROOT"
+}
+trap cleanup EXIT
+STAGE=preflight
+on_error() { echo "Backup workflow failed at stage: ${STAGE}. Detailed logs were kept private and removed with the runner workspace." >&2; }
+trap 'on_error' ERR
+
+node scripts/preflight.mjs
+node -e "console.log('::add-mask::'+process.env.SUPABASE_DB_URL); console.log('::add-mask::'+process.env.SUPABASE_SERVICE_ROLE_KEY); console.log('::add-mask::'+process.env.BACKUP_GPG_PASSPHRASE); console.log('::add-mask::'+process.env.AWS_ACCESS_KEY_ID); console.log('::add-mask::'+process.env.AWS_SECRET_ACCESS_KEY)"
+printf '%s' "$BACKUP_GPG_PASSPHRASE" > "$ROOT/passphrase"
+chmod 600 "$ROOT/passphrase"
+unset BACKUP_GPG_PASSPHRASE
+
+STAGE=database-export
+export PGPASSWORD="$(node -e 'const u=new URL(process.env.SUPABASE_DB_URL); process.stdout.write(decodeURIComponent(u.password))')"
+export PGHOST="$(node -e 'process.stdout.write(new URL(process.env.SUPABASE_DB_URL).hostname)')"
+export PGPORT="$(node -e 'process.stdout.write(new URL(process.env.SUPABASE_DB_URL).port||"5432")')"
+export PGUSER="postgres"
+export PGDATABASE="postgres"
+export PGSSLMODE="require"
+
+# Full PostgreSQL 17 archive includes application schemas plus Supabase auth/storage metadata.
+pg_dump --version | grep -q '^pg_dump (PostgreSQL) 17\.'
+psql --no-password --quiet --tuples-only --no-align --file=scripts/backup-inventory.sql > "$ROOT/export/inventory-before.json" 2> "$ROOT/logs/inventory-before.log"
+pg_dump --format=custom --file="$ROOT/export/database.dump" --no-password 2> "$ROOT/logs/pg_dump.log"
+supabase db dump --role-only --db-url "$SUPABASE_DB_URL" > "$ROOT/export/roles.sql" 2> "$ROOT/logs/roles.log"
+pg_dump --schema-only --schema=supabase_migrations --file="$ROOT/export/migration-history.sql" --no-password 2> "$ROOT/logs/migration-schema.log"
+pg_dump --data-only --schema=supabase_migrations --file="$ROOT/export/migration-history-data.sql" --no-password 2> "$ROOT/logs/migration-data.log"
+
+STAGE=storage-export
+node scripts/storage-backup.mjs export "$ROOT/export/storage"
+psql --no-password --quiet --tuples-only --no-align --file=scripts/backup-inventory.sql > "$ROOT/export/inventory-after-source.json" 2> "$ROOT/logs/inventory-after-source.log"
+node scripts/compare-inventory.mjs "$ROOT/export/inventory-before.json" "$ROOT/export/inventory-after-source.json"
+
+# Restore and check in a fresh, disposable Supabase PostgreSQL 17 stack. No remote URL is mounted into it.
+STAGE=disposable-restore
+mkdir -p "$ROOT/supabase"
+(cd "$ROOT/supabase" && supabase init --force >/dev/null 2> "$ROOT/logs/supabase-init.log")
+sed -i 's/^major_version = .*/major_version = 17/' "$ROOT/supabase/supabase/config.toml"
+(cd "$ROOT/supabase" && supabase start -x realtime,imgproxy,mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor >/dev/null 2> "$ROOT/logs/supabase-start.log")
+LOCAL_DB_URL="postgresql://postgres:postgres@127.0.0.1:54322/postgres?sslmode=disable"
+LOCAL_STORAGE_URL="http://127.0.0.1:54321"
+LOCAL_SERVICE_KEY="$(cd "$ROOT/supabase" && supabase status -o env 2> "$ROOT/logs/supabase-status.log" | sed -n 's/^SERVICE_ROLE_KEY=//p' | tr -d '"\r')"
+test -n "$LOCAL_SERVICE_KEY"
+echo "::add-mask::$LOCAL_SERVICE_KEY"
+
+# New database is isolated in the disposable Supabase PostgreSQL 17 container.
+PGPASSWORD=postgres psql 'postgresql://postgres:postgres@127.0.0.1:54322/postgres' -v ON_ERROR_STOP=1 -c 'CREATE DATABASE mk9_backup_restore'
+PGPASSWORD=postgres psql 'postgresql://postgres:postgres@127.0.0.1:54322/postgres' -v ON_ERROR_STOP=1 -f "$ROOT/export/roles.sql" > /dev/null 2> "$ROOT/logs/restore-roles.log"
+PGPASSWORD=postgres pg_restore --exit-on-error --dbname='postgresql://postgres:postgres@127.0.0.1:54322/mk9_backup_restore' "$ROOT/export/database.dump" > /dev/null 2> "$ROOT/logs/restore-database.log"
+PGPASSWORD=postgres psql 'postgresql://postgres:postgres@127.0.0.1:54322/mk9_backup_restore' -v ON_ERROR_STOP=1 --quiet --tuples-only --no-align --file=scripts/backup-inventory.sql > "$ROOT/restore/inventory-after.json" 2> "$ROOT/logs/inventory-restore.log"
+node scripts/compare-inventory.mjs "$ROOT/export/inventory-before.json" "$ROOT/restore/inventory-after.json"
+node scripts/storage-backup.mjs verify "$ROOT/export/storage"
+
+# Rebuild the disposable local Storage buckets and objects from the encrypted archive manifest and bytes.
+node scripts/storage-backup.mjs restore-local "$ROOT/export/storage"
+PGPASSWORD=postgres psql "$LOCAL_DB_URL" -v ON_ERROR_STOP=1 --file="$ROOT/export/storage/restore-metadata.sql" > /dev/null 2> "$ROOT/logs/restore-storage-metadata.log"
+
+STAGE=package-encrypt-upload
+(
+  cd "$ROOT/export"
+  find . -type f -print0 | sort -z | xargs -0 sha256sum > "$ROOT/SHA256SUMS"
+)
+mv "$ROOT/SHA256SUMS" "$ROOT/export/SHA256SUMS"
+(cd "$ROOT/export" && sha256sum --check SHA256SUMS) >/dev/null 2> "$ROOT/logs/checksum-before-encryption.log"
+pg_restore --list "$ROOT/export/database.dump" > /dev/null 2> "$ROOT/logs/archive-list.log"
+
+tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner -C "$ROOT/export" -czf "$ROOT/backup.tar.gz" .
+gpg --batch --yes --pinentry-mode loopback --passphrase-file "$ROOT/passphrase" --symmetric --cipher-algo AES256 --output "$ROOT/backup.tar.gz.gpg" "$ROOT/backup.tar.gz"
+gpg --batch --quiet --pinentry-mode loopback --passphrase-file "$ROOT/passphrase" --decrypt "$ROOT/backup.tar.gz.gpg" > "$ROOT/decrypted.tar.gz"
+mkdir -m 700 "$ROOT/decrypted-check"
+tar -xzf "$ROOT/decrypted.tar.gz" -C "$ROOT/decrypted-check" 2> "$ROOT/logs/archive-extract.log"
+(cd "$ROOT/decrypted-check" && sha256sum --check SHA256SUMS) >/dev/null 2> "$ROOT/logs/checksum-after-encryption.log"
+pg_restore --list "$ROOT/decrypted-check/database.dump" > /dev/null 2> "$ROOT/logs/archive-list-after-encryption.log"
+node scripts/storage-backup.mjs verify "$ROOT/decrypted-check/storage"
+
+export AWS_EC2_METADATA_DISABLED=true AWS_DEFAULT_REGION="$BACKUP_S3_REGION"
+OBJECT_KEY="${BACKUP_S3_PREFIX}/$(date -u +%Y%m%dT%H%M%SZ)-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.tar.gz.gpg"
+CIPHER_SHA256="$(sha256sum "$ROOT/backup.tar.gz.gpg" | cut -d ' ' -f 1)"
+aws s3 cp "$ROOT/backup.tar.gz.gpg" "s3://${BACKUP_S3_BUCKET}/${OBJECT_KEY}" --endpoint-url "$BACKUP_S3_ENDPOINT_URL" --only-show-errors --metadata "sha256=${CIPHER_SHA256}"
+REMOTE_SHA256="$(aws s3api head-object --bucket "$BACKUP_S3_BUCKET" --key "$OBJECT_KEY" --endpoint-url "$BACKUP_S3_ENDPOINT_URL" --query 'Metadata.sha256' --output text)"
+test "$REMOTE_SHA256" = "$CIPHER_SHA256"
+aws s3 cp "s3://${BACKUP_S3_BUCKET}/${OBJECT_KEY}" "$ROOT/roundtrip.tar.gz.gpg" --endpoint-url "$BACKUP_S3_ENDPOINT_URL" --only-show-errors
+cmp --silent "$ROOT/backup.tar.gz.gpg" "$ROOT/roundtrip.tar.gz.gpg"
+echo 'Encrypted backup and disposable restore validation completed.'
