@@ -55,6 +55,8 @@ LOCAL_STORAGE_URL="http://127.0.0.1:54321"
 LOCAL_SERVICE_KEY="$(cd "$ROOT/supabase" && supabase status -o env 2> "$ROOT/logs/supabase-status.log" | sed -n 's/^SERVICE_ROLE_KEY=//p' | tr -d '"\r')"
 test -n "$LOCAL_SERVICE_KEY"
 echo "::add-mask::$LOCAL_SERVICE_KEY"
+export RESTORE_SUPABASE_URL="$LOCAL_STORAGE_URL"
+export RESTORE_SUPABASE_SERVICE_ROLE_KEY="$LOCAL_SERVICE_KEY"
 
 # New database is isolated in the disposable Supabase PostgreSQL 17 container.
 PGPASSWORD=postgres psql 'postgresql://postgres:postgres@127.0.0.1:54322/postgres' -v ON_ERROR_STOP=1 -c 'CREATE DATABASE mk9_backup_restore'
