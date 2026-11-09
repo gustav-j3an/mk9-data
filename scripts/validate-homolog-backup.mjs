@@ -33,7 +33,9 @@ export function validateCanonicalHomologationBackup(archiveDir = 'supabase/fetch
     const fullPath = join(archiveDir, f);
     const buf = readFileSync(fullPath);
     totalBytes += buf.length;
-    const sha = createHash('sha256').update(buf).digest('hex').toUpperCase();
+    // Canonicalize text line endings so the existing pinned backup digest is OS independent.
+    const content = buf.toString('utf8').replace(/\r?\n/g, '\r\n');
+    const sha = createHash('sha256').update(content, 'utf8').digest('hex').toUpperCase();
     hashList.push(sha);
   }
 

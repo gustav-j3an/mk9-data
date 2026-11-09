@@ -41,8 +41,9 @@ export const AUTHORIZED_MIGRATIONS = [
 ];
 
 export function computeFileSha256(filePath) {
-  const buf = readFileSync(filePath);
-  return createHash('sha256').update(buf).digest('hex').toUpperCase();
+  // As migrations are text, canonicalize line endings so pinned hashes are stable on Windows (CRLF) and Linux (LF).
+  const content = readFileSync(filePath, 'utf8').replace(/\r?\n/g, '\r\n');
+  return createHash('sha256').update(content, 'utf8').digest('hex').toUpperCase();
 }
 
 export function validateAuthorizedMigrationsIntegrity() {
