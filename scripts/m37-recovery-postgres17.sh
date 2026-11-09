@@ -104,9 +104,10 @@ apply_migration() {
   local migration="$1"
   echo "Migration: $(basename "$migration")"
   if grep -Eq '^[[:space:]]*BEGIN;[[:space:]]*$' "$migration"; then
-    # Files with their own BEGIN/COMMIT must contain no SQL after COMMIT.
-    grep -Eq '^[[:space:]]*COMMIT;[[:space:]]*$' "$migration"
-    if awk '/^[[:space:]]*COMMIT;[[:space:]]*$/ { ended=1; next } ended && $0 !~ /^[[:space:]]*($|--)/ { exit 1 }' "$migration"; then
+    # Files with their own BEGIN/COMMIT may end with empty SQL terminators,
+    # but no statements may follow COMMIT.
+    grep -Eq '^[[:space:]]*COMMIT;[[:space:]]*;*[[:space:]]*$' "$migration"
+    if awk '/^[[:space:]]*COMMIT;[[:space:]]*;*[[:space:]]*$/ { ended=1; next } ended && $0 !~ /^[[:space:]]*($|--|;[[:space:]]*$)/ { exit 1 }' "$migration"; then
       psql -X -v ON_ERROR_STOP=1 -f "$migration" >/dev/null
     else
       echo "SQL follows COMMIT in $migration" >&2
@@ -131,6 +132,55 @@ done < <(find supabase/migrations -maxdepth 1 -type f -name '*.sql' | sort | awk
 for migration in "${baseline[@]}"; do
   apply_migration "$migration"
 done
+
+# The 47-row ledger describes remote history but does not execute its SQL.
+# Rebuild all four captured M18 definitions in order on this disposable database.
+historical_m18=(
+  supabase/fetched_homologation_migrations/20261030152933_m18_homologation_security.sql
+  supabase/fetched_homologation_migrations/20261030153146_m18_active_session_guard.sql
+  supabase/fetched_homologation_migrations/20261030153303_m18_industry_route_projection.sql
+  supabase/fetched_homologation_migrations/20261030153702_m18_photo_upsert_permission.sql
+)
+for migration in "${historical_m18[@]}"; do
+  test -f "$migration"
+  apply_migration "$migration"
+done
+
+# Verify that M18 installed the authentic active-user behavior, grants, and
+# the associated RLS/view/storage objects required by the later migrations.
+m18_contract="$(psql -X -v ON_ERROR_STOP=1 -Atqc "
+SELECT
+  (SELECT count(*) = 1 AND bool_and(p.prosecdef AND p.provolatile = 's'
+       AND p.proconfig = ARRAY['search_path=pg_catalog']::text[]
+       AND lower(regexp_replace(p.prosrc, '[[:space:]]+', '', 'g')) = 'selectexists(select1frompublic.profileswhereid=auth.uid()andstatus=''ativo'');'
+       AND has_function_privilege('authenticated', p.oid, 'EXECUTE')
+       AND NOT has_function_privilege('anon', p.oid, 'EXECUTE')
+       AND NOT attendance_private.active_user())
+   FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'attendance_private' AND p.proname = 'active_user')
+  AND
+  (SELECT count(*) > 0
+   FROM pg_policy pol
+   JOIN pg_class c ON c.oid = pol.polrelid
+   JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'public' AND pol.polname = 'm18_active_session')
+  AND
+  (SELECT count(*) = 1
+   FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'public' AND c.relname = 'industry_routes'
+     AND c.relkind = 'v' AND c.reloptions @> ARRAY['security_barrier=true'])
+  AND
+  (SELECT count(*) = 1
+   FROM pg_policy pol
+   WHERE pol.polrelid = 'storage.objects'::regclass
+     AND pol.polname = 'm18_authorized_photo_upsert'
+     AND pol.polcmd = 'w')
+")"
+if [ "$m18_contract" != "t" ]; then
+  echo "Historical M18 security contract is incomplete or differs from homologation." >&2
+  exit 1
+fi
+echo "Four authentic M18 migrations applied; active_user definition, grants, and RLS objects verified."
 
 # Establish the exact pre-migration function state from the captured homologation
 # definitions, then compare it with the post-recovery state on this same server.
