@@ -273,7 +273,7 @@ migrations=(
   supabase/migrations/20261106140000_m37_pending_visit_active_route_guard.sql
   supabase/migrations/20261106150000_m37_checkin_route_and_conflict_guard.sql
   supabase/migrations/20261107140000_m37_reconcile_materialized_pending_recovery.sql
-  supabase/migrations/20261108100000_m37_integral_weekly_recovery.sql
+  supabase/migrations/20261108160835_m37_integral_weekly_recovery.sql
   supabase/migrations/20261108130000_m38_visit_cancellation_and_day_end_close.sql
   supabase/migrations/20261108170619_m38_retry_attempt_history.sql
   supabase/migrations/20261108174150_m38_checkin_reuses_active_scheduled_attempt.sql
@@ -298,7 +298,7 @@ m37_base AS (
     AND p.proname = 'attendance_start_scheduled_occurrence_m37_base'
 )
 SELECT
-  EXISTS (SELECT 1 FROM supabase_migrations.schema_migrations WHERE version = '20261108100000')
+  EXISTS (SELECT 1 FROM supabase_migrations.schema_migrations WHERE version = '20261108160835')
   AND (SELECT position('AND scheduled_date IS NULL' IN prosrc) > 0
             AND position('ON CONFLICT (promotor_matricula, loja_codigo, industria_codigo, data_visita) WHERE scheduled_date IS NULL' IN prosrc) > 0
        FROM checkin)
