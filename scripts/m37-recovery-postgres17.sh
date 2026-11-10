@@ -202,6 +202,7 @@ migrations=(
   supabase/migrations/20261106140000_m37_pending_visit_active_route_guard.sql
   supabase/migrations/20261106150000_m37_checkin_route_and_conflict_guard.sql
   supabase/migrations/20261107140000_m37_reconcile_materialized_pending_recovery.sql
+  supabase/migrations/20261108100000_m37_integral_weekly_recovery.sql
   supabase/migrations/20261108130000_m38_visit_cancellation_and_day_end_close.sql
   supabase/migrations/20261108170619_m38_retry_attempt_history.sql
   supabase/migrations/20261108174150_m38_checkin_reuses_active_scheduled_attempt.sql
@@ -233,17 +234,17 @@ for migration in "${migrations[@]}"; do
 done
 
 rm -rf "$cli_test_dir"
-echo "All 8 target migrations successfully applied from checked-in SQL files."
+echo "All 9 target migrations successfully applied from checked-in SQL files."
 echo "Current ledger entries for target migrations:"
 psql -X -v ON_ERROR_STOP=1 -c "SELECT version, name FROM supabase_migrations.schema_migrations WHERE version >= '20261105165500' ORDER BY version;"
 
-# Ledger sintético descartável: 47 historical aliases + 8 target migrations = 55
+# Ledger sintético descartável: 47 historical aliases + 9 target migrations = 56
 total_ledger="$(psql -X -v ON_ERROR_STOP=1 -Atqc "SELECT count(*) FROM supabase_migrations.schema_migrations;")"
-if [ "$total_ledger" -ne 55 ]; then
-  echo "ERROR: Expected 55 test-ledger migrations (47 baseline + 8 target), found $total_ledger" >&2
+if [ "$total_ledger" -ne 56 ]; then
+  echo "ERROR: Expected 56 test-ledger migrations (47 baseline + 9 target), found $total_ledger" >&2
   exit 1
 fi
-echo "Verified exact disposable ledger count: $total_ledger total versions (47 historical + 8 target)."
+echo "Verified exact disposable ledger count: $total_ledger total versions (47 historical + 9 target)."
 
 if psql -X -v ON_ERROR_STOP=1 -Atqc "$snapshot_query" | cmp -s "$before_snapshot" -; then
   echo 'Target migrations did not change captured functions' >&2
