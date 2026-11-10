@@ -90,7 +90,7 @@ test('backup script encrypts before publishing only a GPG artifact and keeps res
   assert.match(workflow, /workflow_dispatch:/);
   assert.doesNotMatch(workflow, /\n\s+push:/);
   assert.match(workflow, /environment: homologation-backup/);
-  assert.match(workflow, /uses: actions\/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f/);
+  assert.match(workflow, /uses: actions\/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9/);
   assert.match(workflow, /retention-days: 1/);
   assert.match(workflow, /if-no-files-found: error/);
   assert.match(workflow, /\.tar\.gz\.gpg/);
