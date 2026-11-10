@@ -1,0 +1,88 @@
+name: MK9 homologation backup and restore validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_ref:
+        description: Supabase project reference (must be homologation)
+        required: true
+        type: string
+      confirm_artifact_access:
+        description: Confirm this encrypted file will be stored as a short-lived GitHub artifact in a public repository
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mk9-homologation-backup
+  cancel-in-progress: false
+
+jobs:
+  backup-and-restore:
+    if: github.ref == 'refs/heads/codex/m38-backup-actions'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    environment: homologation-backup
+    env:
+      GITHUB_REF: ${{ github.ref }}
+      INPUT_PROJECT_REF: ${{ inputs.project_ref }}
+      INPUT_CONFIRM_ARTIFACT_ACCESS: ${{ inputs.confirm_artifact_access }}
+      SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+      SUPABASE_PROJECT_URL: ${{ vars.SUPABASE_PROJECT_URL }}
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      BACKUP_GPG_PASSPHRASE: ${{ secrets.BACKUP_GPG_PASSPHRASE }}
+    steps:
+      - name: Check out this implementation branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: codex/m38-backup-actions
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22.16.0'
+
+      - name: Run preflight and security checks
+        run: node scripts/preflight.mjs
+
+      - name: Install PostgreSQL 17 client and GPG
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo install -d -m 0755 /usr/share/keyrings
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /usr/share/keyrings/postgresql.gpg
+          echo 'deb [signed-by=/usr/share/keyrings/postgresql.gpg] https://apt.postgresql.org/pub/repos/apt noble-pgdg main' | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-17 gpg
+          pg_dump --version | grep -q '^pg_dump (PostgreSQL) 17\.'
+          docker --version
+
+      - name: Install pinned Supabase CLI
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          curl -fsSL https://github.com/supabase/cli/releases/download/v3.0.0/supabase_3.0.0_linux_amd64.tar.gz -o "$RUNNER_TEMP/supabase-cli.tar.gz"
+          tar -xzf "$RUNNER_TEMP/supabase-cli.tar.gz" -C "$RUNNER_TEMP" supabase
+          sudo install "$RUNNER_TEMP/supabase" /usr/local/bin/supabase
+          test "$(supabase --version)" = "3.0.0"
+
+      - name: Export, restore-test, and encrypt backup
+        shell: bash
+        run: bash scripts/mk9-supabase-homologation-backup.sh
+
+      - name: Upload encrypted backup artifact (1 day)
+        if: success()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mk9-homologation-backup-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/mk9-homologation-backup-${{ github.run_id }}-${{ github.run_attempt }}.tar.gz.gpg
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+          overwrite: false
+          include-hidden-files: false
