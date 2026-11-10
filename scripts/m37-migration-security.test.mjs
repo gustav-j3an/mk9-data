@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const migration = readFileSync(
-  new URL('../supabase/migrations/20261108100000_m37_integral_weekly_recovery.sql', import.meta.url),
+  new URL('../supabase/migrations/20261108160835_m37_integral_weekly_recovery.sql', import.meta.url),
   'utf8'
 );
 const rpcStart = migration.indexOf('CREATE OR REPLACE FUNCTION attendance_private.attendance_start_scheduled_occurrence(');

@@ -2,10 +2,10 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
-const migration = await readFile(new URL('../supabase/migrations/20261108130000_m38_visit_cancellation_and_day_end_close.sql', import.meta.url), 'utf8');
+const migration = await readFile(new URL('../supabase/migrations/20261110150000_m38_visit_cancellation_and_day_end_close.sql', import.meta.url), 'utf8');
 const portal = await readFile(new URL('../src/views/PromoterPortalView.tsx', import.meta.url), 'utf8');
 const cancellationService = await readFile(new URL('../src/lib/visitCancellationService.ts', import.meta.url), 'utf8');
-const recoveryMigration = await readFile(new URL('../supabase/migrations/20261108100000_m37_integral_weekly_recovery.sql', import.meta.url), 'utf8');
+const recoveryMigration = await readFile(new URL('../supabase/migrations/20261108160835_m37_integral_weekly_recovery.sql', import.meta.url), 'utf8');
 
 test('cancelamento exige sessão de promotor ativo, propriedade da visita e justificativa específica', () => {
   assert.match(migration, /p\.id = auth\.uid\(\) AND p\.role = 'promotor' AND p\.status = 'ativo'/);

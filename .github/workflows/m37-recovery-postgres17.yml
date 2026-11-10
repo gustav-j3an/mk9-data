@@ -1,4 +1,4 @@
-name: M37 recovery on Supabase PostgreSQL 17
+name: M37 and M38 isolated validation on Supabase PostgreSQL 17
 
 on:
   push:
@@ -12,9 +12,21 @@ permissions:
 jobs:
   recovery:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install npm dependencies
+        run: npm ci
+      - name: Run complete npm test suite
+        run: npm test
+      - name: Run TypeScript typecheck
+        run: npm run typecheck
+      - name: Build production bundle
+        run: npm run build
       - name: Install pinned Supabase CLI
         run: |
           curl -fsSL https://github.com/supabase/cli/releases/download/v3.0.0/supabase_3.0.0_linux_amd64.tar.gz -o /tmp/supabase-cli.tar.gz
@@ -29,8 +41,8 @@ jobs:
           cd "$RUNNER_TEMP/mk9-m37"
           supabase init
           sed -i 's/^major_version = .*/major_version = 17/' supabase/config.toml
-          supabase start -x realtime,storage-api,imgproxy,mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor >/dev/null
-      - name: Apply real baseline, four migrations and recovery
+          supabase start -x realtime,storage-api,imgproxy,mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor 2>&1 | tee "$RUNNER_TEMP/supabase-start.log"
+      - name: Simulate homologation ledger, migrations and functional suites
         env:
           SUPABASE_TEST_WORKDIR: ${{ runner.temp }}/mk9-m37
           PGHOST: 127.0.0.1
@@ -38,7 +50,42 @@ jobs:
           PGUSER: postgres
           PGPASSWORD: postgres
           PGDATABASE: postgres
-        run: bash scripts/m37-recovery-postgres17.sh
+        run: |
+          monitor_pid=''
+          cleanup_monitor() {
+            if [ -n "$monitor_pid" ]; then
+              kill "$monitor_pid" 2>/dev/null || true
+              wait "$monitor_pid" 2>/dev/null || true
+            fi
+          }
+          trap cleanup_monitor EXIT
+          {
+            while true; do
+              date -Is
+              docker stats --no-stream
+              sleep 15
+            done
+          } > "$RUNNER_TEMP/docker-memory-samples.txt" 2>&1 &
+          monitor_pid=$!
+          bash scripts/m37-recovery-postgres17.sh
+      - name: Capture PostgreSQL and container diagnostics
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/mk9-diagnostics"
+          cp "$RUNNER_TEMP/supabase-start.log" "$RUNNER_TEMP/mk9-diagnostics/" 2>/dev/null || true
+          cp "$RUNNER_TEMP/docker-memory-samples.txt" "$RUNNER_TEMP/mk9-diagnostics/" 2>/dev/null || true
+          free -h > "$RUNNER_TEMP/mk9-diagnostics/runner-memory.txt" 2>&1 || true
+          docker ps -a --no-trunc > "$RUNNER_TEMP/mk9-diagnostics/docker-containers.txt" 2>&1 || true
+          docker stats --no-stream > "$RUNNER_TEMP/mk9-diagnostics/docker-memory.txt" 2>&1 || true
+          if [ -f "$RUNNER_TEMP/mk9-m37/supabase/config.toml" ]; then
+            cd "$RUNNER_TEMP/mk9-m37"
+            supabase status > "$RUNNER_TEMP/mk9-diagnostics/supabase-status.txt" 2>&1 || true
+          fi
+          for diagnostic in "$RUNNER_TEMP"/mk9-diagnostics/*; do
+            [ -f "$diagnostic" ] || continue
+            echo "=== $(basename "$diagnostic") ==="
+            cat "$diagnostic"
+          done
       - name: Stop isolated stack
         if: always()
         run: |

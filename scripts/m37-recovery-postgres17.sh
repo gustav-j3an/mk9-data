@@ -77,15 +77,20 @@ psql -X -v ON_ERROR_STOP=1 -Atqc "
     ('20261030153702', 'm18_photo_upsert_permission')
   ON CONFLICT (version) DO NOTHING;
 "
-echo "Homologation baseline ledger simulated with $(psql -X -v ON_ERROR_STOP=1 -Atqc 'SELECT count(*) FROM supabase_migrations.schema_migrations;') recorded versions."
+baseline_count="$(psql -X -v ON_ERROR_STOP=1 -Atqc 'SELECT count(*) FROM supabase_migrations.schema_migrations;')"
+if [ "$baseline_count" -ne 47 ]; then
+  echo "ERROR: Expected exact 47-version historical baseline, found $baseline_count" >&2
+  exit 1
+fi
+echo "Homologation historical baseline simulated with $baseline_count recorded versions."
 
 apply_migration() {
   local migration="$1"
   echo "Migration: $(basename "$migration")"
   if grep -Eq '^[[:space:]]*BEGIN;[[:space:]]*$' "$migration"; then
     # Files with their own BEGIN/COMMIT must contain no SQL after COMMIT.
-    grep -Eq '^[[:space:]]*COMMIT;[[:space:]]*$' "$migration"
-    if awk '/^[[:space:]]*COMMIT;[[:space:]]*$/ { ended=1; next } ended && $0 !~ /^[[:space:]]*($|--)/ { exit 1 }' "$migration"; then
+    grep -Eq '^[[:space:]]*COMMIT;+[[:space:]]*$' "$migration"
+    if awk '/^[[:space:]]*COMMIT;+[[:space:]]*$/ { ended=1; next } ended && $0 !~ /^[[:space:]]*($|--|;[[:space:]]*$)/ { exit 1 }' "$migration"; then
       psql -X -v ON_ERROR_STOP=1 -f "$migration" >/dev/null
     else
       echo "SQL follows COMMIT in $migration" >&2
@@ -108,6 +113,20 @@ while IFS= read -r migration; do
   baseline+=("$migration")
 done < <(find supabase/migrations -maxdepth 1 -type f -name '*.sql' | sort | awk -F/ '$NF < "20261024" && $NF !~ /^20260930_/')
 for migration in "${baseline[@]}"; do
+  apply_migration "$migration"
+done
+
+# The 47-version historical ledger also contains four M18 migrations. Their
+# SQL is captured under the homologation's canonical versions, while this
+# repository keeps the matching source in fetched_homologation_migrations.
+# Rebuild those schema dependencies without adding duplicate ledger rows.
+for migration in \
+  supabase/fetched_homologation_migrations/20261030152933_m18_homologation_security.sql \
+  supabase/fetched_homologation_migrations/20261030153146_m18_active_session_guard.sql \
+  supabase/fetched_homologation_migrations/20261030153303_m18_industry_route_projection.sql \
+  supabase/fetched_homologation_migrations/20261030153702_m18_photo_upsert_permission.sql; do
+  test -f "$migration"
+  echo "Historical schema dependency (already in ledger): $(basename "$migration")"
   apply_migration "$migration"
 done
 
@@ -202,12 +221,13 @@ migrations=(
   supabase/migrations/20261106140000_m37_pending_visit_active_route_guard.sql
   supabase/migrations/20261106150000_m37_checkin_route_and_conflict_guard.sql
   supabase/migrations/20261107140000_m37_reconcile_materialized_pending_recovery.sql
-  supabase/migrations/20261108100000_m37_integral_weekly_recovery.sql
-  supabase/migrations/20261108130000_m38_visit_cancellation_and_day_end_close.sql
-  supabase/migrations/20261108170619_m38_retry_attempt_history.sql
-  supabase/migrations/20261108174150_m38_checkin_reuses_active_scheduled_attempt.sql
+  supabase/migrations/20261108160835_m37_integral_weekly_recovery.sql
+  supabase/migrations/20261110150000_m38_visit_cancellation_and_day_end_close.sql
+  supabase/migrations/20261110160000_m38_retry_attempt_history.sql
+  supabase/migrations/20261110170000_m38_checkin_reuses_active_scheduled_attempt.sql
 )
 
+applied_dependency_count=0
 for migration in "${migrations[@]}"; do
   mig_basename="$(basename "$migration")"
   expected_ver="$(echo "$mig_basename" | cut -d_ -f1)"
@@ -231,20 +251,43 @@ for migration in "${migrations[@]}"; do
 
   # Verificar existência das funções alvo
   psql -X -v ON_ERROR_STOP=1 -Atqc "SELECT count(*) = 3 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE (n.nspname='public' AND p.proname='attendance_check_in') OR (n.nspname='attendance_private' AND p.proname='attendance_start_scheduled_occurrence') OR (n.nspname='public' AND p.proname='check_visit_promotor_update_integrity')" | grep -qx t
+
+  applied_dependency_count=$((applied_dependency_count + 1))
+  if [ "$applied_dependency_count" -eq 6 ]; then
+    simulated_ledger_count="$(psql -X -v ON_ERROR_STOP=1 -Atqc 'SELECT count(*) FROM supabase_migrations.schema_migrations;')"
+    if [ "$simulated_ledger_count" -ne 53 ]; then
+      echo "ERROR: Expected the real 53-version homologation pre-M38 ledger, found $simulated_ledger_count" >&2
+      exit 1
+    fi
+    psql -X -v ON_ERROR_STOP=1 -Atqc "SELECT count(*) = 6 AND bool_and(name IS NOT NULL) FROM supabase_migrations.schema_migrations WHERE version >= '20261105165500'" | grep -qx t
+    psql -X -v ON_ERROR_STOP=1 -Atqc "SELECT EXISTS(SELECT 1 FROM supabase_migrations.schema_migrations WHERE version='20261108160835' AND name='m37_integral_weekly_recovery') AND NOT EXISTS(SELECT 1 FROM supabase_migrations.schema_migrations WHERE version='20261108100000')" | grep -qx t
+    psql -X -v ON_ERROR_STOP=1 -Atqc "SELECT to_regclass('public.visits') IS NOT NULL AND to_regclass('public.visit_schedule_actions') IS NOT NULL AND to_regclass('public.rotas') IS NOT NULL AND to_regclass('public.profiles') IS NOT NULL AND to_regclass('public.industrias') IS NOT NULL AND to_regprocedure('public.attendance_check_in(text,text,uuid,numeric,numeric,numeric)') IS NOT NULL AND to_regprocedure('attendance_private.attendance_start_scheduled_occurrence(uuid,date,text,numeric,numeric,numeric)') IS NOT NULL AND to_regprocedure('public.check_visit_promotor_update_integrity()') IS NOT NULL" | grep -qx t
+    schema_facts="$(psql -X -v ON_ERROR_STOP=1 -At -f scripts/m38-homologation-schema-fingerprint.sql)"
+    expected_schema_facts=$'152\t41c50d8fa3740cde1c84bb56217d48e2ea3f3d74a30898f746c4a89a62391054'
+    if [ "$schema_facts" != "$expected_schema_facts" ]; then
+      echo "ERROR: Simulated 53-version M30/M37 schema differs from audited homologation fingerprint." >&2
+      echo "Expected: $expected_schema_facts" >&2
+      echo "Actual:   $schema_facts" >&2
+      exit 1
+    fi
+    psql -X -v ON_ERROR_STOP=1 -Atqc "SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname='pg_cron')" | grep -qx t
+    echo "Verified exact 53-version homologation pre-M38 ledger and 152-fact M30/M37 catalog fingerprint."
+  fi
 done
 
 rm -rf "$cli_test_dir"
-echo "All 9 target migrations successfully applied from checked-in SQL files."
+echo "Six already-applied M30/M37 dependencies and three re-versioned M38 migrations successfully applied in the disposable database."
 echo "Current ledger entries for target migrations:"
 psql -X -v ON_ERROR_STOP=1 -c "SELECT version, name FROM supabase_migrations.schema_migrations WHERE version >= '20261105165500' ORDER BY version;"
 
-# Ledger sintético descartável: 47 historical aliases + 9 target migrations = 56
+# Ledger descartável: 47 historical aliases + six M30/M37 versions (the live
+# 53-version state) + three pending M38 migrations = 56.
 total_ledger="$(psql -X -v ON_ERROR_STOP=1 -Atqc "SELECT count(*) FROM supabase_migrations.schema_migrations;")"
 if [ "$total_ledger" -ne 56 ]; then
   echo "ERROR: Expected 56 test-ledger migrations (47 baseline + 9 target), found $total_ledger" >&2
   exit 1
 fi
-echo "Verified exact disposable ledger count: $total_ledger total versions (47 historical + 9 target)."
+echo "Verified exact disposable ledger count: $total_ledger total versions (53 homologation baseline + 3 M38 migrations)."
 
 if psql -X -v ON_ERROR_STOP=1 -Atqc "$snapshot_query" | cmp -s "$before_snapshot" -; then
   echo 'Target migrations did not change captured functions' >&2

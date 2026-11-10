@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
-const retryMigration = await readFile(new URL('../supabase/migrations/20261108170619_m38_retry_attempt_history.sql', import.meta.url), 'utf8');
-const closeMigration = await readFile(new URL('../supabase/migrations/20261108130000_m38_visit_cancellation_and_day_end_close.sql', import.meta.url), 'utf8');
-const checkinMigration = await readFile(new URL('../supabase/migrations/20261108174150_m38_checkin_reuses_active_scheduled_attempt.sql', import.meta.url), 'utf8');
+const retryMigration = await readFile(new URL('../supabase/migrations/20261110160000_m38_retry_attempt_history.sql', import.meta.url), 'utf8');
+const closeMigration = await readFile(new URL('../supabase/migrations/20261110150000_m38_visit_cancellation_and_day_end_close.sql', import.meta.url), 'utf8');
+const checkinMigration = await readFile(new URL('../supabase/migrations/20261110170000_m38_checkin_reuses_active_scheduled_attempt.sql', import.meta.url), 'utf8');
 
 test('recovery attempts keep the scheduled occurrence and create an immutable linked visit row', () => {
   assert.match(retryMigration, /ADD COLUMN attempt_number smallint NOT NULL DEFAULT 1/);
