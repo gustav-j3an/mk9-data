@@ -101,6 +101,30 @@ apply_migration() {
   fi
 }
 
+migration_ledger_name() {
+  local migration_basename="${1##*/}"
+  if [[ "$migration_basename" != *.sql ]]; then
+    echo "ERROR: Expected a .sql migration filename, received: $migration_basename" >&2
+    return 1
+  fi
+  local migration_stem="${migration_basename%.sql}"
+  printf '%s\n' "${migration_stem#*_}"
+}
+
+assert_psql_true() {
+  local description="$1"
+  local query="$2"
+  local result
+  if ! result="$(psql -X -v ON_ERROR_STOP=1 -Atqc "$query")"; then
+    echo "ERROR: Could not evaluate database assertion: $description" >&2
+    return 1
+  fi
+  if [[ "$result" != t ]]; then
+    echo "ERROR: $description (actual result: $result)" >&2
+    return 1
+  fi
+}
+
 # Use the actual repository migrations. A missing Supabase dependency is a hard failure;
 # this runner deliberately does not fabricate auth/storage objects or disable body checks.
 baseline=(
@@ -231,6 +255,7 @@ applied_dependency_count=0
 for migration in "${migrations[@]}"; do
   mig_basename="$(basename "$migration")"
   expected_ver="$(echo "$mig_basename" | cut -d_ -f1)"
+  ledger_name="$(migration_ledger_name "$mig_basename")"
   echo "--- Applying migration to isolated PostgreSQL: $mig_basename ---"
 
   # Garantir existência e adicionar cumulativamente a migration atual no diretório de migrations do workdir isolado
@@ -243,14 +268,18 @@ for migration in "${migrations[@]}"; do
   # Aplicar o SQL oficial ao PostgreSQL descartÃ¡vel. O CLI falha ao reconciliar
   # aliases histÃ³ricos; este ledger existe apenas neste banco local de teste.
   apply_migration "$migration"
-  psql -X -v ON_ERROR_STOP=1 -Atqc "INSERT INTO supabase_migrations.schema_migrations(version,name) VALUES ('$expected_ver','${mig_basename#*_}') ON CONFLICT(version) DO NOTHING"
+  psql -X -v ON_ERROR_STOP=1 -Atqc "INSERT INTO supabase_migrations.schema_migrations(version,name) VALUES ('$expected_ver','$ledger_name') ON CONFLICT(version) DO NOTHING"
 
   # Verificar se a versão foi registrada nativamente pelo CLI no ledger
-  psql -X -v ON_ERROR_STOP=1 -Atqc "SELECT count(*) FROM supabase_migrations.schema_migrations WHERE version = '$expected_ver'" | grep -qx 1
+  registered_count="$(psql -X -v ON_ERROR_STOP=1 -Atqc "SELECT count(*) FROM supabase_migrations.schema_migrations WHERE version = '$expected_ver'")"
+  if [[ "$registered_count" != 1 ]]; then
+    echo "ERROR: Migration version $expected_ver was not registered exactly once (found $registered_count)." >&2
+    exit 1
+  fi
   echo "Version $expected_ver applied and recorded in disposable test ledger."
 
   # Verificar existência das funções alvo
-  psql -X -v ON_ERROR_STOP=1 -Atqc "SELECT count(*) = 3 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE (n.nspname='public' AND p.proname='attendance_check_in') OR (n.nspname='attendance_private' AND p.proname='attendance_start_scheduled_occurrence') OR (n.nspname='public' AND p.proname='check_visit_promotor_update_integrity')" | grep -qx t
+  assert_psql_true "the three M37 check-in/recovery functions exist after $expected_ver" "SELECT count(*) = 3 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE (n.nspname='public' AND p.proname='attendance_check_in') OR (n.nspname='attendance_private' AND p.proname='attendance_start_scheduled_occurrence') OR (n.nspname='public' AND p.proname='check_visit_promotor_update_integrity')"
 
   applied_dependency_count=$((applied_dependency_count + 1))
   if [ "$applied_dependency_count" -eq 6 ]; then
@@ -259,9 +288,9 @@ for migration in "${migrations[@]}"; do
       echo "ERROR: Expected the real 53-version homologation pre-M38 ledger, found $simulated_ledger_count" >&2
       exit 1
     fi
-    psql -X -v ON_ERROR_STOP=1 -Atqc "SELECT count(*) = 6 AND bool_and(name IS NOT NULL) FROM supabase_migrations.schema_migrations WHERE version >= '20261105165500'" | grep -qx t
-    psql -X -v ON_ERROR_STOP=1 -Atqc "SELECT EXISTS(SELECT 1 FROM supabase_migrations.schema_migrations WHERE version='20261108160835' AND name='m37_integral_weekly_recovery') AND NOT EXISTS(SELECT 1 FROM supabase_migrations.schema_migrations WHERE version='20261108100000')" | grep -qx t
-    psql -X -v ON_ERROR_STOP=1 -Atqc "SELECT to_regclass('public.visits') IS NOT NULL AND to_regclass('public.visit_schedule_actions') IS NOT NULL AND to_regclass('public.rotas') IS NOT NULL AND to_regclass('public.profiles') IS NOT NULL AND to_regclass('public.industrias') IS NOT NULL AND to_regprocedure('public.attendance_check_in(text,text,uuid,numeric,numeric,numeric)') IS NOT NULL AND to_regprocedure('attendance_private.attendance_start_scheduled_occurrence(uuid,date,text,numeric,numeric,numeric)') IS NOT NULL AND to_regprocedure('public.check_visit_promotor_update_integrity()') IS NOT NULL" | grep -qx t
+    assert_psql_true "all six M30/M37 ledger entries use their extension-free homologation names" "SELECT count(*) = 6 AND bool_and(actual.name = expected.name) FROM (VALUES ('20261105165500','m30_harden_industry_active_checkin'),('20261106131614','m30_serialize_industry_checkin'),('20261106140000','m37_pending_visit_active_route_guard'),('20261106150000','m37_checkin_route_and_conflict_guard'),('20261107140000','m37_reconcile_materialized_pending_recovery'),('20261108160835','m37_integral_weekly_recovery')) AS expected(version,name) LEFT JOIN supabase_migrations.schema_migrations actual USING (version)"
+    assert_psql_true "the applied M37 weekly migration keeps its homologation version and name, with no obsolete version" "SELECT EXISTS(SELECT 1 FROM supabase_migrations.schema_migrations WHERE version='20261108160835' AND name='m37_integral_weekly_recovery') AND NOT EXISTS(SELECT 1 FROM supabase_migrations.schema_migrations WHERE version='20261108100000')"
+    assert_psql_true "the expected catalog relations and functions exist after the six M30/M37 migrations" "SELECT to_regclass('public.visits') IS NOT NULL AND to_regclass('public.visit_schedule_actions') IS NOT NULL AND to_regclass('public.rotas') IS NOT NULL AND to_regclass('public.profiles') IS NOT NULL AND to_regclass('public.industrias') IS NOT NULL AND to_regprocedure('public.attendance_check_in(text,text,uuid,numeric,numeric,numeric)') IS NOT NULL AND to_regprocedure('attendance_private.attendance_start_scheduled_occurrence(uuid,date,text,numeric,numeric,numeric)') IS NOT NULL AND to_regprocedure('public.check_visit_promotor_update_integrity()') IS NOT NULL"
     schema_facts="$(psql -X -v ON_ERROR_STOP=1 -At -f scripts/m38-homologation-schema-fingerprint.sql)"
     expected_schema_facts=$'152\t41c50d8fa3740cde1c84bb56217d48e2ea3f3d74a30898f746c4a89a62391054'
     if [ "$schema_facts" != "$expected_schema_facts" ]; then
@@ -270,7 +299,7 @@ for migration in "${migrations[@]}"; do
       echo "Actual:   $schema_facts" >&2
       exit 1
     fi
-    psql -X -v ON_ERROR_STOP=1 -Atqc "SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname='pg_cron')" | grep -qx t
+    assert_psql_true "pg_cron is available in the PostgreSQL 17 simulation" "SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname='pg_cron')"
     echo "Verified exact 53-version homologation pre-M38 ledger and 152-fact M30/M37 catalog fingerprint."
   fi
 done
