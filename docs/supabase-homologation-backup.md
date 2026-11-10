@@ -1,51 +1,62 @@
-# MK9 homologation backup workflow
+# Backup de homologação pelo GitHub Actions
 
-This manual workflow is intended for the staging Supabase project `tafjceemuetqjyngresg` only. It uses a GitHub-hosted Ubuntu runner, PostgreSQL 17 client tools, Supabase CLI `3.0.0`, and a disposable local Supabase stack. It does not apply migrations, enable `pg_cron`, or write to the source database. Production's project reference and endpoint are intentionally absent from this implementation.
+O workflow manual gera um backup da homologação `tafjceemuetqjyngresg` em runner hospedado pelo GitHub. Ele usa ferramentas PostgreSQL 17, Supabase CLI `3.0.0`, Docker e uma stack Supabase descartável para validar separadamente a restauração do banco e do Storage. Não aplica migrations, não habilita `pg_cron` e não grava na origem.
 
-The job is available only on `codex/m38-backup-actions`. It requires the protected GitHub Environment `homologation-backup`, a successful exact-project preflight, the manual private-destination confirmation, a full restore and integrity comparison in the disposable stack, and encryption before it uploads anything to the external object store. The workflow has only `workflow_dispatch`, read-only repository permission, no GitHub artifact upload, and no Supabase or deployment token permissions.
+O job só roda na branch `codex/m38-backup-actions` e exige o Environment protegido `homologation-backup`, as três credenciais de homologação, uma senha GPG forte e a confirmação manual de que o artifact criptografado ficará no GitHub. O workflow só tem `workflow_dispatch`, permissão de repositório `contents: read` e não usa tokens de deploy.
 
-## GitHub configuration
+## Aviso sobre o armazenamento
 
-Create Environment `homologation-backup` in repository settings. Require at least one reviewer, restrict deployments to `codex/m38-backup-actions`, and protect that branch with reviewed changes. Keep the following values in the Environment (not repository-wide settings):
+Este repositório é público. O artifact fica associado à execução do GitHub Actions e pode ser acessível conforme as permissões e regras do GitHub para o repositório. Ele não deve ser tratado como armazenamento privado permanente. A retenção configurada é de **1 dia**; depois, o artifact expira. O único arquivo enviado é o `.tar.gz.gpg` cifrado; nenhum dump, dado Auth, foto, manifesto ou checksum em texto aberto é enviado como artifact.
+
+A senha GPG fica em um GitHub Environment Secret e deve ter pelo menos 32 bytes, sem quebra de linha. Mantenha uma cópia de recuperação da senha em local separado e protegido. Sem essa senha, não será possível descriptografar o arquivo. Mesmo cifrado, o artifact pode ser baixado por pessoas que tenham acesso à execução/repositório, então proteja a senha e não reutilize uma senha de outros sistemas.
+
+## Configuração necessária
+
+Crie o Environment `homologation-backup`, exija aprovação de pelo menos um revisor, limite a branch de deployment a `codex/m38-backup-actions` e proteja a branch com revisão.
 
 **Environment variables**
 
-- `SUPABASE_PROJECT_REF` — fixed to the homologation project reference.
-- `SUPABASE_PROJECT_URL` — homologation API URL.
-- `BACKUP_S3_ENDPOINT_URL` — HTTPS endpoint for a private S3-compatible bucket, such as an already-existing Cloudflare R2 bucket.
-- `BACKUP_S3_BUCKET` — private bucket name.
-- `BACKUP_S3_REGION` — provider region (`auto` for R2).
-- `BACKUP_S3_PREFIX` — dedicated path prefix, for example `mk9/homologation`.
+- `SUPABASE_PROJECT_REF` — `tafjceemuetqjyngresg`.
+- `SUPABASE_PROJECT_URL` — URL da API desse projeto de homologação.
 
 **Environment secrets**
 
-- `SUPABASE_DB_URL` — direct PostgreSQL connection string for staging only, username `postgres`, database `postgres`, TLS required.
-- `SUPABASE_SERVICE_ROLE_KEY` — staging `service_role` JWT whose `ref` claim matches the staging project.
-- `BACKUP_GPG_PASSPHRASE` — unique passphrase of at least 32 characters; store its recovery copy separately from the bucket.
-- `BACKUP_S3_ACCESS_KEY_ID` and `BACKUP_S3_SECRET_ACCESS_KEY` — credentials scoped to write/read objects only in this one bucket, and to the prefix too if the provider supports prefix-scoped keys.
+- `SUPABASE_DB_URL` — conexão direta PostgreSQL da homologação, usuário `postgres`, banco `postgres`, com TLS.
+- `SUPABASE_SERVICE_ROLE_KEY` — chave de serviço da homologação; a claim `ref` precisa ser `tafjceemuetqjyngresg`.
+- `BACKUP_GPG_PASSPHRASE` — frase aleatória exclusiva, com no mínimo 32 bytes e sem CR/LF. Guarde a cópia de recuperação fora do GitHub.
 
-Configure the bucket private, enable versioning or equivalent retention if available, and restrict access to the backup operators. The workflow cannot independently prove provider-side public-access and retention settings; the run requires a manual confirmation. Do not place any production URL/key in these settings.
+Não configure valores ou credenciais de produção. O preflight confere o ref, a URL e o host exatos, a claim da chave, a branch, a conexão TLS e a confirmação manual antes de conectar à origem.
 
-## Manual execution
+## Execução e download
 
-After reviewing the workflow and configuring the Environment, the file must first be present on the repository's default branch for GitHub to accept its first `workflow_dispatch`. This implementation branch alone cannot show the initial **Run workflow** button or receive its first dispatch. This task does not merge it; a later separately approved integration is required. Once the workflow exists on the default branch, open **Actions → MK9 homologation backup and restore validation → Run workflow**, select `codex/m38-backup-actions`, enter `tafjceemuetqjyngresg`, and confirm the private external destination. The run stops before any source connection when an Environment value is absent or mismatched. It never runs automatically on push, pull request, schedule, or deployment.
+O arquivo do workflow precisa estar na branch padrão antes que o GitHub aceite a primeira execução `workflow_dispatch` e exiba o botão **Run workflow**. A integração na branch padrão exige PR revisada; esta branch de trabalho não a faz automaticamente.
 
-## Backup contents and restore
+Depois que o workflow estiver na branch padrão e o Environment estiver configurado:
 
-The encrypted archive contains a PostgreSQL custom-format full dump, separate custom-role SQL and migration-history exports, a schema/data inventory, and a Storage export. Storage objects retain their bucket/path hierarchy; the manifest records bucket settings, object IDs, owner IDs, timestamps, metadata, byte size, and SHA-256. The private objects remain private: export uses authenticated API requests and never creates public or signed URLs. The script verifies both PostgreSQL client and server are version 17 before creating an export.
+1. Abra **Actions → MK9 homologation backup and restore validation → Run workflow**.
+2. Selecione `codex/m38-backup-actions`.
+3. Informe `tafjceemuetqjyngresg` e marque a confirmação de acesso ao artifact criptografado.
+4. Aguarde a execução concluir. Falha em exportação, comparação, restauração, criptografia ou checksums impede a etapa de upload.
+5. Na página da execução concluída, em **Artifacts**, baixe `mk9-homologation-backup-<run-id>-<attempt>`. Extraia o ZIP do artifact; dentro estará somente o arquivo `.tar.gz.gpg`.
+6. Com a cópia protegida da frase GPG, descriptografe e extraia localmente. Por exemplo, salve a senha em um arquivo temporário protegido fora do repositório, com permissão de leitura apenas para você, e execute:
 
-Before upload, the workflow inventories the database before export and after Storage collection; any data/schema change during that interval aborts the run. It checks the PostgreSQL archive and file hashes, starts a disposable local Supabase stack configured for PostgreSQL 17, restores the database archive into a fresh database named `mk9_backup_restore`, and compares table data, schemas and owners, constraints, indexes, user-defined types, table and sequence ACLs/state, schema ACLs, default privileges, role attributes/memberships, RLS flags, policies, function and aggregate definitions/security/ACLs, triggers, views, and extension versions. SHA-256 digests use the PostgreSQL binary-string hash function available in PostgreSQL 17.
+   ```bash
+   gpg --batch --quiet --pinentry-mode loopback --passphrase-file /caminho/seguro/gpg-passphrase --decrypt mk9-backup.tar.gz.gpg > mk9-backup.tar.gz
+   mkdir -m 700 mk9-backup-extraido
+   tar -xzf mk9-backup.tar.gz -C mk9-backup-extraido
+   (cd mk9-backup-extraido && sha256sum --check SHA256SUMS)
+   ```
 
-The Storage check is separate: the local Supabase Storage API remains attached to the stack's default `postgres` database, while the full database archive is restored to `mk9_backup_restore`. The workflow independently rebuilds buckets and object bytes through that local API, applies the captured bucket/object timestamps, IDs, and metadata using local SQL, lists the resulting API inventory, and verifies the bytes again by SHA-256. It does **not** validate a single integrated restore where Storage metadata and corresponding `storage.objects` rows from the full archive coexist in the same database. Any mismatch in either independent validation stops the job before upload. Only the AES-256 encrypted archive is uploaded. The runner downloads the stored ciphertext once and byte-compares it with the local encrypted file. Runner files and containers are removed on success or failure; diagnostic command output is kept in the private temporary directory and deleted with it. The source inventory reads all table data twice, so schedule the manual run during a quiet period; otherwise it fails closed.
+   Apague a cópia temporária da senha com segurança depois. Não use a senha em argumentos de linha de comando nem salve os arquivos descriptografados em pastas sincronizadas ou compartilhadas.
 
-### Auth and Storage recovery limits
+Não coloque o conteúdo descriptografado em issues, PRs, artifacts, logs ou no repositório. O workflow não inicia automaticamente em push, PR, agendamento ou deploy.
 
-The database archive includes the PostgreSQL `auth` schema and its rows, and the inventory compares Auth data during the disposable database restore. Provider settings that live in the Supabase dashboard (OAuth credentials, SMTP, redirect URLs, CAPTCHA, MFA configuration) are not PostgreSQL data and are not included. Treat the archive as highly sensitive because it contains user records and authentication material.
+## Conteúdo e validação
 
-Storage file bytes are not stored in PostgreSQL, so they are exported separately through authenticated Storage API calls. The encrypted manifest preserves bucket configuration, paths, object IDs, owner IDs, timestamps, and object metadata. The separate disposable Storage API test recreates bucket settings, paths, bytes, timestamps, IDs and metadata, then compares its bucket/object inventory and downloaded hashes with the manifest. It does not import source Auth users into that local Storage API database, so it does not reassign source `owner_id` values there; those remain in the manifest and in the independently restored database archive. A live-project restore is deliberately not implemented: Supabase-managed Auth/Storage schemas and owner references require a separate reviewed recovery procedure for the target project.
+O arquivo cifrado reúne um dump PostgreSQL custom-format, exportação separada de roles e histórico de migrations, inventário de schemas/dados/permissões e bytes e manifesto do Storage. O inventário compara dados e objetos PostgreSQL; a restauração do banco ocorre em `mk9_backup_restore`. A validação de Storage é separada: recria buckets/objetos pela API local, aplica metadados na base padrão `postgres` da stack descartável e compara o inventário e hashes dos bytes. Essas verificações não constituem uma restauração integrada com as tabelas de Storage do dump na mesma base. A restauração em projeto Supabase real não está implementada.
 
-For the isolated validation performed by this workflow, the order is roles, full database archive into `mk9_backup_restore`, then the independent Storage API reconstruction in the disposable stack's default `postgres` database. They are two checks, not an integrated recovery test. For manual recovery, download the encrypted object with restricted credentials, decrypt using the separately stored passphrase, and verify `SHA256SUMS`. The database archive and Storage payload are separate recovery inputs. Do not apply the generic dump directly to a live Supabase project: managed Auth/Storage schema ownership and object-owner references need a target-specific reviewed procedure. Never point restore commands at production. This workflow validates isolated components; it does not restore the live homologation project.
+O manifesto mantém os IDs de proprietário, mas a validação isolada do Storage não recria usuários Auth nem reassocia `owner_id` na API local. Configurações Auth que vivem no painel Supabase — como OAuth, SMTP, redirects, CAPTCHA e MFA — também não são cobertas pelo dump PostgreSQL. Use um procedimento de recuperação separado, revisado e específico para o projeto antes de qualquer restauração real.
 
-## Limits
+## Limitações
 
-No backup has been run by this implementation. The real PostgreSQL and Storage restore path must complete successfully in GitHub Actions before treating an archive as recovery evidence. Supabase-managed schemas can differ between cloud and local platform images; any unsupported object, ownership, extension, or privilege causes restore validation to fail closed, before upload. Backups can contain personal data and private files, so the destination and passphrase require separate restricted custody. R2 and other S3 services may incur charges above their current free allowances.
+Não há armazenamento privado permanente, versionamento ou garantia de recuperação no GitHub Artifacts. O artifact expira após um dia e pode estar disponível a usuários com permissões sobre o repositório/execução. Artifacts dependem das políticas e limites do GitHub. Nenhum backup foi executado por esta implementação; o primeiro run real ainda precisa confirmar funcionamento do GPG, do Supabase CLI e da restauração no runner hospedado. Divergências entre schemas gerenciados na origem e na stack local interrompem o processo antes do upload.

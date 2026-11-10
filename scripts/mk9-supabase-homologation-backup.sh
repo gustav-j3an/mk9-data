@@ -2,7 +2,11 @@
 set -Eeuo pipefail
 umask 077
 
-ROOT="${RUNNER_TEMP:?}/mk9-homologation-backup"
+RUN_ID="${GITHUB_RUN_ID:?}"
+RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT:?}"
+ARTIFACT_PATH="${RUNNER_TEMP:?}/mk9-homologation-backup-${RUN_ID}-${RUN_ATTEMPT}.tar.gz.gpg"
+rm -f "$ARTIFACT_PATH"
+ROOT="${RUNNER_TEMP}/mk9-homologation-backup"
 mkdir -p "$ROOT/export" "$ROOT/restore" "$ROOT/logs"
 chmod 700 "$ROOT" "$ROOT/export" "$ROOT/restore" "$ROOT/logs"
 
@@ -11,14 +15,18 @@ cleanup() {
     (cd "$ROOT/supabase" && supabase stop --no-backup >/dev/null 2>&1) || true
   fi
   rm -rf "$ROOT"
+  if [[ "${BACKUP_COMPLETE:-false}" != true ]]; then
+    rm -f "$ARTIFACT_PATH"
+  fi
 }
+BACKUP_COMPLETE=false
 trap cleanup EXIT
 STAGE=preflight
 on_error() { echo "Backup workflow failed at stage: ${STAGE}. Detailed logs were kept private and removed with the runner workspace." >&2; }
 trap 'on_error' ERR
 
 node scripts/preflight.mjs
-node -e "console.log('::add-mask::'+process.env.SUPABASE_DB_URL); console.log('::add-mask::'+process.env.SUPABASE_SERVICE_ROLE_KEY); console.log('::add-mask::'+process.env.BACKUP_GPG_PASSPHRASE); console.log('::add-mask::'+process.env.AWS_ACCESS_KEY_ID); console.log('::add-mask::'+process.env.AWS_SECRET_ACCESS_KEY)"
+node -e "console.log('::add-mask::'+process.env.SUPABASE_DB_URL); console.log('::add-mask::'+process.env.SUPABASE_SERVICE_ROLE_KEY); console.log('::add-mask::'+process.env.BACKUP_GPG_PASSPHRASE)"
 printf '%s' "$BACKUP_GPG_PASSPHRASE" > "$ROOT/passphrase"
 chmod 600 "$ROOT/passphrase"
 unset BACKUP_GPG_PASSPHRASE
@@ -98,12 +106,7 @@ tar -xzf "$ROOT/decrypted.tar.gz" -C "$ROOT/decrypted-check" 2> "$ROOT/logs/arch
 pg_restore --list "$ROOT/decrypted-check/database.dump" > /dev/null 2> "$ROOT/logs/archive-list-after-encryption.log"
 node scripts/storage-backup.mjs verify "$ROOT/decrypted-check/storage"
 
-export AWS_EC2_METADATA_DISABLED=true AWS_DEFAULT_REGION="$BACKUP_S3_REGION"
-OBJECT_KEY="${BACKUP_S3_PREFIX}/$(date -u +%Y%m%dT%H%M%SZ)-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.tar.gz.gpg"
-CIPHER_SHA256="$(sha256sum "$ROOT/backup.tar.gz.gpg" | cut -d ' ' -f 1)"
-aws s3 cp "$ROOT/backup.tar.gz.gpg" "s3://${BACKUP_S3_BUCKET}/${OBJECT_KEY}" --endpoint-url "$BACKUP_S3_ENDPOINT_URL" --only-show-errors --metadata "sha256=${CIPHER_SHA256}"
-REMOTE_SHA256="$(aws s3api head-object --bucket "$BACKUP_S3_BUCKET" --key "$OBJECT_KEY" --endpoint-url "$BACKUP_S3_ENDPOINT_URL" --query 'Metadata.sha256' --output text)"
-test "$REMOTE_SHA256" = "$CIPHER_SHA256"
-aws s3 cp "s3://${BACKUP_S3_BUCKET}/${OBJECT_KEY}" "$ROOT/roundtrip.tar.gz.gpg" --endpoint-url "$BACKUP_S3_ENDPOINT_URL" --only-show-errors
-cmp --silent "$ROOT/backup.tar.gz.gpg" "$ROOT/roundtrip.tar.gz.gpg"
-echo 'Encrypted backup upload completed after separate disposable PostgreSQL and Storage validations.'
+install -m 0600 "$ROOT/backup.tar.gz.gpg" "$ARTIFACT_PATH"
+test -s "$ARTIFACT_PATH"
+BACKUP_COMPLETE=true
+echo 'Encrypted backup artifact prepared after separate disposable PostgreSQL and Storage validations.'

@@ -14,9 +14,7 @@ const valid = {
   SUPABASE_PROJECT_URL: `https://${HOMOLOGATION_REF}.supabase.co`,
   SUPABASE_DB_URL: `postgresql://postgres:placeholder@db.${HOMOLOGATION_REF}.supabase.co:5432/postgres?sslmode=require`,
   SUPABASE_SERVICE_ROLE_KEY: 'placeholder', BACKUP_GPG_PASSPHRASE: 'x'.repeat(40),
-  AWS_ACCESS_KEY_ID: 'placeholder', AWS_SECRET_ACCESS_KEY: 'placeholder',
-  INPUT_CONFIRM_PRIVATE_DESTINATION: 'true', BACKUP_S3_ENDPOINT_URL: 'https://example-r2.invalid',
-  BACKUP_S3_BUCKET: 'mk9-private-backups', BACKUP_S3_REGION: 'auto', BACKUP_S3_PREFIX: 'homologation/mk9',
+  INPUT_CONFIRM_ARTIFACT_ACCESS: 'true',
 };
 
 test('staging endpoints and JWT project claims are exact', () => {
@@ -24,19 +22,23 @@ test('staging endpoints and JWT project claims are exact', () => {
   assert.throws(() => assertSourceTarget({ projectRef: 'production-ref', projectUrl: 'https://production-ref.supabase.co', databaseUrl: 'postgresql://postgres:x@db.production-ref.supabase.co/postgres?sslmode=require', serviceRoleKey: jwt({ role: 'service_role', ref: 'production-ref' }) }));
 });
 
-test('preflight rejects all non-allowlisted branch, source and destination values', () => {
+test('preflight rejects non-allowlisted branch/source and has no object-store requirement', () => {
   const env = { ...valid, SUPABASE_SERVICE_ROLE_KEY: jwt({ role: 'service_role', ref: HOMOLOGATION_REF }) };
   assert.equal(validateBackupConfig(env), true);
-  for (const [key, value] of [['GITHUB_REF', 'refs/heads/main'], ['INPUT_PROJECT_REF', 'production-ref'], ['SUPABASE_PROJECT_URL', 'https://production-ref.supabase.co'], ['SUPABASE_DB_URL', 'postgresql://postgres:x@db.production-ref.supabase.co/postgres?sslmode=require'], ['BACKUP_S3_ENDPOINT_URL', 'http://example.invalid']]) {
+  for (const [key, value] of [['GITHUB_REF', 'refs/heads/main'], ['INPUT_PROJECT_REF', 'production-ref'], ['SUPABASE_PROJECT_URL', 'https://production-ref.supabase.co'], ['SUPABASE_DB_URL', 'postgresql://postgres:x@db.production-ref.supabase.co/postgres?sslmode=require']]) {
     assert.throws(() => validateBackupConfig({ ...env, [key]: value }));
   }
+  assert.equal('AWS_ACCESS_KEY_ID' in env, false);
+  assert.equal('BACKUP_S3_ENDPOINT_URL' in env, false);
 });
 
-test('preflight blocks missing secrets and absent private-destination confirmation', () => {
+test('preflight blocks missing secrets, weak GPG passphrase and absent artifact disclosure confirmation', () => {
   const env = { ...valid, SUPABASE_SERVICE_ROLE_KEY: jwt({ role: 'service_role', ref: HOMOLOGATION_REF }) };
-  assert.throws(() => validateBackupConfig({ ...env, AWS_SECRET_ACCESS_KEY: '' }));
+  assert.throws(() => validateBackupConfig({ ...env, SUPABASE_DB_URL: '' }));
   assert.throws(() => validateBackupConfig({ ...env, BACKUP_GPG_PASSPHRASE: '' }));
-  assert.throws(() => validateBackupConfig({ ...env, INPUT_CONFIRM_PRIVATE_DESTINATION: 'false' }));
+  assert.throws(() => validateBackupConfig({ ...env, BACKUP_GPG_PASSPHRASE: 'short' }));
+  assert.throws(() => validateBackupConfig({ ...env, BACKUP_GPG_PASSPHRASE: `${'x'.repeat(40)}\nignored` }));
+  assert.throws(() => validateBackupConfig({ ...env, INPUT_CONFIRM_ARTIFACT_ACCESS: 'false' }));
 });
 
 test('restore target is restricted to local Supabase API and object paths cannot escape', () => {
@@ -70,13 +72,15 @@ test('separate Storage inventory checks objects, IDs, metadata, timestamps, buck
   assert.throws(() => assertStorageInventoryMatches(manifest, buckets, []), /LOCAL_STORAGE_OBJECT_INVENTORY_MISMATCH/);
 });
 
-test('backup script encrypts and verifies before the only external upload and keeps restores isolated', async () => {
+test('backup script encrypts before publishing only a GPG artifact and keeps restores isolated', async () => {
   const script = await readFile(new URL('./mk9-supabase-homologation-backup.sh', import.meta.url), 'utf8');
   const workflow = await readFile(new URL('../.github/workflows/supabase-homologation-backup.yml', import.meta.url), 'utf8');
+  const docs = await readFile(new URL('../docs/supabase-homologation-backup.md', import.meta.url), 'utf8');
   const encryption = script.indexOf('--symmetric --cipher-algo AES256');
   const encryptionCheck = script.indexOf('gpg --batch --quiet --pinentry-mode loopback --passphrase-file');
-  const upload = script.indexOf('aws s3 cp "$ROOT/backup.tar.gz.gpg"');
-  assert.ok(encryption > 0 && encryptionCheck > encryption && upload > encryptionCheck);
+  const artifactCopy = script.indexOf('install -m 0600 "$ROOT/backup.tar.gz.gpg" "$ARTIFACT_PATH"');
+  assert.ok(encryption > 0 && encryptionCheck > encryption && artifactCopy > encryptionCheck);
+  assert.doesNotMatch(script, /\baws\b|s3:\/\//i);
   assert.match(script, /set -Eeuo pipefail/);
   assert.match(script, /mk9_backup_restore/);
   assert.match(script, /verify-local/);
@@ -86,12 +90,20 @@ test('backup script encrypts and verifies before the only external upload and ke
   assert.match(workflow, /workflow_dispatch:/);
   assert.doesNotMatch(workflow, /\n\s+push:/);
   assert.match(workflow, /environment: homologation-backup/);
+  assert.match(workflow, /uses: actions\/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f/);
+  assert.match(workflow, /retention-days: 1/);
+  assert.match(workflow, /if-no-files-found: error/);
+  assert.match(workflow, /\.tar\.gz\.gpg/);
+  assert.doesNotMatch(workflow, /AWS_|BACKUP_S3_|awscli/i);
+  assert.match(docs, /Este repositório é público/);
+  assert.match(docs, /não deve ser tratado como armazenamento privado permanente/);
+  assert.match(docs, /retenção configurada é de \*\*1 dia\*\*/);
   assert.match(script, /assert|pg_restore/);
 });
 
 test('inventory SQL includes row hashes and privilege/RLS/managed-object coverage', async () => {
   const sql = await readFile(new URL('./backup-inventory.sql', import.meta.url), 'utf8');
-  for (const fragment of ['sha256(', 'relrowsecurity', 'pg_policies', 'pg_default_acl', 'pg_auth_members', 'pg_sequence', 'pg_aggregate', 'pg_extension', 'pg_get_functiondef', 'pg_constraint', 'pg_index', 'pg_type']) {
+  for (const fragment of ['sha256(', 'relrowsecurity', 'pg_policies', 'pg_default_acl', 'pg_auth_members', 'pg_sequence', 'pg_aggregate', 'aggminvtransfn', 'indisreplident', 'pg_extension', 'pg_get_functiondef', 'pg_constraint', 'pg_index', 'pg_type']) {
     assert.ok(sql.includes(fragment), `missing inventory feature ${fragment}`);
   }
   assert.doesNotMatch(sql, /data_md5|definition_md5/);
