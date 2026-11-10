@@ -12,6 +12,22 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION attendance_private.active_user()
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = '' AS $$
+  SELECT auth.uid() IS NOT NULL AND EXISTS (
+    SELECT 1
+    FROM public.profiles p
+    WHERE p.id = auth.uid()
+      AND p.status = 'ativo'
+  );
+$$;
+REVOKE ALL ON FUNCTION attendance_private.active_user() FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION attendance_private.active_user() TO authenticated;
+
 CREATE TABLE public.visit_lifecycle_audit (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   visit_id uuid NOT NULL UNIQUE REFERENCES public.visits(id) ON DELETE RESTRICT,

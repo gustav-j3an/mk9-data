@@ -27,9 +27,11 @@ const createPsqlSession = (name = 'session') => {
       const output = stdoutData.slice(0, idx).trim();
       stdoutData = stdoutData.slice(idx + activeQuery.sentinel.length);
       const q = activeQuery;
-      activeQuery = null;
       if (q.timer) clearTimeout(q.timer);
-      setImmediate(() => {
+      // Docker-backed psql bridges expose stdout and stderr as separate pipes.
+      // Let the SQL error event arrive before deciding from the completion marker.
+      setTimeout(() => {
+        if (activeQuery === q) activeQuery = null;
         if (q.queryStderr.includes('ERROR:')) {
           const err = new Error(`PsqlSession [${name}] query failed: ${q.queryStderr.trim()}`);
           err.stderr = q.queryStderr.trim();
@@ -40,7 +42,7 @@ const createPsqlSession = (name = 'session') => {
         } else {
           q.resolve(output);
         }
-      });
+      }, 25);
     }
   });
 
@@ -312,6 +314,8 @@ try {
       'recover'
     );
   `);
+  // The expected SQL rejection can arrive while the test is checking lock state.
+  promoterPromise.catch(() => {});
 
   // 3. Sincronização explícita e verificação formal no catálogo do PostgreSQL:
   // Verifica que promoterA está com lock não concedido (NOT granted) especificamente bloqueado por adminA
@@ -387,6 +391,7 @@ try {
 
   // 2. Sessão administrativa tenta inativar a indústria M37IC2
   const adminPromise = adminB.query(`UPDATE public.industrias SET status = 'inativo' WHERE codigo = '${m37}IC2';`);
+  adminPromise.catch(() => {});
 
   // 3. Sincronização explícita e verificação formal no catálogo do PostgreSQL:
   await waitForCondition(() => {
