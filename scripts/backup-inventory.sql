@@ -70,6 +70,7 @@ BEGIN
   FOR r IN
     SELECT n.nspname AS schema_name, c.relname AS sequence_name,
            pg_get_userbyid(c.relowner) AS owner_name, coalesce(c.relacl::text, '') AS acl,
+           s.seqtypid::regtype::text AS sequence_type,
            s.seqstart, s.seqincrement, s.seqmin, s.seqmax, s.seqcache, s.seqcycle
     FROM pg_class c
     JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -81,6 +82,7 @@ BEGIN
       INTO seq_last_value, seq_is_called;
     sequences := sequences || jsonb_build_array(jsonb_build_object(
       'schema', r.schema_name, 'name', r.sequence_name, 'owner', r.owner_name, 'acl', r.acl,
+      'data_type', r.sequence_type,
       'start', r.seqstart, 'increment', r.seqincrement, 'min', r.seqmin, 'max', r.seqmax,
       'cache', r.seqcache, 'cycle', r.seqcycle, 'last_value', seq_last_value, 'is_called', seq_is_called
     ));
@@ -139,6 +141,7 @@ BEGIN
       'serial_function', a.aggserialfn::regprocedure::text,
       'deserial_function', a.aggdeserialfn::regprocedure::text,
       'moving_transition_function', a.aggmtransfn::regprocedure::text,
+      'moving_inverse_transition_function', a.aggminvtransfn::regprocedure::text,
       'moving_final_function', a.aggmfinalfn::regprocedure::text,
       'transition_type', a.aggtranstype::regtype::text, 'initial_value', a.agginitval,
       'moving_transition_type', a.aggmtranstype::regtype::text,
@@ -187,7 +190,10 @@ BEGIN
       'definition', pg_get_indexdef(i.indexrelid), 'valid', i.indisvalid,
       'ready', i.indisready, 'unique', i.indisunique, 'primary', i.indisprimary,
       'nulls_not_distinct', i.indnullsnotdistinct, 'key_attributes', i.indnkeyatts,
-      'attributes', i.indnatts, 'owner', pg_get_userbyid(idx.relowner),
+      'attributes', i.indnatts, 'exclusion', i.indisexclusion,
+      'immediate', i.indimmediate, 'clustered', i.indisclustered,
+      'replica_identity', i.indisreplident, 'live', i.indislive,
+      'owner', pg_get_userbyid(idx.relowner),
       'acl', coalesce(idx.relacl::text, '')
     ) ORDER BY n.nspname, base.relname, idx.relname), '[]'::jsonb)
     INTO indexes
