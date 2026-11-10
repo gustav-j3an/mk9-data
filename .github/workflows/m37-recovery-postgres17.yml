@@ -20,7 +20,7 @@ jobs:
           node-version: 22
           cache: npm
       - name: Install npm dependencies
-        run: npm ci
+        run: npm ci --no-audit --no-fund
       - name: Run complete npm test suite
         run: npm test
       - name: Run TypeScript typecheck
@@ -41,7 +41,20 @@ jobs:
           cd "$RUNNER_TEMP/mk9-m37"
           supabase init
           sed -i 's/^major_version = .*/major_version = 17/' supabase/config.toml
-          supabase start -x realtime,storage-api,imgproxy,mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor 2>&1 | tee "$RUNNER_TEMP/supabase-start.log"
+          supabase start -x realtime,storage-api,imgproxy,mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor > "$RUNNER_TEMP/supabase-start.log" 2>&1
+      - name: Mask disposable local Supabase credentials
+        shell: bash
+        run: |
+          cd "$RUNNER_TEMP/mk9-m37"
+          supabase status -o env | while IFS='=' read -r name value; do
+            case "$name" in
+              ANON_KEY|SUPABASE_ANON_KEY|SERVICE_ROLE_KEY|SUPABASE_SERVICE_ROLE_KEY|JWT_SECRET|POSTGRES_PASSWORD)
+                value="${value%\"}"
+                value="${value#\"}"
+                [ -z "$value" ] || echo "::add-mask::$value"
+                ;;
+            esac
+          done
       - name: Simulate homologation ledger, migrations and functional suites
         env:
           SUPABASE_TEST_WORKDIR: ${{ runner.temp }}/mk9-m37
@@ -79,6 +92,15 @@ jobs:
           docker stats --no-stream > "$RUNNER_TEMP/mk9-diagnostics/docker-memory.txt" 2>&1 || true
           if [ -f "$RUNNER_TEMP/mk9-m37/supabase/config.toml" ]; then
             cd "$RUNNER_TEMP/mk9-m37"
+            supabase status -o env 2>/dev/null | while IFS='=' read -r name value; do
+              case "$name" in
+                ANON_KEY|SUPABASE_ANON_KEY|SERVICE_ROLE_KEY|SUPABASE_SERVICE_ROLE_KEY|JWT_SECRET|POSTGRES_PASSWORD)
+                  value="${value%\"}"
+                  value="${value#\"}"
+                  [ -z "$value" ] || echo "::add-mask::$value"
+                  ;;
+              esac
+            done
             supabase status > "$RUNNER_TEMP/mk9-diagnostics/supabase-status.txt" 2>&1 || true
           fi
           for diagnostic in "$RUNNER_TEMP"/mk9-diagnostics/*; do
