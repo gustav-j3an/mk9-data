@@ -13,6 +13,27 @@ import {
 
 export const EXPECTED_BASELINE_MIGRATIONS_COUNT = 47;
 export const EXPECTED_COMBINED_SHA256 = 'A64E0ACDE372B322A92BAEA946242B251BE967A75A7DFB6AB4618CDFC756723E';
+const INVENTORY_FILE = 'docs/m37.21-fetched-migrations-inventory.md';
+
+function sha256(buffer) {
+  return createHash('sha256').update(buffer).digest('hex').toUpperCase();
+}
+
+function parseCanonicalInventory() {
+  const inventory = readFileSync(INVENTORY_FILE, 'utf8');
+  return [...inventory.matchAll(/^\|\s*\d+\s*\|\s*\d+\s*\|\s*`([^`]+)`\s*\|\s*(\d+)\s*\|\s*`([A-F0-9]{64})`\s*\|\s*$/gm)]
+    .map(([, file, bytes, sha]) => ({ file, bytes: Number(bytes), sha }));
+}
+
+function newlineVariants(buffer) {
+  const text = new TextDecoder('utf-8', { fatal: true }).decode(buffer);
+  const lfText = text.replace(/\r\n?/g, '\n');
+  const lf = Buffer.from(lfText, 'utf8');
+  const crlf = Buffer.from(lfText.replace(/\n/g, '\r\n'), 'utf8');
+  // Two canonical fetched files retain LF on the final line ending.
+  const crlfWithLfTerminator = Buffer.from(lfText.replace(/\n/g, '\r\n').replace(/\r\n$/, '\n'), 'utf8');
+  return { lf, crlf, crlfWithLfTerminator };
+}
 
 export function validateCanonicalHomologationBackup(archiveDir = 'supabase/fetched_homologation_migrations') {
   const files = readdirSync(archiveDir)
@@ -26,18 +47,49 @@ export function validateCanonicalHomologationBackup(archiveDir = 'supabase/fetch
     };
   }
 
+  const inventory = parseCanonicalInventory();
+  if (inventory.length !== EXPECTED_BASELINE_MIGRATIONS_COUNT) {
+    return {
+      ok: false,
+      error: `Canonical inventory validation failed: Expected ${EXPECTED_BASELINE_MIGRATIONS_COUNT} rows, found ${inventory.length}.`
+    };
+  }
+  const inventoryByFile = new Map(inventory.map(entry => [entry.file, entry]));
+  const inventoryFiles = [...inventoryByFile.keys()].sort();
+  if (new Set(inventoryByFile.keys()).size !== inventory.length
+      || files.some((file, index) => file !== inventoryFiles[index])) {
+    return { ok: false, error: 'Backup file names do not exactly match the canonical 47-file inventory.' };
+  }
+
   const hashList = [];
   let totalBytes = 0;
 
   for (const f of files) {
     const fullPath = join(archiveDir, f);
     const buf = readFileSync(fullPath);
-    totalBytes += buf.length;
-    const sha = createHash('sha256').update(buf).digest('hex').toUpperCase();
-    hashList.push(sha);
+    let variants;
+    try {
+      variants = newlineVariants(buf);
+    } catch {
+      return { ok: false, error: `Migration ${f} is not valid UTF-8.` };
+    }
+
+    const expected = inventoryByFile.get(f);
+    const matchingVariant = Object.values(variants).find(candidate => sha256(candidate) === expected.sha);
+    if (!matchingVariant || matchingVariant.length !== expected.bytes) {
+      return {
+        ok: false,
+        error: `Canonical content mismatch for ${f}: inventory SHA-256/size ${expected.sha}/${expected.bytes} does not match any newline-only representation.`
+      };
+    }
+
+    // Hash a single CRLF representation so the aggregate stays stable across
+    // Windows and Linux while preserving every non-newline byte.
+    totalBytes += variants.crlf.length;
+    hashList.push(sha256(variants.crlf));
   }
 
-  const combined = createHash('sha256').update(hashList.join('')).digest('hex').toUpperCase();
+  const combined = sha256(Buffer.from(hashList.join(''), 'utf8'));
 
   if (combined !== EXPECTED_COMBINED_SHA256) {
     return {
