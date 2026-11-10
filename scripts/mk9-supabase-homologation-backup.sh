@@ -33,9 +33,14 @@ export PGSSLMODE="require"
 
 # Full PostgreSQL 17 archive includes application schemas plus Supabase auth/storage metadata.
 pg_dump --version | grep -q '^pg_dump (PostgreSQL) 17\.'
+SERVER_VERSION_NUM="$(psql --no-password --quiet --tuples-only --no-align --command='SHOW server_version_num' 2> "$ROOT/logs/server-version.log" | tr -d '[:space:]')"
+if [[ ! "$SERVER_VERSION_NUM" =~ ^[0-9]{6}$ ]] || (( SERVER_VERSION_NUM < 170000 || SERVER_VERSION_NUM >= 180000 )); then
+  echo 'The allowlisted homologation database is not PostgreSQL 17; export stopped.' >&2
+  exit 1
+fi
 psql --no-password --quiet --tuples-only --no-align --file=scripts/backup-inventory.sql > "$ROOT/export/inventory-before.json" 2> "$ROOT/logs/inventory-before.log"
 pg_dump --format=custom --file="$ROOT/export/database.dump" --no-password 2> "$ROOT/logs/pg_dump.log"
-supabase db dump --role-only --db-url "$SUPABASE_DB_URL" > "$ROOT/export/roles.sql" 2> "$ROOT/logs/roles.log"
+supabase db dump --role-only --remote="$SUPABASE_DB_URL" > "$ROOT/export/roles.sql" 2> "$ROOT/logs/roles.log"
 pg_dump --schema-only --schema=supabase_migrations --file="$ROOT/export/migration-history.sql" --no-password 2> "$ROOT/logs/migration-schema.log"
 pg_dump --data-only --schema=supabase_migrations --file="$ROOT/export/migration-history-data.sql" --no-password 2> "$ROOT/logs/migration-data.log"
 
@@ -58,17 +63,22 @@ echo "::add-mask::$LOCAL_SERVICE_KEY"
 export RESTORE_SUPABASE_URL="$LOCAL_STORAGE_URL"
 export RESTORE_SUPABASE_SERVICE_ROLE_KEY="$LOCAL_SERVICE_KEY"
 
-# New database is isolated in the disposable Supabase PostgreSQL 17 container.
+# Database restore and Storage API restore are separate checks inside one disposable local stack.
+# The database archive is restored to mk9_backup_restore. The local Storage API still uses the
+# stack's default postgres database; no claim of an integrated database+Storage restore is made.
 PGPASSWORD=postgres psql 'postgresql://postgres:postgres@127.0.0.1:54322/postgres' -v ON_ERROR_STOP=1 -c 'CREATE DATABASE mk9_backup_restore'
 PGPASSWORD=postgres psql 'postgresql://postgres:postgres@127.0.0.1:54322/postgres' -v ON_ERROR_STOP=1 -f "$ROOT/export/roles.sql" > /dev/null 2> "$ROOT/logs/restore-roles.log"
 PGPASSWORD=postgres pg_restore --exit-on-error --dbname='postgresql://postgres:postgres@127.0.0.1:54322/mk9_backup_restore' "$ROOT/export/database.dump" > /dev/null 2> "$ROOT/logs/restore-database.log"
 PGPASSWORD=postgres psql 'postgresql://postgres:postgres@127.0.0.1:54322/mk9_backup_restore' -v ON_ERROR_STOP=1 --quiet --tuples-only --no-align --file=scripts/backup-inventory.sql > "$ROOT/restore/inventory-after.json" 2> "$ROOT/logs/inventory-restore.log"
 node scripts/compare-inventory.mjs "$ROOT/export/inventory-before.json" "$ROOT/restore/inventory-after.json"
+echo 'Disposable PostgreSQL database restore verified independently in database mk9_backup_restore.'
 node scripts/storage-backup.mjs verify "$ROOT/export/storage"
 
-# Rebuild the disposable local Storage buckets and objects from the encrypted archive manifest and bytes.
-node scripts/storage-backup.mjs restore-local "$ROOT/export/storage"
-PGPASSWORD=postgres psql "$LOCAL_DB_URL" -v ON_ERROR_STOP=1 --file="$ROOT/export/storage/restore-metadata.sql" > /dev/null 2> "$ROOT/logs/restore-storage-metadata.log"
+# Independently rebuild the disposable stack Storage API (default postgres database), then
+# apply its captured Storage metadata and compare the API inventory and object bytes.
+node scripts/storage-backup.mjs restore-local "$ROOT/export/storage" "$ROOT/restore/storage-metadata.sql"
+PGPASSWORD=postgres psql "$LOCAL_DB_URL" -v ON_ERROR_STOP=1 --file="$ROOT/restore/storage-metadata.sql" > /dev/null 2> "$ROOT/logs/restore-storage-metadata.log"
+node scripts/storage-backup.mjs verify-local "$ROOT/export/storage"
 
 STAGE=package-encrypt-upload
 (
@@ -96,4 +106,4 @@ REMOTE_SHA256="$(aws s3api head-object --bucket "$BACKUP_S3_BUCKET" --key "$OBJE
 test "$REMOTE_SHA256" = "$CIPHER_SHA256"
 aws s3 cp "s3://${BACKUP_S3_BUCKET}/${OBJECT_KEY}" "$ROOT/roundtrip.tar.gz.gpg" --endpoint-url "$BACKUP_S3_ENDPOINT_URL" --only-show-errors
 cmp --silent "$ROOT/backup.tar.gz.gpg" "$ROOT/roundtrip.tar.gz.gpg"
-echo 'Encrypted backup and disposable restore validation completed.'
+echo 'Encrypted backup upload completed after separate disposable PostgreSQL and Storage validations.'

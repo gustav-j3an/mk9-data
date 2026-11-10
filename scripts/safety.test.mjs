@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { HOMOLOGATION_REF, assertLocalRestoreTarget, assertSourceTarget, resolveObjectPath } from './storage-backup.mjs';
+import { mkdtemp, readFile, rm, symlink, unlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { HOMOLOGATION_REF, assertLocalRestoreTarget, assertSourceTarget, assertStorageInventoryMatches, resolveObjectPath, verifyStorageArchive } from './storage-backup.mjs';
 import { validateBackupConfig } from './preflight.mjs';
+import { assertInventoriesEqual } from './compare-inventory.mjs';
 
 const jwt = payload => `x.${Buffer.from(JSON.stringify(payload)).toString('base64url')}.x`;
 const valid = {
@@ -41,4 +44,70 @@ test('restore target is restricted to local Supabase API and object paths cannot
   assert.throws(() => assertLocalRestoreTarget('https://tafjceemuetqjyngresg.supabase.co:54321'));
   assert.throws(() => resolveObjectPath('/tmp/objects', 'private', '../secret'));
   assert.throws(() => resolveObjectPath('/tmp/objects', 'private', 'a//b'));
+});
+
+test('database inventory comparison rejects changes in any tracked object or data field', () => {
+  const source = { schemas: ['public'], table_sha256: 'a', rls: true, roles: ['app'] };
+  assert.equal(assertInventoriesEqual(source, structuredClone(source)), true);
+  const changedData = structuredClone(source);
+  changedData.table_sha256 = 'b';
+  assert.throws(() => assertInventoriesEqual(source, changedData), /DATABASE_INVENTORY_MISMATCH/);
+  const changedRls = structuredClone(source);
+  changedRls.rls = false;
+  assert.throws(() => assertInventoriesEqual(source, changedRls), /DATABASE_INVENTORY_MISMATCH/);
+});
+
+test('separate Storage inventory checks objects, IDs, metadata, timestamps, bucket policy and bytes count', () => {
+  const manifest = {
+    buckets: [{ id: 'private-id', name: 'private', public: false, file_size_limit: 123, allowed_mime_types: ['image/jpeg'], created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-02T00:00:00Z' }],
+    objects: [{ bucket: 'private', name: 'a/photo.jpg', id: 'source-id', owner_id: 'source-user', created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-02T00:00:00Z', last_accessed_at: null, metadata: { mimetype: 'image/jpeg', size: 4 }, size: 4 }],
+  };
+  const buckets = structuredClone(manifest.buckets);
+  const objects = [{ ...structuredClone(manifest.objects[0]), owner_id: 'local-owner' }];
+  assert.deepEqual(assertStorageInventoryMatches(manifest, buckets, objects), { buckets: 1, objects: 1 });
+  assert.throws(() => assertStorageInventoryMatches(manifest, buckets, [{ ...objects[0], id: 'different-id' }]), /LOCAL_STORAGE_OBJECT_METADATA_MISMATCH/);
+  assert.throws(() => assertStorageInventoryMatches(manifest, [{ ...buckets[0], public: true }], objects), /LOCAL_STORAGE_BUCKET_INVENTORY_MISMATCH/);
+  assert.throws(() => assertStorageInventoryMatches(manifest, buckets, []), /LOCAL_STORAGE_OBJECT_INVENTORY_MISMATCH/);
+});
+
+test('backup script encrypts and verifies before the only external upload and keeps restores isolated', async () => {
+  const script = await readFile(new URL('./mk9-supabase-homologation-backup.sh', import.meta.url), 'utf8');
+  const workflow = await readFile(new URL('../.github/workflows/supabase-homologation-backup.yml', import.meta.url), 'utf8');
+  const encryption = script.indexOf('--symmetric --cipher-algo AES256');
+  const encryptionCheck = script.indexOf('gpg --batch --quiet --pinentry-mode loopback --passphrase-file');
+  const upload = script.indexOf('aws s3 cp "$ROOT/backup.tar.gz.gpg"');
+  assert.ok(encryption > 0 && encryptionCheck > encryption && upload > encryptionCheck);
+  assert.match(script, /set -Eeuo pipefail/);
+  assert.match(script, /mk9_backup_restore/);
+  assert.match(script, /verify-local/);
+  assert.match(script, /supabase db dump --role-only --remote="\$SUPABASE_DB_URL"/);
+  assert.match(script, /SHOW server_version_num/);
+  assert.match(script, /SERVER_VERSION_NUM < 170000/);
+  assert.match(workflow, /workflow_dispatch:/);
+  assert.doesNotMatch(workflow, /\n\s+push:/);
+  assert.match(workflow, /environment: homologation-backup/);
+  assert.match(script, /assert|pg_restore/);
+});
+
+test('inventory SQL includes row hashes and privilege/RLS/managed-object coverage', async () => {
+  const sql = await readFile(new URL('./backup-inventory.sql', import.meta.url), 'utf8');
+  for (const fragment of ['sha256(', 'relrowsecurity', 'pg_policies', 'pg_default_acl', 'pg_auth_members', 'pg_sequence', 'pg_aggregate', 'pg_extension', 'pg_get_functiondef', 'pg_constraint', 'pg_index', 'pg_type']) {
+    assert.ok(sql.includes(fragment), `missing inventory feature ${fragment}`);
+  }
+  assert.doesNotMatch(sql, /data_md5|definition_md5/);
+});
+
+test('Storage archive rejects unmanifested files and symlinks', async () => {
+  const directory = await mkdtemp(`${tmpdir()}/mk9-backup-test-`);
+  try {
+    await writeFile(`${directory}/manifest.json`, JSON.stringify({ format: 1, projectRef: HOMOLOGATION_REF, buckets: [], objects: [], totalBytes: 0 }));
+    assert.deepEqual(await verifyStorageArchive(directory), { buckets: 0, objects: 0, bytes: 0 });
+    await writeFile(`${directory}/unexpected.txt`, 'not in the manifest');
+    await assert.rejects(verifyStorageArchive(directory), /STORAGE_ARCHIVE_FILE_SET_MISMATCH/);
+    await unlink(`${directory}/unexpected.txt`);
+    await symlink('/etc/passwd', `${directory}/link`);
+    await assert.rejects(verifyStorageArchive(directory), /STORAGE_ARCHIVE_SYMLINK_REJECTED/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
