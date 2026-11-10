@@ -214,7 +214,7 @@ echo "Created temporary CLI isolated root: $cli_test_dir"
   supabase init --force >/dev/null
   # Ajustar a porta e versão no config.toml do workdir para corresponder ao stack local
   sed -i "s/^major_version = .*/major_version = 17/" supabase/config.toml
-  sed -i "s/^port = 54322/port = ${PGPORT:-54322}/" supabase/config.toml
+  sed -i "s/^port = 54322/port = ${PGPORT:?PGPORT must match the isolated Supabase database port}/" supabase/config.toml
 )
 
 mkdir -p "$cli_test_dir/supabase/migrations"

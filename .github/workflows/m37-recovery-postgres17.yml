@@ -35,12 +35,22 @@ jobs:
           test "$(supabase --version)" = "3.0.0"
           supabase start --help >/dev/null
           supabase init --help >/dev/null
+      - name: Diagnose runner ports before starting Supabase
+        run: |
+          {
+            date -Is
+            echo '=== Listening TCP ports and owning processes ==='
+            ss -H -ltnp || true
+            echo '=== Existing Docker containers and published ports ==='
+            docker ps --format '{{.Names}} {{.Ports}}' || true
+          } | tee "$RUNNER_TEMP/pre-start-ports.txt"
       - name: Start isolated official Supabase stack
         run: |
           mkdir -p "$RUNNER_TEMP/mk9-m37"
           cd "$RUNNER_TEMP/mk9-m37"
           supabase init
           sed -i 's/^major_version = .*/major_version = 17/' supabase/config.toml
+          node "$GITHUB_WORKSPACE/scripts/configure-m37-supabase-ports.mjs" supabase/config.toml
           supabase start -x realtime,storage-api,imgproxy,mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor > "$RUNNER_TEMP/supabase-start.log" 2>&1
       - name: Mask disposable local Supabase credentials
         shell: bash
@@ -59,7 +69,6 @@ jobs:
         env:
           SUPABASE_TEST_WORKDIR: ${{ runner.temp }}/mk9-m37
           PGHOST: 127.0.0.1
-          PGPORT: '54322'
           PGUSER: postgres
           PGPASSWORD: postgres
           PGDATABASE: postgres
@@ -86,6 +95,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/mk9-diagnostics"
           cp "$RUNNER_TEMP/supabase-start.log" "$RUNNER_TEMP/mk9-diagnostics/" 2>/dev/null || true
+          cp "$RUNNER_TEMP/pre-start-ports.txt" "$RUNNER_TEMP/mk9-diagnostics/" 2>/dev/null || true
           cp "$RUNNER_TEMP/docker-memory-samples.txt" "$RUNNER_TEMP/mk9-diagnostics/" 2>/dev/null || true
           free -h > "$RUNNER_TEMP/mk9-diagnostics/runner-memory.txt" 2>&1 || true
           docker ps -a --no-trunc > "$RUNNER_TEMP/mk9-diagnostics/docker-containers.txt" 2>&1 || true
