@@ -23,8 +23,17 @@ async function main() {
       const a = JSON.stringify(after[key]);
       if (b !== a) {
         console.error(`Mismatch in section "${key}":`);
-        console.error(`Source:   ${b?.slice(0, 300)}`);
-        console.error(`Restored: ${a?.slice(0, 300)}`);
+        if (Array.isArray(before[key]) && Array.isArray(after[key])) {
+          const bSet = new Set(before[key].map(x => JSON.stringify(x)));
+          const aSet = new Set(after[key].map(x => JSON.stringify(x)));
+          const onlyInBefore = before[key].filter(x => !aSet.has(JSON.stringify(x)));
+          const onlyInAfter = after[key].filter(x => !bSet.has(JSON.stringify(x)));
+          console.error(`  Items only in Source (${onlyInBefore.length}):`, JSON.stringify(onlyInBefore.slice(0, 3)));
+          console.error(`  Items only in Restored (${onlyInAfter.length}):`, JSON.stringify(onlyInAfter.slice(0, 3)));
+        } else {
+          console.error(`Source:   ${b?.slice(0, 300)}`);
+          console.error(`Restored: ${a?.slice(0, 300)}`);
+        }
       }
     }
     process.exitCode = 1;
