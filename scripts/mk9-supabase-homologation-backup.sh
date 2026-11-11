@@ -104,7 +104,7 @@ export RESTORE_SUPABASE_SERVICE_ROLE_KEY="$LOCAL_SERVICE_KEY"
 PGPASSWORD=postgres psql 'postgresql://postgres:postgres@127.0.0.1:54322/postgres?sslmode=disable' -v ON_ERROR_STOP=1 -c 'CREATE DATABASE mk9_backup_restore' || (cat "$ROOT/logs/restore-database.log" >&2 && exit 1)
 # Filter out Supabase internal roles from roles.sql before local restore so that
 # pre-existing reserved roles in the clean Docker container are not altered or duplicated.
-grep -vE '^ALTER ROLE (supabase_admin|supabase_auth_admin|supabase_storage_admin|supabase_functions_admin|supabase_read_only_user|supabase_replication_admin|authenticator)\b' "$ROOT/export/roles.sql" > "$ROOT/restore/roles-filtered.sql" || cp "$ROOT/export/roles.sql" "$ROOT/restore/roles-filtered.sql"
+node scripts/filter-roles.mjs "$ROOT/export/roles.sql" "$ROOT/restore/roles-filtered.sql"
 
 PGPASSWORD=postgres psql 'postgresql://postgres:postgres@127.0.0.1:54322/postgres?sslmode=disable' -v ON_ERROR_STOP=1 -f "$ROOT/restore/roles-filtered.sql" > /dev/null 2> "$ROOT/logs/restore-roles.log" || (cat "$ROOT/logs/restore-roles.log" >&2 && exit 1)
 PGPASSWORD=postgres pg_restore --exit-on-error --dbname='postgresql://postgres:postgres@127.0.0.1:54322/mk9_backup_restore?sslmode=disable' "$ROOT/export/database.dump" > /dev/null 2> "$ROOT/logs/restore-database.log" || (cat "$ROOT/logs/restore-database.log" >&2 && exit 1)
