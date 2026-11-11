@@ -33,3 +33,9 @@ test('M37 recovery database assertions report failures instead of failing silent
   assert.match(recoveryScript, /ERROR: \$description \(actual result: \$result\)/);
   assert.match(recoveryScript, /ERROR: Could not evaluate database assertion: \$description/);
 });
+
+test('M37/M38 schema fingerprint uses the same explicit pipe separator as its expected value', () => {
+  assert.match(recoveryScript, /schema_facts="\$\(psql -X -v ON_ERROR_STOP=1 -At -F '\|' -f scripts\/m38-homologation-schema-fingerprint\.sql\)"/);
+  assert.match(recoveryScript, /expected_schema_facts='152\|[a-f0-9]{64}'/);
+  assert.doesNotMatch(recoveryScript, /expected_schema_facts=\$'152\\t/);
+});
