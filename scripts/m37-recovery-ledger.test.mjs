@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const recoveryScript = readFileSync(new URL('./m37-recovery-postgres17.sh', import.meta.url), 'utf8');
+const pgCronPreflight = readFileSync(new URL('./m37-pg-cron-preflight.sh', import.meta.url), 'utf8');
+const workflow = readFileSync(new URL('../.github/workflows/m37-recovery-postgres17.yml', import.meta.url), 'utf8');
 const executorScript = readFileSync(new URL('./safe-homolog-executor.mjs', import.meta.url), 'utf8');
 
 test('M37 recovery simulation records the six applied M30/M37 ledger names without .sql', () => {
@@ -41,23 +43,41 @@ test('M37/M38 schema fingerprint uses the same explicit pipe separator as its ex
 });
 
 test('M38 disposable PostgreSQL preflight installs and verifies the real pg_cron module before migrations', () => {
-  const available = recoveryScript.indexOf('pg_available_extensions WHERE name=\'pg_cron\'');
-  const preloaded = recoveryScript.indexOf("'pg_cron' = ANY (regexp_split_to_array(current_setting('shared_preload_libraries')");
-  const install = recoveryScript.indexOf("CREATE EXTENSION IF NOT EXISTS pg_cron");
-  const installed = recoveryScript.indexOf("pg_extension WHERE extname='pg_cron'");
-  const objects = recoveryScript.indexOf("to_regnamespace('cron') IS NOT NULL");
-  const preflightBlock = recoveryScript.match(/if \[ "\$applied_dependency_count" -eq 6 \]; then([\s\S]*?)\n  fi/)?.[1];
+  const available = pgCronPreflight.indexOf('pg_available_extensions WHERE name=\'pg_cron\'');
+  const preloaded = pgCronPreflight.indexOf("'pg_cron' = ANY (regexp_split_to_array(current_setting('shared_preload_libraries')");
+  const database = pgCronPreflight.indexOf("current_setting('cron.database_name', true) = current_database()");
+  const install = pgCronPreflight.indexOf("CREATE EXTENSION IF NOT EXISTS pg_cron");
+  const installed = pgCronPreflight.indexOf("pg_extension WHERE extname='pg_cron'");
+  const objects = pgCronPreflight.indexOf("to_regnamespace('cron') IS NOT NULL");
 
-  for (const [label, position] of Object.entries({ available, preloaded, install, installed, objects })) {
+  for (const [label, position] of Object.entries({ available, preloaded, database, install, installed, objects })) {
     assert.ok(position >= 0, `preflight must check ${label}`);
   }
-  assert.ok(preflightBlock, 'the PostgreSQL feature preflight must run after all six M30/M37 dependencies');
-  assert.ok(available < preloaded && preloaded < install && install < installed && installed < objects,
-    'pg_cron availability, preload, installation and catalog objects must be checked in order');
-  for (const marker of [available, preloaded, install, installed, objects]) {
-    assert.ok(preflightBlock.includes(recoveryScript.slice(marker, recoveryScript.indexOf('\n', marker))),
-      'every pg_cron preflight step must be in the six-dependency gate before M38');
-  }
-  assert.match(recoveryScript, /to_regclass\('cron\.job'\) IS NOT NULL/);
-  assert.match(recoveryScript, /cron\.database_name', true\) = current_database\(\)/);
+  assert.ok(available < preloaded && preloaded < database && database < install && install < installed && installed < objects,
+    'pg_cron availability, preload and database config must pass before installation and object checks');
+  assert.match(pgCronPreflight, /to_regclass\('cron\.job'\) IS NOT NULL/);
+  assert.match(recoveryScript, /bash scripts\/m37-pg-cron-preflight\.sh/);
+});
+
+test('GitHub Actions runs pg_cron preflight before npm install, tests, typecheck, build and migrations', () => {
+  const position = marker => {
+    const found = workflow.indexOf(marker);
+    assert.ok(found >= 0, `workflow must include ${marker}`);
+    return found;
+  };
+  const start = position('name: Start isolated official Supabase stack');
+  const preflight = position('name: Verify and install pg_cron in disposable PostgreSQL 17');
+  const install = position('name: Install npm dependencies');
+  const tests = position('name: Run complete npm test suite');
+  const typecheck = position('name: Run TypeScript typecheck');
+  const build = position('name: Build production bundle');
+  const migrations = position('name: Simulate homologation ledger, migrations and functional suites');
+
+  assert.ok(start < preflight && preflight < install && install < tests && tests < typecheck && typecheck < build && build < migrations,
+    'the database must pass pg_cron preflight before the full verification workload');
+  assert.match(workflow, /curl -fsSL https:\/\/github\.com\/supabase\/cli\/releases\/download\/v3\.0\.0\//);
+  assert.match(workflow, /configure-m37-supabase-ports\.mjs/);
+  assert.match(workflow, /bash scripts\/m37-pg-cron-preflight\.sh/);
+  assert.match(workflow, /name: Capture PostgreSQL and container diagnostics\s+if: always\(\)/);
+  assert.match(workflow, /name: Stop isolated stack\s+if: always\(\)/);
 });

@@ -299,14 +299,9 @@ for migration in "${migrations[@]}"; do
       echo "Actual:   $schema_facts" >&2
       exit 1
     fi
-    # Supabase's PostgreSQL image ships pg_cron preloaded, but the extension
-    # must still be installed in this disposable database before M38 runs.
-    assert_psql_true "pg_cron files are available for PostgreSQL 17" "SELECT EXISTS (SELECT 1 FROM pg_available_extensions WHERE name='pg_cron')"
-    assert_psql_true "pg_cron is loaded by the PostgreSQL 17 server" "SELECT 'pg_cron' = ANY (regexp_split_to_array(current_setting('shared_preload_libraries'), E'\\s*,\\s*'))"
-    psql -X -v ON_ERROR_STOP=1 -c 'CREATE EXTENSION IF NOT EXISTS pg_cron'
-    assert_psql_true "pg_cron is installed in the disposable database" "SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname='pg_cron')"
-    assert_psql_true "pg_cron exposes its schema, scheduler functions and job table" "SELECT to_regnamespace('cron') IS NOT NULL AND EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='cron' AND p.proname='schedule') AND EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='cron' AND p.proname='unschedule') AND to_regclass('cron.job') IS NOT NULL"
-    assert_psql_true "pg_cron targets the disposable postgres database" "SELECT current_setting('cron.database_name', true) = current_database()"
+    # Recheck in the same state immediately before M38 after migrations alter
+    # the disposable database catalog.
+    bash scripts/m37-pg-cron-preflight.sh
     echo "Verified exact 53-version homologation pre-M38 ledger and 152-fact M30/M37 catalog fingerprint."
   fi
 done

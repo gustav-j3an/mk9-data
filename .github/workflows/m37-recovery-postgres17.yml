@@ -19,14 +19,6 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - name: Install npm dependencies
-        run: npm ci --no-audit --no-fund
-      - name: Run complete npm test suite
-        run: npm test
-      - name: Run TypeScript typecheck
-        run: npm run typecheck
-      - name: Build production bundle
-        run: npm run build
       - name: Install pinned Supabase CLI
         run: |
           curl -fsSL https://github.com/supabase/cli/releases/download/v3.0.0/supabase_3.0.0_linux_amd64.tar.gz -o /tmp/supabase-cli.tar.gz
@@ -65,6 +57,21 @@ jobs:
                 ;;
             esac
           done
+      - name: Verify and install pg_cron in disposable PostgreSQL 17
+        env:
+          PGHOST: 127.0.0.1
+          PGUSER: postgres
+          PGPASSWORD: postgres
+          PGDATABASE: postgres
+        run: bash scripts/m37-pg-cron-preflight.sh
+      - name: Install npm dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Run complete npm test suite
+        run: npm test
+      - name: Run TypeScript typecheck
+        run: npm run typecheck
+      - name: Build production bundle
+        run: npm run build
       - name: Simulate homologation ledger, migrations and functional suites
         env:
           SUPABASE_TEST_WORKDIR: ${{ runner.temp }}/mk9-m37
