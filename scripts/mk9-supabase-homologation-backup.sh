@@ -102,8 +102,12 @@ export RESTORE_SUPABASE_SERVICE_ROLE_KEY="$LOCAL_SERVICE_KEY"
 # The database archive is restored to mk9_backup_restore. The local Storage API still uses the
 # stack's default postgres database; no claim of an integrated database+Storage restore is made.
 PGPASSWORD=postgres psql 'postgresql://postgres:postgres@127.0.0.1:54322/postgres?sslmode=disable' -v ON_ERROR_STOP=1 -c 'CREATE DATABASE mk9_backup_restore' || (cat "$ROOT/logs/restore-database.log" >&2 && exit 1)
-# Grant membership in Supabase internal service roles to postgres in the disposable stack so pg_restore can SET ROLE and assign schema/object ownership
-PGPASSWORD=postgres psql 'postgresql://postgres:postgres@127.0.0.1:54322/postgres?sslmode=disable' -v ON_ERROR_STOP=1 -c 'GRANT supabase_admin, supabase_auth_admin, supabase_storage_admin, supabase_functions_admin TO postgres WITH ADMIN OPTION' || true
+# Use docker exec to grant membership in Supabase internal service roles to postgres as superuser
+# in the clean disposable stack so pg_restore can SET ROLE and assign schema/object ownership
+CONTAINER_ID="$(docker ps -q -f name=supabase_db)"
+if [[ -n "$CONTAINER_ID" ]]; then
+  docker exec "$CONTAINER_ID" psql -U supabase_admin -d postgres -c 'GRANT supabase_admin, supabase_auth_admin, supabase_storage_admin, supabase_functions_admin TO postgres WITH ADMIN OPTION' >/dev/null 2>&1 || true
+fi
 
 # Filter out Supabase internal roles from roles.sql before local restore so that
 # pre-existing reserved roles in the clean Docker container are not altered or duplicated.
