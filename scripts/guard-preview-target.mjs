@@ -1,8 +1,13 @@
 export const HOMOLOGATION_PROJECT_REF = 'tafjceemuetqjyngresg';
 export const HOMOLOGATION_PREVIEW_BRANCH = 'codex/m44-promoter-homologation-preview';
+export const HOMOLOGATION_PAGES_BRANCH = 'codex/m46-cloudflare-promoter-homologation';
+export const HOMOLOGATION_PROTECTED_BRANCHES = new Set([
+  HOMOLOGATION_PREVIEW_BRANCH,
+  HOMOLOGATION_PAGES_BRANCH,
+]);
 
 export function validatePreviewTarget({ branch, supabaseUrl, publishableKey }) {
-  if (branch !== HOMOLOGATION_PREVIEW_BRANCH) return { ok: true, applies: false };
+  if (!HOMOLOGATION_PROTECTED_BRANCHES.has(branch)) return { ok: true, applies: false };
 
   let projectRef = null;
   try {

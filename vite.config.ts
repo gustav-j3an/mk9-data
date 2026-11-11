@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import {defineConfig, loadEnv} from 'vite';
 import { rhHandler } from './server/rh-handler.ts';
 import rhAccessHandler from './server/rh-access-handler.ts';
-import { assertPreviewTarget, HOMOLOGATION_PREVIEW_BRANCH } from './scripts/guard-preview-target.mjs';
+import { assertPreviewTarget, HOMOLOGATION_PROTECTED_BRANCHES } from './scripts/guard-preview-target.mjs';
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
@@ -17,16 +17,16 @@ export default defineConfig(({ mode }) => {
   const readGit = (args: string[]) => {
     try { return execFileSync('git', args, { encoding: 'utf8' }).trim(); } catch { return 'unknown'; }
   };
-  const buildCommit = (process.env.VERCEL_GIT_COMMIT_SHA || readGit(['rev-parse', 'HEAD'])).slice(0, 7);
-  const buildRef = (process.env.VERCEL_GIT_COMMIT_REF || readGit(['branch', '--show-current'])).replace(/[^a-zA-Z0-9._/-]/g, '').slice(0, 100);
-  if (buildRef === HOMOLOGATION_PREVIEW_BRANCH) {
+  const buildCommit = (process.env.VERCEL_GIT_COMMIT_SHA || process.env.CF_PAGES_COMMIT_SHA || readGit(['rev-parse', 'HEAD'])).slice(0, 7);
+  const buildRef = (process.env.VERCEL_GIT_COMMIT_REF || process.env.CF_PAGES_BRANCH || readGit(['branch', '--show-current'])).replace(/[^a-zA-Z0-9._/-]/g, '').slice(0, 100);
+  if (HOMOLOGATION_PROTECTED_BRANCHES.has(buildRef)) {
     assertPreviewTarget({
       branch: buildRef,
       supabaseUrl: env.VITE_SUPABASE_URL || process.env.VITE_SUPABASE_URL,
       publishableKey: env.VITE_SUPABASE_PUBLISHABLE_KEY || process.env.VITE_SUPABASE_PUBLISHABLE_KEY || env.VITE_SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY,
     });
   }
-  const buildDirty = !process.env.VERCEL_GIT_COMMIT_SHA && Boolean(readGit(['status', '--porcelain']));
+  const buildDirty = !process.env.VERCEL_GIT_COMMIT_SHA && !process.env.CF_PAGES_COMMIT_SHA && Boolean(readGit(['status', '--porcelain']));
   const buildInfo = { version: packageVersion, commit: `${buildCommit}${buildDirty ? '-dirty' : ''}`, ref: buildRef || 'unknown' };
   return {
     define: {

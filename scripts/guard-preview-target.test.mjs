@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { assertPreviewTarget, HOMOLOGATION_PREVIEW_BRANCH, HOMOLOGATION_PROJECT_REF, validatePreviewTarget } from './guard-preview-target.mjs';
+import { assertPreviewTarget, HOMOLOGATION_PAGES_BRANCH, HOMOLOGATION_PREVIEW_BRANCH, HOMOLOGATION_PROJECT_REF, validatePreviewTarget } from './guard-preview-target.mjs';
 
 const valid = {
   branch: HOMOLOGATION_PREVIEW_BRANCH,
@@ -10,6 +10,7 @@ const valid = {
 
 test('dedicated Preview accepts only the homologation URL and a public key', () => {
   assert.deepEqual(validatePreviewTarget(valid), { ok: true, applies: true, projectRef: HOMOLOGATION_PROJECT_REF });
+  assert.equal(assertPreviewTarget({ ...valid, branch: HOMOLOGATION_PAGES_BRANCH }).projectRef, HOMOLOGATION_PROJECT_REF);
   assert.throws(() => assertPreviewTarget({ ...valid, supabaseUrl: 'https://xzmbesqhxcnuokjwrbnw.supabase.co' }), /restricted to the homologation/);
   assert.throws(() => assertPreviewTarget({ ...valid, publishableKey: '' }), /requires a Supabase publishable/);
 });
@@ -23,4 +24,5 @@ test('legacy JWT keys must identify homologation and cannot be service role', ()
 
 test('guard does not change normal development or production builds', () => {
   assert.deepEqual(validatePreviewTarget({ branch: 'main', supabaseUrl: 'https://xzmbesqhxcnuokjwrbnw.supabase.co', publishableKey: 'anything' }), { ok: true, applies: false });
+  assert.throws(() => assertPreviewTarget({ ...valid, branch: HOMOLOGATION_PAGES_BRANCH, supabaseUrl: 'https://xzmbesqhxcnuokjwrbnw.supabase.co' }), /restricted to the homologation/);
 });
