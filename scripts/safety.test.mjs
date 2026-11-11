@@ -109,10 +109,10 @@ test('backup script encrypts before publishing only a GPG artifact and keeps res
   assert.match(script, /set -Eeuo pipefail/);
   assert.match(script, /mk9_backup_restore/);
   assert.match(script, /verify-local/);
-  assert.match(script, /supabase db dump --role-only --remote="\$SUPABASE_DB_URL"/);
-  assert.match(script, /export PGUSER=.*SUPABASE_DB_URL/);
+  assert.match(script, /supabase db dump --role-only --remote="\$NORMALIZED_DB_URL"/);
+  assert.match(script, /export PGUSER=.*NORMALIZED_DB_URL/);
   assert.match(script, /PGSSLMODE="verify-full"/);
-  assert.match(script, /PGSSLROOTCERT="system"/);
+  assert.match(script, /PGSSLROOTCERT=/);
   assert.match(script, /SHOW server_version_num/);
   assert.match(script, /SERVER_VERSION_NUM < 170000/);
   assert.match(workflow, /workflow_dispatch:/);

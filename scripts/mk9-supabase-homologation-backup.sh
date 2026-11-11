@@ -26,19 +26,40 @@ on_error() { echo "Backup workflow failed at stage: ${STAGE}. Detailed logs were
 trap 'on_error' ERR
 
 node scripts/preflight.mjs
+NORMALIZED_DB_URL="$(node -e '
+import { normalizeHomologationPoolerUrl } from "./scripts/pooler-connection.mjs";
+const normalized = normalizeHomologationPoolerUrl(process.env.SUPABASE_DB_URL);
+process.stderr.write("::add-mask::" + normalized + "\n");
+process.stdout.write(normalized);
+')"
 node -e "console.log('::add-mask::'+process.env.SUPABASE_DB_URL); console.log('::add-mask::'+process.env.SUPABASE_SERVICE_ROLE_KEY); console.log('::add-mask::'+process.env.BACKUP_GPG_PASSPHRASE)"
 printf '%s' "$BACKUP_GPG_PASSPHRASE" > "$ROOT/passphrase"
 chmod 600 "$ROOT/passphrase"
 unset BACKUP_GPG_PASSPHRASE
 
 STAGE=database-export
-export PGPASSWORD="$(node -e 'const u=new URL(process.env.SUPABASE_DB_URL); process.stdout.write(decodeURIComponent(u.password))')"
-export PGHOST="$(node -e 'process.stdout.write(new URL(process.env.SUPABASE_DB_URL).hostname)')"
-export PGPORT="$(node -e 'process.stdout.write(new URL(process.env.SUPABASE_DB_URL).port||"5432")')"
-export PGUSER="$(node -e 'process.stdout.write(decodeURIComponent(new URL(process.env.SUPABASE_DB_URL).username))')"
+export PGPASSWORD="$(node -e 'const u=new URL(process.argv[1]); process.stdout.write(decodeURIComponent(u.password))' "$NORMALIZED_DB_URL")"
+export PGHOST="$(node -e 'process.stdout.write(new URL(process.argv[1]).hostname)' "$NORMALIZED_DB_URL")"
+export PGPORT="$(node -e 'process.stdout.write(new URL(process.argv[1]).port||"5432")' "$NORMALIZED_DB_URL")"
+export PGUSER="$(node -e 'process.stdout.write(decodeURIComponent(new URL(process.argv[1]).username))' "$NORMALIZED_DB_URL")"
 export PGDATABASE="postgres"
 export PGSSLMODE="verify-full"
-export PGSSLROOTCERT="system"
+export PGSSLROOTCERT="$(node -e '
+import path from "node:path";
+import fs from "node:fs";
+const u = new URL(process.argv[1]);
+const certParam = u.searchParams.get("sslrootcert") || "certs/supabase-prod-ca-2021.crt";
+if (certParam === "system") {
+  process.stdout.write("system");
+} else {
+  const resolved = path.resolve(certParam);
+  if (!fs.existsSync(resolved)) {
+    console.error("SSL Root Certificate file not found:", resolved);
+    process.exit(1);
+  }
+  process.stdout.write(resolved);
+}
+' "$NORMALIZED_DB_URL")"
 
 # Full PostgreSQL 17 archive includes application schemas plus Supabase auth/storage metadata.
 pg_dump --version | grep -q '^pg_dump (PostgreSQL) 17\.'
@@ -49,7 +70,7 @@ if [[ ! "$SERVER_VERSION_NUM" =~ ^[0-9]{6}$ ]] || (( SERVER_VERSION_NUM < 170000
 fi
 psql --no-password --quiet --tuples-only --no-align --file=scripts/backup-inventory.sql > "$ROOT/export/inventory-before.json" 2> "$ROOT/logs/inventory-before.log"
 pg_dump --format=custom --file="$ROOT/export/database.dump" --no-password 2> "$ROOT/logs/pg_dump.log"
-supabase db dump --role-only --remote="$SUPABASE_DB_URL" > "$ROOT/export/roles.sql" 2> "$ROOT/logs/roles.log"
+supabase db dump --role-only --remote="$NORMALIZED_DB_URL" > "$ROOT/export/roles.sql" 2> "$ROOT/logs/roles.log"
 pg_dump --schema-only --schema=supabase_migrations --file="$ROOT/export/migration-history.sql" --no-password 2> "$ROOT/logs/migration-schema.log"
 pg_dump --data-only --schema=supabase_migrations --file="$ROOT/export/migration-history-data.sql" --no-password 2> "$ROOT/logs/migration-data.log"
 

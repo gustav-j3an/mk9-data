@@ -1,4 +1,37 @@
-import { ALLOWED_BACKUP_BRANCH, HOMOLOGATION_REF, parseHomologationPoolerUrl } from './pooler-connection.mjs';
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import {
+  ALLOWED_BACKUP_BRANCH,
+  HOMOLOGATION_REF,
+  parseHomologationPoolerUrl,
+  SUPABASE_CA_CERT_PATH,
+  SUPABASE_CA_SHA256,
+} from './pooler-connection.mjs';
+
+export function verifySupabaseCaCertificate(certRelativePath = SUPABASE_CA_CERT_PATH) {
+  const resolved = path.resolve(certRelativePath);
+  if (!fs.existsSync(resolved)) {
+    throw new Error(`CA_CERT_FILE_NOT_FOUND: ${certRelativePath}`);
+  }
+  const pem = fs.readFileSync(resolved, 'utf8');
+  const cert = new crypto.X509Certificate(pem);
+  if (cert.fingerprint256 !== SUPABASE_CA_SHA256) {
+    throw new Error(`CA_CERT_FINGERPRINT_MISMATCH: expected ${SUPABASE_CA_SHA256}, got ${cert.fingerprint256}`);
+  }
+  const now = new Date();
+  const validFrom = new Date(cert.validFrom);
+  const validTo = new Date(cert.validTo);
+  if (now < validFrom || now > validTo) {
+    throw new Error(`CA_CERT_EXPIRED_OR_NOT_YET_VALID: valid between ${cert.validFrom} and ${cert.validTo}`);
+  }
+  return {
+    verified: true,
+    subject: cert.subject,
+    fingerprint256: cert.fingerprint256,
+    path: resolved,
+  };
+}
 
 function validServiceRoleKey(value) {
   const parts = String(value ?? '').split('.');
@@ -25,6 +58,7 @@ export function validateBackupConfig(env) {
     throw new Error('PASSPHRASE_INVALID');
   }
   if (env.INPUT_CONFIRM_ARTIFACT_ACCESS !== 'true') throw new Error('ARTIFACT_ACCESS_CONFIRMATION_REQUIRED');
+  verifySupabaseCaCertificate();
   parseHomologationPoolerUrl(env.SUPABASE_DB_URL, env.SUPABASE_POOLER_HOST);
   return true;
 }
