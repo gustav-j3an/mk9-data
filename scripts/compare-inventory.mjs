@@ -16,8 +16,17 @@ async function main() {
   const after = JSON.parse(await readFile(afterPath, 'utf8'));
   try {
     assertInventoriesEqual(before, after);
-  } catch {
+  } catch (err) {
     console.error('Restored database inventory does not match source.');
+    for (const key of Object.keys(before)) {
+      const b = JSON.stringify(before[key]);
+      const a = JSON.stringify(after[key]);
+      if (b !== a) {
+        console.error(`Mismatch in section "${key}":`);
+        console.error(`Source:   ${b?.slice(0, 300)}`);
+        console.error(`Restored: ${a?.slice(0, 300)}`);
+      }
+    }
     process.exitCode = 1;
     return;
   }
