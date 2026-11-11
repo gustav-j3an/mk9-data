@@ -1,62 +1,54 @@
 # Backup de homologação pelo GitHub Actions
 
-O workflow manual gera um backup da homologação `tafjceemuetqjyngresg` em runner hospedado pelo GitHub. Ele usa ferramentas PostgreSQL 17, Supabase CLI `3.0.0`, Docker e uma stack Supabase descartável para validar separadamente a restauração do banco e do Storage. Não aplica migrations, não habilita `pg_cron` e não grava na origem.
+O workflow manual prepara uma exportação da homologação `tafjceemuetqjyngresg` em runner hospedado pelo GitHub. Usa clientes PostgreSQL 17, Supabase CLI `3.1.0`, Docker no runner e uma stack Supabase descartável para validações separadas do banco e do Storage. Não aplica migrations, não habilita extensões remotas e não grava na origem.
 
-O job só roda na branch `codex/m38-backup-actions` e exige o Environment protegido `homologation-backup`, as três credenciais de homologação, uma senha GPG forte e a confirmação manual de que o artifact criptografado ficará no GitHub. O workflow só tem `workflow_dispatch`, permissão de repositório `contents: read` e não usa tokens de deploy.
+O job só pode rodar na branch `codex/m42.2-m39-session-pooler`. Requer o Environment protegido `homologation-backup`, credenciais de homologação, frase GPG forte e confirmação manual sobre o artifact. O workflow só tem `workflow_dispatch`, permissão `contents: read` e não usa tokens de deploy. Nenhuma execução foi iniciada nesta missão.
 
-## Aviso sobre o armazenamento
+## Conexão e proteções
 
-Este repositório é público. O artifact fica associado à execução do GitHub Actions e pode ser acessível conforme as permissões e regras do GitHub para o repositório. Ele não deve ser tratado como armazenamento privado permanente. A retenção configurada é de **1 dia**; depois, o artifact expira. O único arquivo enviado é o `.tar.gz.gpg` cifrado; nenhum dump, dado Auth, foto, manifesto ou checksum em texto aberto é enviado como artifact.
+O banco é aceito somente se a URL usar o host exato definido em `SUPABASE_POOLER_HOST`, usuário `postgres.tafjceemuetqjyngresg`, banco `postgres`, porta `5432` (Session Pooler) e `sslmode=verify-full&sslrootcert=system`. O hostname precisa ser copiado do Connect > Session pooler do projeto de homologação e cadastrado como variável do Environment protegido; o código não deriva host pela região. Hosts desconhecidos, modo transaction, URL direta, produção e parâmetros extras ou TLS fraco são rejeitados antes de conectar.
 
-A senha GPG fica em um GitHub Environment Secret e deve ter pelo menos 32 bytes, sem quebra de linha. Mantenha uma cópia de recuperação da senha em local separado e protegido. Sem essa senha, não será possível descriptografar o arquivo. Mesmo cifrado, o artifact pode ser baixado por pessoas que tenham acesso à execução/repositório, então proteja a senha e não reutilize uma senha de outros sistemas.
+O driver libpq recebe o usuário extraído da URL através de `PGUSER`; o script não o substitui por `postgres`. A conexão usa `verify-full` e o bundle de CAs do sistema, falhando fechada se o certificado não for confiável. A versão 3.1.0 do CLI adiciona verificação do certificado Supabase nos comandos de banco; a execução controlada ainda precisa validar o caminho completo pelo container do CLI e pela Session Pooler.
 
 ## Configuração necessária
 
-Crie o Environment `homologation-backup`, exija aprovação de pelo menos um revisor, limite a branch de deployment a `codex/m38-backup-actions` e proteja a branch com revisão.
+Configure o Environment `homologation-backup` para exigir aprovação de revisor e permitir somente a branch de trabalho após revisão. Não configure valores de produção.
 
 **Environment variables**
 
 - `SUPABASE_PROJECT_REF` — `tafjceemuetqjyngresg`.
-- `SUPABASE_PROJECT_URL` — URL da API desse projeto de homologação.
+- `SUPABASE_PROJECT_URL` — `https://tafjceemuetqjyngresg.supabase.co`.
+- `SUPABASE_POOLER_HOST` — hostname exato copiado do Connect > Session pooler no projeto de homologação.
 
 **Environment secrets**
 
-- `SUPABASE_DB_URL` — conexão direta PostgreSQL da homologação, usuário `postgres`, banco `postgres`, com TLS.
-- `SUPABASE_SERVICE_ROLE_KEY` — chave de serviço da homologação; a claim `ref` precisa ser `tafjceemuetqjyngresg`.
-- `BACKUP_GPG_PASSPHRASE` — frase aleatória exclusiva, com no mínimo 32 bytes e sem CR/LF. Guarde a cópia de recuperação fora do GitHub.
+- `SUPABASE_DB_URL` — URL Session Pooler IPv4 com usuário `postgres.tafjceemuetqjyngresg`, porta `5432`, banco `postgres`, `sslmode=verify-full` e `sslrootcert=system`.
+- `SUPABASE_SERVICE_ROLE_KEY` — chave de serviço desse projeto; claim `ref` deve ser `tafjceemuetqjyngresg`.
+- `BACKUP_GPG_PASSPHRASE` — frase aleatória exclusiva com no mínimo 32 bytes e sem CR/LF. Guarde uma cópia protegida fora do GitHub.
 
-Não configure valores ou credenciais de produção. O preflight confere o ref, a URL e o host exatos, a claim da chave, a branch, a conexão TLS e a confirmação manual antes de conectar à origem.
+O preflight valida branch, referências, endpoint da API, host pooler configurado, URL, usuário, porta, banco, TLS, claim da chave e confirmação manual antes da conexão. Nenhum segredo é impresso.
 
-## Execução e download
+## Armazenamento
 
-O arquivo do workflow precisa estar na branch padrão antes que o GitHub aceite a primeira execução `workflow_dispatch` e exiba o botão **Run workflow**. A integração na branch padrão exige PR revisada; esta branch de trabalho não a faz automaticamente.
+Este repositório é público. O artifact cifrado é retido por **1 dia** e pode estar acessível a pessoas com permissão sobre o repositório ou a execução. Não é armazenamento privado permanente. O único arquivo enviado é o `.tar.gz.gpg`; dumps, dados Auth, objetos Storage e checksums em claro não são publicados como artifact.
 
-Depois que o workflow estiver na branch padrão e o Environment estiver configurado:
+O repositório privado `mk9-date-homologation-backups` possui uma implementação independente baseada em release privado e cifragem age. Ela não foi alterada nem recebeu dados nesta missão. Em leitura da API do GitHub, havia três ativos cifrados e o workflow mais recente (#11) terminou com sucesso e registra `partial_approved`; dois ativos anteriores registram `partial_failed`, e os três deixam Storage pendente. Isso comprova armazenamento de dumps cifrados e uma validação parcial aprovada, mas não recuperação completa de banco e Storage; os arquivos não foram baixados ou descriptografados nesta revisão.
 
-1. Abra **Actions → MK9 homologation backup and restore validation → Run workflow**.
-2. Selecione `codex/m38-backup-actions`.
-3. Informe `tafjceemuetqjyngresg` e marque a confirmação de acesso ao artifact criptografado.
-4. Aguarde a execução concluir. Falha em exportação, comparação, restauração, criptografia ou checksums impede a etapa de upload.
-5. Na página da execução concluída, em **Artifacts**, baixe `mk9-homologation-backup-<run-id>-<attempt>`. Extraia o ZIP do artifact; dentro estará somente o arquivo `.tar.gz.gpg`.
-6. Com a cópia protegida da frase GPG, descriptografe e extraia localmente. Por exemplo, salve a senha em um arquivo temporário protegido fora do repositório, com permissão de leitura apenas para você, e execute:
+O runbook desse repositório informa limite de 2 GiB por ativo e nenhum limite agregado de armazenamento de releases documentado; o plano e a cobrança da conta não foram confirmados. Ele também alerta que minutos/uso de Actions e egress Supabase precisam ser conferidos antes da execução. A implementação atual desse repositório valida o pooler por um padrão que incorpora `sa-east-1`; não a reutilize para uma futura execução sem trocar isso por um hostname exato obtido de configuração confiável.
 
-   ```bash
-   gpg --batch --quiet --pinentry-mode loopback --passphrase-file /caminho/seguro/gpg-passphrase --decrypt mk9-backup.tar.gz.gpg > mk9-backup.tar.gz
-   mkdir -m 700 mk9-backup-extraido
-   tar -xzf mk9-backup.tar.gz -C mk9-backup-extraido
-   (cd mk9-backup-extraido && sha256sum --check SHA256SUMS)
-   ```
+## Execução manual futura
 
-   Apague a cópia temporária da senha com segurança depois. Não use a senha em argumentos de linha de comando nem salve os arquivos descriptografados em pastas sincronizadas ou compartilhadas.
+A primeira execução `workflow_dispatch` depende de o workflow estar disponível na branch padrão e das regras do Environment permitirem a branch revisada. Após essa preparação:
 
-Não coloque o conteúdo descriptografado em issues, PRs, artifacts, logs ou no repositório. O workflow não inicia automaticamente em push, PR, agendamento ou deploy.
+1. Abra **Actions > MK9 homologation backup and restore validation > Run workflow** e selecione a branch revisada.
+2. Informe `tafjceemuetqjyngresg` e confirme explicitamente o acesso ao artifact cifrado.
+3. Aguarde preflight, exportação, verificações em stack descartável, cifragem e checksums. Uma falha interrompe o upload.
+4. Baixe o artifact e descriptografe somente em ambiente protegido, com a frase GPG guardada separadamente. Não use a frase em argumentos de linha de comando nem coloque dados descriptografados em pastas sincronizadas, logs, issues, PRs ou no repositório.
 
-## Conteúdo e validação
+Não execute antes de confirmar visualmente no Dashboard a identidade do projeto e o host e configurar o Environment protegido. O primeiro ensaio controlado deve confirmar o caminho TLS completo no runner, incluindo o `pg_dump` em container do CLI e a Session Pooler.
 
-O arquivo cifrado reúne um dump PostgreSQL custom-format, exportação separada de roles e histórico de migrations, inventário de schemas/dados/permissões e bytes e manifesto do Storage. O inventário compara dados e objetos PostgreSQL; a restauração do banco ocorre em `mk9_backup_restore`. A validação de Storage é separada: recria buckets/objetos pela API local, aplica metadados na base padrão `postgres` da stack descartável e compara o inventário e hashes dos bytes. Essas verificações não constituem uma restauração integrada com as tabelas de Storage do dump na mesma base. A restauração em projeto Supabase real não está implementada.
+## Conteúdo e limites da recuperação
 
-O manifesto mantém os IDs de proprietário, mas a validação isolada do Storage não recria usuários Auth nem reassocia `owner_id` na API local. Configurações Auth que vivem no painel Supabase — como OAuth, SMTP, redirects, CAPTCHA e MFA — também não são cobertas pelo dump PostgreSQL. Use um procedimento de recuperação separado, revisado e específico para o projeto antes de qualquer restauração real.
+O pacote inclui dump PostgreSQL customizado, roles, histórico de migrations, inventário de objetos/dados/permissões e bytes e manifesto do Storage. A verificação restaura o banco e o Storage em etapas separadas na stack descartável; não demonstra uma restauração integrada entre banco/Auth/Storage, nem uma restauração num projeto Supabase real. O Storage restaurado pela API local não recria usuários Auth nem reassocia `owner_id`. Configurações Auth do painel — OAuth, SMTP, redirects, CAPTCHA e MFA — não estão cobertas.
 
-## Limitações
-
-Não há armazenamento privado permanente, versionamento ou garantia de recuperação no GitHub Artifacts. O artifact expira após um dia e pode estar disponível a usuários com permissões sobre o repositório/execução. Artifacts dependem das políticas e limites do GitHub. Nenhum backup foi executado por esta implementação; o primeiro run real ainda precisa confirmar funcionamento do GPG, do Supabase CLI e da restauração no runner hospedado. Divergências entre schemas gerenciados na origem e na stack local interrompem o processo antes do upload.
+Nenhum backup real foi executado ou restaurado nesta missão. Antes de declarar recuperação integral, ainda é necessário um ensaio integrado suficiente e uma estratégia aprovada para autenticação/configuração do projeto. Divergências dos schemas gerenciados entre origem e stack local interrompem o processo antes de disponibilizar artifact.

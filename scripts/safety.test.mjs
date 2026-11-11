@@ -2,30 +2,53 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { HOMOLOGATION_REF, assertLocalRestoreTarget, assertSourceTarget, assertStorageInventoryMatches, resolveObjectPath, verifyStorageArchive } from './storage-backup.mjs';
+import { assertLocalRestoreTarget, assertSourceTarget, assertStorageInventoryMatches, resolveObjectPath, verifyStorageArchive } from './storage-backup.mjs';
+import { ALLOWED_BACKUP_BRANCH, HOMOLOGATION_REF, parseHomologationPoolerUrl } from './pooler-connection.mjs';
 import { validateBackupConfig } from './preflight.mjs';
 import { assertInventoriesEqual } from './compare-inventory.mjs';
 
 const jwt = payload => `x.${Buffer.from(JSON.stringify(payload)).toString('base64url')}.x`;
+const poolerHost = 'configured-test.pooler.supabase.com';
+const validDbUrl = `postgresql://postgres.${HOMOLOGATION_REF}:placeholder@${poolerHost}:5432/postgres?sslmode=verify-full&sslrootcert=system`;
 const valid = {
-  GITHUB_REF: 'refs/heads/codex/m38-backup-actions',
+  GITHUB_REF: `refs/heads/${ALLOWED_BACKUP_BRANCH}`,
   INPUT_PROJECT_REF: HOMOLOGATION_REF,
   SUPABASE_PROJECT_REF: HOMOLOGATION_REF,
   SUPABASE_PROJECT_URL: `https://${HOMOLOGATION_REF}.supabase.co`,
-  SUPABASE_DB_URL: `postgresql://postgres:placeholder@db.${HOMOLOGATION_REF}.supabase.co:5432/postgres?sslmode=require`,
+  SUPABASE_DB_URL: validDbUrl,
+  SUPABASE_POOLER_HOST: poolerHost,
   SUPABASE_SERVICE_ROLE_KEY: 'placeholder', BACKUP_GPG_PASSPHRASE: 'x'.repeat(40),
   INPUT_CONFIRM_ARTIFACT_ACCESS: 'true',
 };
 
 test('staging endpoints and JWT project claims are exact', () => {
-  assert.equal(assertSourceTarget({ projectRef: HOMOLOGATION_REF, projectUrl: `https://${HOMOLOGATION_REF}.supabase.co`, databaseUrl: valid.SUPABASE_DB_URL, serviceRoleKey: jwt({ role: 'service_role', ref: HOMOLOGATION_REF }) }), true);
-  assert.throws(() => assertSourceTarget({ projectRef: 'production-ref', projectUrl: 'https://production-ref.supabase.co', databaseUrl: 'postgresql://postgres:x@db.production-ref.supabase.co/postgres?sslmode=require', serviceRoleKey: jwt({ role: 'service_role', ref: 'production-ref' }) }));
+  assert.equal(assertSourceTarget({ projectRef: HOMOLOGATION_REF, projectUrl: `https://${HOMOLOGATION_REF}.supabase.co`, databaseUrl: valid.SUPABASE_DB_URL, poolerHost, serviceRoleKey: jwt({ role: 'service_role', ref: HOMOLOGATION_REF }) }), true);
+  assert.throws(() => assertSourceTarget({ projectRef: 'production-ref', projectUrl: 'https://production-ref.supabase.co', databaseUrl: 'postgresql://postgres:x@db.production-ref.supabase.co/postgres?sslmode=require', poolerHost, serviceRoleKey: jwt({ role: 'service_role', ref: 'production-ref' }) }));
+});
+
+test('pooler URL accepts only the configured homologation session endpoint and strong TLS', () => {
+  assert.deepEqual(parseHomologationPoolerUrl(validDbUrl, poolerHost), {
+    host: poolerHost, port: '5432', user: `postgres.${HOMOLOGATION_REF}`, password: 'placeholder', database: 'postgres',
+  });
+  const invalidUrls = [
+    `postgresql://postgres.${HOMOLOGATION_REF}:x@${poolerHost}:6543/postgres?sslmode=verify-full&sslrootcert=system`,
+    `postgresql://postgres.${HOMOLOGATION_REF}:x@unknown.pooler.supabase.com:5432/postgres?sslmode=verify-full&sslrootcert=system`,
+    `postgresql://postgres.${HOMOLOGATION_REF}:x@${poolerHost}:5432/postgres?sslmode=require&sslrootcert=system`,
+    `postgresql://postgres.${HOMOLOGATION_REF}:x@${poolerHost}:5432/postgres?sslmode=disable&sslrootcert=system`,
+    `postgresql://postgres.${HOMOLOGATION_REF}:x@${poolerHost}:5432/postgres?sslmode=verify-full`,
+    `postgresql://postgres.${HOMOLOGATION_REF}:x@${poolerHost}:5432/postgres?sslmode=verify-full&sslmode=require&sslrootcert=system`,
+    `postgresql://postgres.other-project:x@${poolerHost}:5432/postgres?sslmode=verify-full&sslrootcert=system`,
+    `postgresql://postgres.${HOMOLOGATION_REF}:x@db.production.supabase.co:5432/postgres?sslmode=verify-full&sslrootcert=system`,
+  ];
+  for (const url of invalidUrls) assert.throws(() => parseHomologationPoolerUrl(url, poolerHost));
+  assert.throws(() => parseHomologationPoolerUrl(validDbUrl, 'unknown.example.com'));
+  assert.throws(() => parseHomologationPoolerUrl(validDbUrl, ''));
 });
 
 test('preflight rejects non-allowlisted branch/source and has no object-store requirement', () => {
   const env = { ...valid, SUPABASE_SERVICE_ROLE_KEY: jwt({ role: 'service_role', ref: HOMOLOGATION_REF }) };
   assert.equal(validateBackupConfig(env), true);
-  for (const [key, value] of [['GITHUB_REF', 'refs/heads/main'], ['INPUT_PROJECT_REF', 'production-ref'], ['SUPABASE_PROJECT_URL', 'https://production-ref.supabase.co'], ['SUPABASE_DB_URL', 'postgresql://postgres:x@db.production-ref.supabase.co/postgres?sslmode=require']]) {
+  for (const [key, value] of [['GITHUB_REF', 'refs/heads/main'], ['GITHUB_REF', 'refs/heads/codex/m38-backup-actions'], ['INPUT_PROJECT_REF', 'production-ref'], ['SUPABASE_PROJECT_REF', 'production-ref'], ['SUPABASE_PROJECT_URL', 'https://production-ref.supabase.co'], ['SUPABASE_DB_URL', 'postgresql://postgres:x@db.production-ref.supabase.co/postgres?sslmode=require'], ['SUPABASE_POOLER_HOST', 'aws-1-sa-east-1.pooler.supabase.com']]) {
     assert.throws(() => validateBackupConfig({ ...env, [key]: value }));
   }
   assert.equal('AWS_ACCESS_KEY_ID' in env, false);
@@ -35,6 +58,8 @@ test('preflight rejects non-allowlisted branch/source and has no object-store re
 test('preflight blocks missing secrets, weak GPG passphrase and absent artifact disclosure confirmation', () => {
   const env = { ...valid, SUPABASE_SERVICE_ROLE_KEY: jwt({ role: 'service_role', ref: HOMOLOGATION_REF }) };
   assert.throws(() => validateBackupConfig({ ...env, SUPABASE_DB_URL: '' }));
+  assert.throws(() => validateBackupConfig({ ...env, SUPABASE_POOLER_HOST: '' }));
+  assert.throws(() => validateBackupConfig({ ...env, SUPABASE_SERVICE_ROLE_KEY: '' }));
   assert.throws(() => validateBackupConfig({ ...env, BACKUP_GPG_PASSPHRASE: '' }));
   assert.throws(() => validateBackupConfig({ ...env, BACKUP_GPG_PASSPHRASE: 'short' }));
   assert.throws(() => validateBackupConfig({ ...env, BACKUP_GPG_PASSPHRASE: `${'x'.repeat(40)}\nignored` }));
@@ -85,19 +110,27 @@ test('backup script encrypts before publishing only a GPG artifact and keeps res
   assert.match(script, /mk9_backup_restore/);
   assert.match(script, /verify-local/);
   assert.match(script, /supabase db dump --role-only --remote="\$SUPABASE_DB_URL"/);
+  assert.match(script, /export PGUSER=.*SUPABASE_DB_URL/);
+  assert.match(script, /PGSSLMODE="verify-full"/);
+  assert.match(script, /PGSSLROOTCERT="system"/);
   assert.match(script, /SHOW server_version_num/);
   assert.match(script, /SERVER_VERSION_NUM < 170000/);
   assert.match(workflow, /workflow_dispatch:/);
   assert.doesNotMatch(workflow, /\n\s+push:/);
   assert.match(workflow, /environment: homologation-backup/);
+  assert.match(workflow, /SUPABASE_POOLER_HOST: \$\{\{ vars\.SUPABASE_POOLER_HOST \}\}/);
+  assert.match(workflow, /supabase_3\.1\.0_linux_amd64\.tar\.gz/);
+  assert.match(workflow, /\)" = "3\.1\.0"/);
+  assert.match(workflow, /refs\/heads\/codex\/m42\.2-m39-session-pooler/);
   assert.match(workflow, /uses: actions\/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9/);
   assert.match(workflow, /retention-days: 1/);
   assert.match(workflow, /if-no-files-found: error/);
   assert.match(workflow, /\.tar\.gz\.gpg/);
   assert.doesNotMatch(workflow, /AWS_|BACKUP_S3_|awscli/i);
-  assert.match(docs, /Este repositório é público/);
-  assert.match(docs, /não deve ser tratado como armazenamento privado permanente/);
-  assert.match(docs, /retenção configurada é de \*\*1 dia\*\*/);
+  assert.match(docs, /reposit.rio . p.blico/);
+  assert.match(docs, /armazenamento privado permanente/);
+  assert.match(docs, /SUPABASE_POOLER_HOST/);
+  assert.match(docs, /sslmode=verify-full/);
   assert.match(script, /assert|pg_restore/);
 });
 
@@ -109,7 +142,7 @@ test('inventory SQL includes row hashes and privilege/RLS/managed-object coverag
   assert.doesNotMatch(sql, /data_md5|definition_md5/);
 });
 
-test('Storage archive rejects unmanifested files and symlinks', async () => {
+test('Storage archive rejects unmanifested files and symlinks', async t => {
   const directory = await mkdtemp(`${tmpdir()}/mk9-backup-test-`);
   try {
     await writeFile(`${directory}/manifest.json`, JSON.stringify({ format: 1, projectRef: HOMOLOGATION_REF, buckets: [], objects: [], totalBytes: 0 }));
@@ -117,7 +150,15 @@ test('Storage archive rejects unmanifested files and symlinks', async () => {
     await writeFile(`${directory}/unexpected.txt`, 'not in the manifest');
     await assert.rejects(verifyStorageArchive(directory), /STORAGE_ARCHIVE_FILE_SET_MISMATCH/);
     await unlink(`${directory}/unexpected.txt`);
-    await symlink('/etc/passwd', `${directory}/link`);
+    try {
+      await symlink('/etc/passwd', `${directory}/link`);
+    } catch (error) {
+      if (['EPERM', 'EACCES'].includes(error.code)) {
+        t.skip('the current operating system account cannot create symlinks');
+        return;
+      }
+      throw error;
+    }
     await assert.rejects(verifyStorageArchive(directory), /STORAGE_ARCHIVE_SYMLINK_REJECTED/);
   } finally {
     await rm(directory, { recursive: true, force: true });

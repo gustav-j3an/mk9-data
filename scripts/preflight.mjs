@@ -1,4 +1,4 @@
-import { HOMOLOGATION_REF } from './storage-backup.mjs';
+import { ALLOWED_BACKUP_BRANCH, HOMOLOGATION_REF, parseHomologationPoolerUrl } from './pooler-connection.mjs';
 
 function validServiceRoleKey(value) {
   const parts = String(value ?? '').split('.');
@@ -12,11 +12,12 @@ function validServiceRoleKey(value) {
 }
 
 export function validateBackupConfig(env) {
-  if (env.GITHUB_REF !== 'refs/heads/codex/m38-backup-actions') throw new Error('BRANCH_NOT_ALLOWED');
+  if (env.GITHUB_REF !== `refs/heads/${ALLOWED_BACKUP_BRANCH}`) throw new Error('BRANCH_NOT_ALLOWED');
   if (env.INPUT_PROJECT_REF !== HOMOLOGATION_REF || env.SUPABASE_PROJECT_REF !== HOMOLOGATION_REF) throw new Error('PROJECT_REF_MISMATCH');
   const api = new URL(env.SUPABASE_PROJECT_URL ?? '');
-  if (api.protocol !== 'https:' || api.hostname !== `${HOMOLOGATION_REF}.supabase.co`) throw new Error('PROJECT_URL_MISMATCH');
-  if (!env.SUPABASE_DB_URL || !env.SUPABASE_SERVICE_ROLE_KEY || !env.BACKUP_GPG_PASSPHRASE) {
+  if (api.protocol !== 'https:' || api.hostname !== `${HOMOLOGATION_REF}.supabase.co`
+      || api.username || api.password || api.port || api.pathname !== '/' || api.search || api.hash) throw new Error('PROJECT_URL_MISMATCH');
+  if (!env.SUPABASE_DB_URL || !env.SUPABASE_POOLER_HOST || !env.SUPABASE_SERVICE_ROLE_KEY || !env.BACKUP_GPG_PASSPHRASE) {
     throw new Error('REQUIRED_SECRET_MISSING');
   }
   if (!validServiceRoleKey(env.SUPABASE_SERVICE_ROLE_KEY)) throw new Error('SERVICE_ROLE_KEY_PROJECT_MISMATCH');
@@ -24,15 +25,7 @@ export function validateBackupConfig(env) {
     throw new Error('PASSPHRASE_INVALID');
   }
   if (env.INPUT_CONFIRM_ARTIFACT_ACCESS !== 'true') throw new Error('ARTIFACT_ACCESS_CONFIRMATION_REQUIRED');
-  const parsedDb = new URL(env.SUPABASE_DB_URL);
-  if (!['postgres:', 'postgresql:'].includes(parsedDb.protocol)
-      || parsedDb.hostname !== `db.${HOMOLOGATION_REF}.supabase.co`
-      || decodeURIComponent(parsedDb.username) !== 'postgres'
-      || !parsedDb.password
-      || parsedDb.pathname !== '/postgres'
-      || !['require', 'verify-ca', 'verify-full'].includes((parsedDb.searchParams.get('sslmode') ?? '').toLowerCase())) {
-    throw new Error('DATABASE_TARGET_MISMATCH');
-  }
+  parseHomologationPoolerUrl(env.SUPABASE_DB_URL, env.SUPABASE_POOLER_HOST);
   return true;
 }
 

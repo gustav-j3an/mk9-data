@@ -5,24 +5,17 @@ import path from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { pathToFileURL } from 'node:url';
+import { HOMOLOGATION_REF, parseHomologationPoolerUrl } from './pooler-connection.mjs';
 
-export const HOMOLOGATION_REF = 'tafjceemuetqjyngresg';
 const PAGE_SIZE = 500;
 
-export function assertSourceTarget({ projectRef, projectUrl, databaseUrl, serviceRoleKey }) {
+export function assertSourceTarget({ projectRef, projectUrl, databaseUrl, poolerHost, serviceRoleKey }) {
   if (projectRef !== HOMOLOGATION_REF) throw new Error('PROJECT_REF_MISMATCH');
   const api = new URL(projectUrl);
   if (api.protocol !== 'https:' || api.hostname !== `${HOMOLOGATION_REF}.supabase.co`) {
     throw new Error('PROJECT_URL_MISMATCH');
   }
-  const db = new URL(databaseUrl);
-  if (!['postgres:', 'postgresql:'].includes(db.protocol)
-      || db.hostname !== `db.${HOMOLOGATION_REF}.supabase.co`
-      || decodeURIComponent(db.username) !== 'postgres'
-      || db.pathname !== '/postgres'
-      || !db.searchParams.get('sslmode')?.match(/^(require|verify-ca|verify-full)$/i)) {
-    throw new Error('DATABASE_TARGET_MISMATCH');
-  }
+  parseHomologationPoolerUrl(databaseUrl, poolerHost);
   const payload = decodeJwtPayload(serviceRoleKey);
   if (payload.role !== 'service_role' || payload.ref !== HOMOLOGATION_REF) {
     throw new Error('STORAGE_KEY_PROJECT_MISMATCH');
@@ -415,6 +408,7 @@ async function main() {
       projectRef: process.env.SUPABASE_PROJECT_REF,
       projectUrl: process.env.SUPABASE_PROJECT_URL,
       databaseUrl: process.env.SUPABASE_DB_URL,
+      poolerHost: process.env.SUPABASE_POOLER_HOST,
       serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY,
     });
     const result = await exportStorage({

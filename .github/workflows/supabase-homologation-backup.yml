@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   backup-and-restore:
-    if: github.ref == 'refs/heads/codex/m38-backup-actions'
+    if: github.ref == 'refs/heads/codex/m42.2-m39-session-pooler'
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     environment: homologation-backup
@@ -32,6 +32,7 @@ jobs:
       INPUT_CONFIRM_ARTIFACT_ACCESS: ${{ inputs.confirm_artifact_access }}
       SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
       SUPABASE_PROJECT_URL: ${{ vars.SUPABASE_PROJECT_URL }}
+      SUPABASE_POOLER_HOST: ${{ vars.SUPABASE_POOLER_HOST }}
       SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       BACKUP_GPG_PASSPHRASE: ${{ secrets.BACKUP_GPG_PASSPHRASE }}
@@ -39,7 +40,7 @@ jobs:
       - name: Check out this implementation branch
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          ref: codex/m38-backup-actions
+          ref: codex/m42.2-m39-session-pooler
           persist-credentials: false
 
       - name: Set up Node.js
@@ -66,10 +67,10 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          curl -fsSL https://github.com/supabase/cli/releases/download/v3.0.0/supabase_3.0.0_linux_amd64.tar.gz -o "$RUNNER_TEMP/supabase-cli.tar.gz"
+          curl -fsSL https://github.com/supabase/cli/releases/download/v3.1.0/supabase_3.1.0_linux_amd64.tar.gz -o "$RUNNER_TEMP/supabase-cli.tar.gz"
           tar -xzf "$RUNNER_TEMP/supabase-cli.tar.gz" -C "$RUNNER_TEMP" supabase
           sudo install "$RUNNER_TEMP/supabase" /usr/local/bin/supabase
-          test "$(supabase --version)" = "3.0.0"
+          test "$(supabase --version)" = "3.1.0"
 
       - name: Export, restore-test, and encrypt backup
         shell: bash

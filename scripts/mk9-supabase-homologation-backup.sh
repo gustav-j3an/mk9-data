@@ -35,9 +35,10 @@ STAGE=database-export
 export PGPASSWORD="$(node -e 'const u=new URL(process.env.SUPABASE_DB_URL); process.stdout.write(decodeURIComponent(u.password))')"
 export PGHOST="$(node -e 'process.stdout.write(new URL(process.env.SUPABASE_DB_URL).hostname)')"
 export PGPORT="$(node -e 'process.stdout.write(new URL(process.env.SUPABASE_DB_URL).port||"5432")')"
-export PGUSER="postgres"
+export PGUSER="$(node -e 'process.stdout.write(decodeURIComponent(new URL(process.env.SUPABASE_DB_URL).username))')"
 export PGDATABASE="postgres"
-export PGSSLMODE="require"
+export PGSSLMODE="verify-full"
+export PGSSLROOTCERT="system"
 
 # Full PostgreSQL 17 archive includes application schemas plus Supabase auth/storage metadata.
 pg_dump --version | grep -q '^pg_dump (PostgreSQL) 17\.'
