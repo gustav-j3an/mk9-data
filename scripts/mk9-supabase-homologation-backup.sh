@@ -101,10 +101,10 @@ export RESTORE_SUPABASE_SERVICE_ROLE_KEY="$LOCAL_SERVICE_KEY"
 # Database restore and Storage API restore are separate checks inside one disposable local stack.
 # The database archive is restored to mk9_backup_restore. The local Storage API still uses the
 # stack's default postgres database; no claim of an integrated database+Storage restore is made.
-PGPASSWORD=postgres psql 'postgresql://postgres:postgres@127.0.0.1:54322/postgres?sslmode=disable' -v ON_ERROR_STOP=1 -c 'CREATE DATABASE mk9_backup_restore'
-PGPASSWORD=postgres psql 'postgresql://postgres:postgres@127.0.0.1:54322/postgres?sslmode=disable' -v ON_ERROR_STOP=1 -f "$ROOT/export/roles.sql" > /dev/null 2> "$ROOT/logs/restore-roles.log"
-PGPASSWORD=postgres pg_restore --exit-on-error --dbname='postgresql://postgres:postgres@127.0.0.1:54322/mk9_backup_restore?sslmode=disable' "$ROOT/export/database.dump" > /dev/null 2> "$ROOT/logs/restore-database.log"
-PGPASSWORD=postgres psql 'postgresql://postgres:postgres@127.0.0.1:54322/mk9_backup_restore?sslmode=disable' -v ON_ERROR_STOP=1 --quiet --tuples-only --no-align --file=scripts/backup-inventory.sql > "$ROOT/restore/inventory-after.json" 2> "$ROOT/logs/inventory-restore.log"
+PGPASSWORD=postgres psql 'postgresql://postgres:postgres@127.0.0.1:54322/postgres?sslmode=disable' -v ON_ERROR_STOP=1 -c 'CREATE DATABASE mk9_backup_restore' || (cat "$ROOT/logs/restore-database.log" >&2 && exit 1)
+PGPASSWORD=postgres psql 'postgresql://postgres:postgres@127.0.0.1:54322/postgres?sslmode=disable' -v ON_ERROR_STOP=1 -f "$ROOT/export/roles.sql" > /dev/null 2> "$ROOT/logs/restore-roles.log" || (cat "$ROOT/logs/restore-roles.log" >&2 && exit 1)
+PGPASSWORD=postgres pg_restore --exit-on-error --dbname='postgresql://postgres:postgres@127.0.0.1:54322/mk9_backup_restore?sslmode=disable' "$ROOT/export/database.dump" > /dev/null 2> "$ROOT/logs/restore-database.log" || (cat "$ROOT/logs/restore-database.log" >&2 && exit 1)
+PGPASSWORD=postgres psql 'postgresql://postgres:postgres@127.0.0.1:54322/mk9_backup_restore?sslmode=disable' -v ON_ERROR_STOP=1 --quiet --tuples-only --no-align --file=scripts/backup-inventory.sql > "$ROOT/restore/inventory-after.json" 2> "$ROOT/logs/inventory-restore.log" || (cat "$ROOT/logs/inventory-restore.log" >&2 && exit 1)
 node scripts/compare-inventory.mjs "$ROOT/export/inventory-before.json" "$ROOT/restore/inventory-after.json"
 echo 'Disposable PostgreSQL database restore verified independently in database mk9_backup_restore.'
 node scripts/storage-backup.mjs verify "$ROOT/export/storage"
@@ -112,7 +112,7 @@ node scripts/storage-backup.mjs verify "$ROOT/export/storage"
 # Independently rebuild the disposable stack Storage API (default postgres database), then
 # apply its captured Storage metadata and compare the API inventory and object bytes.
 node scripts/storage-backup.mjs restore-local "$ROOT/export/storage" "$ROOT/restore/storage-metadata.sql"
-PGPASSWORD=postgres psql "$LOCAL_DB_URL" -v ON_ERROR_STOP=1 --file="$ROOT/restore/storage-metadata.sql" > /dev/null 2> "$ROOT/logs/restore-storage-metadata.log"
+PGPASSWORD=postgres psql "$LOCAL_DB_URL" -v ON_ERROR_STOP=1 --file="$ROOT/restore/storage-metadata.sql" > /dev/null 2> "$ROOT/logs/restore-storage-metadata.log" || (cat "$ROOT/logs/restore-storage-metadata.log" >&2 && exit 1)
 node scripts/storage-backup.mjs verify-local "$ROOT/export/storage"
 
 STAGE=package-encrypt-upload
