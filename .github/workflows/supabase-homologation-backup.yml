@@ -60,6 +60,8 @@ jobs:
           echo 'deb [signed-by=/usr/share/keyrings/postgresql.gpg] https://apt.postgresql.org/pub/repos/apt noble-pgdg main' | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
           sudo apt-get update -qq
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y postgresql-client-17 gpg
+          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
+          export PATH="/usr/lib/postgresql/17/bin:$PATH"
           echo "Installed pg_dump version: $(pg_dump --version)"
           pg_dump --version | grep -q '^pg_dump (PostgreSQL) 17\.'
           echo "Installed psql version: $(psql --version)"
