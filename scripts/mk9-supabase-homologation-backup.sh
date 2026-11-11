@@ -113,7 +113,7 @@ fi
 if [[ -n "$CONTAINER_ID" ]]; then
   echo "Disposable database container ID: $CONTAINER_ID"
   docker exec "$CONTAINER_ID" psql -U supabase_admin -d postgres -c 'ALTER ROLE postgres WITH SUPERUSER; CREATE ROLE pgbouncer; GRANT supabase_admin, supabase_auth_admin, supabase_storage_admin, supabase_functions_admin, pgbouncer TO postgres WITH ADMIN OPTION;' || true
-  docker exec "$CONTAINER_ID" psql -U supabase_admin -d mk9_backup_restore -c 'GRANT ALL ON SCHEMA public TO postgres; GRANT supabase_admin, supabase_auth_admin, supabase_storage_admin, supabase_functions_admin, pgbouncer TO postgres WITH ADMIN OPTION;' || true
+  docker exec "$CONTAINER_ID" psql -U supabase_admin -d mk9_backup_restore -c 'GRANT ALL ON SCHEMA public TO postgres; GRANT ALL ON DATABASE mk9_backup_restore TO postgres; GRANT supabase_admin, supabase_auth_admin, supabase_storage_admin, supabase_functions_admin, pgbouncer TO postgres WITH ADMIN OPTION; GRANT ALL ON ALL SCHEMAS IN DATABASE mk9_backup_restore TO postgres; ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin GRANT ALL ON SCHEMAS TO postgres;' || true
 fi
 
 # Filter out Supabase internal roles from roles.sql before local restore so that
@@ -121,7 +121,7 @@ fi
 node scripts/filter-roles.mjs "$ROOT/export/roles.sql" "$ROOT/restore/roles-filtered.sql"
 
 PGPASSWORD=postgres psql 'postgresql://postgres:postgres@127.0.0.1:54322/postgres?sslmode=disable' -v ON_ERROR_STOP=1 -f "$ROOT/restore/roles-filtered.sql" > /dev/null 2> "$ROOT/logs/restore-roles.log" || (cat "$ROOT/logs/restore-roles.log" >&2 && exit 1)
-PGPASSWORD=postgres pg_restore --exit-on-error --dbname='postgresql://postgres:postgres@127.0.0.1:54322/mk9_backup_restore?sslmode=disable' "$ROOT/export/database.dump" > /dev/null 2> "$ROOT/logs/restore-database.log" || (cat "$ROOT/logs/restore-database.log" >&2 && exit 1)
+docker exec "$CONTAINER_ID" pg_restore --exit-on-error --username=supabase_admin --dbname=mk9_backup_restore < "$ROOT/export/database.dump" > /dev/null 2> "$ROOT/logs/restore-database.log" || (cat "$ROOT/logs/restore-database.log" >&2 && exit 1)
 PGPASSWORD=postgres psql 'postgresql://postgres:postgres@127.0.0.1:54322/mk9_backup_restore?sslmode=disable' -v ON_ERROR_STOP=1 --quiet --tuples-only --no-align --file=scripts/backup-inventory.sql > "$ROOT/restore/inventory-after.json" 2> "$ROOT/logs/inventory-restore.log" || (cat "$ROOT/logs/inventory-restore.log" >&2 && exit 1)
 node scripts/compare-inventory.mjs "$ROOT/export/inventory-before.json" "$ROOT/restore/inventory-after.json"
 echo 'Disposable PostgreSQL database restore verified independently in database mk9_backup_restore.'
