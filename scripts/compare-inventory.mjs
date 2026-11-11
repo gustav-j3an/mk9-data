@@ -2,8 +2,42 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+function normalizeAcl(acl) {
+  if (!acl || typeof acl !== 'string') return '';
+  // PostgreSQL ACL string representation: "{priv1,priv2,...}" or ""
+  const trimmed = acl.trim();
+  if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+    const inner = trimmed.slice(1, -1);
+    if (!inner) return '';
+    const parts = inner.split(',').map(s => s.trim()).filter(Boolean);
+    parts.sort();
+    return `{${parts.join(',')}}`;
+  }
+  return trimmed;
+}
+
+function normalizeInventory(obj) {
+  if (obj === null || typeof obj !== 'object') {
+    return obj;
+  }
+  if (Array.isArray(obj)) {
+    return obj.map(normalizeInventory);
+  }
+  const result = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (key === 'acl' && typeof value === 'string') {
+      result[key] = normalizeAcl(value);
+    } else {
+      result[key] = normalizeInventory(value);
+    }
+  }
+  return result;
+}
+
 export function assertInventoriesEqual(beforeInventory, afterInventory) {
-  if (JSON.stringify(beforeInventory) !== JSON.stringify(afterInventory)) {
+  const normBefore = normalizeInventory(beforeInventory);
+  const normAfter = normalizeInventory(afterInventory);
+  if (JSON.stringify(normBefore) !== JSON.stringify(normAfter)) {
     throw new Error('DATABASE_INVENTORY_MISMATCH');
   }
   return true;

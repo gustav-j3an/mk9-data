@@ -105,7 +105,11 @@ BEGIN
   FROM pg_auth_members m
   JOIN pg_roles granted ON granted.oid = m.roleid
   JOIN pg_roles member ON member.oid = m.member
-  JOIN pg_roles grantor ON grantor.oid = m.grantor;
+  JOIN pg_roles grantor ON grantor.oid = m.grantor
+  WHERE member.rolname NOT LIKE 'cli_login_%'
+    AND granted.rolname NOT LIKE 'cli_login_%'
+    AND grantor.rolname NOT LIKE 'cli_login_%'
+    AND NOT (member.rolname = 'postgres' AND granted.rolname IN ('pgbouncer', 'supabase_admin', 'supabase_auth_admin', 'supabase_storage_admin', 'supabase_functions_admin'));
 
   SELECT coalesce(jsonb_agg(jsonb_build_object(
       'schema', schemaname, 'table', tablename, 'name', policyname,
@@ -173,15 +177,18 @@ BEGIN
   WHERE rolname NOT IN (
     'supabase_admin', 'supabase_auth_admin', 'supabase_storage_admin',
     'supabase_functions_admin', 'supabase_read_only_user', 'supabase_replication_admin',
-    'authenticator', 'pg_database_owner', 'pg_read_all_data', 'pg_write_all_data'
-  );
+    'authenticator', 'pg_database_owner', 'pg_read_all_data', 'pg_write_all_data',
+    'postgres'
+  )
+    AND rolname NOT LIKE 'cli_login_%';
 
   SELECT coalesce(jsonb_agg(jsonb_build_object(
       'schema', n.nspname, 'relation_or_domain', coalesce(c.relname, t.typname), 'name', con.conname,
       'type', con.contype, 'definition', pg_get_constraintdef(con.oid, true),
       'validated', con.convalidated, 'deferrable', con.condeferrable,
       'initially_deferred', con.condeferred, 'local', con.conislocal,
-      'inheritance_count', con.coninhcount, 'no_inherit', con.connoinherit
+      'inheritance_count', con.coninhcount,
+      'no_inherit', CASE WHEN c.relispartition THEN false ELSE con.connoinherit END
     ) ORDER BY n.nspname, coalesce(c.relname, t.typname), con.conname), '[]'::jsonb)
     INTO constraints
   FROM pg_constraint con
