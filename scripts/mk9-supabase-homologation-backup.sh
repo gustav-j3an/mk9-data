@@ -87,6 +87,9 @@ mkdir -p "$ROOT/supabase"
 (cd "$ROOT/supabase" && supabase init --force >/dev/null 2> "$ROOT/logs/supabase-init.log")
 sed -i 's/^major_version = .*/major_version = 17/' "$ROOT/supabase/supabase/config.toml"
 (cd "$ROOT/supabase" && supabase start -x realtime,imgproxy,mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor >/dev/null 2> "$ROOT/logs/supabase-start.log")
+
+# Unset PG* environment variables from remote export so local connections use default/explicit parameters
+unset PGHOST PGPORT PGUSER PGDATABASE PGSSLMODE PGSSLROOTCERT
 LOCAL_DB_URL="postgresql://postgres:postgres@127.0.0.1:54322/postgres?sslmode=disable"
 LOCAL_STORAGE_URL="http://127.0.0.1:54321"
 LOCAL_SERVICE_KEY="$(cd "$ROOT/supabase" && supabase status -o env 2> "$ROOT/logs/supabase-status.log" | sed -n 's/^SERVICE_ROLE_KEY=//p' | tr -d '"\r')"
@@ -98,10 +101,10 @@ export RESTORE_SUPABASE_SERVICE_ROLE_KEY="$LOCAL_SERVICE_KEY"
 # Database restore and Storage API restore are separate checks inside one disposable local stack.
 # The database archive is restored to mk9_backup_restore. The local Storage API still uses the
 # stack's default postgres database; no claim of an integrated database+Storage restore is made.
-PGPASSWORD=postgres psql 'postgresql://postgres:postgres@127.0.0.1:54322/postgres' -v ON_ERROR_STOP=1 -c 'CREATE DATABASE mk9_backup_restore'
-PGPASSWORD=postgres psql 'postgresql://postgres:postgres@127.0.0.1:54322/postgres' -v ON_ERROR_STOP=1 -f "$ROOT/export/roles.sql" > /dev/null 2> "$ROOT/logs/restore-roles.log"
-PGPASSWORD=postgres pg_restore --exit-on-error --dbname='postgresql://postgres:postgres@127.0.0.1:54322/mk9_backup_restore' "$ROOT/export/database.dump" > /dev/null 2> "$ROOT/logs/restore-database.log"
-PGPASSWORD=postgres psql 'postgresql://postgres:postgres@127.0.0.1:54322/mk9_backup_restore' -v ON_ERROR_STOP=1 --quiet --tuples-only --no-align --file=scripts/backup-inventory.sql > "$ROOT/restore/inventory-after.json" 2> "$ROOT/logs/inventory-restore.log"
+PGPASSWORD=postgres psql 'postgresql://postgres:postgres@127.0.0.1:54322/postgres?sslmode=disable' -v ON_ERROR_STOP=1 -c 'CREATE DATABASE mk9_backup_restore'
+PGPASSWORD=postgres psql 'postgresql://postgres:postgres@127.0.0.1:54322/postgres?sslmode=disable' -v ON_ERROR_STOP=1 -f "$ROOT/export/roles.sql" > /dev/null 2> "$ROOT/logs/restore-roles.log"
+PGPASSWORD=postgres pg_restore --exit-on-error --dbname='postgresql://postgres:postgres@127.0.0.1:54322/mk9_backup_restore?sslmode=disable' "$ROOT/export/database.dump" > /dev/null 2> "$ROOT/logs/restore-database.log"
+PGPASSWORD=postgres psql 'postgresql://postgres:postgres@127.0.0.1:54322/mk9_backup_restore?sslmode=disable' -v ON_ERROR_STOP=1 --quiet --tuples-only --no-align --file=scripts/backup-inventory.sql > "$ROOT/restore/inventory-after.json" 2> "$ROOT/logs/inventory-restore.log"
 node scripts/compare-inventory.mjs "$ROOT/export/inventory-before.json" "$ROOT/restore/inventory-after.json"
 echo 'Disposable PostgreSQL database restore verified independently in database mk9_backup_restore.'
 node scripts/storage-backup.mjs verify "$ROOT/export/storage"
