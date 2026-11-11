@@ -59,8 +59,11 @@ jobs:
           curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /usr/share/keyrings/postgresql.gpg
           echo 'deb [signed-by=/usr/share/keyrings/postgresql.gpg] https://apt.postgresql.org/pub/repos/apt noble-pgdg main' | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
           sudo apt-get update -qq
-          sudo apt-get install -y -qq postgresql-client-17 gpg
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y postgresql-client-17 gpg
+          echo "Installed pg_dump version: $(pg_dump --version)"
           pg_dump --version | grep -q '^pg_dump (PostgreSQL) 17\.'
+          echo "Installed psql version: $(psql --version)"
+          psql --version | grep -q '^psql (PostgreSQL) 17\.'
           docker --version
 
       - name: Install pinned Supabase CLI
