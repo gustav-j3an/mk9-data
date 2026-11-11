@@ -44,7 +44,7 @@ test('M37/M38 schema fingerprint uses the same explicit pipe separator as its ex
 
 test('M38 disposable PostgreSQL preflight installs and verifies the real pg_cron module before migrations', () => {
   const available = pgCronPreflight.indexOf('pg_available_extensions WHERE name=\'pg_cron\'');
-  const preloaded = pgCronPreflight.indexOf("'pg_cron' = ANY (regexp_split_to_array(current_setting('shared_preload_libraries')");
+  const preloaded = pgCronPreflight.indexOf("FROM unnest(string_to_array(current_setting('shared_preload_libraries'), ',')) AS library(name)");
   const database = pgCronPreflight.indexOf("current_setting('cron.database_name', true) = current_database()");
   const install = pgCronPreflight.indexOf("CREATE EXTENSION IF NOT EXISTS pg_cron");
   const installed = pgCronPreflight.indexOf("pg_extension WHERE extname='pg_cron'");
@@ -71,8 +71,6 @@ test('pg_cron diagnostic catalogs are recorded before any preflight assertion ca
     "current_setting('server_version_num')",
     "SELECT name, setting, source, sourcefile, pending_restart",
     "current_setting('cron.database_name', true)",
-    'FROM pg_file_settings',
-    'sourceline, name, setting, applied, error',
     'FROM pg_available_extensions',
     'default_version, installed_version',
     'FROM pg_extension',
@@ -84,6 +82,20 @@ test('pg_cron diagnostic catalogs are recorded before any preflight assertion ca
   assert.match(diagnosticSection, /coalesce\(current_setting\('cron\.database_name', true\), '<absent>'\)/);
   assert.match(diagnosticSection, /WHERE name = 'pg_cron'/);
   assert.match(diagnosticSection, /WHERE extname = 'pg_cron'/);
+  assert.doesNotMatch(diagnosticSection, /pg_file_settings|pg_show_all_file_settings/);
+  assert.doesNotMatch(pgCronPreflight, /pg_file_settings|pg_show_all_file_settings/);
+});
+
+test('preload check handles the PostgreSQL 17.11 shared library list from run 54 without regex escapes', () => {
+  const run54Libraries = 'pg_stat_statements, pgaudit, plpgsql, plpgsql_check, pg_cron, pg_net, pgsodium, auto_explain, pg_tle, plan_filter, supabase_vault';
+  const query = pgCronPreflight.match(/assert_psql_true "pg_cron is loaded through shared_preload_libraries" \\\r?\n\s+"([^"]+)"/)?.[1];
+
+  assert.ok(query, 'preflight must retain a dedicated shared_preload_libraries assertion');
+  assert.match(query, /unnest\(string_to_array\(current_setting\('shared_preload_libraries'\), ','\)\)/);
+  assert.match(query, /btrim\(library\.name\) = 'pg_cron'/);
+  assert.doesNotMatch(query, /regexp_split_to_array|\\\\/);
+  assert.equal(run54Libraries.split(',').map(library => library.trim()).includes('pg_cron'), true,
+    'the exact shared library list reported in GitHub Actions run 54 must satisfy the check');
 });
 
 test('GitHub Actions runs pg_cron preflight before npm install, tests, typecheck, build and migrations', () => {

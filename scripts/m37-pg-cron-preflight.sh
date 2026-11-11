@@ -31,11 +31,6 @@ ORDER BY name;
 
 SELECT coalesce(current_setting('cron.database_name', true), '<absent>') AS cron_database_name;
 
-SELECT sourcefile, sourceline, name, setting, applied, error
-FROM pg_file_settings
-WHERE name IN ('shared_preload_libraries', 'cron.database_name')
-ORDER BY sourcefile, sourceline;
-
 SELECT name, default_version, installed_version
 FROM pg_available_extensions
 WHERE name = 'pg_cron';
@@ -50,7 +45,7 @@ assert_psql_true "server is PostgreSQL 17" \
 assert_psql_true "pg_cron control files are available in this PostgreSQL image" \
   "SELECT EXISTS (SELECT 1 FROM pg_available_extensions WHERE name='pg_cron')"
 assert_psql_true "pg_cron is loaded through shared_preload_libraries" \
-  "SELECT 'pg_cron' = ANY (regexp_split_to_array(current_setting('shared_preload_libraries'), E'\\s*,\\s*'))"
+  "SELECT EXISTS (SELECT 1 FROM unnest(string_to_array(current_setting('shared_preload_libraries'), ',')) AS library(name) WHERE btrim(library.name) = 'pg_cron')"
 assert_psql_true "pg_cron is configured for the disposable current database" \
   "SELECT coalesce(current_setting('cron.database_name', true) = current_database(), false)"
 
