@@ -109,10 +109,10 @@ BEGIN
 
   SELECT coalesce(jsonb_agg(jsonb_build_object(
       'schema', schemaname, 'table', tablename, 'name', policyname,
-      'permissive', permissive, 'roles', roles, 'command', cmd,
+      'permissive', permissive, 'roles', pol.roles, 'command', cmd,
       'using', qual, 'check', with_check
     ) ORDER BY schemaname, tablename, policyname), '[]'::jsonb) INTO policies
-  FROM pg_policies WHERE schemaname !~ '^pg_' AND schemaname <> 'information_schema';
+  FROM pg_policies pol WHERE schemaname !~ '^pg_' AND schemaname <> 'information_schema';
 
   SELECT coalesce(jsonb_agg(jsonb_build_object(
       'schema', n.nspname, 'name', p.proname,
