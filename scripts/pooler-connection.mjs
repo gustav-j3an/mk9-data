@@ -3,6 +3,43 @@ export const ALLOWED_BACKUP_BRANCH = 'codex/m42.2-m39-session-pooler';
 
 const HOST_FORMAT = /^[a-z0-9]+(?:-[a-z0-9]+)*\.pooler\.supabase\.com$/;
 
+/**
+ * Normalizes a database connection URL by ensuring exact TLS parameters:
+ * sslmode=verify-full&sslrootcert=system.
+ *
+ * If no query parameters are present, it safely appends them.
+ * If query parameters are present, it validates that only sslmode=verify-full
+ * and sslrootcert=system are supplied (rejecting arbitrary, unknown, duplicated or incompatible parameters).
+ */
+export function normalizeHomologationPoolerUrl(rawUrl) {
+  let url;
+  try {
+    url = new URL(rawUrl);
+  } catch (err) {
+    throw new Error('DATABASE_URL_INVALID');
+  }
+
+  const allParams = [...url.searchParams.entries()];
+
+  // If query parameters are completely absent (count === 0), add mandatory secure TLS params
+  if (allParams.length === 0) {
+    url.searchParams.set('sslmode', 'verify-full');
+    url.searchParams.set('sslrootcert', 'system');
+    return url.toString();
+  }
+
+  // If query parameters are present, strictly validate them
+  const inspection = inspectHomologationTlsPolicy(url.toString());
+  if (!inspection.valid) {
+    const err = new Error(`DATABASE_TLS_POLICY_MISMATCH: ${inspection.summary}`);
+    err.code = 'DATABASE_TLS_POLICY_MISMATCH';
+    err.issues = inspection.issues;
+    throw err;
+  }
+
+  return url.toString();
+}
+
 export function inspectHomologationTlsPolicy(rawUrl) {
   let url;
   try {
@@ -82,9 +119,13 @@ export function parseHomologationPoolerUrl(rawUrl, configuredHost) {
     throw new Error('DATABASE_TARGET_MISMATCH');
   }
 
-  const inspection = inspectHomologationTlsPolicy(rawUrl);
+  // Normalize TLS parameters (accepts clean URL without query, appends verify-full & system)
+  const normalizedUrl = normalizeHomologationPoolerUrl(rawUrl);
+
+  // Re-verify normalized URL
+  const verifiedUrl = new URL(normalizedUrl);
+  const inspection = inspectHomologationTlsPolicy(normalizedUrl);
   if (!inspection.valid) {
-    // Provide safe, non-sensitive categories of what failed
     const err = new Error(`DATABASE_TLS_POLICY_MISMATCH: ${inspection.summary}`);
     err.code = 'DATABASE_TLS_POLICY_MISMATCH';
     err.issues = inspection.issues;
@@ -92,10 +133,10 @@ export function parseHomologationPoolerUrl(rawUrl, configuredHost) {
   }
 
   return {
-    host: url.hostname,
+    host: verifiedUrl.hostname,
     port: '5432',
-    user: decodeURIComponent(url.username),
-    password: decodeURIComponent(url.password),
+    user: decodeURIComponent(verifiedUrl.username),
+    password: decodeURIComponent(verifiedUrl.password),
     database: 'postgres',
   };
 }

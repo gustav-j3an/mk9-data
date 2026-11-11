@@ -1,5 +1,5 @@
 import dns from 'node:dns/promises';
-import { HOMOLOGATION_REF, parseHomologationPoolerUrl } from './pooler-connection.mjs';
+import { HOMOLOGATION_REF, normalizeHomologationPoolerUrl, parseHomologationPoolerUrl } from './pooler-connection.mjs';
 
 export const ALLOWED_CONNECTION_TEST_BRANCH = 'codex/m42.5-homologation-connection-test';
 
@@ -18,13 +18,15 @@ export function validateConnectionTestConfig(env) {
 
   // Preflight URL check: validates protocol, host === configuredHost, port === 5432,
   // username === postgres.tafjceemuetqjyngresg, pathname === /postgres,
-  // and strict TLS parameters sslmode=verify-full&sslrootcert=system
+  // normalizes TLS if absent and enforces strict TLS parameters sslmode=verify-full&sslrootcert=system
   const parsed = parseHomologationPoolerUrl(env.SUPABASE_DB_URL, env.SUPABASE_POOLER_HOST);
+  const normalizedUrl = normalizeHomologationPoolerUrl(env.SUPABASE_DB_URL);
 
   return {
     parsed,
     projectRef: HOMOLOGATION_REF,
     poolerHost: env.SUPABASE_POOLER_HOST,
+    normalizedUrl,
   };
 }
 

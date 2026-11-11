@@ -2,12 +2,15 @@
 set -Eeuo pipefail
 umask 077
 
-echo "==> [MK9 DATE M42.5] Validating connection test preflight configuration..."
-node -e '
+echo "==> [MK9 DATE M42.5] Validating connection test preflight configuration and normalizing TLS..."
+NORMALIZED_DB_URL="$(node -e '
 import { validateConnectionTestConfig } from "./scripts/homologation-connection-test.mjs";
-validateConnectionTestConfig(process.env);
-console.log("Configuration preflight passed safely without credentials leak.");
-'
+const config = validateConnectionTestConfig(process.env);
+console.log("::add-mask::" + config.normalizedUrl);
+process.stdout.write(config.normalizedUrl);
+')"
+echo ""
+echo "Configuration preflight passed safely with strong TLS policy enforced."
 
 echo "==> [MK9 DATE M42.5] Verifying IPv4 DNS resolution for Session Pooler..."
 POOLER_HOST="${SUPABASE_POOLER_HOST:?}"
@@ -24,10 +27,10 @@ verifyPoolerDnsResolution(host).then(ip => {
 echo "DNS resolution verified for pooler host (IPv4: ${RESOLVED_IP})."
 
 echo "==> [MK9 DATE M42.5] Extracting connection parameters for read-only probe..."
-export PGPASSWORD="$(node -e 'const u=new URL(process.env.SUPABASE_DB_URL); process.stdout.write(decodeURIComponent(u.password))')"
-export PGHOST="$(node -e 'process.stdout.write(new URL(process.env.SUPABASE_DB_URL).hostname)')"
-export PGPORT="$(node -e 'process.stdout.write(new URL(process.env.SUPABASE_DB_URL).port||"5432")')"
-export PGUSER="$(node -e 'process.stdout.write(decodeURIComponent(new URL(process.env.SUPABASE_DB_URL).username))')"
+export PGPASSWORD="$(node -e 'const u=new URL(process.argv[1]); process.stdout.write(decodeURIComponent(u.password))' "$NORMALIZED_DB_URL")"
+export PGHOST="$(node -e 'process.stdout.write(new URL(process.argv[1]).hostname)' "$NORMALIZED_DB_URL")"
+export PGPORT="$(node -e 'process.stdout.write(new URL(process.argv[1]).port||"5432")' "$NORMALIZED_DB_URL")"
+export PGUSER="$(node -e 'process.stdout.write(decodeURIComponent(new URL(process.argv[1]).username))' "$NORMALIZED_DB_URL")"
 export PGDATABASE="postgres"
 export PGSSLMODE="verify-full"
 export PGSSLROOTCERT="system"
