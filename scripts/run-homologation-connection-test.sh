@@ -55,9 +55,13 @@ echo "==> [MK9 DATE M42.5] Checking client psql tool..."
 psql --version | grep -q '^psql (PostgreSQL) 17\.'
 
 echo "==> [MK9 DATE M42.5] Querying database identity (current_database, current_user, version)..."
-PROBE_OUTPUT="$(psql --no-password --quiet --tuples-only --no-align --command="SELECT current_database() || '|' || current_user || '|' || current_setting('server_version_num')" 2> /tmp/psql-probe-error.log || (cat /tmp/psql-probe-error.log >&2 && exit 1))"
+PROBE_OUTPUT="$(psql --no-password --quiet --tuples-only --no-align --command="SELECT current_database() || '|' || current_user || '|' || current_setting('server_version_num');" 2> /tmp/psql-probe-error.log || (cat /tmp/psql-probe-error.log >&2 && exit 1))"
+if [ -s /tmp/psql-probe-error.log ]; then
+  cat /tmp/psql-probe-error.log >&2
+fi
 
 echo "==> [MK9 DATE M42.5] Validating response integrity..."
+export PROBE_OUTPUT
 node -e '
 import { parseSessionInspectionResult } from "./scripts/homologation-connection-test.mjs";
 const raw = process.env.PROBE_OUTPUT;
@@ -66,6 +70,6 @@ console.log("Successfully connected to PostgreSQL homologation database:");
 console.log("  - Database: " + res.currentDatabase);
 console.log("  - Current User: " + res.currentUser);
 console.log("  - Engine Version Num: " + res.serverVersionNum + " (PostgreSQL 17 verified)");
-' PROBE_OUTPUT="$PROBE_OUTPUT"
+'
 
 echo "==> [MK9 DATE M42.5] Connection test completed successfully with ZERO writes, dumps or schema changes."
