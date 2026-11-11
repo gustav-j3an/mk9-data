@@ -4,7 +4,8 @@ umask 077
 
 echo "==> [MK9 DATE M42.5] Validating connection test preflight configuration and normalizing TLS..."
 NORMALIZED_DB_URL="$(node -e '
-import { validateConnectionTestConfig } from "./scripts/homologation-connection-test.mjs";
+import { validateConnectionTestConfig, verifySupabaseCaCertificate } from "./scripts/homologation-connection-test.mjs";
+verifySupabaseCaCertificate();
 const config = validateConnectionTestConfig(process.env);
 process.stderr.write("::add-mask::" + config.normalizedUrl + "\n");
 process.stdout.write(config.normalizedUrl);
@@ -33,7 +34,22 @@ export PGPORT="$(node -e 'process.stdout.write(new URL(process.argv[1]).port||"5
 export PGUSER="$(node -e 'process.stdout.write(decodeURIComponent(new URL(process.argv[1]).username))' "$NORMALIZED_DB_URL")"
 export PGDATABASE="postgres"
 export PGSSLMODE="verify-full"
-export PGSSLROOTCERT="system"
+export PGSSLROOTCERT="$(node -e '
+import path from "node:path";
+import fs from "node:fs";
+const u = new URL(process.argv[1]);
+const certParam = u.searchParams.get("sslrootcert") || "certs/supabase-prod-ca-2021.crt";
+if (certParam === "system") {
+  process.stdout.write("system");
+} else {
+  const resolved = path.resolve(certParam);
+  if (!fs.existsSync(resolved)) {
+    console.error("SSL Root Certificate file not found:", resolved);
+    process.exit(1);
+  }
+  process.stdout.write(resolved);
+}
+' "$NORMALIZED_DB_URL")"
 
 echo "==> [MK9 DATE M42.5] Checking client psql tool..."
 psql --version | grep -q '^psql (PostgreSQL) 17\.'

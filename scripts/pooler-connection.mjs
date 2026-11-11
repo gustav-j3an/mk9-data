@@ -1,15 +1,17 @@
 export const HOMOLOGATION_REF = 'tafjceemuetqjyngresg';
 export const ALLOWED_BACKUP_BRANCH = 'codex/m42.2-m39-session-pooler';
+export const SUPABASE_CA_CERT_PATH = 'certs/supabase-prod-ca-2021.crt';
+export const SUPABASE_CA_SHA256 = '80:70:25:AD:50:D4:ED:21:9D:2C:9C:7D:29:9C:00:4F:82:4E:B0:0C:F7:F6:5A:FE:F6:07:D0:7B:72:E6:CA:FA';
 
 const HOST_FORMAT = /^[a-z0-9]+(?:-[a-z0-9]+)*\.pooler\.supabase\.com$/;
 
 /**
  * Normalizes a database connection URL by ensuring exact TLS parameters:
- * sslmode=verify-full&sslrootcert=system.
+ * sslmode=verify-full&sslrootcert=<path-to-supabase-ca> (or system).
  *
- * If no query parameters are present, it safely appends them.
+ * If no query parameters are present, it safely appends sslmode=verify-full&sslrootcert=certs/supabase-prod-ca-2021.crt.
  * If query parameters are present, it validates that only sslmode=verify-full
- * and sslrootcert=system are supplied (rejecting arbitrary, unknown, duplicated or incompatible parameters).
+ * and an approved sslrootcert are supplied (rejecting arbitrary, unknown, duplicated or incompatible parameters).
  */
 export function normalizeHomologationPoolerUrl(rawUrl) {
   let url;
@@ -24,7 +26,7 @@ export function normalizeHomologationPoolerUrl(rawUrl) {
   // If query parameters are completely absent (count === 0), add mandatory secure TLS params
   if (allParams.length === 0) {
     url.searchParams.set('sslmode', 'verify-full');
-    url.searchParams.set('sslrootcert', 'system');
+    url.searchParams.set('sslrootcert', SUPABASE_CA_CERT_PATH);
     return url.toString();
   }
 
@@ -68,13 +70,14 @@ export function inspectHomologationTlsPolicy(rawUrl) {
     issues.push('sslmode parameter is incompatible (expected "verify-full")');
   }
 
-  // 2. Validate sslrootcert
+  // 2. Validate sslrootcert (accepts verified local cert path or system)
+  const isApprovedRootCert = sslrootcert === SUPABASE_CA_CERT_PATH || sslrootcert === 'system' || sslrootcert === './' + SUPABASE_CA_CERT_PATH;
   if (sslrootcertCount === 0) {
-    issues.push('sslrootcert parameter is missing (expected "sslrootcert=system")');
+    issues.push(`sslrootcert parameter is missing (expected "sslrootcert=${SUPABASE_CA_CERT_PATH}")`);
   } else if (sslrootcertCount > 1) {
     issues.push(`sslrootcert parameter is duplicated (${sslrootcertCount} occurrences)`);
-  } else if (sslrootcert !== 'system') {
-    issues.push('sslrootcert parameter is incompatible (expected "system")');
+  } else if (!isApprovedRootCert) {
+    issues.push(`sslrootcert parameter is incompatible (expected "${SUPABASE_CA_CERT_PATH}" or "system")`);
   }
 
   // 3. Count additional unauthorized query parameters (WITHOUT revealing any values)

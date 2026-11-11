@@ -5,8 +5,9 @@ import {
   validateConnectionTestConfig,
   verifyPoolerDnsResolution,
   parseSessionInspectionResult,
+  verifySupabaseCaCertificate,
 } from './homologation-connection-test.mjs';
-import { HOMOLOGATION_REF } from './pooler-connection.mjs';
+import { HOMOLOGATION_REF, SUPABASE_CA_SHA256 } from './pooler-connection.mjs';
 
 const poolerHost = 'aws-1-sa-east-1.pooler.supabase.com';
 const validDbUrl = `postgresql://postgres.${HOMOLOGATION_REF}:dummy-secret@${poolerHost}:5432/postgres?sslmode=verify-full&sslrootcert=system`;
@@ -18,6 +19,18 @@ const validEnv = {
   SUPABASE_DB_URL: validDbUrl,
   SUPABASE_POOLER_HOST: poolerHost,
 };
+
+test('verifySupabaseCaCertificate validates official certificate file and rejects tampered files', () => {
+  const verified = verifySupabaseCaCertificate();
+  assert.equal(verified.verified, true);
+  assert.equal(verified.fingerprint256, SUPABASE_CA_SHA256);
+  assert.match(verified.subject, /Supabase Root 2021 CA/);
+
+  assert.throws(
+    () => verifySupabaseCaCertificate('non-existent-cert.crt'),
+    /CA_CERT_FILE_NOT_FOUND/
+  );
+});
 
 test('validateConnectionTestConfig accepts exact valid configuration', () => {
   const result = validateConnectionTestConfig(validEnv);

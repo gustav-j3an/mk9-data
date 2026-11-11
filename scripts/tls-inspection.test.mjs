@@ -5,28 +5,33 @@ import {
   normalizeHomologationPoolerUrl,
   parseHomologationPoolerUrl,
   HOMOLOGATION_REF,
+  SUPABASE_CA_CERT_PATH,
 } from './pooler-connection.mjs';
 
 const host = 'aws-1-sa-east-1.pooler.supabase.com';
 const base = `postgresql://postgres.${HOMOLOGATION_REF}:secret-pass-token-12345@${host}:5432/postgres`;
 
-test('normalizeHomologationPoolerUrl accepts URL with 0 parameters and appends verify-full & system', () => {
+test('normalizeHomologationPoolerUrl accepts URL with 0 parameters and appends verify-full & supabase root cert', () => {
   const normalized = normalizeHomologationPoolerUrl(base);
   const u = new URL(normalized);
   assert.equal(u.searchParams.get('sslmode'), 'verify-full');
-  assert.equal(u.searchParams.get('sslrootcert'), 'system');
+  assert.equal(u.searchParams.get('sslrootcert'), SUPABASE_CA_CERT_PATH);
   assert.equal([...u.searchParams.entries()].length, 2);
 });
 
-test('normalizeHomologationPoolerUrl preserves already compliant URL', () => {
-  const compliant = `${base}?sslmode=verify-full&sslrootcert=system`;
-  const normalized = normalizeHomologationPoolerUrl(compliant);
-  assert.equal(normalized, compliant);
+test('normalizeHomologationPoolerUrl preserves already compliant URL with system or cert path', () => {
+  const compliantCert = `${base}?sslmode=verify-full&sslrootcert=${SUPABASE_CA_CERT_PATH}`;
+  const normalizedCert = normalizeHomologationPoolerUrl(compliantCert);
+  assert.equal(normalizedCert, compliantCert);
+
+  const compliantSystem = `${base}?sslmode=verify-full&sslrootcert=system`;
+  const normalizedSystem = normalizeHomologationPoolerUrl(compliantSystem);
+  assert.equal(normalizedSystem, compliantSystem);
 });
 
 test('normalizeHomologationPoolerUrl rejects incompatible sslmode or sslrootcert', () => {
   assert.throws(
-    () => normalizeHomologationPoolerUrl(`${base}?sslmode=require&sslrootcert=system`),
+    () => normalizeHomologationPoolerUrl(`${base}?sslmode=require&sslrootcert=${SUPABASE_CA_CERT_PATH}`),
     /DATABASE_TLS_POLICY_MISMATCH: sslmode parameter is incompatible/
   );
   assert.throws(
