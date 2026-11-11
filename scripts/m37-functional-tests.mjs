@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
+import { resolveSupabaseTestApiUrl } from './m37-supabase-test-api-url.mjs';
 
 const pg = (sql) => execFileSync('psql', ['-X', '-A', '-t', '-v', 'ON_ERROR_STOP=1', '-c', sql], { encoding: 'utf8' }).trim();
 const createPsqlSession = (name = 'session') => {
@@ -151,11 +152,12 @@ const waitForCondition = async (fn, desc = 'condition', timeoutMs = 8000) => {
     await new Promise(r => setTimeout(r, 20));
   }
 };
-const status = process.env.SUPABASE_TEST_ANON_KEY && process.env.SUPABASE_TEST_SERVICE_KEY
-  ? ''
-  : execFileSync('supabase', ['status', '-o', 'env'], {
-    cwd: process.env.SUPABASE_TEST_WORKDIR, encoding: 'utf8'
-  });
+const hasExplicitLocalConfig = process.env.SUPABASE_TEST_API_URL
+  && process.env.SUPABASE_TEST_ANON_KEY
+  && process.env.SUPABASE_TEST_SERVICE_KEY;
+const status = hasExplicitLocalConfig ? '' : execFileSync('supabase', ['status', '-o', 'env'], {
+  cwd: process.env.SUPABASE_TEST_WORKDIR, encoding: 'utf8'
+});
 const env = Object.fromEntries(status.split(/\r?\n/).map(line => {
   const match = line.match(/^([A-Z_]+)=(.*)$/);
   return match ? [match[1], match[2].replace(/^["']|["']$/g, '')] : [];
@@ -163,7 +165,7 @@ const env = Object.fromEntries(status.split(/\r?\n/).map(line => {
 const anonKey = process.env.SUPABASE_TEST_ANON_KEY ?? env.ANON_KEY ?? env.SUPABASE_ANON_KEY;
 const serviceKey = process.env.SUPABASE_TEST_SERVICE_KEY ?? env.SERVICE_ROLE_KEY ?? env.SUPABASE_SERVICE_ROLE_KEY;
 assert.ok(anonKey && serviceKey, 'Local Supabase keys missing from CLI status');
-const base = process.env.SUPABASE_TEST_API_URL ?? 'http://127.0.0.1:54321';
+const base = resolveSupabaseTestApiUrl(process.env.SUPABASE_TEST_API_URL, status);
 const testTag = randomBytes(2).toString('hex').toUpperCase();
 const m37 = `M37${testTag}`;
 const testUuidPrefix = `37000000-${testTag.toLowerCase()}-4000-8000`;

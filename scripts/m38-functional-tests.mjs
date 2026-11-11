@@ -2,9 +2,12 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { resolveSupabaseTestApiUrl } from './m37-supabase-test-api-url.mjs';
 
 const pg = sql => execFileSync('psql', ['-X','-A','-t','-v','ON_ERROR_STOP=1','-c',sql], { encoding:'utf8' }).trim();
-const status = process.env.SUPABASE_TEST_ANON_KEY && process.env.SUPABASE_TEST_SERVICE_KEY
+const status = process.env.SUPABASE_TEST_API_URL
+  && process.env.SUPABASE_TEST_ANON_KEY
+  && process.env.SUPABASE_TEST_SERVICE_KEY
   ? ''
   : execFileSync('supabase', ['status', '-o', 'env'], { cwd: process.env.SUPABASE_TEST_WORKDIR, encoding: 'utf8' });
 const localEnv = Object.fromEntries(status.split(/\r?\n/).map(line => {
@@ -13,7 +16,7 @@ const localEnv = Object.fromEntries(status.split(/\r?\n/).map(line => {
 }).filter(([key]) => key));
 const anonKey = process.env.SUPABASE_TEST_ANON_KEY ?? localEnv.ANON_KEY ?? localEnv.SUPABASE_ANON_KEY;
 const serviceKey = process.env.SUPABASE_TEST_SERVICE_KEY ?? localEnv.SERVICE_ROLE_KEY ?? localEnv.SUPABASE_SERVICE_ROLE_KEY;
-const base = process.env.SUPABASE_TEST_API_URL || 'http://127.0.0.1:54321';
+const base = resolveSupabaseTestApiUrl(process.env.SUPABASE_TEST_API_URL, status);
 const testTag = randomBytes(2).toString('hex').toUpperCase();
 const m38 = `M38${testTag}`;
 const testUuidPrefix = `38000000-${testTag.toLowerCase()}-4000-8000`;
