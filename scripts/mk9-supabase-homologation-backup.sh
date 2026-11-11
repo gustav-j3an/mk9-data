@@ -68,15 +68,17 @@ if [[ ! "$SERVER_VERSION_NUM" =~ ^[0-9]{6}$ ]] || (( SERVER_VERSION_NUM < 170000
   echo 'The allowlisted homologation database is not PostgreSQL 17; export stopped.' >&2
   exit 1
 fi
-psql --no-password --quiet --tuples-only --no-align --file=scripts/backup-inventory.sql > "$ROOT/export/inventory-before.json" 2> "$ROOT/logs/inventory-before.log"
-pg_dump --format=custom --file="$ROOT/export/database.dump" --no-password 2> "$ROOT/logs/pg_dump.log"
-supabase db dump --role-only --remote="$NORMALIZED_DB_URL" > "$ROOT/export/roles.sql" 2> "$ROOT/logs/roles.log"
-pg_dump --schema-only --schema=supabase_migrations --file="$ROOT/export/migration-history.sql" --no-password 2> "$ROOT/logs/migration-schema.log"
-pg_dump --data-only --schema=supabase_migrations --file="$ROOT/export/migration-history-data.sql" --no-password 2> "$ROOT/logs/migration-data.log"
+psql -v ON_ERROR_STOP=1 --no-password --quiet --tuples-only --no-align --file=scripts/backup-inventory.sql > "$ROOT/export/inventory-before.json" 2> "$ROOT/logs/inventory-before.log" || (cat "$ROOT/logs/inventory-before.log" >&2 && exit 1)
+test -s "$ROOT/export/inventory-before.json" || (echo "Inventory before is empty. Error log:" >&2 && cat "$ROOT/logs/inventory-before.log" >&2 && exit 1)
+pg_dump --format=custom --file="$ROOT/export/database.dump" --no-password 2> "$ROOT/logs/pg_dump.log" || (cat "$ROOT/logs/pg_dump.log" >&2 && exit 1)
+supabase db dump --role-only --remote="$NORMALIZED_DB_URL" > "$ROOT/export/roles.sql" 2> "$ROOT/logs/roles.log" || (cat "$ROOT/logs/roles.log" >&2 && exit 1)
+pg_dump --schema-only --schema=supabase_migrations --file="$ROOT/export/migration-history.sql" --no-password 2> "$ROOT/logs/migration-schema.log" || (cat "$ROOT/logs/migration-schema.log" >&2 && exit 1)
+pg_dump --data-only --schema=supabase_migrations --file="$ROOT/export/migration-history-data.sql" --no-password 2> "$ROOT/logs/migration-data.log" || (cat "$ROOT/logs/migration-data.log" >&2 && exit 1)
 
 STAGE=storage-export
 node scripts/storage-backup.mjs export "$ROOT/export/storage"
-psql --no-password --quiet --tuples-only --no-align --file=scripts/backup-inventory.sql > "$ROOT/export/inventory-after-source.json" 2> "$ROOT/logs/inventory-after-source.log"
+psql -v ON_ERROR_STOP=1 --no-password --quiet --tuples-only --no-align --file=scripts/backup-inventory.sql > "$ROOT/export/inventory-after-source.json" 2> "$ROOT/logs/inventory-after-source.log" || (cat "$ROOT/logs/inventory-after-source.log" >&2 && exit 1)
+test -s "$ROOT/export/inventory-after-source.json" || (echo "Inventory after source is empty. Error log:" >&2 && cat "$ROOT/logs/inventory-after-source.log" >&2 && exit 1)
 node scripts/compare-inventory.mjs "$ROOT/export/inventory-before.json" "$ROOT/export/inventory-after-source.json"
 
 # Restore and check in a fresh, disposable Supabase PostgreSQL 17 stack. No remote URL is mounted into it.
