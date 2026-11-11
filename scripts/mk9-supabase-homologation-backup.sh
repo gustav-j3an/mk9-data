@@ -102,11 +102,18 @@ export RESTORE_SUPABASE_SERVICE_ROLE_KEY="$LOCAL_SERVICE_KEY"
 # The database archive is restored to mk9_backup_restore. The local Storage API still uses the
 # stack's default postgres database; no claim of an integrated database+Storage restore is made.
 PGPASSWORD=postgres psql 'postgresql://postgres:postgres@127.0.0.1:54322/postgres?sslmode=disable' -v ON_ERROR_STOP=1 -c 'CREATE DATABASE mk9_backup_restore' || (cat "$ROOT/logs/restore-database.log" >&2 && exit 1)
-# Use docker exec to grant superuser and role memberships to postgres in the clean disposable
-# stack so pg_restore can SET ROLE and assign schema/object ownership (e.g. auth, pgbouncer)
-CONTAINER_ID="$(docker ps -q -f name=supabase_db | head -n 1)"
+
+# In the clean disposable stack, grant superuser and missing roles to postgres so pg_restore
+# can restore objects and schema definitions without role mismatch.
+# We run as user postgres inside the container (or via psql if superuser) or docker exec.
+CONTAINER_ID="$(docker ps --filter "name=supabase_db" --format "{{.ID}}" | head -n 1)"
+if [[ -z "$CONTAINER_ID" ]]; then
+  CONTAINER_ID="$(docker ps -q | head -n 1)"
+fi
 if [[ -n "$CONTAINER_ID" ]]; then
-  docker exec "$CONTAINER_ID" psql -U supabase_admin -d postgres -c 'ALTER ROLE postgres WITH SUPERUSER; CREATE ROLE pgbouncer; GRANT supabase_admin, supabase_auth_admin, supabase_storage_admin, supabase_functions_admin, pgbouncer TO postgres WITH ADMIN OPTION;' >/dev/null 2>&1 || true
+  echo "Disposable database container ID: $CONTAINER_ID"
+  docker exec -u postgres "$CONTAINER_ID" psql -U postgres -d postgres -c 'ALTER ROLE postgres WITH SUPERUSER; CREATE ROLE pgbouncer; GRANT supabase_admin, supabase_auth_admin, supabase_storage_admin, supabase_functions_admin, pgbouncer TO postgres WITH ADMIN OPTION;' || true
+  docker exec -u postgres "$CONTAINER_ID" psql -U postgres -d mk9_backup_restore -c 'GRANT ALL ON SCHEMA public TO postgres; GRANT supabase_admin, supabase_auth_admin, supabase_storage_admin, supabase_functions_admin, pgbouncer TO postgres WITH ADMIN OPTION;' || true
 fi
 
 # Filter out Supabase internal roles from roles.sql before local restore so that
