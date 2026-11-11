@@ -6,7 +6,7 @@ echo "==> [MK9 DATE M42.5] Validating connection test preflight configuration an
 NORMALIZED_DB_URL="$(node -e '
 import { validateConnectionTestConfig } from "./scripts/homologation-connection-test.mjs";
 const config = validateConnectionTestConfig(process.env);
-console.log("::add-mask::" + config.normalizedUrl);
+process.stderr.write("::add-mask::" + config.normalizedUrl + "\n");
 process.stdout.write(config.normalizedUrl);
 ')"
 echo ""
