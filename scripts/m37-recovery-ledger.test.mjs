@@ -59,6 +59,33 @@ test('M38 disposable PostgreSQL preflight installs and verifies the real pg_cron
   assert.match(recoveryScript, /bash scripts\/m37-pg-cron-preflight\.sh/);
 });
 
+test('pg_cron diagnostic catalogs are recorded before any preflight assertion can fail', () => {
+  const diagnosticStart = pgCronPreflight.indexOf('=== PostgreSQL 17 pg_cron configuration diagnostics (read-only) ===');
+  const firstAssertion = pgCronPreflight.indexOf('assert_psql_true "server is PostgreSQL 17"');
+  assert.ok(diagnosticStart >= 0 && firstAssertion > diagnosticStart,
+    'diagnostics must run before the first failing prerequisite assertion');
+
+  const diagnosticSection = pgCronPreflight.slice(diagnosticStart, firstAssertion);
+  for (const required of [
+    "current_setting('server_version')",
+    "current_setting('server_version_num')",
+    "SELECT name, setting, source, sourcefile, pending_restart",
+    "current_setting('cron.database_name', true)",
+    'FROM pg_file_settings',
+    'sourceline, name, setting, applied, error',
+    'FROM pg_available_extensions',
+    'default_version, installed_version',
+    'FROM pg_extension',
+    'extname, extversion'
+  ]) {
+    assert.ok(diagnosticSection.includes(required), `diagnostics must record ${required}`);
+  }
+  assert.match(diagnosticSection, /name IN \('shared_preload_libraries', 'cron\.database_name'\)/);
+  assert.match(diagnosticSection, /coalesce\(current_setting\('cron\.database_name', true\), '<absent>'\)/);
+  assert.match(diagnosticSection, /WHERE name = 'pg_cron'/);
+  assert.match(diagnosticSection, /WHERE extname = 'pg_cron'/);
+});
+
 test('GitHub Actions runs pg_cron preflight before npm install, tests, typecheck, build and migrations', () => {
   const position = marker => {
     const found = workflow.indexOf(marker);

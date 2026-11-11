@@ -15,6 +15,36 @@ assert_psql_true() {
   fi
 }
 
+# These read-only diagnostics deliberately precede every assertion so a failed
+# prerequisite still leaves the server's effective pg_cron configuration in CI.
+# Only the named settings and pg_cron catalog rows are emitted; no environment
+# variables, connection strings, or credentials are printed.
+echo "=== PostgreSQL 17 pg_cron configuration diagnostics (read-only) ==="
+psql -X -v ON_ERROR_STOP=1 <<'SQL'
+SELECT current_setting('server_version') AS postgres_version,
+       current_setting('server_version_num') AS postgres_version_num;
+
+SELECT name, setting, source, sourcefile, pending_restart
+FROM pg_settings
+WHERE name IN ('shared_preload_libraries', 'cron.database_name')
+ORDER BY name;
+
+SELECT coalesce(current_setting('cron.database_name', true), '<absent>') AS cron_database_name;
+
+SELECT sourcefile, sourceline, name, setting, applied, error
+FROM pg_file_settings
+WHERE name IN ('shared_preload_libraries', 'cron.database_name')
+ORDER BY sourcefile, sourceline;
+
+SELECT name, default_version, installed_version
+FROM pg_available_extensions
+WHERE name = 'pg_cron';
+
+SELECT extname, extversion
+FROM pg_extension
+WHERE extname = 'pg_cron';
+SQL
+
 assert_psql_true "server is PostgreSQL 17" \
   "SELECT current_setting('server_version_num')::int BETWEEN 170000 AND 179999"
 assert_psql_true "pg_cron control files are available in this PostgreSQL image" \
