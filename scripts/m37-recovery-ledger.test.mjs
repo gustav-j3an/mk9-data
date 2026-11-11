@@ -39,3 +39,25 @@ test('M37/M38 schema fingerprint uses the same explicit pipe separator as its ex
   assert.match(recoveryScript, /expected_schema_facts='152\|[a-f0-9]{64}'/);
   assert.doesNotMatch(recoveryScript, /expected_schema_facts=\$'152\\t/);
 });
+
+test('M38 disposable PostgreSQL preflight installs and verifies the real pg_cron module before migrations', () => {
+  const available = recoveryScript.indexOf('pg_available_extensions WHERE name=\'pg_cron\'');
+  const preloaded = recoveryScript.indexOf("'pg_cron' = ANY (regexp_split_to_array(current_setting('shared_preload_libraries')");
+  const install = recoveryScript.indexOf("CREATE EXTENSION IF NOT EXISTS pg_cron");
+  const installed = recoveryScript.indexOf("pg_extension WHERE extname='pg_cron'");
+  const objects = recoveryScript.indexOf("to_regnamespace('cron') IS NOT NULL");
+  const preflightBlock = recoveryScript.match(/if \[ "\$applied_dependency_count" -eq 6 \]; then([\s\S]*?)\n  fi/)?.[1];
+
+  for (const [label, position] of Object.entries({ available, preloaded, install, installed, objects })) {
+    assert.ok(position >= 0, `preflight must check ${label}`);
+  }
+  assert.ok(preflightBlock, 'the PostgreSQL feature preflight must run after all six M30/M37 dependencies');
+  assert.ok(available < preloaded && preloaded < install && install < installed && installed < objects,
+    'pg_cron availability, preload, installation and catalog objects must be checked in order');
+  for (const marker of [available, preloaded, install, installed, objects]) {
+    assert.ok(preflightBlock.includes(recoveryScript.slice(marker, recoveryScript.indexOf('\n', marker))),
+      'every pg_cron preflight step must be in the six-dependency gate before M38');
+  }
+  assert.match(recoveryScript, /to_regclass\('cron\.job'\) IS NOT NULL/);
+  assert.match(recoveryScript, /cron\.database_name', true\) = current_database\(\)/);
+});
