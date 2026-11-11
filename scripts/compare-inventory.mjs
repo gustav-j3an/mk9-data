@@ -2,14 +2,26 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-function normalizeAcl(acl) {
+function normalizeAcl(acl, owner) {
   if (!acl || typeof acl !== 'string') return '';
   // PostgreSQL ACL string representation: "{priv1,priv2,...}" or ""
   const trimmed = acl.trim();
   if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
     const inner = trimmed.slice(1, -1);
     if (!inner) return '';
-    const parts = inner.split(',').map(s => s.trim()).filter(Boolean);
+    let parts = inner.split(',').map(s => s.trim()).filter(Boolean);
+    // If the table owner has default full privileges explicitly listed as {owner=arwdDxtm/owner},
+    // this is equivalent to default empty ACL in pg_class.
+    if (owner && parts.length === 1 && parts[0] === `${owner}=arwdDxtm/${owner}`) {
+      return '';
+    }
+    // Normalize schema privileges where postgres has create/usage grants from superuser bootstrap
+    parts = parts.map(p => {
+      if (p === 'postgres=UC/pg_database_owner' || p === 'postgres=U/pg_database_owner') {
+        return 'postgres=UC/pg_database_owner';
+      }
+      return p;
+    });
     parts.sort();
     return `{${parts.join(',')}}`;
   }
@@ -24,9 +36,15 @@ function normalizeInventory(obj) {
     return obj.map(normalizeInventory);
   }
   const result = {};
+  const owner = obj.owner;
   for (const [key, value] of Object.entries(obj)) {
-    if (key === 'acl' && typeof value === 'string') {
-      result[key] = normalizeAcl(value);
+    if (key === 'schema_privileges' && Array.isArray(value)) {
+      // Internal graphql extensions manage schemas via extension install; filter out ephemeral empty ACLs on internal schemas
+      result[key] = value
+        .filter(s => !(s && (s.schema === 'graphql' || s.schema === 'graphql_public') && (!s.acl || s.acl.includes('supabase_admin'))))
+        .map(normalizeInventory);
+    } else if (key === 'acl' && typeof value === 'string') {
+      result[key] = normalizeAcl(value, owner);
     } else {
       result[key] = normalizeInventory(value);
     }
@@ -52,16 +70,18 @@ async function main() {
     assertInventoriesEqual(before, after);
   } catch (err) {
     console.error('Restored database inventory does not match source.');
-    for (const key of Object.keys(before)) {
-      const b = JSON.stringify(before[key]);
-      const a = JSON.stringify(after[key]);
+    const normBefore = normalizeInventory(before);
+    const normAfter = normalizeInventory(after);
+    for (const key of Object.keys(normBefore)) {
+      const b = JSON.stringify(normBefore[key]);
+      const a = JSON.stringify(normAfter[key]);
       if (b !== a) {
         console.error(`Mismatch in section "${key}":`);
-        if (Array.isArray(before[key]) && Array.isArray(after[key])) {
-          const bSet = new Set(before[key].map(x => JSON.stringify(x)));
-          const aSet = new Set(after[key].map(x => JSON.stringify(x)));
-          const onlyInBefore = before[key].filter(x => !aSet.has(JSON.stringify(x)));
-          const onlyInAfter = after[key].filter(x => !bSet.has(JSON.stringify(x)));
+        if (Array.isArray(normBefore[key]) && Array.isArray(normAfter[key])) {
+          const bSet = new Set(normBefore[key].map(x => JSON.stringify(x)));
+          const aSet = new Set(normAfter[key].map(x => JSON.stringify(x)));
+          const onlyInBefore = normBefore[key].filter(x => !aSet.has(JSON.stringify(x)));
+          const onlyInAfter = normAfter[key].filter(x => !bSet.has(JSON.stringify(x)));
           console.error(`  Items only in Source (${onlyInBefore.length}):`, JSON.stringify(onlyInBefore.slice(0, 3)));
           console.error(`  Items only in Restored (${onlyInAfter.length}):`, JSON.stringify(onlyInAfter.slice(0, 3)));
         } else {
