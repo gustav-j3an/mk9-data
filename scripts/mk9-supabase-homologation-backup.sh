@@ -102,7 +102,11 @@ export RESTORE_SUPABASE_SERVICE_ROLE_KEY="$LOCAL_SERVICE_KEY"
 # The database archive is restored to mk9_backup_restore. The local Storage API still uses the
 # stack's default postgres database; no claim of an integrated database+Storage restore is made.
 PGPASSWORD=postgres psql 'postgresql://postgres:postgres@127.0.0.1:54322/postgres?sslmode=disable' -v ON_ERROR_STOP=1 -c 'CREATE DATABASE mk9_backup_restore' || (cat "$ROOT/logs/restore-database.log" >&2 && exit 1)
-PGPASSWORD=postgres psql 'postgresql://postgres:postgres@127.0.0.1:54322/postgres?sslmode=disable' -v ON_ERROR_STOP=1 -f "$ROOT/export/roles.sql" > /dev/null 2> "$ROOT/logs/restore-roles.log" || (cat "$ROOT/logs/restore-roles.log" >&2 && exit 1)
+# Filter out Supabase internal roles from roles.sql before local restore so that
+# pre-existing reserved roles in the clean Docker container are not altered or duplicated.
+grep -vE '^ALTER ROLE (supabase_admin|supabase_auth_admin|supabase_storage_admin|supabase_functions_admin|supabase_read_only_user|supabase_replication_admin|authenticator)\b' "$ROOT/export/roles.sql" > "$ROOT/restore/roles-filtered.sql" || cp "$ROOT/export/roles.sql" "$ROOT/restore/roles-filtered.sql"
+
+PGPASSWORD=postgres psql 'postgresql://postgres:postgres@127.0.0.1:54322/postgres?sslmode=disable' -v ON_ERROR_STOP=1 -f "$ROOT/restore/roles-filtered.sql" > /dev/null 2> "$ROOT/logs/restore-roles.log" || (cat "$ROOT/logs/restore-roles.log" >&2 && exit 1)
 PGPASSWORD=postgres pg_restore --exit-on-error --dbname='postgresql://postgres:postgres@127.0.0.1:54322/mk9_backup_restore?sslmode=disable' "$ROOT/export/database.dump" > /dev/null 2> "$ROOT/logs/restore-database.log" || (cat "$ROOT/logs/restore-database.log" >&2 && exit 1)
 PGPASSWORD=postgres psql 'postgresql://postgres:postgres@127.0.0.1:54322/mk9_backup_restore?sslmode=disable' -v ON_ERROR_STOP=1 --quiet --tuples-only --no-align --file=scripts/backup-inventory.sql > "$ROOT/restore/inventory-after.json" 2> "$ROOT/logs/inventory-restore.log" || (cat "$ROOT/logs/inventory-restore.log" >&2 && exit 1)
 node scripts/compare-inventory.mjs "$ROOT/export/inventory-before.json" "$ROOT/restore/inventory-after.json"

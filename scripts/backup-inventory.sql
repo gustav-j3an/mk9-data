@@ -169,7 +169,12 @@ BEGIN
       'settings', coalesce(rolconfig, ARRAY[]::text[])
     ) ORDER BY rolname), '[]'::jsonb)
     INTO roles
-  FROM pg_roles;
+  FROM pg_roles
+  WHERE rolname NOT IN (
+    'supabase_admin', 'supabase_auth_admin', 'supabase_storage_admin',
+    'supabase_functions_admin', 'supabase_read_only_user', 'supabase_replication_admin',
+    'authenticator', 'pg_database_owner', 'pg_read_all_data', 'pg_write_all_data'
+  );
 
   SELECT coalesce(jsonb_agg(jsonb_build_object(
       'schema', n.nspname, 'relation_or_domain', coalesce(c.relname, t.typname), 'name', con.conname,
