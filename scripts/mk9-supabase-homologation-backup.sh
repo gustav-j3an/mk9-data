@@ -105,15 +105,15 @@ PGPASSWORD=postgres psql 'postgresql://postgres:postgres@127.0.0.1:54322/postgre
 
 # In the clean disposable stack, grant superuser and missing roles to postgres so pg_restore
 # can restore objects and schema definitions without role mismatch.
-# We run as user postgres inside the container (or via psql if superuser) or docker exec.
+# We connect using the local database superuser (supabase_admin) inside the container.
 CONTAINER_ID="$(docker ps --filter "name=supabase_db" --format "{{.ID}}" | head -n 1)"
 if [[ -z "$CONTAINER_ID" ]]; then
   CONTAINER_ID="$(docker ps -q | head -n 1)"
 fi
 if [[ -n "$CONTAINER_ID" ]]; then
   echo "Disposable database container ID: $CONTAINER_ID"
-  docker exec -u postgres "$CONTAINER_ID" psql -U postgres -d postgres -c 'ALTER ROLE postgres WITH SUPERUSER; CREATE ROLE pgbouncer; GRANT supabase_admin, supabase_auth_admin, supabase_storage_admin, supabase_functions_admin, pgbouncer TO postgres WITH ADMIN OPTION;' || true
-  docker exec -u postgres "$CONTAINER_ID" psql -U postgres -d mk9_backup_restore -c 'GRANT ALL ON SCHEMA public TO postgres; GRANT supabase_admin, supabase_auth_admin, supabase_storage_admin, supabase_functions_admin, pgbouncer TO postgres WITH ADMIN OPTION;' || true
+  docker exec "$CONTAINER_ID" psql -U supabase_admin -d postgres -c 'ALTER ROLE postgres WITH SUPERUSER; CREATE ROLE pgbouncer; GRANT supabase_admin, supabase_auth_admin, supabase_storage_admin, supabase_functions_admin, pgbouncer TO postgres WITH ADMIN OPTION;' || true
+  docker exec "$CONTAINER_ID" psql -U supabase_admin -d mk9_backup_restore -c 'GRANT ALL ON SCHEMA public TO postgres; GRANT supabase_admin, supabase_auth_admin, supabase_storage_admin, supabase_functions_admin, pgbouncer TO postgres WITH ADMIN OPTION;' || true
 fi
 
 # Filter out Supabase internal roles from roles.sql before local restore so that
