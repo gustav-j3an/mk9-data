@@ -134,7 +134,7 @@ export function executeM38HomologationApply(env = process.env) {
     throw new Error('CRON_JOB_NOT_REGISTERED: pg_cron job m38-expire-old-open-visits missing or incorrect schedule.');
   }
 
-  const rpcCheck = runPsql(dbUrl, "SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname IN ('attendance_cancel_or_retry_visit', 'attendance_close_day', 'attendance_check_in');");
+  const rpcCheck = runPsql(dbUrl, "SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname IN ('attendance_cancel_visit', 'attendance_start_scheduled_occurrence', 'attendance_check_in');");
   console.log(`Public RPC functions found: ${rpcCheck} (expected: 3)`);
   if (rpcCheck !== '3') {
     throw new Error('RPC_FUNCTIONS_MISSING: Not all required RPCs were found in public namespace.');
