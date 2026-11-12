@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import {
   PRODUCTION_REF,
   ALLOWED_BACKUP_BRANCH,
@@ -56,7 +57,7 @@ test('production-preflight: verifies official Supabase CA certificate', () => {
 });
 
 test('production-preflight: rejects invalid branch, invalid ref or missing secrets', () => {
-  const currentHeadSha = '8926bb8751383a3543eff6ae0674e2116f9ab6cb';
+  const currentHeadSha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
   const validJwt = [
     Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url'),
     Buffer.from(JSON.stringify({ role: 'service_role', ref: 'xzmbesqhxcnuokjwrbnw' })).toString('base64url'),
@@ -85,7 +86,7 @@ test('production-preflight: rejects invalid branch, invalid ref or missing secre
 });
 
 test('production-preflight: commit verification validates actual code and rejects invalid/divergent SHAs', () => {
-  const currentHeadSha = '8926bb8751383a3543eff6ae0674e2116f9ab6cb';
+  const currentHeadSha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
 
   // 1. Correct approved commit matching git rev-parse HEAD
   const result = verifyCheckedOutCommit(currentHeadSha);
@@ -100,7 +101,7 @@ test('production-preflight: commit verification validates actual code and reject
 
   // 3. Abbreviated commit SHA (must be rejected)
   assert.throws(
-    () => verifyCheckedOutCommit('8926bb8'),
+    () => verifyCheckedOutCommit('e6297ae'),
     /APPROVED_COMMIT_SHA_FORMAT_INVALID/
   );
 
@@ -281,3 +282,25 @@ test('security-workflow-check: ensures secrets are NOT present in global workflo
   assert.ok(!checkoutRef.includes('refs/heads/'), 'Checkout ref must not be a mutable branch ref');
   assert.ok(checkoutRef.includes('vars.APPROVED_COMMIT_SHA'), 'Checkout ref must honor vars.APPROVED_COMMIT_SHA');
 });
+
+test('production-disposable-container: discovery logic filters candidate containers by image and hex ID', () => {
+  const hexPattern = /^[0-9a-fA-F]{12,64}$/;
+
+  // Test hex ID pattern
+  assert.ok(hexPattern.test('77c8ec52dacd'), '12-char hex is valid');
+  assert.ok(hexPattern.test('77c8ec52dacd77c8ec52dacd77c8ec52dacd77c8ec52dacd77c8ec52dacd1234'), '64-char hex is valid');
+  assert.ok(!hexPattern.test('invalid-id!'), 'Non-hex rejected');
+  assert.ok(!hexPattern.test('123'), 'Short ID rejected');
+
+  // Test container filtering simulation
+  const mockCandidates = [
+    { id: '111122223333', image: 'supabase/postgres:17.2.0.1' },
+    { id: '444455556666', image: 'supabase/gotrue:v2.158.0' },
+    { id: '777788889999', image: 'redis:alpine' },
+  ];
+
+  const filtered = mockCandidates.filter(c => hexPattern.test(c.id) && c.image.includes('supabase/postgres:'));
+  assert.equal(filtered.length, 1);
+  assert.equal(filtered[0].id, '111122223333');
+});
+

@@ -1,6 +1,6 @@
 export const PRODUCTION_REF = 'xzmbesqhxcnuokjwrbnw';
 export const ALLOWED_BACKUP_BRANCH = 'codex/m57.2-production-backup-workflow';
-export const APPROVED_BACKUP_COMMIT_SHA = '2fa19be1d00e8674d583b8411eaa3770c5256f2f';
+export const APPROVED_BACKUP_COMMIT_SHA = 'e6297aec7eb374498aa4ca158c50e16319be51c6';
 export const SUPABASE_CA_CERT_PATH = 'certs/supabase-prod-ca-2021.crt';
 export const SUPABASE_CA_SHA256 = '80:70:25:AD:50:D4:ED:21:9D:2C:9C:7D:29:9C:00:4F:82:4E:B0:0C:F7:F6:5A:FE:F6:07:D0:7B:72:E6:CA:FA';
 

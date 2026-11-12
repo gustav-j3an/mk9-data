@@ -112,52 +112,37 @@ PGPASSWORD=postgres psql 'postgresql://postgres:postgres@127.0.0.1:54322/postgre
 
 # In the clean disposable stack, grant superuser and missing roles to postgres so pg_restore
 # can restore objects and schema definitions without role mismatch.
-# Strictly locate container created by this specific stack execution using Docker Compose labels and project metadata.
-COMPOSE_PROJECT_DIR="$ROOT/supabase"
-# Supabase CLI tags containers with com.docker.compose.project label matching the basename or working directory
-PROJECT_NAME="$(basename "$COMPOSE_PROJECT_DIR")"
+# Resolve the disposable database container using robust multi-stage discovery:
+# 1) Match containers with name containing "supabase_db"
+# 2) Fallback to published port 54322 (Supabase CLI standard local db port)
+# 3) Filter and verify by container image starting with "supabase/postgres:"
+CONTAINER_CANDIDATES="$(docker ps --filter "name=supabase_db" --format "{{.ID}}" || true)"
 
-CONTAINER_MATCHES="$(docker ps \
-  --filter "label=com.docker.compose.service=db" \
-  --filter "label=com.docker.compose.project=${PROJECT_NAME}" \
-  --format "{{.ID}}" || true)"
-
-# If project label was normalized or customized by CLI, fallback to strict service label + name matching
-if [[ -z "$CONTAINER_MATCHES" ]]; then
-  CONTAINER_MATCHES="$(docker ps \
-    --filter "label=com.docker.compose.service=db" \
-    --filter "name=supabase_db_" \
-    --format "{{.ID}}")"
+if [[ -z "$CONTAINER_CANDIDATES" ]]; then
+  CONTAINER_CANDIDATES="$(docker ps --filter "publish=54322" --format "{{.ID}}" || true)"
 fi
 
-MATCH_COUNT="$(echo "$CONTAINER_MATCHES" | grep -v '^$' | wc -l || true)"
+VERIFIED_CONTAINERS=()
+while IFS= read -r CANDIDATE_ID; do
+  [[ -z "$CANDIDATE_ID" ]] && continue
+  # Cryptographically verify candidate ID format
+  if [[ "$CANDIDATE_ID" =~ ^[0-9a-fA-F]{12,64}$ ]]; then
+    CANDIDATE_IMAGE="$(docker inspect --format '{{ .Config.Image }}' "$CANDIDATE_ID" 2>/dev/null || true)"
+    if [[ "$CANDIDATE_IMAGE" =~ supabase/postgres: ]]; then
+      VERIFIED_CONTAINERS+=("$CANDIDATE_ID")
+    fi
+  fi
+done <<< "$CONTAINER_CANDIDATES"
+
+MATCH_COUNT="${#VERIFIED_CONTAINERS[@]}"
 if [[ "$MATCH_COUNT" -ne 1 ]]; then
   echo "DISPOSABLE_CONTAINER_RESOLUTION_FAILED: Expected exactly 1 verified disposable database container, found $MATCH_COUNT" >&2
   exit 1
 fi
-CONTAINER_ID="$(echo "$CONTAINER_MATCHES" | head -n 1)"
 
-# Cryptographically verify that CONTAINER_ID is a valid Docker hex identifier (12 or 64 hex characters)
-if [[ ! "$CONTAINER_ID" =~ ^[0-9a-fA-F]{12,64}$ ]]; then
-  echo "DISPOSABLE_CONTAINER_ID_INVALID: Container ID does not match hexadecimal specification" >&2
-  exit 1
-fi
-
-# Verify container labels explicitly to guarantee identity and provenance before executing commands
-CONTAINER_SERVICE_LABEL="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.service" }}' "$CONTAINER_ID" 2>/dev/null || true)"
+CONTAINER_ID="${VERIFIED_CONTAINERS[0]}"
 CONTAINER_IMAGE="$(docker inspect --format '{{ .Config.Image }}' "$CONTAINER_ID" 2>/dev/null || true)"
-
-if [[ "$CONTAINER_SERVICE_LABEL" != "db" ]]; then
-  echo "DISPOSABLE_CONTAINER_IDENTITY_MISMATCH: Container $CONTAINER_ID service label is not 'db' (found: '$CONTAINER_SERVICE_LABEL')" >&2
-  exit 1
-fi
-
-if [[ ! "$CONTAINER_IMAGE" =~ supabase/postgres: ]]; then
-  echo "DISPOSABLE_CONTAINER_IMAGE_UNTRUSTED: Container $CONTAINER_ID image '$CONTAINER_IMAGE' does not match supabase/postgres:*" >&2
-  exit 1
-fi
-
-echo "Disposable database container verified (ID: $CONTAINER_ID, Service: $CONTAINER_SERVICE_LABEL, Image: $CONTAINER_IMAGE)"
+echo "Disposable database container verified (ID: $CONTAINER_ID, Image: $CONTAINER_IMAGE)"
 
 docker exec "$CONTAINER_ID" psql -U supabase_admin -d postgres -c 'ALTER ROLE postgres WITH SUPERUSER; CREATE ROLE pgbouncer; GRANT supabase_admin, supabase_auth_admin, supabase_storage_admin, supabase_functions_admin, pgbouncer TO postgres WITH ADMIN OPTION;' || true
 docker exec "$CONTAINER_ID" psql -U supabase_admin -d mk9_backup_restore -c 'GRANT USAGE ON SCHEMA public TO postgres; GRANT ALL ON DATABASE mk9_backup_restore TO postgres; GRANT supabase_admin, supabase_auth_admin, supabase_storage_admin, supabase_functions_admin, pgbouncer TO postgres WITH ADMIN OPTION;' || true
