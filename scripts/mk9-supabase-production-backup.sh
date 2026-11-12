@@ -94,7 +94,12 @@ node scripts/compare-inventory.mjs "$ROOT/export/inventory-before.json" "$ROOT/e
 STAGE=disposable-restore
 mkdir -p "$ROOT/supabase"
 (cd "$ROOT/supabase" && supabase init --force >/dev/null 2> "$ROOT/logs/supabase-init.log")
+# Generate ephemeral stack project_id and cryptographic nonce to unambiguously bind the disposable container
+DISPOSABLE_STACK_NONCE="$(node -e 'import("node:crypto").then(c => console.log(c.randomBytes(16).toString("hex")))')"
+DISPOSABLE_PROJECT_ID="mk9_restore_${DISPOSABLE_STACK_NONCE}"
+
 sed -i 's/^major_version = .*/major_version = 17/' "$ROOT/supabase/supabase/config.toml"
+sed -i "s/^project_id = .*/project_id = \"${DISPOSABLE_PROJECT_ID}\"/" "$ROOT/supabase/supabase/config.toml"
 (cd "$ROOT/supabase" && supabase start -x realtime,imgproxy,mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor >/dev/null 2> "$ROOT/logs/supabase-start.log")
 
 # Unset PG* environment variables from remote export so local connections use default/explicit parameters
@@ -107,42 +112,23 @@ echo "::add-mask::$LOCAL_SERVICE_KEY"
 export RESTORE_SUPABASE_URL="$LOCAL_STORAGE_URL"
 export RESTORE_SUPABASE_SERVICE_ROLE_KEY="$LOCAL_SERVICE_KEY"
 
+# Plant cryptographic nonce into the disposable PostgreSQL database via LOCAL_DB_URL
+PGPASSWORD=postgres psql "$LOCAL_DB_URL" -v ON_ERROR_STOP=1 -c "CREATE TABLE IF NOT EXISTS mk9_backup_restore_nonce (token text); INSERT INTO mk9_backup_restore_nonce VALUES ('${DISPOSABLE_STACK_NONCE}');" || (cat "$ROOT/logs/restore-database.log" >&2 && exit 1)
+
 # Database restore and Storage API restore are separate checks inside one disposable local stack.
-PGPASSWORD=postgres psql 'postgresql://postgres:postgres@127.0.0.1:54322/postgres?sslmode=disable' -v ON_ERROR_STOP=1 -c 'CREATE DATABASE mk9_backup_restore' || (cat "$ROOT/logs/restore-database.log" >&2 && exit 1)
+PGPASSWORD=postgres psql "$LOCAL_DB_URL" -v ON_ERROR_STOP=1 -c 'CREATE DATABASE mk9_backup_restore' || (cat "$ROOT/logs/restore-database.log" >&2 && exit 1)
 
 # In the clean disposable stack, grant superuser and missing roles to postgres so pg_restore
 # can restore objects and schema definitions without role mismatch.
-# Resolve the disposable database container using robust multi-stage discovery:
-# 1) Match containers with name containing "supabase_db"
-# 2) Fallback to published port 54322 (Supabase CLI standard local db port)
-# 3) Filter and verify by container image starting with "supabase/postgres:"
-CONTAINER_CANDIDATES="$(docker ps --filter "name=supabase_db" --format "{{.ID}}" || true)"
-
-if [[ -z "$CONTAINER_CANDIDATES" ]]; then
-  CONTAINER_CANDIDATES="$(docker ps --filter "publish=54322" --format "{{.ID}}" || true)"
-fi
-
-VERIFIED_CONTAINERS=()
-while IFS= read -r CANDIDATE_ID; do
-  [[ -z "$CANDIDATE_ID" ]] && continue
-  # Cryptographically verify candidate ID format
-  if [[ "$CANDIDATE_ID" =~ ^[0-9a-fA-F]{12,64}$ ]]; then
-    CANDIDATE_IMAGE="$(docker inspect --format '{{ .Config.Image }}' "$CANDIDATE_ID" 2>/dev/null || true)"
-    if [[ "$CANDIDATE_IMAGE" =~ supabase/postgres: ]]; then
-      VERIFIED_CONTAINERS+=("$CANDIDATE_ID")
-    fi
-  fi
-done <<< "$CONTAINER_CANDIDATES"
-
-MATCH_COUNT="${#VERIFIED_CONTAINERS[@]}"
-if [[ "$MATCH_COUNT" -ne 1 ]]; then
-  echo "DISPOSABLE_CONTAINER_RESOLUTION_FAILED: Expected exactly 1 verified disposable database container, found $MATCH_COUNT" >&2
+# Unambiguously resolve the disposable container matching DISPOSABLE_PROJECT_ID, image provenance,
+# and internal database nonce verification before performing any docker exec commands.
+CONTAINER_ID="$(node scripts/resolve-disposable-container.mjs "$DISPOSABLE_PROJECT_ID" "$DISPOSABLE_STACK_NONCE")"
+if [[ -z "$CONTAINER_ID" ]]; then
+  echo "DISPOSABLE_CONTAINER_RESOLUTION_FAILED: Resolution script returned empty container identifier" >&2
   exit 1
 fi
-
-CONTAINER_ID="${VERIFIED_CONTAINERS[0]}"
 CONTAINER_IMAGE="$(docker inspect --format '{{ .Config.Image }}' "$CONTAINER_ID" 2>/dev/null || true)"
-echo "Disposable database container verified (ID: $CONTAINER_ID, Image: $CONTAINER_IMAGE)"
+echo "Disposable database container verified unambiguously (ID: $CONTAINER_ID, Project: $DISPOSABLE_PROJECT_ID, Image: $CONTAINER_IMAGE)"
 
 docker exec "$CONTAINER_ID" psql -U supabase_admin -d postgres -c 'ALTER ROLE postgres WITH SUPERUSER; CREATE ROLE pgbouncer; GRANT supabase_admin, supabase_auth_admin, supabase_storage_admin, supabase_functions_admin, pgbouncer TO postgres WITH ADMIN OPTION;' || true
 docker exec "$CONTAINER_ID" psql -U supabase_admin -d mk9_backup_restore -c 'GRANT USAGE ON SCHEMA public TO postgres; GRANT ALL ON DATABASE mk9_backup_restore TO postgres; GRANT supabase_admin, supabase_auth_admin, supabase_storage_admin, supabase_functions_admin, pgbouncer TO postgres WITH ADMIN OPTION;' || true
