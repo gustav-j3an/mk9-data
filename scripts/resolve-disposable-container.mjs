@@ -15,6 +15,16 @@ import crypto from 'node:crypto';
  * If any check fails, or if 0 or >1 containers match, execution is halted immediately.
  */
 
+export function isAuthorizedPostgresImage(image) {
+  if (!image || typeof image !== 'string') {
+    return false;
+  }
+  // Exclusively accept official Supabase Postgres image registries:
+  // 1. Docker Hub: supabase/postgres:<tag>
+  // 2. AWS ECR Public: public.ecr.aws/supabase/postgres:<tag>
+  return /^(?:public\.ecr\.aws\/)?supabase\/postgres:[a-zA-Z0-9_.-]+$/.test(image.trim());
+}
+
 export function verifyCandidateContainerMetadata({
   containerId,
   containerName,
@@ -33,8 +43,8 @@ export function verifyCandidateContainerMetadata({
     return { valid: false, reason: 'NAME_MISMATCH' };
   }
 
-  // Image check: must be official Supabase postgres image
-  if (!image || !image.startsWith('supabase/postgres:')) {
+  // Image check: must be official Supabase postgres image from Docker Hub or AWS ECR
+  if (!isAuthorizedPostgresImage(image)) {
     return { valid: false, reason: 'IMAGE_UNTRUSTED' };
   }
 
@@ -74,7 +84,7 @@ export function filterVerifiedContainers(candidates, expectedProjectId) {
   return verified[0];
 }
 
-export function verifyDatabaseNonceMatch({ containerId, expectedNonce, execFn }) {
+export function verifyDatabaseNonceMatch({ containerId, expectedNonce, targetDatabase = 'postgres', execFn }) {
   if (!containerId || !expectedNonce) {
     throw new Error('NONCE_VERIFICATION_PARAMS_MISSING');
   }
@@ -82,7 +92,7 @@ export function verifyDatabaseNonceMatch({ containerId, expectedNonce, execFn })
   const query = 'SELECT token FROM mk9_backup_restore_nonce LIMIT 1;';
   let returnedNonce;
   try {
-    returnedNonce = execFn(containerId, query);
+    returnedNonce = execFn(containerId, query, targetDatabase);
   } catch (err) {
     throw new Error(`CONTAINER_NONCE_QUERY_FAILED: ${err.message}`);
   }
@@ -145,8 +155,8 @@ if (process.argv[1] && process.argv[1].endsWith('resolve-disposable-container.mj
   }
 
   // Verify database nonce inside container via docker exec
-  const execFn = (id, sql) => {
-    return execFileSync('docker', ['exec', id, 'psql', '-U', 'postgres', '-d', 'postgres', '-t', '-A', '-c', sql], {
+  const execFn = (id, sql, db = 'postgres') => {
+    return execFileSync('docker', ['exec', id, 'psql', '-U', 'postgres', '-d', db, '-t', '-A', '-c', sql], {
       encoding: 'utf8',
     }).trim();
   };

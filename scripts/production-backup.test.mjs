@@ -314,13 +314,16 @@ test('production-disposable-container: discovery logic filters candidate contain
   // Test container filtering simulation
   const mockCandidates = [
     { id: '111122223333', image: 'supabase/postgres:17.2.0.1' },
+    { id: '222233334444', image: 'public.ecr.aws/supabase/postgres:17.2.0.1' },
     { id: '444455556666', image: 'supabase/gotrue:v2.158.0' },
     { id: '777788889999', image: 'redis:alpine' },
   ];
 
-  const filtered = mockCandidates.filter(c => hexPattern.test(c.id) && c.image.includes('supabase/postgres:'));
-  assert.equal(filtered.length, 1);
+  const isSupabasePostgres = img => /^(?:public\.ecr\.aws\/)?supabase\/postgres:/.test(img);
+  const filtered = mockCandidates.filter(c => hexPattern.test(c.id) && isSupabasePostgres(c.image));
+  assert.equal(filtered.length, 2);
   assert.equal(filtered[0].id, '111122223333');
+  assert.equal(filtered[1].id, '222233334444');
 });
 
 test('production-disposable-container: shell script binds ephemeral project id and invokes resolver', async () => {
