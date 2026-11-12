@@ -4,7 +4,6 @@ import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import {
   ALLOWED_BACKUP_BRANCH,
-  APPROVED_BACKUP_COMMIT_SHA,
   PRODUCTION_REF,
   parseProductionPoolerUrl,
   SUPABASE_CA_CERT_PATH,
@@ -13,9 +12,9 @@ import {
 
 /**
  * Validates the currently checked-out Git commit against the approved commit SHA.
- * Rejects abbreviated SHAs, branch names, tags, or unapproved commit SHAs.
+ * Rejects missing, empty, abbreviated SHAs, branch names, tags, or unapproved commit SHAs.
  */
-export function verifyCheckedOutCommit(approvedSha = APPROVED_BACKUP_COMMIT_SHA, targetDir = process.cwd()) {
+export function verifyCheckedOutCommit(approvedSha, targetDir = process.cwd()) {
   const fullShaRegex = /^[0-9a-f]{40}$/i;
   if (!approvedSha || typeof approvedSha !== 'string' || !fullShaRegex.test(approvedSha.trim())) {
     throw new Error('APPROVED_COMMIT_SHA_FORMAT_INVALID: Approved commit must be a full 40-character hex SHA');
@@ -95,8 +94,10 @@ export function validateProductionBackupConfig(env) {
     throw new Error('PASSPHRASE_INVALID');
   }
   if (env.INPUT_CONFIRM_ARTIFACT_ACCESS !== 'true') throw new Error('ARTIFACT_ACCESS_CONFIRMATION_REQUIRED');
-  const approvedSha = env.APPROVED_COMMIT_SHA || APPROVED_BACKUP_COMMIT_SHA;
-  verifyCheckedOutCommit(approvedSha);
+  if (!env.APPROVED_COMMIT_SHA) {
+    throw new Error('APPROVED_COMMIT_SHA_MISSING: Environment variable APPROVED_COMMIT_SHA is required');
+  }
+  verifyCheckedOutCommit(env.APPROVED_COMMIT_SHA);
   verifySupabaseCaCertificate();
   parseProductionPoolerUrl(env.SUPABASE_DB_URL, env.SUPABASE_POOLER_HOST);
   return true;

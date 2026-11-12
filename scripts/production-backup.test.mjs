@@ -6,7 +6,6 @@ import { execFileSync } from 'node:child_process';
 import {
   PRODUCTION_REF,
   ALLOWED_BACKUP_BRANCH,
-  APPROVED_BACKUP_COMMIT_SHA,
   SUPABASE_CA_CERT_PATH,
   SUPABASE_CA_SHA256,
   normalizeProductionPoolerUrl,
@@ -79,6 +78,22 @@ test('production-preflight: rejects invalid branch, invalid ref or missing secre
   };
 
   assert.equal(validateProductionBackupConfig(validEnv), true);
+
+  // Missing APPROVED_COMMIT_SHA must throw
+  assert.throws(
+    () => validateProductionBackupConfig({ ...validEnv, APPROVED_COMMIT_SHA: undefined }),
+    /APPROVED_COMMIT_SHA_MISSING/
+  );
+  assert.throws(
+    () => validateProductionBackupConfig({ ...validEnv, APPROVED_COMMIT_SHA: '' }),
+    /APPROVED_COMMIT_SHA_MISSING/
+  );
+
+  // Divergent APPROVED_COMMIT_SHA must throw COMMIT_SHA_MISMATCH
+  assert.throws(
+    () => validateProductionBackupConfig({ ...validEnv, APPROVED_COMMIT_SHA: '0000000000000000000000000000000000000000' }),
+    /COMMIT_SHA_MISMATCH/
+  );
 
   assert.throws(() => validateProductionBackupConfig({ ...validEnv, GITHUB_REF: 'refs/heads/main' }), /BRANCH_NOT_ALLOWED/);
   assert.throws(() => validateProductionBackupConfig({ ...validEnv, INPUT_PROJECT_REF: 'tafjceemuetqjyngresg' }), /PROJECT_REF_MISMATCH/);
@@ -281,6 +296,10 @@ test('security-workflow-check: ensures secrets are NOT present in global workflo
   const checkoutRef = checkoutRefMatch[1].trim();
   assert.ok(!checkoutRef.includes('refs/heads/'), 'Checkout ref must not be a mutable branch ref');
   assert.ok(checkoutRef.includes('vars.APPROVED_COMMIT_SHA'), 'Checkout ref must honor vars.APPROVED_COMMIT_SHA');
+
+  // Both preflight steps (standalone and backup script) must receive APPROVED_COMMIT_SHA
+  const preflightEnvMatches = [...workflowYaml.matchAll(/APPROVED_COMMIT_SHA:\s*(\$\{\{\s*vars\.APPROVED_COMMIT_SHA[^\n]+)/g)];
+  assert.ok(preflightEnvMatches.length >= 2, 'APPROVED_COMMIT_SHA must be transmitted to both preflight and backup execution steps');
 });
 
 test('production-disposable-container: discovery logic filters candidate containers by image and hex ID', () => {
