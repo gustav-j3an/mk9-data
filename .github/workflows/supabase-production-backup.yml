@@ -26,6 +26,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     environment: production-backup
+    # Global job env strictly contains non-sensitive variables only.
+    # Production secrets are scoped strictly to the specific steps requiring them.
     env:
       GITHUB_REF: ${{ github.ref }}
       INPUT_PROJECT_REF: ${{ inputs.project_ref }}
@@ -33,9 +35,6 @@ jobs:
       SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
       SUPABASE_PROJECT_URL: ${{ vars.SUPABASE_PROJECT_URL }}
       SUPABASE_POOLER_HOST: ${{ vars.SUPABASE_POOLER_HOST }}
-      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
-      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-      BACKUP_GPG_PASSPHRASE: ${{ secrets.BACKUP_GPG_PASSPHRASE }}
     steps:
       - name: Check out this implementation branch
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -49,6 +48,10 @@ jobs:
           node-version: '22.16.0'
 
       - name: Run preflight and security checks
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          BACKUP_GPG_PASSPHRASE: ${{ secrets.BACKUP_GPG_PASSPHRASE }}
         run: node scripts/production-preflight.mjs
 
       - name: Install PostgreSQL 17 client and GPG
@@ -75,6 +78,10 @@ jobs:
           test "$(supabase --version)" = "3.0.0"
 
       - name: Export, restore-test, and encrypt production backup
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          BACKUP_GPG_PASSPHRASE: ${{ secrets.BACKUP_GPG_PASSPHRASE }}
         shell: bash
         run: bash scripts/mk9-supabase-production-backup.sh
 

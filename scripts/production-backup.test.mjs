@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 import {
   PRODUCTION_REF,
   ALLOWED_BACKUP_BRANCH,
@@ -16,7 +18,8 @@ import {
   resolveObjectPath,
   assertStorageInventoryMatches,
 } from './production-storage-backup.mjs';
-import { parseMigrationHistoryData } from './reconcile-migrations.mjs';
+import { parseMigrationHistoryData, reconcileMigrationsLedger } from './reconcile-migrations.mjs';
+import { bundleRepositoryMigrations } from './bundle-repository-migrations.mjs';
 
 test('production-pooler-connection: rejects non-production project ref', () => {
   assert.equal(PRODUCTION_REF, 'xzmbesqhxcnuokjwrbnw');
@@ -101,10 +104,9 @@ test('production-storage-backup: detects corrupted files, size mismatch, and alt
     { bucket: 'visit-photos', name: 'photo1.jpg', sha256: 'abc123hash', bytes: 1024 }
   ];
 
-  // Identical inventory succeeds
   assert.equal(assertStorageInventoryMatches(sourceManifest, validRestoredBuckets, validRestoredObjects), true);
 
-  // 1. Corrupted bucket security configuration (public flag mismatch)
+  // 1. Corrupted bucket public setting
   const alteredBucketPublic = [{ ...validRestoredBuckets[0], public: true }];
   assert.throws(
     () => assertStorageInventoryMatches(sourceManifest, alteredBucketPublic, validRestoredObjects),
@@ -125,26 +127,22 @@ test('production-storage-backup: detects corrupted files, size mismatch, and alt
     /STORAGE_RESTORE_SIZE_MISMATCH/
   );
 
-  // 4. Corrupted object SHA-256 hash (data corruption)
+  // 4. Corrupted object SHA-256 hash
   const alteredObjectHash = [{ ...validRestoredObjects[0], sha256: 'corrupted_hash_xyz' }];
   assert.throws(
     () => assertStorageInventoryMatches(sourceManifest, validRestoredBuckets, alteredObjectHash),
     /STORAGE_RESTORE_HASH_MISMATCH/
   );
 
-  // 5. Incomplete restore (missing object)
+  // 5. Incomplete restore
   assert.throws(
     () => assertStorageInventoryMatches(sourceManifest, validRestoredBuckets, []),
     /STORAGE_RESTORE_OBJECT_COUNT_MISMATCH/
   );
 });
 
-test('reconcile-migrations: correctly parses schema_migrations output from pg_dump', () => {
+test('reconcile-migrations: correctly parses schema_migrations and detects empty/corrupted data', () => {
   const sampleDump = `
---
--- Data for Name: schema_migrations; Type: TABLE DATA; Schema: supabase_migrations; Owner: supabase_admin
---
-
 COPY supabase_migrations.schema_migrations (version, statements, name) FROM stdin;
 20260930120000	{"statement 1"}	create_profiles
 20261001150000	{"statement 2"}	create_visits
@@ -152,4 +150,41 @@ COPY supabase_migrations.schema_migrations (version, statements, name) FROM stdi
 `;
   const parsed = parseMigrationHistoryData(sampleDump);
   assert.deepEqual(parsed, ['20260930120000', '20261001150000']);
+
+  // Empty data throws error to prevent silent approval
+  assert.throws(() => parseMigrationHistoryData(''), /MIGRATION_LEDGER_EMPTY_OR_UNREADABLE/);
+  assert.throws(() => parseMigrationHistoryData('-- only comments\n'), /MIGRATION_LEDGER_ZERO_ENTRIES/);
+  assert.throws(() => parseMigrationHistoryData('COPY supabase_migrations.schema_migrations FROM stdin;\ninvalid_row\n\\.\n'), /MIGRATION_LEDGER_MALFORMED_LINE/);
+});
+
+test('bundle-repository-migrations: strictly excludes subdirectories like propostas', async () => {
+  const result = await bundleRepositoryMigrations('supabase/migrations', path.resolve('scratch/test-bundle-output'));
+  assert.ok(result.total_executable_files > 0);
+  assert.ok(result.total_excluded_items > 0);
+
+  const excludedPropostas = result.excluded_items.find(i => i.name === 'propostas');
+  assert.ok(excludedPropostas, 'Subdirectory propostas must be recorded in excluded items');
+  assert.equal(excludedPropostas.type, 'directory');
+
+  for (const m of result.migrations) {
+    assert.ok(!m.filename.includes('proposal_sync_contratos_with_data_inicio'), 'Proposals must not be in executable migrations');
+    assert.ok(m.sha256 && m.sha256.length === 64, 'Each bundled migration must have SHA-256 hash');
+  }
+});
+
+test('security-workflow-check: ensures secrets are NOT present in global workflow env', async () => {
+  const workflowYaml = await readFile('.github/workflows/supabase-production-backup.yml', 'utf8');
+
+  // Match the global env block under jobs.backup-and-restore.env
+  const globalEnvMatch = workflowYaml.match(/jobs:\s*[\s\S]*?backup-and-restore:\s*[\s\S]*?env:\s*([\s\S]*?)\s*steps:/);
+  assert.ok(globalEnvMatch, 'Global job env block must exist');
+  const globalEnvContent = globalEnvMatch[1];
+
+  // Secrets must NOT be referenced in the global job env
+  assert.ok(!globalEnvContent.includes('secrets.SUPABASE_DB_URL'), 'secrets.SUPABASE_DB_URL must not be in global job env');
+  assert.ok(!globalEnvContent.includes('secrets.SUPABASE_SERVICE_ROLE_KEY'), 'secrets.SUPABASE_SERVICE_ROLE_KEY must not be in global job env');
+  assert.ok(!globalEnvContent.includes('secrets.BACKUP_GPG_PASSPHRASE'), 'secrets.BACKUP_GPG_PASSPHRASE must not be in global job env');
+
+  // Secrets must be present only in specific execution steps
+  assert.ok(workflowYaml.includes('SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}'), 'Secrets must be step-scoped');
 });

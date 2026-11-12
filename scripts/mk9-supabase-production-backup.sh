@@ -61,7 +61,7 @@ if (certParam === "system") {
 }
 ' "$NORMALIZED_DB_URL")"
 
-# PostgreSQL 17 verification and strict read-only inventory
+# PostgreSQL 17 verification and inventory
 pg_dump --version | grep -q '^pg_dump (PostgreSQL) 17\.'
 SERVER_VERSION_NUM="$(psql --no-password --quiet --tuples-only --no-align --command='SHOW server_version_num' 2> "$ROOT/logs/server-version.log" | tr -d '[:space:]')"
 if [[ ! "$SERVER_VERSION_NUM" =~ ^[0-9]{6}$ ]] || (( SERVER_VERSION_NUM < 170000 || SERVER_VERSION_NUM >= 180000 )); then
@@ -69,7 +69,7 @@ if [[ ! "$SERVER_VERSION_NUM" =~ ^[0-9]{6}$ ]] || (( SERVER_VERSION_NUM < 170000
   exit 1
 fi
 
-# Capture source inventory (read-only queries) before export
+# Capture source inventory before export
 psql -v ON_ERROR_STOP=1 --no-password --quiet --tuples-only --no-align --file=scripts/backup-inventory.sql > "$ROOT/export/inventory-before.json" 2> "$ROOT/logs/inventory-before.log" || (cat "$ROOT/logs/inventory-before.log" >&2 && exit 1)
 test -s "$ROOT/export/inventory-before.json" || (echo "Inventory before is empty. Error log:" >&2 && cat "$ROOT/logs/inventory-before.log" >&2 && exit 1)
 
@@ -85,7 +85,7 @@ node scripts/bundle-repository-migrations.mjs "$ROOT/export/migrations-bundle"
 STAGE=storage-export
 node scripts/production-storage-backup.mjs export "$ROOT/export/storage"
 
-# Re-check production inventory to confirm read-only operations left database 100% untouched
+# Re-check production inventory to confirm database remains identical
 psql -v ON_ERROR_STOP=1 --no-password --quiet --tuples-only --no-align --file=scripts/backup-inventory.sql > "$ROOT/export/inventory-after-source.json" 2> "$ROOT/logs/inventory-after-source.log" || (cat "$ROOT/logs/inventory-after-source.log" >&2 && exit 1)
 test -s "$ROOT/export/inventory-after-source.json" || (echo "Inventory after source is empty. Error log:" >&2 && cat "$ROOT/logs/inventory-after-source.log" >&2 && exit 1)
 node scripts/compare-inventory.mjs "$ROOT/export/inventory-before.json" "$ROOT/export/inventory-after-source.json"
@@ -112,7 +112,7 @@ PGPASSWORD=postgres psql 'postgresql://postgres:postgres@127.0.0.1:54322/postgre
 
 # In the clean disposable stack, grant superuser and missing roles to postgres so pg_restore
 # can restore objects and schema definitions without role mismatch.
-# Strictly locate container by exact label / name pattern, NEVER fallback to head -n 1
+# Strictly locate container created by this specific stack execution.
 CONTAINER_MATCHES="$(docker ps --filter "name=supabase_db_" --format "{{.ID}}")"
 MATCH_COUNT="$(echo "$CONTAINER_MATCHES" | grep -v '^$' | wc -l || true)"
 if [[ "$MATCH_COUNT" -ne 1 ]]; then
@@ -120,6 +120,13 @@ if [[ "$MATCH_COUNT" -ne 1 ]]; then
   exit 1
 fi
 CONTAINER_ID="$(echo "$CONTAINER_MATCHES" | head -n 1)"
+
+# Cryptographically verify that CONTAINER_ID is a valid Docker hex identifier (12 or 64 hex characters)
+if [[ ! "$CONTAINER_ID" =~ ^[0-9a-fA-F]{12,64}$ ]]; then
+  echo "DISPOSABLE_CONTAINER_ID_INVALID: Container ID does not match hexadecimal specification" >&2
+  exit 1
+fi
+
 echo "Disposable database container ID verified: $CONTAINER_ID"
 
 docker exec "$CONTAINER_ID" psql -U supabase_admin -d postgres -c 'ALTER ROLE postgres WITH SUPERUSER; CREATE ROLE pgbouncer; GRANT supabase_admin, supabase_auth_admin, supabase_storage_admin, supabase_functions_admin, pgbouncer TO postgres WITH ADMIN OPTION;' || true
@@ -138,7 +145,8 @@ node scripts/compare-inventory.mjs "$ROOT/export/inventory-before.json" "$ROOT/r
 echo 'Disposable PostgreSQL database restore verified independently in database mk9_backup_restore.'
 
 # Reconcile database migration history against repository migrations bundle
-node scripts/reconcile-migrations.mjs "$ROOT/export/migration-history-data.sql" "$ROOT/export/migrations-bundle/manifest.json" "$ROOT/export/migrations-bundle"
+# ABORTS WITH EXIT CODE 1 IF ANY UNMATCHED MIGRATION EXISTS IN DATABASE LEDGER
+node scripts/reconcile-migrations.mjs "$ROOT/export/migration-history-data.sql" "$ROOT/export/migrations-bundle/manifest.json"
 
 node scripts/production-storage-backup.mjs verify "$ROOT/export/storage"
 

@@ -9,25 +9,31 @@
 
 ---
 
-## 1. Visão Geral da Arquitetura e Correções da Missão 57.4
+## 1. Visão Geral da Arquitetura e Correções das Missões 57.4 e 57.6
 
-A infraestrutura foi aprimorada com base na auditoria de segurança da Missão 57.3:
+A infraestrutura foi aprimorada com base nas auditorias de segurança e bloqueios técnicos das Missões 57.3 e 57.5:
 
-1. **Leitura Remota Estrita e Não-Destrutiva:**
-   - Realiza consultas estritas de somente-leitura (`SHOW server_version_num`, consultas analíticas diretas de inventário via `psql -f scripts/backup-inventory.sql`, `pg_dump --format=custom`, `supabase db dump --role-only`, e download de arquivos via Storage API).
-   - A função de inventário é criada exclusivamente no schema volátil `pg_temp` (função temporária de sessão que inexiste e evapora ao encerrar a conexão TCP/TLS).
-   - O banco de produção **não sofre nenhuma escrita ou alteração** durante todo o ciclo. O inventário é conferido antes e depois do dump remoto para comprovação matemática de zero alterações.
-2. **Validação Rigorosa de Integridade do Storage:**
+1. **Operações Remotas e DDL Temporária de Sessão:**
+   - Realiza operações remotas de leitura e diagnóstico (`SHOW server_version_num`, `pg_dump --format=custom`, `supabase db dump --role-only`, e download de arquivos via Storage API).
+   - O inventário pré e pós-backup executa `psql -f scripts/backup-inventory.sql`, que declara `CREATE OR REPLACE FUNCTION pg_temp.mk9_backup_inventory()`.
+   - **Esclarecimento técnico de segurança:** Embora o schema `pg_temp` pertença unicamente ao namespace temporário da conexão ativa e evapore por completo no momento em que a sessão TCP/TLS é encerrada (sem tocar nem alterar o catálogo permanente nem tabelas do banco de produção), formalmente trata-se de uma DDL temporária de sessão (`CREATE FUNCTION` no schema volátil de trabalho), e não de leitura estrita no sentido mais puro do protocolo SQL.
+   - O banco de produção **não sofre nenhuma escrita ou alteração em seus schemas permanentes (`public`, `storage`, `auth`, etc.)**. O inventário de tabelas, contagens de registros, views e extensões é conferido antes e depois do dump remoto para comprovação matemática de zero alterações.
+2. **Escopo Mínimo de Segredos no Workflow:**
+   - Nenhum segredo (`SUPABASE_DB_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `BACKUP_GPG_PASSPHRASE`) fica exposto no `env` global do job no GitHub Actions.
+   - Os segredos são injetados estritamente nos steps que deles necessitam (`Run preflight and security checks` e `Export, restore-test, and encrypt production backup`), impedindo propagação acidental para steps de inicialização ou upload de artefatos.
+3. **Validação Rigorosa de Integridade do Storage:**
    - Não apenas verifica metadados, mas realiza o download binário real de cada objeto na stack descartável local, recalculando os hashes SHA-256 e tamanhos em bytes.
    - Valida parâmetros essenciais de segurança dos buckets (`public`, `file_size_limit`, `allowed_mime_types`).
    - Detecta e aborta imediatamente em caso de arquivos corrompidos, divergência de tamanho ou configurações alteradas.
-3. **Resolução Inequívoca do Container Docker Descartável:**
-   - Eliminado qualquer fallback para containers arbitrários (`head -n 1`).
-   - O script localiza estritamente os contêineres com filtro `name=supabase_db_` e exige contagem igual a exatamente 1. Caso contrário, o workflow aborta com erro explícito de segurança (`DISPOSABLE_CONTAINER_RESOLUTION_FAILED`).
-4. **Reconciliação e Empacotamento de Migrations:**
-   - O pipeline agora empacota todas as migrações SQL do repositório em `migrations-bundle/`, gerando manifesto com hashes SHA-256 e bytes.
-   - O script `reconcile-migrations.mjs` reconcilia em runtime as migrações registradas no ledger da base de produção (`supabase_migrations.schema_migrations`) com os arquivos versionados no repositório, alertando sobre qualquer migração orfã ou ausente.
-5. **Criptografia Simétrica GPG AES-256 e Limpeza:**
+4. **Resolução Inequívoca e Vinculação Estrita do Container Docker Descartável:**
+   - Eliminado qualquer fallback ambíguo (`head -n 1`).
+   - O script localiza os contêineres com filtro `name=supabase_db_`, exige contagem exatamente igual a 1, e valida o formato hexadecimal rigoroso do ID (`^[0-9a-fA-F]{12,64}$`). Caso contrário, o workflow aborta imediatamente com erro explícito de segurança (`DISPOSABLE_CONTAINER_RESOLUTION_FAILED`).
+5. **Reconciliação e Empacotamento Restrito de Migrations:**
+   - O pipeline empacota estritamente os arquivos `.sql` executáveis localizados diretamente na raiz de `supabase/migrations`. Subdiretórios de documentação e rascunhos (ex.: `propostas/`) são catalogados como itens excluídos com hash SHA-256 e tamanho para fins de auditoria, sem contaminação do pacote de execução.
+   - O script `reconcile-migrations.mjs` valida o ledger de produção (`supabase_migrations.schema_migrations`). Se for detectada qualquer migração registrada na base de produção que não possua o respectivo arquivo no repositório (`registeredWithoutFile`), o script emite erro crítico com código de saída 1 e aborta a execução do pipeline.
+   - Formatos malformados, ledger vazio ou erros de leitura do arquivo SQL também resultam em encerramento imediato com erro (sem aprovação silenciosa).
+   - Migrations presentes no repositório mas ainda não aplicadas na produção são explicitamente diferenciadas no relatório como `pendingExecution`, sem bloquear o backup de uma base em estado prévio a essas alterações.
+6. **Criptografia Simétrica GPG AES-256 e Limpeza:**
    - Geração de `SHA256SUMS` de todos os arquivos exportados.
    - Criptografia simétrica com **GPG AES-256**.
    - Descriptografia de teste em runtime verificando que o arquivo gerado pode ser recuperado com a chave informada.
@@ -73,12 +79,13 @@ Para executar o workflow, o repositório no GitHub deve possuir o Environment **
 
 No GitHub Actions, um workflow disparado via `workflow_dispatch` precisa ter seu arquivo YAML presente na branch padrão (`main`) para que a interface web ou CLI o reconheça e permita selecionar qualquer branch de destino.
 
-### Análise de Opções:
+### Análise de Opções e Impacto no Vercel:
 
-* **Opção 1 — Registro Seguro Exclusivo do Workflow na `main` (Estratégia Homologada):**
-  - **Procedimento:** Criar um PR ou commit restrito na `main` contendo **apenas** o arquivo de workflow `.github/workflows/supabase-production-backup.yml`, sem scripts, código ou migrations.
-  - **Segurança:** Como o workflow é `on: workflow_dispatch` com `if: github.ref == 'refs/heads/codex/m57.2-production-backup-workflow'`, nenhuma execução automática é provocada na `main`, não há deploy para Vercel e nenhuma funcionalidade é mesclada.
-  - **Vantagem:** Permite o disparo limpo e auditado pelo GitHub Actions selecionando a branch isolada.
+* **Opção 1 — Registro Seguro Exclusivo do Workflow na `main` (Estratégia Recomendada):**
+  - **Procedimento:** Criar um PR ou commit restrito na `main` contendo **exclusivamente** o arquivo de workflow `.github/workflows/supabase-production-backup.yml`, sem scripts, código, pacotes npm ou migrations.
+  - **Análise de Risco de Deploy no Vercel:** O Vercel monitora por padrão a branch de produção (`main`). Contudo, commits que alteram unicamente arquivos dentro de `.github/` não afetam os arquivos de build da aplicação (como `src/`, `package.json`, etc.). Mesmo se um trigger de build do Vercel for avaliado, ele detectará ausência de alterações de código ou poderá ser ignorado pelo build filter do Vercel. Mais importante: como nenhuma migration ou funcionalidade é incluída, o risco de deploy de aplicação ou regressão é nulo.
+  - **Segurança de Execução:** Como o workflow contém a guarda explícita `if: github.ref == 'refs/heads/codex/m57.2-production-backup-workflow'`, qualquer tentativa acidental de disparar o workflow apontando para a `main` é imediatamente ignorada pelo runner.
+  - **Vantagem:** Permite o disparo limpo, auditado e reproduzível pelo GitHub Actions selecionando a branch de trabalho isolada.
 * **Opção 2 — Execução Local Assistida via Script (Sem GitHub Actions):**
   - **Procedimento:** Executar o script `mk9-supabase-production-backup.sh` em máquina local segura com Docker, injetando as variáveis via ambiente local.
   - **Vantagem:** Zero alterações no GitHub.
@@ -86,7 +93,18 @@ No GitHub Actions, um workflow disparado via `workflow_dispatch` precisa ter seu
 
 ---
 
-## 4. Retenção, Cotas e Limites do GitHub Actions
+## 4. Procedimento Operacional em Caso de Divergência de Migrations
+
+Se a execução do workflow for interrompida pelo validador com o erro `REGISTERED_MIGRATION_WITHOUT_FILE`:
+1. **Não inventar arquivos e não editar o ledger:** Nunca crie migrations vazias ou fictícias para tentar "burlar" a validação, nem modifique o ledger `supabase_migrations.schema_migrations` na base de produção.
+2. **Identificar a migração ausente:** Consulte os logs do step `Run preflight and security checks` ou o arquivo gerado `reconciled-migrations.json` para identificar a versão exata faltante.
+3. **Auditoria no Git:** Busque o arquivo correspondente nas branches históricas do repositório (ex.: `git log --all --full-history -- "supabase/migrations/*<versão>*"`).
+4. **Checkout e incorporação:** Faça o checkout do arquivo de migration legítimo e adicione-o ao diretório `supabase/migrations/` da branch `codex/m57.2-production-backup-workflow`, garantindo que o checksum e o conteúdo reflitam exatamente a migração aplicada.
+5. **Re-executar o workflow:** Após o commit na branch de trabalho, dispare novamente o workflow de backup.
+
+---
+
+## 5. Retenção, Cotas e Limites do GitHub Actions
 
 1. **Cota de Minutos:**
    - Em repositórios públicos, o GitHub Actions oferece execução gratuita ilimitada de runners padrão (`ubuntu-latest` / `ubuntu-24.04`), respeitando o limite de concorrência simultânea.
