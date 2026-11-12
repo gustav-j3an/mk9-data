@@ -11,7 +11,9 @@ mkdir -p "$ROOT/export" "$ROOT/restore" "$ROOT/logs"
 chmod 700 "$ROOT" "$ROOT/export" "$ROOT/restore" "$ROOT/logs"
 
 cleanup() {
-  if [[ -d "$ROOT/supabase" ]]; then
+  if [[ -n "${DISPOSABLE_STACK_DIR:-}" && -d "$DISPOSABLE_STACK_DIR" ]]; then
+    (cd "$DISPOSABLE_STACK_DIR" && supabase stop --no-backup >/dev/null 2>&1) || true
+  elif [[ -d "$ROOT/supabase" ]]; then
     (cd "$ROOT/supabase" && supabase stop --no-backup >/dev/null 2>&1) || true
   fi
   rm -rf "$ROOT"
@@ -92,21 +94,22 @@ node scripts/compare-inventory.mjs "$ROOT/export/inventory-before.json" "$ROOT/e
 
 # Restore and check in a fresh, disposable Supabase PostgreSQL 17 stack. No remote URL is mounted into it.
 STAGE=disposable-restore
-mkdir -p "$ROOT/supabase"
-(cd "$ROOT/supabase" && supabase init --force >/dev/null 2> "$ROOT/logs/supabase-init.log")
 # Generate ephemeral stack project_id and cryptographic nonce to unambiguously bind the disposable container
 DISPOSABLE_STACK_NONCE="$(node -e 'import("node:crypto").then(c => console.log(c.randomBytes(16).toString("hex")))')"
 DISPOSABLE_PROJECT_ID="mk9_restore_${DISPOSABLE_STACK_NONCE}"
+DISPOSABLE_STACK_DIR="$ROOT/${DISPOSABLE_PROJECT_ID}"
+mkdir -p "$DISPOSABLE_STACK_DIR"
+(cd "$DISPOSABLE_STACK_DIR" && supabase init --force >/dev/null 2> "$ROOT/logs/supabase-init.log")
 
-sed -i 's/^major_version = .*/major_version = 17/' "$ROOT/supabase/supabase/config.toml"
-sed -i "s/^project_id = .*/project_id = \"${DISPOSABLE_PROJECT_ID}\"/" "$ROOT/supabase/supabase/config.toml"
-(cd "$ROOT/supabase" && supabase start -x realtime,imgproxy,mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor >/dev/null 2> "$ROOT/logs/supabase-start.log")
+sed -i 's/^major_version = .*/major_version = 17/' "$DISPOSABLE_STACK_DIR/supabase/config.toml"
+sed -i "s/^project_id = .*/project_id = \"${DISPOSABLE_PROJECT_ID}\"/" "$DISPOSABLE_STACK_DIR/supabase/config.toml"
+(cd "$DISPOSABLE_STACK_DIR" && supabase start -x realtime,imgproxy,mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor >/dev/null 2> "$ROOT/logs/supabase-start.log")
 
 # Unset PG* environment variables from remote export so local connections use default/explicit parameters
 unset PGHOST PGPORT PGUSER PGDATABASE PGSSLMODE PGSSLROOTCERT
 LOCAL_DB_URL="postgresql://postgres:postgres@127.0.0.1:54322/postgres?sslmode=disable"
 LOCAL_STORAGE_URL="http://127.0.0.1:54321"
-LOCAL_SERVICE_KEY="$(cd "$ROOT/supabase" && supabase status -o env 2> "$ROOT/logs/supabase-status.log" | sed -n 's/^SERVICE_ROLE_KEY=//p' | tr -d '"\r')"
+LOCAL_SERVICE_KEY="$(cd "$DISPOSABLE_STACK_DIR" && supabase status -o env 2> "$ROOT/logs/supabase-status.log" | sed -n 's/^SERVICE_ROLE_KEY=//p' | tr -d '"\r')"
 test -n "$LOCAL_SERVICE_KEY"
 echo "::add-mask::$LOCAL_SERVICE_KEY"
 export RESTORE_SUPABASE_URL="$LOCAL_STORAGE_URL"
