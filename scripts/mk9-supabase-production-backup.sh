@@ -112,11 +112,27 @@ PGPASSWORD=postgres psql 'postgresql://postgres:postgres@127.0.0.1:54322/postgre
 
 # In the clean disposable stack, grant superuser and missing roles to postgres so pg_restore
 # can restore objects and schema definitions without role mismatch.
-# Strictly locate container created by this specific stack execution.
-CONTAINER_MATCHES="$(docker ps --filter "name=supabase_db_" --format "{{.ID}}")"
+# Strictly locate container created by this specific stack execution using Docker Compose labels and project metadata.
+COMPOSE_PROJECT_DIR="$ROOT/supabase"
+# Supabase CLI tags containers with com.docker.compose.project label matching the basename or working directory
+PROJECT_NAME="$(basename "$COMPOSE_PROJECT_DIR")"
+
+CONTAINER_MATCHES="$(docker ps \
+  --filter "label=com.docker.compose.service=db" \
+  --filter "label=com.docker.compose.project=${PROJECT_NAME}" \
+  --format "{{.ID}}" || true)"
+
+# If project label was normalized or customized by CLI, fallback to strict service label + name matching
+if [[ -z "$CONTAINER_MATCHES" ]]; then
+  CONTAINER_MATCHES="$(docker ps \
+    --filter "label=com.docker.compose.service=db" \
+    --filter "name=supabase_db_" \
+    --format "{{.ID}}")"
+fi
+
 MATCH_COUNT="$(echo "$CONTAINER_MATCHES" | grep -v '^$' | wc -l || true)"
 if [[ "$MATCH_COUNT" -ne 1 ]]; then
-  echo "DISPOSABLE_CONTAINER_RESOLUTION_FAILED: Expected exactly 1 supabase_db container, found $MATCH_COUNT" >&2
+  echo "DISPOSABLE_CONTAINER_RESOLUTION_FAILED: Expected exactly 1 verified disposable database container, found $MATCH_COUNT" >&2
   exit 1
 fi
 CONTAINER_ID="$(echo "$CONTAINER_MATCHES" | head -n 1)"
@@ -127,7 +143,21 @@ if [[ ! "$CONTAINER_ID" =~ ^[0-9a-fA-F]{12,64}$ ]]; then
   exit 1
 fi
 
-echo "Disposable database container ID verified: $CONTAINER_ID"
+# Verify container labels explicitly to guarantee identity and provenance before executing commands
+CONTAINER_SERVICE_LABEL="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.service" }}' "$CONTAINER_ID" 2>/dev/null || true)"
+CONTAINER_IMAGE="$(docker inspect --format '{{ .Config.Image }}' "$CONTAINER_ID" 2>/dev/null || true)"
+
+if [[ "$CONTAINER_SERVICE_LABEL" != "db" ]]; then
+  echo "DISPOSABLE_CONTAINER_IDENTITY_MISMATCH: Container $CONTAINER_ID service label is not 'db' (found: '$CONTAINER_SERVICE_LABEL')" >&2
+  exit 1
+fi
+
+if [[ ! "$CONTAINER_IMAGE" =~ supabase/postgres: ]]; then
+  echo "DISPOSABLE_CONTAINER_IMAGE_UNTRUSTED: Container $CONTAINER_ID image '$CONTAINER_IMAGE' does not match supabase/postgres:*" >&2
+  exit 1
+fi
+
+echo "Disposable database container verified (ID: $CONTAINER_ID, Service: $CONTAINER_SERVICE_LABEL, Image: $CONTAINER_IMAGE)"
 
 docker exec "$CONTAINER_ID" psql -U supabase_admin -d postgres -c 'ALTER ROLE postgres WITH SUPERUSER; CREATE ROLE pgbouncer; GRANT supabase_admin, supabase_auth_admin, supabase_storage_admin, supabase_functions_admin, pgbouncer TO postgres WITH ADMIN OPTION;' || true
 docker exec "$CONTAINER_ID" psql -U supabase_admin -d mk9_backup_restore -c 'GRANT USAGE ON SCHEMA public TO postgres; GRANT ALL ON DATABASE mk9_backup_restore TO postgres; GRANT supabase_admin, supabase_auth_admin, supabase_storage_admin, supabase_functions_admin, pgbouncer TO postgres WITH ADMIN OPTION;' || true

@@ -6,8 +6,8 @@ import { pathToFileURL } from 'node:url';
 /**
  * Bundles executable repository migrations from supabase/migrations (top-level only).
  * Strictly excludes proposal directories (like supabase/migrations/propostas),
- * experimental files, and non-SQL assets, while maintaining an explicit audit record
- * of excluded items.
+ * experimental files, and non-SQL assets, while maintaining an explicit, deep audit record
+ * of excluded items with relative paths, sizes and SHA-256 hashes.
  */
 export async function bundleRepositoryMigrations(migrationsDir = 'supabase/migrations', outputDir) {
   const resolvedDir = path.resolve(migrationsDir);
@@ -19,21 +19,47 @@ export async function bundleRepositoryMigrations(migrationsDir = 'supabase/migra
   const executableFiles = [];
   const excludedItems = [];
 
+  // Helper to catalog excluded files recursively inside subdirectories
+  async function catalogDirectoryExcluded(dirPath, relativePrefix) {
+    const subEntries = await readdir(dirPath, { withFileTypes: true });
+    for (const sub of subEntries) {
+      const subFull = path.join(dirPath, sub.name);
+      const subRel = path.join(relativePrefix, sub.name).replace(/\\/g, '/');
+      if (sub.isDirectory()) {
+        await catalogDirectoryExcluded(subFull, subRel);
+      } else {
+        const subContent = await readFile(subFull);
+        const subSha = createHash('sha256').update(subContent).digest('hex');
+        excludedItems.push({
+          path: subRel,
+          name: sub.name,
+          type: sub.name.endsWith('.sql') ? 'excluded-sql-subfolder' : 'excluded-non-sql-subfolder',
+          bytes: subContent.length,
+          sha256: subSha,
+          reason: 'Subdirectories (e.g. proposals, drafts) are strictly excluded from executable migrations bundle',
+        });
+      }
+    }
+  }
+
   for (const entry of entries) {
     if (entry.isDirectory()) {
-      excludedItems.push({
-        name: entry.name,
-        type: 'directory',
-        reason: 'Subdirectories (e.g. proposals, drafts) are strictly excluded from executable migrations',
-      });
+      const subDirPath = path.join(resolvedDir, entry.name);
+      await catalogDirectoryExcluded(subDirPath, entry.name);
       continue;
     }
 
     if (!entry.isFile() || !entry.name.endsWith('.sql')) {
+      const filePath = path.join(resolvedDir, entry.name);
+      const content = await readFile(filePath);
+      const sha256 = createHash('sha256').update(content).digest('hex');
       excludedItems.push({
+        path: entry.name,
         name: entry.name,
         type: 'non-sql-file',
-        reason: 'Only .sql files are included in migrations bundle',
+        bytes: content.length,
+        sha256,
+        reason: 'Only .sql files in top-level migrations dir are included in executable bundle',
       });
       continue;
     }

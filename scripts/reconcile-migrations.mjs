@@ -3,8 +3,10 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 /**
- * Parses pg_dump --data-only --schema=supabase_migrations output
- * Extracts all recorded migration versions from INSERT or COPY statements.
+ * Parses pg_dump --data-only --schema=supabase_migrations output.
+ * Extracts all recorded migration versions from COPY or INSERT statements.
+ * Validates columns in COPY statement header, validates exact column counts,
+ * and rejects malformed/corrupted rows or unknown/missing version columns.
  * Throws an error on empty ledger, malformed format, or missing data to prevent silent approval.
  */
 export function parseMigrationHistoryData(sqlContent) {
@@ -13,25 +15,57 @@ export function parseMigrationHistoryData(sqlContent) {
   }
 
   const versions = new Set();
-  const copyMatch = sqlContent.match(/COPY\s+supabase_migrations\.schema_migrations(?:\s*\([^)]*\))?\s*FROM\s+stdin;([\s\S]*?)\\\./i);
+  const copyMatch = sqlContent.match(/COPY\s+supabase_migrations\.schema_migrations(?:\s*\(([^)]+)\))?\s*FROM\s+stdin;([\s\S]*?)\\\./i);
   if (copyMatch) {
-    const lines = copyMatch[1].trim().split(/\r?\n/);
+    const rawColHeader = copyMatch[1];
+    let versionColIdx = 0;
+    let expectedColCount = 1;
+
+    if (rawColHeader) {
+      const colNames = rawColHeader.split(',').map(c => c.trim().toLowerCase());
+      versionColIdx = colNames.indexOf('version');
+      if (versionColIdx === -1) {
+        throw new Error(`MIGRATION_LEDGER_HEADER_INVALID: "version" column missing in COPY header: "${rawColHeader}"`);
+      }
+      expectedColCount = colNames.length;
+    }
+
+    const lines = copyMatch[2].trim().split(/\r?\n/);
     for (const line of lines) {
       if (!line.trim()) continue;
       const parts = line.split('\t');
-      const version = parts[0]?.trim();
+      if (rawColHeader && parts.length !== expectedColCount) {
+        throw new Error(`MIGRATION_LEDGER_ROW_COLUMN_MISMATCH: expected ${expectedColCount} columns but got ${parts.length} in row "${line}"`);
+      }
+      const version = parts[versionColIdx]?.trim();
       if (version && /^\d+$/.test(version)) {
         versions.add(version);
       } else {
-        throw new Error(`MIGRATION_LEDGER_MALFORMED_LINE: unexpected entry "${line}"`);
+        throw new Error(`MIGRATION_LEDGER_MALFORMED_LINE: invalid version format "${version}" in entry "${line}"`);
       }
     }
   }
 
   // Also check INSERT INTO statements if present
-  const insertMatches = sqlContent.matchAll(/INSERT\s+INTO\s+supabase_migrations\.schema_migrations\s*(?:\([^)]*\))?\s*VALUES\s*\('?(\d+)'?/gi);
-  for (const m of insertMatches) {
-    if (m[1]) versions.add(m[1]);
+  const insertMatches = sqlContent.matchAll(/INSERT\s+INTO\s+supabase_migrations\.schema_migrations\s*(?:\(([^)]+)\))?\s*VALUES\s*\(([^;]+)\);?/gi);
+  for (const match of insertMatches) {
+    const colHeader = match[1];
+    const valuesClause = match[2];
+    let versionIdx = 0;
+    if (colHeader) {
+      const cols = colHeader.split(',').map(c => c.trim().toLowerCase());
+      versionIdx = cols.indexOf('version');
+      if (versionIdx === -1) {
+        throw new Error(`MIGRATION_LEDGER_INSERT_HEADER_INVALID: "version" column missing in INSERT header: "${colHeader}"`);
+      }
+    }
+    const valParts = valuesClause.split(',').map(v => v.trim().replace(/^['"]|['"]$/g, ''));
+    const versionVal = valParts[versionIdx];
+    if (versionVal && /^\d+$/.test(versionVal)) {
+      versions.add(versionVal);
+    } else {
+      throw new Error(`MIGRATION_LEDGER_MALFORMED_INSERT: invalid version "${versionVal}"`);
+    }
   }
 
   if (versions.size === 0) {

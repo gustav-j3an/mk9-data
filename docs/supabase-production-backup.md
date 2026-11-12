@@ -93,7 +93,44 @@ No GitHub Actions, um workflow disparado via `workflow_dispatch` precisa ter seu
 
 ---
 
-## 4. Procedimento Operacional em Caso de Divergência de Migrations
+## 4. Análise de Credenciais de Leitura e Menor Privilégio
+
+### A. Diagnóstico de Viabilidade de Credencial Exclusiva de Leitura
+1. **Operações PostgreSQL no Backup:**
+   - `pg_dump`: Para exportar integralmente os schemas da aplicação (`public`, etc.) e os schemas gerenciados pelo Supabase (`auth`, `storage`), o usuário PostgreSQL precisa ter permissão `SELECT` em todas as tabelas e sequências, além de privilégio de leitura sobre definições de tipos, triggers e schemas. No PostgreSQL padrão, um role customizado (ex.: `backup_reader`) precisaria de `pg_read_all_data` e acesso aos schemas de sistema.
+   - `supabase db dump --role-only`: A CLI do Supabase e o `pg_dumpall --roles-only` exigem privilégio de leitura sobre tabelas de catálogo protegidas (como `pg_authid`). No Supabase gerenciado, apenas o superusuário interno (`supabase_admin`) ou o role administrativo `postgres` possuem permissões suficientes para inspecionar credenciais e roles.
+   - Inventário pré e pós-backup (`backup-inventory.sql`): Cria uma função em `pg_temp` e executa consultas reflexivas em `pg_class`, `pg_namespace`, etc. Um role de leitura comum conseguiria executar o inventário.
+2. **Operações Storage:**
+   - A listagem e download de arquivos via REST API do Storage Supabase utilizam a chave `service_role`. No modelo Supabase, a chave `service_role` ignora RLS (Row Level Security) e possui privilégios totais sobre a API REST/Storage.
+   - Não existe no Supabase atual uma chave nativa "storage_read_only" via token JWT sem personalização profunda de claims ou proxies intermediários.
+3. **Riscos Residuais do Uso de `postgres` e `service_role`:**
+   - Como o `postgres` possui permissões DDL/DML e o `service_role` ignora RLS, qualquer comando malicioso no runner poderia teoricamente alterar dados se o script fosse adulterado.
+4. **Contramedidas e Isolamento Obrigatórios:**
+   - **Somente-leitura comprovada em runtime:** O script executa apenas `pg_dump` e downloads, sem nenhum `INSERT`, `UPDATE` ou `DROP` remoto. O inventário pré e pós-backup compara tabelas e contagens de linhas para comprovação matemática de ausência de alterações.
+   - **Guarda de IP e Session Pooler:** A conexão é restrita ao host do pooler com `sslmode=verify-full` e validação estrita da Root CA oficial da Supabase.
+   - **GitHub Environment Protection:** Exigência de revisão manual (Required Reviewers) e branch restrita (`codex/m57.2-production-backup-workflow`) no GitHub Environment `production-backup`.
+
+---
+
+## 5. Estratégia para Fixar o Commit Executado (Imutabilidade de Execução)
+
+Para garantir que a execução do backup no GitHub Actions utilize exatamente a versão auditada e aprovada, sem risco de commits adicionais ou alterações inesperadas na branch:
+1. **Fixação por Commit SHA:**
+   - No workflow `.github/workflows/supabase-production-backup.yml`, o step `Check out this implementation branch` pode receber o SHA específico revisado ou um input opcional `commit_sha` no `workflow_dispatch`.
+   - Exemplo:
+     ```yaml
+     - name: Check out this implementation branch
+       uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+       with:
+         ref: ${{ inputs.commit_sha || 'codex/m57.2-production-backup-workflow' }}
+         persist-credentials: false
+     ```
+2. **Validação no Preflight:**
+   - O script `production-preflight.mjs` pode validar se o commit em execução (`process.env.GITHUB_SHA`) corresponde exatamente ao commit aprovado pelo conselho técnico antes de permitir o avanço do pipeline.
+
+---
+
+## 6. Procedimento Operacional em Caso de Divergência de Migrations
 
 Se a execução do workflow for interrompida pelo validador com o erro `REGISTERED_MIGRATION_WITHOUT_FILE`:
 1. **Não inventar arquivos e não editar o ledger:** Nunca crie migrations vazias ou fictícias para tentar "burlar" a validação, nem modifique o ledger `supabase_migrations.schema_migrations` na base de produção.

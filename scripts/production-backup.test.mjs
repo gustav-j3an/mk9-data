@@ -142,30 +142,72 @@ test('production-storage-backup: detects corrupted files, size mismatch, and alt
 });
 
 test('reconcile-migrations: correctly parses schema_migrations and detects empty/corrupted data', () => {
-  const sampleDump = `
+  // 1. Standard COPY format with column list (version in 1st position)
+  const sampleDumpWithColumns = `
 COPY supabase_migrations.schema_migrations (version, statements, name) FROM stdin;
 20260930120000	{"statement 1"}	create_profiles
 20261001150000	{"statement 2"}	create_visits
 \\.
 `;
-  const parsed = parseMigrationHistoryData(sampleDump);
-  assert.deepEqual(parsed, ['20260930120000', '20261001150000']);
+  const parsed1 = parseMigrationHistoryData(sampleDumpWithColumns);
+  assert.deepEqual(parsed1, ['20260930120000', '20261001150000']);
 
-  // Empty data throws error to prevent silent approval
+  // 2. COPY format with version in different position (e.g. name, version, statements)
+  const sampleDumpReordered = `
+COPY supabase_migrations.schema_migrations (name, version, statements) FROM stdin;
+create_profiles	20260930120000	{"statement 1"}
+create_visits	20261001150000	{"statement 2"}
+\\.
+`;
+  const parsed2 = parseMigrationHistoryData(sampleDumpReordered);
+  assert.deepEqual(parsed2, ['20260930120000', '20261001150000']);
+
+  // 3. COPY format without explicit column list
+  const sampleDumpNoColHeader = `
+COPY supabase_migrations.schema_migrations FROM stdin;
+20260930120000	{"statement 1"}	create_profiles
+\\.
+`;
+  const parsed3 = parseMigrationHistoryData(sampleDumpNoColHeader);
+  assert.deepEqual(parsed3, ['20260930120000']);
+
+  // 4. Reject COPY header missing version column
+  assert.throws(
+    () => parseMigrationHistoryData('COPY supabase_migrations.schema_migrations (name, statements) FROM stdin;\nfoo\tbar\n\\.\n'),
+    /MIGRATION_LEDGER_HEADER_INVALID/
+  );
+
+  // 5. Reject COPY row with column count mismatch (expected 3, got 2)
+  assert.throws(
+    () => parseMigrationHistoryData('COPY supabase_migrations.schema_migrations (version, statements, name) FROM stdin;\n20260930120000\tmissing_third_col\n\\.\n'),
+    /MIGRATION_LEDGER_ROW_COLUMN_MISMATCH/
+  );
+
+  // 6. Reject invalid non-numeric version format
+  assert.throws(
+    () => parseMigrationHistoryData('COPY supabase_migrations.schema_migrations (version, name) FROM stdin;\nnot_a_version\tcreate_profiles\n\\.\n'),
+    /MIGRATION_LEDGER_MALFORMED_LINE/
+  );
+
+  // 7. Empty data or comments-only throws error to prevent silent approval
   assert.throws(() => parseMigrationHistoryData(''), /MIGRATION_LEDGER_EMPTY_OR_UNREADABLE/);
   assert.throws(() => parseMigrationHistoryData('-- only comments\n'), /MIGRATION_LEDGER_ZERO_ENTRIES/);
-  assert.throws(() => parseMigrationHistoryData('COPY supabase_migrations.schema_migrations FROM stdin;\ninvalid_row\n\\.\n'), /MIGRATION_LEDGER_MALFORMED_LINE/);
 });
 
-test('bundle-repository-migrations: strictly excludes subdirectories like propostas', async () => {
+test('bundle-repository-migrations: strictly excludes subdirectories and deep-catalogs excluded files', async () => {
   const result = await bundleRepositoryMigrations('supabase/migrations', path.resolve('scratch/test-bundle-output'));
   assert.ok(result.total_executable_files > 0);
   assert.ok(result.total_excluded_items > 0);
 
-  const excludedPropostas = result.excluded_items.find(i => i.name === 'propostas');
-  assert.ok(excludedPropostas, 'Subdirectory propostas must be recorded in excluded items');
-  assert.equal(excludedPropostas.type, 'directory');
+  // Check that proposal file in propostas/ subfolder is deeply cataloged in excluded_items with SHA256 and bytes
+  const excludedProposal = result.excluded_items.find(i => i.name === '20261018160000_proposal_sync_contratos_with_data_inicio.sql');
+  assert.ok(excludedProposal, 'Proposal SQL file inside subfolder must be cataloged in excluded items');
+  assert.equal(excludedProposal.type, 'excluded-sql-subfolder');
+  assert.ok(excludedProposal.path.includes('propostas/20261018160000_proposal_sync_contratos_with_data_inicio.sql'));
+  assert.ok(excludedProposal.bytes > 0);
+  assert.equal(excludedProposal.sha256.length, 64);
 
+  // Executable migrations must not contain proposals or subdirectories
   for (const m of result.migrations) {
     assert.ok(!m.filename.includes('proposal_sync_contratos_with_data_inicio'), 'Proposals must not be in executable migrations');
     assert.ok(m.sha256 && m.sha256.length === 64, 'Each bundled migration must have SHA-256 hash');
