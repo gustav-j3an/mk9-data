@@ -220,11 +220,33 @@ export async function verifyStorageArchive(archiveDir) {
 }
 
 export function assertStorageInventoryMatches(sourceManifest, restoredBuckets, restoredObjects) {
-  const sourceBucketNames = sourceManifest.buckets.map(b => b.name).sort();
-  const restoredBucketNames = restoredBuckets.map(b => b.name).sort();
-  if (JSON.stringify(sourceBucketNames) !== JSON.stringify(restoredBucketNames)) {
-    throw new Error('STORAGE_RESTORE_BUCKET_MISMATCH');
+  // 1. Rigorous comparison of buckets: names and security configurations
+  const sourceBucketMap = new Map(sourceManifest.buckets.map(b => [b.name, b]));
+  const restoredBucketMap = new Map(restoredBuckets.map(b => [b.name, b]));
+
+  if (sourceBucketMap.size !== restoredBucketMap.size) {
+    throw new Error('STORAGE_RESTORE_BUCKET_MISMATCH: bucket count mismatch');
   }
+
+  for (const [name, src] of sourceBucketMap.entries()) {
+    const res = restoredBucketMap.get(name);
+    if (!res) {
+      throw new Error(`STORAGE_RESTORE_BUCKET_MISMATCH: bucket missing in restore: ${name}`);
+    }
+    if (Boolean(src.public) !== Boolean(res.public)) {
+      throw new Error(`STORAGE_RESTORE_BUCKET_CONFIG_MISMATCH: ${name} public setting mismatch`);
+    }
+    if ((src.file_size_limit ?? null) !== (res.file_size_limit ?? null)) {
+      throw new Error(`STORAGE_RESTORE_BUCKET_CONFIG_MISMATCH: ${name} file_size_limit mismatch`);
+    }
+    const srcMime = src.allowed_mime_types ? [...src.allowed_mime_types].sort() : [];
+    const resMime = res.allowed_mime_types ? [...res.allowed_mime_types].sort() : [];
+    if (JSON.stringify(srcMime) !== JSON.stringify(resMime)) {
+      throw new Error(`STORAGE_RESTORE_BUCKET_CONFIG_MISMATCH: ${name} allowed_mime_types mismatch`);
+    }
+  }
+
+  // 2. Rigorous comparison of objects: signatures, sizes, and hashes
   const sourceObjectSignatures = sourceManifest.objects
     .map(o => ({ bucket: o.bucket, name: o.name, sha256: o.sha256, bytes: o.bytes }))
     .sort((a, b) => a.bucket === b.bucket ? a.name.localeCompare(b.name) : a.bucket.localeCompare(b.bucket));
@@ -238,13 +260,20 @@ export function assertStorageInventoryMatches(sourceManifest, restoredBuckets, r
     .sort((a, b) => a.bucket === b.bucket ? a.name.localeCompare(b.name) : a.bucket.localeCompare(b.bucket));
 
   if (sourceObjectSignatures.length !== restoredObjectSignatures.length) {
-    throw new Error('STORAGE_RESTORE_OBJECT_COUNT_MISMATCH');
+    throw new Error(`STORAGE_RESTORE_OBJECT_COUNT_MISMATCH: expected ${sourceObjectSignatures.length}, got ${restoredObjectSignatures.length}`);
   }
+
   for (let i = 0; i < sourceObjectSignatures.length; i += 1) {
     const s = sourceObjectSignatures[i];
     const r = restoredObjectSignatures[i];
     if (s.bucket !== r.bucket || s.name !== r.name) {
       throw new Error(`STORAGE_RESTORE_OBJECT_MISMATCH: expected ${s.bucket}/${s.name}, got ${r.bucket}/${r.name}`);
+    }
+    if (s.bytes !== r.bytes) {
+      throw new Error(`STORAGE_RESTORE_SIZE_MISMATCH: ${s.bucket}/${s.name} expected ${s.bytes} bytes, got ${r.bytes}`);
+    }
+    if (r.sha256 && s.sha256 !== r.sha256) {
+      throw new Error(`STORAGE_RESTORE_HASH_MISMATCH: ${s.bucket}/${s.name} metadata hash mismatch`);
     }
   }
   return true;
@@ -304,7 +333,7 @@ export async function restoreStorageLocal({ archiveDir, metadataSqlPath, localUr
   }
   statements.push('ALTER TABLE storage.objects ENABLE TRIGGER update_objects_updated_at;');
   if (!metadataSqlPath) throw new Error('RESTORE_METADATA_OUTPUT_REQUIRED');
-  await writeFile(path.resolve(metadataSqlPath), `${statements.join('\n')}\n`, { flag: 'wx', mode: 0o600 });
+  await writeFile(path.resolve(metadataSqlPath), `${statements.join('\n')}\n`, { flag: 'w', mode: 0o600 });
   return checked;
 }
 
@@ -315,14 +344,37 @@ export async function verifyRestoredStorageLocal({ archiveDir, localUrl, localSe
   const manifest = JSON.parse(await readFile(path.join(root, 'manifest.json'), 'utf8'));
   const buckets = await listBuckets(localUrl, localServiceRoleKey);
   const objects = [];
+  let totalDownloadedBytes = 0;
+
   for (const bucket of buckets) {
-    objects.push(...await listAllObjects(localUrl, localServiceRoleKey, bucket.id ?? bucket.name));
+    const bucketObjects = await listAllObjects(localUrl, localServiceRoleKey, bucket.id ?? bucket.name);
+    for (const obj of bucketObjects) {
+      // Direct binary download and byte hashing from the restored local Storage API
+      const encodedPath = obj.name.split('/').map(encodeURIComponent).join('/');
+      const response = await apiRequest(localUrl, localServiceRoleKey, `/storage/v1/object/authenticated/${encodeURIComponent(bucket.id ?? bucket.name)}/${encodedPath}`);
+      if (!response.body) throw new Error('STORAGE_RESTORE_DOWNLOAD_BODY_MISSING');
+      const digest = createHash('sha256');
+      let byteCount = 0;
+      for await (const chunk of response.body) {
+        digest.update(chunk);
+        byteCount += chunk.length;
+      }
+      totalDownloadedBytes += byteCount;
+      objects.push({
+        ...obj,
+        bucket: bucket.name,
+        sha256: digest.digest('hex'),
+        bytes: byteCount,
+      });
+    }
   }
-  const normalized = objects.map(item => {
-    const bucket = buckets.find(candidate => (candidate.id ?? candidate.name) === item.bucket);
-    return { ...item, bucket: bucket?.name ?? item.bucket };
-  });
-  return { ...checked, ...assertStorageInventoryMatches(manifest, buckets, normalized) };
+
+  if (totalDownloadedBytes !== manifest.total_bytes) {
+    throw new Error(`STORAGE_RESTORE_TOTAL_BYTES_MISMATCH: expected ${manifest.total_bytes}, got ${totalDownloadedBytes}`);
+  }
+
+  assertStorageInventoryMatches(manifest, buckets, objects);
+  return { ...checked, restoredBytes: totalDownloadedBytes, objects: objects.length };
 }
 
 async function main() {

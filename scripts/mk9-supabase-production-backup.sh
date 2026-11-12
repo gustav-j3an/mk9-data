@@ -79,6 +79,9 @@ supabase db dump --role-only --remote="$NORMALIZED_DB_URL" > "$ROOT/export/roles
 pg_dump --schema-only --schema=supabase_migrations --file="$ROOT/export/migration-history.sql" --no-password 2> "$ROOT/logs/migration-schema.log" || (cat "$ROOT/logs/migration-schema.log" >&2 && exit 1)
 pg_dump --data-only --schema=supabase_migrations --file="$ROOT/export/migration-history-data.sql" --no-password 2> "$ROOT/logs/migration-data.log" || (cat "$ROOT/logs/migration-data.log" >&2 && exit 1)
 
+# Capture and bundle repository migrations with SHA256 hashes
+node scripts/bundle-repository-migrations.mjs "$ROOT/export/migrations-bundle"
+
 STAGE=storage-export
 node scripts/production-storage-backup.mjs export "$ROOT/export/storage"
 
@@ -109,17 +112,19 @@ PGPASSWORD=postgres psql 'postgresql://postgres:postgres@127.0.0.1:54322/postgre
 
 # In the clean disposable stack, grant superuser and missing roles to postgres so pg_restore
 # can restore objects and schema definitions without role mismatch.
-# Connect using the local database superuser (supabase_admin) inside the container.
-CONTAINER_ID="$(docker ps --filter "name=supabase_db" --format "{{.ID}}" | head -n 1)"
-if [[ -z "$CONTAINER_ID" ]]; then
-  CONTAINER_ID="$(docker ps -q | head -n 1)"
+# Strictly locate container by exact label / name pattern, NEVER fallback to head -n 1
+CONTAINER_MATCHES="$(docker ps --filter "name=supabase_db_" --format "{{.ID}}")"
+MATCH_COUNT="$(echo "$CONTAINER_MATCHES" | grep -v '^$' | wc -l || true)"
+if [[ "$MATCH_COUNT" -ne 1 ]]; then
+  echo "DISPOSABLE_CONTAINER_RESOLUTION_FAILED: Expected exactly 1 supabase_db container, found $MATCH_COUNT" >&2
+  exit 1
 fi
-if [[ -n "$CONTAINER_ID" ]]; then
-  echo "Disposable database container ID: $CONTAINER_ID"
-  docker exec "$CONTAINER_ID" psql -U supabase_admin -d postgres -c 'ALTER ROLE postgres WITH SUPERUSER; CREATE ROLE pgbouncer; GRANT supabase_admin, supabase_auth_admin, supabase_storage_admin, supabase_functions_admin, pgbouncer TO postgres WITH ADMIN OPTION;' || true
-  docker exec "$CONTAINER_ID" psql -U supabase_admin -d mk9_backup_restore -c 'GRANT USAGE ON SCHEMA public TO postgres; GRANT ALL ON DATABASE mk9_backup_restore TO postgres; GRANT supabase_admin, supabase_auth_admin, supabase_storage_admin, supabase_functions_admin, pgbouncer TO postgres WITH ADMIN OPTION;' || true
-  docker cp "$ROOT/export/database.dump" "$CONTAINER_ID:/tmp/database.dump"
-fi
+CONTAINER_ID="$(echo "$CONTAINER_MATCHES" | head -n 1)"
+echo "Disposable database container ID verified: $CONTAINER_ID"
+
+docker exec "$CONTAINER_ID" psql -U supabase_admin -d postgres -c 'ALTER ROLE postgres WITH SUPERUSER; CREATE ROLE pgbouncer; GRANT supabase_admin, supabase_auth_admin, supabase_storage_admin, supabase_functions_admin, pgbouncer TO postgres WITH ADMIN OPTION;' || true
+docker exec "$CONTAINER_ID" psql -U supabase_admin -d mk9_backup_restore -c 'GRANT USAGE ON SCHEMA public TO postgres; GRANT ALL ON DATABASE mk9_backup_restore TO postgres; GRANT supabase_admin, supabase_auth_admin, supabase_storage_admin, supabase_functions_admin, pgbouncer TO postgres WITH ADMIN OPTION;' || true
+docker cp "$ROOT/export/database.dump" "$CONTAINER_ID:/tmp/database.dump"
 
 # Filter out Supabase internal roles from roles.sql before local restore
 node scripts/filter-roles.mjs "$ROOT/export/roles.sql" "$ROOT/restore/roles-filtered.sql"
@@ -131,6 +136,10 @@ docker exec "$CONTAINER_ID" rm -f /tmp/database.dump || true
 PGPASSWORD=postgres psql 'postgresql://postgres:postgres@127.0.0.1:54322/mk9_backup_restore?sslmode=disable' -v ON_ERROR_STOP=1 --quiet --tuples-only --no-align --file=scripts/backup-inventory.sql > "$ROOT/restore/inventory-after.json" 2> "$ROOT/logs/inventory-restore.log" || (cat "$ROOT/logs/inventory-restore.log" >&2 && exit 1)
 node scripts/compare-inventory.mjs "$ROOT/export/inventory-before.json" "$ROOT/restore/inventory-after.json"
 echo 'Disposable PostgreSQL database restore verified independently in database mk9_backup_restore.'
+
+# Reconcile database migration history against repository migrations bundle
+node scripts/reconcile-migrations.mjs "$ROOT/export/migration-history-data.sql" "$ROOT/export/migrations-bundle/manifest.json" "$ROOT/export/migrations-bundle"
+
 node scripts/production-storage-backup.mjs verify "$ROOT/export/storage"
 
 # Rebuild disposable Storage API and verify object bytes
