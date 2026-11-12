@@ -75,21 +75,41 @@ Para executar o workflow, o repositório no GitHub deve possuir o Environment **
 
 ---
 
-## 3. Estratégia de Execução do Workflow (Sem Merge de Código na `main`)
+## 3. Arquitetura de Proteção do Workflow e Código Executado (Missões 57.9 e 57.10)
 
-No GitHub Actions, um workflow disparado via `workflow_dispatch` precisa ter seu arquivo YAML presente na branch padrão (`main`) para que a interface web ou CLI o reconheça e permita selecionar qualquer branch de destino.
+### A. Diagnóstico da Vulnerabilidade de Modificação de Workflow
+No modelo do GitHub Actions com `workflow_dispatch`:
+- Quando um workflow é disparado selecionando uma branch de desenvolvimento (ex.: `codex/m57.2-production-backup-workflow`), o GitHub Actions lê e executa a definição do arquivo YAML **da própria branch selecionada**.
+- **Vulnerabilidade Identificada:** Mesmo que o step `actions/checkout` aponte para um commit imutável, se o arquivo YAML puder ser alterado na branch de desenvolvimento sem revisão, um autor mal-intencionado poderia modificar os passos anteriores ou posteriores (por exemplo, injetando comandos arbitrários que imprimem ou transmitem secrets nos steps onde `secrets.SUPABASE_DB_URL` é injetado).
+- Portanto, **proteger o código dos scripts não é suficiente se a definição do próprio workflow na branch não for protegida com igual rigor**.
 
-### Análise de Opções e Impacto no Vercel:
+### B. Arquitetura de Defesa em Profundidade Proposta
+Para garantir que **tanto o workflow quanto os scripts executados** sejam previamente auditados e aprovados, adota-se uma arquitetura em 3 camadas de blindagem:
 
-* **Opção 1 — Registro Seguro Exclusivo do Workflow na `main` (Estratégia Recomendada):**
-  - **Procedimento:** Criar um PR ou commit restrito na `main` contendo **exclusivamente** o arquivo de workflow `.github/workflows/supabase-production-backup.yml`, sem scripts, código, pacotes npm ou migrations.
-  - **Análise de Risco de Deploy no Vercel:** O Vercel monitora por padrão a branch de produção (`main`). Contudo, commits que alteram unicamente arquivos dentro de `.github/` não afetam os arquivos de build da aplicação (como `src/`, `package.json`, etc.). Mesmo se um trigger de build do Vercel for avaliado, ele detectará ausência de alterações de código ou poderá ser ignorado pelo build filter do Vercel. Mais importante: como nenhuma migration ou funcionalidade é incluída, o risco de deploy de aplicação ou regressão é nulo.
-  - **Segurança de Execução:** Como o workflow contém a guarda explícita `if: github.ref == 'refs/heads/codex/m57.2-production-backup-workflow'`, qualquer tentativa acidental de disparar o workflow apontando para a `main` é imediatamente ignorada pelo runner.
-  - **Vantagem:** Permite o disparo limpo, auditado e reproduzível pelo GitHub Actions selecionando a branch de trabalho isolada.
-* **Opção 2 — Execução Local Assistida via Script (Sem GitHub Actions):**
-  - **Procedimento:** Executar o script `mk9-supabase-production-backup.sh` em máquina local segura com Docker, injetando as variáveis via ambiente local.
-  - **Vantagem:** Zero alterações no GitHub.
-  - **Desvantagem:** Depende de ambiente Docker local e conexão da máquina de desenvolvimento com o Supabase.
+1. **Camada 1 — Workflow Gravado em Branch Protegida (`main`):**
+   - O arquivo `.github/workflows/supabase-production-backup.yml` que contém os steps, as injeções de secrets e a chamada dos scripts deve residir na branch padrão (`main`).
+   - A branch `main` possui proteção nativa do GitHub (exigência de Pull Request, revisões mínimas, verificação de status e proibição de push direto).
+   - O workflow na `main` possui a guarda imutável de checkout fixada no commit SHA aprovado:
+     ```yaml
+     - name: Check out isolated production backup implementation
+       uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+       with:
+         ref: ${{ vars.APPROVED_COMMIT_SHA || '8926bb8751383a3543eff6ae0674e2116f9ab6cb' }}
+         persist-credentials: false
+     ```
+   - O workflow define explicitamente os comandos a serem executados (`node scripts/production-preflight.mjs`, `bash scripts/mk9-supabase-production-backup.sh`), impedindo qualquer injeção dinâmica de novos comandos.
+
+2. **Camada 2 — Código e Scripts Imutáveis por Commit SHA:**
+   - O runner monta no disco exclusivamente o conteúdo do commit SHA fixado.
+   - Qualquer push subsequente na branch `codex/m57.2-production-backup-workflow` é totalmente ignorado pela execução do checkout.
+   - O script `production-preflight.mjs` valida via `git rev-parse HEAD` se os arquivos no disco correspondem exatamente ao SHA aprovado (40 caracteres hexadecimais), abortando imediatamente em caso de divergência (`COMMIT_SHA_MISMATCH`).
+
+3. **Camada 3 — Governança de Acesso via GitHub Environment (`production-backup`):**
+   - Os secrets de produção (`SUPABASE_DB_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `BACKUP_GPG_PASSPHRASE`) ficam armazenados exclusivamente no GitHub Environment `production-backup`.
+   - Regras obrigatórias do Environment:
+     - **Required Reviewers:** Todo disparo de workflow para este Environment exige autorização manual de pelo menos um mantenedor credenciado antes que o job inicie e receba os secrets.
+     - **Deployment Branch Policy:** Acesso concedido exclusivamente quando o workflow for executado a partir de branches autorizadas.
+     - **Environment Variable `APPROVED_COMMIT_SHA`:** Permite que o revisor atualize o SHA aprovado no painel do GitHub sem precisar alterar código.
 
 ---
 

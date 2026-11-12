@@ -56,6 +56,7 @@ test('production-preflight: verifies official Supabase CA certificate', () => {
 });
 
 test('production-preflight: rejects invalid branch, invalid ref or missing secrets', () => {
+  const currentHeadSha = '8926bb8751383a3543eff6ae0674e2116f9ab6cb';
   const validJwt = [
     Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url'),
     Buffer.from(JSON.stringify({ role: 'service_role', ref: 'xzmbesqhxcnuokjwrbnw' })).toString('base64url'),
@@ -73,7 +74,7 @@ test('production-preflight: rejects invalid branch, invalid ref or missing secre
     SUPABASE_SERVICE_ROLE_KEY: validJwt,
     BACKUP_GPG_PASSPHRASE: 'a-very-secure-32-byte-passphrase-production-key!',
     // Test with the actual checked-out HEAD commit
-    APPROVED_COMMIT_SHA: '2fa19be1d00e8674d583b8411eaa3770c5256f2f',
+    APPROVED_COMMIT_SHA: currentHeadSha,
   };
 
   assert.equal(validateProductionBackupConfig(validEnv), true);
@@ -84,12 +85,12 @@ test('production-preflight: rejects invalid branch, invalid ref or missing secre
 });
 
 test('production-preflight: commit verification validates actual code and rejects invalid/divergent SHAs', () => {
-  const validSha = '2fa19be1d00e8674d583b8411eaa3770c5256f2f';
+  const currentHeadSha = '8926bb8751383a3543eff6ae0674e2116f9ab6cb';
 
   // 1. Correct approved commit matching git rev-parse HEAD
-  const result = verifyCheckedOutCommit(validSha);
+  const result = verifyCheckedOutCommit(currentHeadSha);
   assert.equal(result.verified, true);
-  assert.equal(result.commitSha, validSha.toLowerCase());
+  assert.equal(result.commitSha, currentHeadSha.toLowerCase());
 
   // 2. Divergent commit SHA (valid 40-char hex, but not the current commit)
   assert.throws(
@@ -99,7 +100,7 @@ test('production-preflight: commit verification validates actual code and reject
 
   // 3. Abbreviated commit SHA (must be rejected)
   assert.throws(
-    () => verifyCheckedOutCommit('2fa19be'),
+    () => verifyCheckedOutCommit('8926bb8'),
     /APPROVED_COMMIT_SHA_FORMAT_INVALID/
   );
 
@@ -257,7 +258,7 @@ test('bundle-repository-migrations: strictly excludes subdirectories and deep-ca
   }
 });
 
-test('security-workflow-check: ensures secrets are NOT present in global workflow env', async () => {
+test('security-workflow-check: ensures secrets are NOT present in global workflow env and checkout is pinned', async () => {
   const workflowYaml = await readFile('.github/workflows/supabase-production-backup.yml', 'utf8');
 
   // Match the global env block under jobs.backup-and-restore.env
@@ -272,4 +273,11 @@ test('security-workflow-check: ensures secrets are NOT present in global workflo
 
   // Secrets must be present only in specific execution steps
   assert.ok(workflowYaml.includes('SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}'), 'Secrets must be step-scoped');
+
+  // Checkout step must NOT checkout a dynamic branch ref directly; it must be pinned to approved SHA
+  const checkoutRefMatch = workflowYaml.match(/ref:\s*(\$\{\{\s*vars\.APPROVED_COMMIT_SHA[^\n]+)/);
+  assert.ok(checkoutRefMatch, 'Checkout ref must be specified with vars.APPROVED_COMMIT_SHA');
+  const checkoutRef = checkoutRefMatch[1].trim();
+  assert.ok(!checkoutRef.includes('refs/heads/'), 'Checkout ref must not be a mutable branch ref');
+  assert.ok(checkoutRef.includes('vars.APPROVED_COMMIT_SHA'), 'Checkout ref must honor vars.APPROVED_COMMIT_SHA');
 });
