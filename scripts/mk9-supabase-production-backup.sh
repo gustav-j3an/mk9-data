@@ -94,8 +94,11 @@ node scripts/compare-inventory.mjs "$ROOT/export/inventory-before.json" "$ROOT/e
 
 # Restore and check in a fresh, disposable Supabase PostgreSQL 17 stack. No remote URL is mounted into it.
 STAGE=disposable-restore
-# Generate ephemeral stack project_id and cryptographic nonce to unambiguously bind the disposable container
-DISPOSABLE_STACK_NONCE="$(node -e 'import("node:crypto").then(c => console.log(c.randomBytes(16).toString("hex")))')"
+# Generate ephemeral stack project_id and cryptographic nonce to unambiguously bind the disposable container.
+# Supabase CLI 3.0.0 truncates project names to at most 40 characters when naming Docker Compose containers.
+# With prefix 'mk9_restore_' (12 chars), exactly 28 hex chars (14 bytes = 112 bits of entropy) guarantees
+# that DISPOSABLE_PROJECT_ID is exactly 40 characters and is never truncated by the CLI or Docker Compose.
+DISPOSABLE_STACK_NONCE="$(node -e 'import("node:crypto").then(c => console.log(c.randomBytes(14).toString("hex")))')"
 DISPOSABLE_PROJECT_ID="mk9_restore_${DISPOSABLE_STACK_NONCE}"
 DISPOSABLE_STACK_DIR="$ROOT/${DISPOSABLE_PROJECT_ID}"
 mkdir -p "$DISPOSABLE_STACK_DIR"
