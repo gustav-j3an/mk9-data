@@ -1,0 +1,71 @@
+name: MK9 DATE — M38 Homologation Apply
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_ref:
+        description: Supabase project reference (must be homologation tafjceemuetqjyngresg)
+        required: true
+        type: string
+        default: tafjceemuetqjyngresg
+      confirmation:
+        description: Exact confirmation string required for M38 execution
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mk9-homologation-m38-apply
+  cancel-in-progress: false
+
+jobs:
+  apply-m38:
+    if: github.ref == 'refs/heads/codex/m50.1-m38-homolog-apply'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: homologation-backup
+    env:
+      GITHUB_REF: ${{ github.ref }}
+      INPUT_PROJECT_REF: ${{ inputs.project_ref }}
+      INPUT_CONFIRMATION: ${{ inputs.confirmation }}
+      SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+      SUPABASE_POOLER_HOST: ${{ vars.SUPABASE_POOLER_HOST }}
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+    steps:
+      - name: Check out isolated M38 apply branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: codex/m50.1-m38-homolog-apply
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22.16.0'
+
+      - name: Install PostgreSQL 17 client
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo install -d -m 0755 /usr/share/keyrings
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /usr/share/keyrings/postgresql.gpg
+          echo 'deb [signed-by=/usr/share/keyrings/postgresql.gpg] https://apt.postgresql.org/pub/repos/apt noble-pgdg main' | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-17
+          psql --version | grep -q '^psql (PostgreSQL) 17\.'
+
+      - name: Run unit safety tests
+        shell: bash
+        run: |
+          node --test scripts/safe-m38-apply.test.mjs
+          node --test scripts/safe-homolog-executor.test.mjs
+
+      - name: Execute controlled M38 application
+        shell: bash
+        run: |
+          node -e '
+            import { executeM38HomologationApply } from "./scripts/safe-m38-apply.mjs";
+            executeM38HomologationApply(process.env);
+          '
