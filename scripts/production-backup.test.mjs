@@ -5,13 +5,18 @@ import path from 'node:path';
 import {
   PRODUCTION_REF,
   ALLOWED_BACKUP_BRANCH,
+  APPROVED_BACKUP_COMMIT_SHA,
   SUPABASE_CA_CERT_PATH,
   SUPABASE_CA_SHA256,
   normalizeProductionPoolerUrl,
   inspectProductionTlsPolicy,
   parseProductionPoolerUrl,
 } from './production-pooler-connection.mjs';
-import { validateProductionBackupConfig, verifySupabaseCaCertificate } from './production-preflight.mjs';
+import {
+  validateProductionBackupConfig,
+  verifySupabaseCaCertificate,
+  verifyCheckedOutCommit,
+} from './production-preflight.mjs';
 import {
   assertSourceTarget,
   assertLocalRestoreTarget,
@@ -67,6 +72,8 @@ test('production-preflight: rejects invalid branch, invalid ref or missing secre
     SUPABASE_DB_URL: 'postgresql://postgres.xzmbesqhxcnuokjwrbnw:secret@aws-0-sa-east-1.pooler.supabase.com:5432/postgres',
     SUPABASE_SERVICE_ROLE_KEY: validJwt,
     BACKUP_GPG_PASSPHRASE: 'a-very-secure-32-byte-passphrase-production-key!',
+    // Test with the actual checked-out HEAD commit
+    APPROVED_COMMIT_SHA: '2fa19be1d00e8674d583b8411eaa3770c5256f2f',
   };
 
   assert.equal(validateProductionBackupConfig(validEnv), true);
@@ -74,6 +81,42 @@ test('production-preflight: rejects invalid branch, invalid ref or missing secre
   assert.throws(() => validateProductionBackupConfig({ ...validEnv, GITHUB_REF: 'refs/heads/main' }), /BRANCH_NOT_ALLOWED/);
   assert.throws(() => validateProductionBackupConfig({ ...validEnv, INPUT_PROJECT_REF: 'tafjceemuetqjyngresg' }), /PROJECT_REF_MISMATCH/);
   assert.throws(() => validateProductionBackupConfig({ ...validEnv, INPUT_CONFIRM_ARTIFACT_ACCESS: 'false' }), /ARTIFACT_ACCESS_CONFIRMATION_REQUIRED/);
+});
+
+test('production-preflight: commit verification validates actual code and rejects invalid/divergent SHAs', () => {
+  const validSha = '2fa19be1d00e8674d583b8411eaa3770c5256f2f';
+
+  // 1. Correct approved commit matching git rev-parse HEAD
+  const result = verifyCheckedOutCommit(validSha);
+  assert.equal(result.verified, true);
+  assert.equal(result.commitSha, validSha.toLowerCase());
+
+  // 2. Divergent commit SHA (valid 40-char hex, but not the current commit)
+  assert.throws(
+    () => verifyCheckedOutCommit('1111111111111111111111111111111111111111'),
+    /COMMIT_SHA_MISMATCH/
+  );
+
+  // 3. Abbreviated commit SHA (must be rejected)
+  assert.throws(
+    () => verifyCheckedOutCommit('2fa19be'),
+    /APPROVED_COMMIT_SHA_FORMAT_INVALID/
+  );
+
+  // 4. Branch reference or tag name (must be rejected)
+  assert.throws(
+    () => verifyCheckedOutCommit('codex/m57.2-production-backup-workflow'),
+    /APPROVED_COMMIT_SHA_FORMAT_INVALID/
+  );
+  assert.throws(
+    () => verifyCheckedOutCommit('main'),
+    /APPROVED_COMMIT_SHA_FORMAT_INVALID/
+  );
+
+  // 5. Empty or malformed input
+  assert.throws(() => verifyCheckedOutCommit(''), /APPROVED_COMMIT_SHA_FORMAT_INVALID/);
+  assert.throws(() => verifyCheckedOutCommit(null), /APPROVED_COMMIT_SHA_FORMAT_INVALID/);
+  assert.throws(() => verifyCheckedOutCommit('not-a-valid-sha-at-all-xyz!'), /APPROVED_COMMIT_SHA_FORMAT_INVALID/);
 });
 
 test('production-storage-backup: path resolution and target guards', () => {

@@ -112,21 +112,37 @@ No GitHub Actions, um workflow disparado via `workflow_dispatch` precisa ter seu
 
 ---
 
-## 5. Estratégia para Fixar o Commit Executado (Imutabilidade de Execução)
+## 5. Mecanismo de Fixação do Commit e Imutabilidade de Execução (Missão 57.9)
 
-Para garantir que a execução do backup no GitHub Actions utilize exatamente a versão auditada e aprovada, sem risco de commits adicionais ou alterações inesperadas na branch:
-1. **Fixação por Commit SHA:**
-   - No workflow `.github/workflows/supabase-production-backup.yml`, o step `Check out this implementation branch` pode receber o SHA específico revisado ou um input opcional `commit_sha` no `workflow_dispatch`.
-   - Exemplo:
+Para garantir que a execução do backup no GitHub Actions utilize rigorosamente o código previamente auditado e aprovado, impedindo que alterações posteriores na branch de desenvolvimento sejam executadas automaticamente contra a produção:
+
+### A. Duplo Bloqueio de Imutabilidade:
+1. **Checkout Fixado no Commit SHA Completo:**
+   - No workflow `.github/workflows/supabase-production-backup.yml`, a action `actions/checkout` não utiliza a referência mutável da branch (`HEAD`), mas sim o hash completo de 40 caracteres hexadecimais:
      ```yaml
      - name: Check out this implementation branch
        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
        with:
-         ref: ${{ inputs.commit_sha || 'codex/m57.2-production-backup-workflow' }}
+         ref: ${{ vars.APPROVED_COMMIT_SHA || '2fa19be1d00e8674d583b8411eaa3770c5256f2f' }}
          persist-credentials: false
      ```
-2. **Validação no Preflight:**
-   - O script `production-preflight.mjs` pode validar se o commit em execução (`process.env.GITHUB_SHA`) corresponde exatamente ao commit aprovado pelo conselho técnico antes de permitir o avanço do pipeline.
+2. **Validação Ativa do Código Efetivamente Executado (Preflight Gate):**
+   - No step `Run preflight and security checks`, a função `verifyCheckedOutCommit()` em `scripts/production-preflight.mjs` consulta diretamente o repositório local montado pelo runner através de `git rev-parse HEAD`.
+   - **Rejeição Estrita:**
+     - Rejeita SHAs abreviados (ex.: `2fa19be`).
+     - Rejeita nomes de branches ou tags (ex.: `codex/m57.2-production-backup-workflow`, `main`).
+     - Rejeita formatos não hexadecimais ou vazios.
+     - Lança erro crítico `COMMIT_SHA_MISMATCH` se o commit real no disco do runner divergir do commit SHA aprovado.
+
+### B. Procedimento para Atualizar o Commit Aprovado após Revisão de Código:
+Quando uma nova melhoria ou ajuste na infraestrutura de backup for auditado e aprovado pelo conselho técnico:
+1. **Obtenção do novo SHA:** Identificar o hash completo de 40 caracteres do commit aprovado na branch (ex.: `git rev-parse HEAD`).
+2. **Opção Recomendada — Via GitHub Environment Variable (Zero alteração de arquivos):**
+   - Acessar *Settings > Environments > production-backup > Environment variables*.
+   - Atualizar a variável `APPROVED_COMMIT_SHA` com o novo hash completo de 40 caracteres.
+   - Como o Environment exige **Required Reviewers**, qualquer alteração nas variáveis ou execução do workflow requer autorização manual do revisor designado.
+3. **Opção Alternativa — No Repositório:**
+   - Atualizar a constante `APPROVED_BACKUP_COMMIT_SHA` em `scripts/production-pooler-connection.mjs` e o fallback no workflow YAML, submetendo novo commit revisado.
 
 ---
 
@@ -141,7 +157,7 @@ Se a execução do workflow for interrompida pelo validador com o erro `REGISTER
 
 ---
 
-## 5. Retenção, Cotas e Limites do GitHub Actions
+## 7. Retenção, Cotas e Limites do GitHub Actions
 
 1. **Cota de Minutos:**
    - Em repositórios públicos, o GitHub Actions oferece execução gratuita ilimitada de runners padrão (`ubuntu-latest` / `ubuntu-24.04`), respeitando o limite de concorrência simultânea.

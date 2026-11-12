@@ -1,13 +1,50 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import {
   ALLOWED_BACKUP_BRANCH,
+  APPROVED_BACKUP_COMMIT_SHA,
   PRODUCTION_REF,
   parseProductionPoolerUrl,
   SUPABASE_CA_CERT_PATH,
   SUPABASE_CA_SHA256,
 } from './production-pooler-connection.mjs';
+
+/**
+ * Validates the currently checked-out Git commit against the approved commit SHA.
+ * Rejects abbreviated SHAs, branch names, tags, or unapproved commit SHAs.
+ */
+export function verifyCheckedOutCommit(approvedSha = APPROVED_BACKUP_COMMIT_SHA, targetDir = process.cwd()) {
+  const fullShaRegex = /^[0-9a-f]{40}$/i;
+  if (!approvedSha || typeof approvedSha !== 'string' || !fullShaRegex.test(approvedSha.trim())) {
+    throw new Error('APPROVED_COMMIT_SHA_FORMAT_INVALID: Approved commit must be a full 40-character hex SHA');
+  }
+
+  let actualSha;
+  try {
+    actualSha = execFileSync('git', ['rev-parse', 'HEAD'], {
+      cwd: targetDir,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
+  } catch (err) {
+    throw new Error(`EXECUTION_COMMIT_DETECTION_FAILED: ${err.message}`);
+  }
+
+  if (!fullShaRegex.test(actualSha)) {
+    throw new Error(`EXECUTION_COMMIT_SHA_MALFORMED: "${actualSha}" is not a valid 40-character hex SHA`);
+  }
+
+  if (actualSha.toLowerCase() !== approvedSha.trim().toLowerCase()) {
+    throw new Error(`COMMIT_SHA_MISMATCH: checked out commit "${actualSha}" does not match approved commit "${approvedSha}"`);
+  }
+
+  return {
+    verified: true,
+    commitSha: actualSha.toLowerCase(),
+  };
+}
 
 export function verifySupabaseCaCertificate(certRelativePath = SUPABASE_CA_CERT_PATH) {
   const resolved = path.resolve(certRelativePath);
@@ -58,6 +95,8 @@ export function validateProductionBackupConfig(env) {
     throw new Error('PASSPHRASE_INVALID');
   }
   if (env.INPUT_CONFIRM_ARTIFACT_ACCESS !== 'true') throw new Error('ARTIFACT_ACCESS_CONFIRMATION_REQUIRED');
+  const approvedSha = env.APPROVED_COMMIT_SHA || APPROVED_BACKUP_COMMIT_SHA;
+  verifyCheckedOutCommit(approvedSha);
   verifySupabaseCaCertificate();
   parseProductionPoolerUrl(env.SUPABASE_DB_URL, env.SUPABASE_POOLER_HOST);
   return true;
