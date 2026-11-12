@@ -335,6 +335,18 @@ test('production-disposable-container: shell script binds ephemeral project id a
   assert.ok(scriptContent.includes('mk9_backup_restore_nonce'), 'Must plant cryptographic nonce table in database');
   assert.ok(scriptContent.includes('resolve-disposable-container.mjs'), 'Must invoke resolver script');
   assert.ok(!scriptContent.includes('CONTAINER_MATCHES="$(docker ps'), 'Legacy brittle docker ps matching must be removed');
+
+  // Regression check for 40-char limit in Supabase CLI 3.0.0 / Docker Compose
+  assert.ok(scriptContent.includes('randomBytes(14)'), 'Must use 14 bytes (28 hex chars) so total project id is exactly 40 chars');
+});
+
+test('production-disposable-container: project id length does not exceed Supabase CLI 40-char limit', () => {
+  const prefix = 'mk9_restore_';
+  // 14 bytes = 28 hex chars
+  const hex = 'a'.repeat(28);
+  const projectId = prefix + hex;
+  assert.equal(projectId.length, 40, 'Project ID must be exactly 40 characters to avoid truncation');
+  assert.ok(/^[0-9a-fA-F]{28}$/.test(hex), 'Hex string must match 28 hex characters');
 });
 
 

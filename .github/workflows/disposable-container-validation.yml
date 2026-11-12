@@ -1,0 +1,137 @@
+name: MK9 disposable database container validation (isolated)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-disposable-container:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out isolated repository branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22.16.0'
+
+      - name: Install PostgreSQL 17 client and Docker check
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo install -d -m 0755 /usr/share/keyrings
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /usr/share/keyrings/postgresql.gpg
+          echo 'deb [signed-by=/usr/share/keyrings/postgresql.gpg] https://apt.postgresql.org/pub/repos/apt noble-pgdg main' | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-17
+          docker --version
+
+      - name: Install pinned Supabase CLI 3.0.0
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          curl -fsSL https://github.com/supabase/cli/releases/download/v3.0.0/supabase_3.0.0_linux_amd64.tar.gz -o "$RUNNER_TEMP/supabase-cli.tar.gz"
+          tar -xzf "$RUNNER_TEMP/supabase-cli.tar.gz" -C "$RUNNER_TEMP" supabase
+          sudo install "$RUNNER_TEMP/supabase" /usr/local/bin/supabase
+          test "$(supabase --version)" = "3.0.0"
+
+      - name: Run disposable container identity and nonce validation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          echo "=== Executing isolated disposable container identity validation ==="
+
+          # 1. Generate unique nonce and project id
+          # Supabase CLI 3.0.0 truncates project names to at most 40 characters in container naming.
+          # 14 bytes = 28 hex chars + 12 prefix chars = exactly 40 chars (112 bits entropy).
+          NONCE="$(node -e 'import("node:crypto").then(c => console.log(c.randomBytes(14).toString("hex")))')"
+          PROJECT_ID="mk9_restore_${NONCE}"
+          STACK_DIR="$RUNNER_TEMP/stacks/${PROJECT_ID}"
+          mkdir -p "$STACK_DIR"
+
+          echo "Initializing Supabase stack in dedicated directory: $STACK_DIR"
+          (cd "$STACK_DIR" && supabase init --force >/dev/null)
+
+          sed -i 's/^major_version = .*/major_version = 17/' "$STACK_DIR/supabase/config.toml"
+          sed -i "s/^project_id = .*/project_id = \"${PROJECT_ID}\"/" "$STACK_DIR/supabase/config.toml"
+
+          echo "Starting isolated Supabase stack..."
+          (cd "$STACK_DIR" && supabase start -x realtime,imgproxy,mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor >/dev/null)
+
+          cleanup_stack() {
+            echo "Stopping disposable Supabase stack..."
+            (cd "$STACK_DIR" && supabase stop --no-backup >/dev/null 2>&1) || true
+            rm -rf "$RUNNER_TEMP/stacks"
+          }
+          trap cleanup_stack EXIT
+
+          # 2. Inspect Docker containers to verify name and labels created by Supabase CLI 3.0.0
+          echo "Inspecting Docker containers..."
+          EXPECTED_NAME="supabase_db_${PROJECT_ID}"
+          MATCHED_CONTAINER_ID="$(docker ps --filter "name=^/${EXPECTED_NAME}$" --format '{{.ID}}')"
+          
+          if [ -z "$MATCHED_CONTAINER_ID" ]; then
+            echo "FAILED: Container with expected name '${EXPECTED_NAME}' not found!" >&2
+            echo "All running containers:" >&2
+            docker ps --format 'table {{.ID}}\t{{.Names}}\t{{.Image}}' >&2
+            exit 1
+          fi
+          echo "SUCCESS: Container with expected name '${EXPECTED_NAME}' found: $MATCHED_CONTAINER_ID"
+
+          # Verify labels
+          CLI_LABEL="$(docker inspect --format '{{ index .Config.Labels "com.supabase.cli.project" }}' "$MATCHED_CONTAINER_ID")"
+          COMPOSE_LABEL="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project" }}' "$MATCHED_CONTAINER_ID")"
+          echo "com.supabase.cli.project: $CLI_LABEL"
+          echo "com.docker.compose.project: $COMPOSE_LABEL"
+
+          if [ "$CLI_LABEL" != "$PROJECT_ID" ]; then
+            echo "FAILED: CLI label mismatch. Expected '$PROJECT_ID', got '$CLI_LABEL'" >&2
+            exit 1
+          fi
+
+          # 3. Plant cryptographic nonce via loopback connection
+          echo "Planting cryptographic nonce into database..."
+          LOCAL_DB_URL="postgresql://postgres:postgres@127.0.0.1:54322/postgres?sslmode=disable"
+          PGPASSWORD=postgres psql "$LOCAL_DB_URL" -v ON_ERROR_STOP=1 -c "CREATE TABLE IF NOT EXISTS mk9_backup_restore_nonce (token text); INSERT INTO mk9_backup_restore_nonce VALUES ('${NONCE}');"
+
+          # 4. Resolve container using resolve-disposable-container.mjs
+          echo "Testing resolve-disposable-container.mjs with matching identity and nonce..."
+          RESOLVED_ID="$(node scripts/resolve-disposable-container.mjs "$PROJECT_ID" "$NONCE")"
+          echo "Resolved container ID: $RESOLVED_ID"
+
+          if [ -z "$RESOLVED_ID" ]; then
+            echo "FAILED: resolve-disposable-container.mjs failed to resolve container!" >&2
+            exit 1
+          fi
+
+          if ! docker ps -q --no-trunc | grep -q "^${RESOLVED_ID}"; then
+            # Check 12-char prefix
+            if [ "${MATCHED_CONTAINER_ID:0:12}" != "${RESOLVED_ID:0:12}" ]; then
+              echo "FAILED: Resolved container ID does not match running container ID!" >&2
+              exit 1
+            fi
+          fi
+          echo "SUCCESS: resolve-disposable-container.mjs verified matching container and nonce challenge."
+
+          # 5. Verify that foreign/mismatched project ID or invalid nonce is rejected
+          echo "Testing rejection of foreign project ID..."
+          if node scripts/resolve-disposable-container.mjs "mk9_restore_unrelated_stack" "$NONCE" >/dev/null 2>&1; then
+            echo "FAILED: Resolver accepted unrelated project ID!" >&2
+            exit 1
+          fi
+          echo "SUCCESS: Foreign project ID correctly rejected."
+
+          echo "Testing rejection of invalid nonce..."
+          if node scripts/resolve-disposable-container.mjs "$PROJECT_ID" "invalid_fake_nonce" >/dev/null 2>&1; then
+            echo "FAILED: Resolver accepted invalid nonce!" >&2
+            exit 1
+          fi
+          echo "SUCCESS: Invalid nonce correctly rejected."
+
+          echo "ALL REAL DOCKER VALIDATION CHECKS PASSED SUCCESSFULLY."
