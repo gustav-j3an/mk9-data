@@ -1,0 +1,111 @@
+name: Disposable Container Diagnostic Verification
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Verify zero production credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in SUPABASE_DB_URL SUPABASE_SERVICE_ROLE_KEY BACKUP_GPG_PASSPHRASE; do
+            if [ -n "${!name:-}" ]; then
+              echo "SECURITY ERROR: Production secret $name is present!" >&2
+              exit 1
+            fi
+          done
+          echo "No production credentials or secrets present."
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+
+      - name: Install pinned Supabase CLI v3.0.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL https://github.com/supabase/cli/releases/download/v3.0.0/supabase_3.0.0_linux_amd64.tar.gz -o "$RUNNER_TEMP/supabase-cli.tar.gz"
+          tar -xzf "$RUNNER_TEMP/supabase-cli.tar.gz" -C "$RUNNER_TEMP" supabase
+          sudo install "$RUNNER_TEMP/supabase" /usr/local/bin/supabase
+          test "$(supabase --version)" = "3.0.0"
+          echo "Supabase CLI 3.0.0 installed successfully."
+
+      - name: Test Approach A - Unique directory named as ephemeral project_id
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # 1. Generate unique project_id and nonce
+          TEST_NONCE="$(node -e 'import("node:crypto").then(c => console.log(c.randomBytes(16).toString("hex")))')"
+          TEST_PROJECT_ID="mk9_restore_${TEST_NONCE}"
+
+          echo "Testing Approach A with TEST_PROJECT_ID: $TEST_PROJECT_ID"
+
+          # 2. Create isolated stack directory named strictly after TEST_PROJECT_ID
+          STACK_ROOT="$RUNNER_TEMP/stacks/$TEST_PROJECT_ID"
+          mkdir -p "$STACK_ROOT"
+
+          # 3. Initialize supabase stack inside this directory
+          (cd "$STACK_ROOT" && supabase init --force)
+
+          # Verify generated config.toml location and contents
+          echo "Checking generated config.toml..."
+          test -f "$STACK_ROOT/supabase/config.toml"
+          grep "^project_id =" "$STACK_ROOT/supabase/config.toml"
+
+          # 4. Apply configurations
+          sed -i 's/^major_version = .*/major_version = 17/' "$STACK_ROOT/supabase/config.toml"
+          sed -i "s/^project_id = .*/project_id = \"${TEST_PROJECT_ID}\"/" "$STACK_ROOT/supabase/config.toml"
+          grep "^project_id =" "$STACK_ROOT/supabase/config.toml"
+          grep "^major_version =" "$STACK_ROOT/supabase/config.toml"
+
+          # 5. Start stack
+          echo "Starting Supabase stack..."
+          (cd "$STACK_ROOT" && supabase start -x realtime,imgproxy,mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor)
+
+          # 6. Inspect Docker containers created
+          echo "Inspecting running Docker containers..."
+          CONTAINER_LIST="$(docker ps --format '{{.ID}} | {{.Names}} | {{.Image}}')"
+          echo "$CONTAINER_LIST"
+
+          # 7. Plant nonce via local PostgreSQL URL on 127.0.0.1:54322
+          LOCAL_DB_URL="postgresql://postgres:postgres@127.0.0.1:54322/postgres?sslmode=disable"
+          PGPASSWORD=postgres psql "$LOCAL_DB_URL" -v ON_ERROR_STOP=1 -c "CREATE TABLE IF NOT EXISTS mk9_backup_restore_nonce (token text); INSERT INTO mk9_backup_restore_nonce VALUES ('${TEST_NONCE}');"
+          PGPASSWORD=postgres psql "$LOCAL_DB_URL" -v ON_ERROR_STOP=1 -c 'CREATE DATABASE mk9_backup_restore'
+
+          # 8. Run resolver verification script
+          echo "Executing resolve-disposable-container.mjs..."
+          RESOLVED_CONTAINER_ID="$(node scripts/resolve-disposable-container.mjs "$TEST_PROJECT_ID" "$TEST_NONCE")"
+          echo "Resolved container ID: $RESOLVED_CONTAINER_ID"
+          test -n "$RESOLVED_CONTAINER_ID"
+
+          # 9. Verify container details
+          RESOLVED_NAME="$(docker inspect --format '{{.Name}}' "$RESOLVED_CONTAINER_ID")"
+          RESOLVED_IMAGE="$(docker inspect --format '{{.Config.Image}}' "$RESOLVED_CONTAINER_ID")"
+          RESOLVED_CLI_LABEL="$(docker inspect --format '{{ index .Config.Labels "com.supabase.cli.project" }}' "$RESOLVED_CONTAINER_ID")"
+
+          echo "Sanitized verification results:"
+          echo "Matches expected name (supabase_db_$TEST_PROJECT_ID): $([ "$RESOLVED_NAME" = "/supabase_db_$TEST_PROJECT_ID" ] && echo true || echo false)"
+          echo "Matches expected CLI label ($TEST_PROJECT_ID): $([ "$RESOLVED_CLI_LABEL" = "$TEST_PROJECT_ID" ] && echo true || echo false)"
+          echo "Image provenance: $RESOLVED_IMAGE"
+
+          # 10. Execute command inside the resolved container
+          docker exec "$RESOLVED_CONTAINER_ID" psql -U supabase_admin -d postgres -c 'SELECT 1;'
+
+          echo "Approach A verified successfully!"
+
+          # Clean up stack
+          (cd "$STACK_ROOT" && supabase stop --no-backup)
