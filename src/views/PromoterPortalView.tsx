@@ -1038,9 +1038,14 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
 
       let visitData: Visit;
 
-      if (existingVisits && existingVisits.length > 0) {
-        // Reutilizar visita existente caso já tenha sido iniciada/criada hoje
-        visitData = existingVisits[0] as Visit;
+      // Se houver visita já iniciada para esta rota e data, verificar se está ativa (em andamento)
+      const reusableExisting = existingVisits && existingVisits.length > 0
+        ? findReusableActiveCheckInVisit(existingVisits as Visit[])
+        : undefined;
+
+      if (reusableExisting) {
+        // Reutilizar visita existente caso já esteja em andamento hoje
+        visitData = reusableExisting as Visit;
         onShowToast({
           title: 'Visita Retomada',
           message: `Visita já existente carregada para a loja ${route.loja?.nome || route.loja_codigo}.`,
@@ -1139,6 +1144,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
       setChecklist(createChecklistState(visitData.checklist_items));
 
       await loadPortalData();
+      setTimeout(() => document.getElementById('active-visit-section')?.scrollIntoView({ behavior: 'smooth' }), 250);
     } catch (err: any) {
       console.error('Erro ao iniciar visita:', err);
 
