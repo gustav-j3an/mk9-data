@@ -304,3 +304,15 @@ test('production-disposable-container: discovery logic filters candidate contain
   assert.equal(filtered[0].id, '111122223333');
 });
 
+test('production-disposable-container: shell script binds ephemeral project id and invokes resolver', async () => {
+  const scriptContent = await readFile('scripts/mk9-supabase-production-backup.sh', 'utf8');
+
+  // Must generate ephemeral stack nonce
+  assert.ok(scriptContent.includes('DISPOSABLE_STACK_NONCE='), 'Must generate ephemeral stack nonce');
+  assert.ok(scriptContent.includes('DISPOSABLE_PROJECT_ID='), 'Must define ephemeral project id');
+  assert.ok(scriptContent.includes('mk9_backup_restore_nonce'), 'Must plant cryptographic nonce table in database');
+  assert.ok(scriptContent.includes('resolve-disposable-container.mjs'), 'Must invoke resolver script');
+  assert.ok(!scriptContent.includes('CONTAINER_MATCHES="$(docker ps'), 'Legacy brittle docker ps matching must be removed');
+});
+
+
