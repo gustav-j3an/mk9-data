@@ -41,7 +41,7 @@ jobs:
         with:
           # Check out strictly pinned to the approved commit SHA (or environment variable if configured)
           # ensuring runtime immutability against subsequent branch pushes.
-          ref: ${{ vars.APPROVED_COMMIT_SHA || '2fa19be1d00e8674d583b8411eaa3770c5256f2f' }}
+          ref: ${{ vars.APPROVED_COMMIT_SHA || 'ae690a298d0b7ee5f0a6cc9720a275eace2a0a44' }}
           persist-credentials: false
 
       - name: Set up Node.js
@@ -51,7 +51,7 @@ jobs:
 
       - name: Run preflight and security checks
         env:
-          APPROVED_COMMIT_SHA: ${{ vars.APPROVED_COMMIT_SHA || '2fa19be1d00e8674d583b8411eaa3770c5256f2f' }}
+          APPROVED_COMMIT_SHA: ${{ vars.APPROVED_COMMIT_SHA || 'ae690a298d0b7ee5f0a6cc9720a275eace2a0a44' }}
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           BACKUP_GPG_PASSPHRASE: ${{ secrets.BACKUP_GPG_PASSPHRASE }}
@@ -82,6 +82,7 @@ jobs:
 
       - name: Export, restore-test, and encrypt production backup
         env:
+          APPROVED_COMMIT_SHA: ${{ vars.APPROVED_COMMIT_SHA || 'ae690a298d0b7ee5f0a6cc9720a275eace2a0a44' }}
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           BACKUP_GPG_PASSPHRASE: ${{ secrets.BACKUP_GPG_PASSPHRASE }}
