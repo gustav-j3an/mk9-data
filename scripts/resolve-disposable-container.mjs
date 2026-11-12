@@ -25,7 +25,7 @@ export function isAuthorizedPostgresImage(image) {
   return /^(?:public\.ecr\.aws\/)?supabase\/postgres:[a-zA-Z0-9_.-]+$/.test(image.trim());
 }
 
-export function verifyCandidateContainerMetadata({
+export function inspectCandidateContainerDiagnostics({
   containerId,
   containerName,
   image,
@@ -33,50 +33,112 @@ export function verifyCandidateContainerMetadata({
   expectedProjectId,
 }) {
   const hexPattern = /^[0-9a-fA-F]{12,64}$/;
-  if (!containerId || !hexPattern.test(containerId.trim())) {
-    return { valid: false, reason: 'INVALID_HEX_ID' };
-  }
+  const isHexValid = Boolean(containerId && hexPattern.test(containerId.trim()));
 
-  // Name check: must match supabase_db_<expectedProjectId>
   const normalizedName = (containerName || '').replace(/^\//, '');
-  if (normalizedName !== `supabase_db_${expectedProjectId}`) {
-    return { valid: false, reason: 'NAME_MISMATCH' };
-  }
+  const isNameMatch = normalizedName === `supabase_db_${expectedProjectId}`;
 
-  // Image check: must be official Supabase postgres image from Docker Hub or AWS ECR
-  if (!isAuthorizedPostgresImage(image)) {
-    return { valid: false, reason: 'IMAGE_UNTRUSTED' };
-  }
+  const isImageMatch = isAuthorizedPostgresImage(image);
 
-  // Label check: project labels if present must match expectedProjectId
   const cliProject = labels?.['com.supabase.cli.project'];
   const composeProject = labels?.['com.docker.compose.project'];
-  if (cliProject && cliProject !== expectedProjectId) {
-    return { valid: false, reason: 'CLI_PROJECT_LABEL_MISMATCH' };
-  }
-  if (composeProject && composeProject !== expectedProjectId) {
-    return { valid: false, reason: 'COMPOSE_PROJECT_LABEL_MISMATCH' };
+
+  // Project label is considered matching if it either matches expectedProjectId or is unset (not conflicting)
+  const isCliProjectMatch = !cliProject || cliProject === expectedProjectId;
+  const isComposeProjectMatch = !composeProject || composeProject === expectedProjectId;
+  const isLabelsMatch = isCliProjectMatch && isComposeProjectMatch;
+
+  let reason = 'APPROVED';
+  let valid = true;
+
+  if (!isHexValid) {
+    valid = false;
+    reason = 'INVALID_HEX_ID';
+  } else if (!isNameMatch) {
+    valid = false;
+    reason = 'NAME_MISMATCH';
+  } else if (!isImageMatch) {
+    valid = false;
+    reason = 'IMAGE_UNTRUSTED';
+  } else if (cliProject && cliProject !== expectedProjectId) {
+    valid = false;
+    reason = 'CLI_PROJECT_LABEL_MISMATCH';
+  } else if (composeProject && composeProject !== expectedProjectId) {
+    valid = false;
+    reason = 'COMPOSE_PROJECT_LABEL_MISMATCH';
   }
 
-  return { valid: true };
+  return {
+    valid,
+    reason,
+    isHexValid,
+    isNameMatch,
+    isImageMatch,
+    isCliProjectMatch,
+    isComposeProjectMatch,
+    isLabelsMatch,
+  };
 }
 
-export function filterVerifiedContainers(candidates, expectedProjectId) {
+export function verifyCandidateContainerMetadata({
+  containerId,
+  containerName,
+  image,
+  labels,
+  expectedProjectId,
+}) {
+  const diag = inspectCandidateContainerDiagnostics({
+    containerId,
+    containerName,
+    image,
+    labels,
+    expectedProjectId,
+  });
+
+  return {
+    valid: diag.valid,
+    reason: diag.reason,
+  };
+}
+
+export function filterVerifiedContainers(candidates, expectedProjectId, logger = console) {
   const verified = [];
+  const diagnostics = [];
+
   for (const candidate of candidates) {
-    const check = verifyCandidateContainerMetadata({
+    const diag = inspectCandidateContainerDiagnostics({
       containerId: candidate.id,
       containerName: candidate.name,
       image: candidate.image,
       labels: candidate.labels,
       expectedProjectId,
     });
-    if (check.valid) {
+
+    if (diag.valid) {
       verified.push(candidate);
     }
+
+    diagnostics.push({
+      reason: diag.reason,
+      isHexValid: diag.isHexValid,
+      isNameMatch: diag.isNameMatch,
+      isImageMatch: diag.isImageMatch,
+      isLabelsMatch: diag.isLabelsMatch,
+    });
   }
 
   if (verified.length !== 1) {
+    // Emit strictly sanitized diagnostic summary without exposing raw IDs, names, images, labels or tokens
+    logger.error(`[DISPOSABLE_CONTAINER_DIAGNOSTICS] Total inspected: ${candidates.length}, Approved: ${verified.length}`);
+    const summaryLimit = Math.min(diagnostics.length, 10);
+    for (let i = 0; i < summaryLimit; i++) {
+      const d = diagnostics[i];
+      logger.error(`[DISPOSABLE_CONTAINER_DIAGNOSTICS] Candidate #${i + 1}: reason=${d.reason} nameMatch=${d.isNameMatch} imageMatch=${d.isImageMatch} labelsMatch=${d.isLabelsMatch} hexValid=${d.isHexValid}`);
+    }
+    if (diagnostics.length > summaryLimit) {
+      logger.error(`[DISPOSABLE_CONTAINER_DIAGNOSTICS] (${diagnostics.length - summaryLimit} additional candidate(s) omitted)`);
+    }
+
     const count = verified.length;
     throw new Error(`DISPOSABLE_CONTAINER_RESOLUTION_FAILED: Expected exactly 1 verified disposable database container for project "${expectedProjectId}", found ${count}`);
   }

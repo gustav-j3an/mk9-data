@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   isAuthorizedPostgresImage,
+  inspectCandidateContainerDiagnostics,
   verifyCandidateContainerMetadata,
   filterVerifiedContainers,
   verifyDatabaseNonceMatch,
@@ -209,4 +210,110 @@ test('resolve-disposable-container: cenário 5 - nenhum container correspondente
     () => filterVerifiedContainers(emptyCandidates, expectedProjectId),
     /DISPOSABLE_CONTAINER_RESOLUTION_FAILED.*found 0/
   );
+});
+
+test('resolve-disposable-container: diagnóstico estruturado emite códigos precisos sem vazar secrets', () => {
+  const expectedProjectId = 'disposable_stack_secret_nonce_1234';
+  const secretRawToken = 'secret_nonce_1234';
+  const rawImage = 'public.ecr.aws/supabase/postgres:17.2.0.1';
+  const rawId = '77c8ec52dacd';
+
+  const mockCandidates = [
+    // Candidato 1: ID inválido
+    {
+      id: 'not-hex!',
+      name: `supabase_db_${expectedProjectId}`,
+      image: rawImage,
+      labels: { 'com.supabase.cli.project': expectedProjectId },
+    },
+    // Candidato 2: Nome divergente
+    {
+      id: '111122223333',
+      name: 'supabase_db_other_unrelated_stack',
+      image: rawImage,
+      labels: { 'com.supabase.cli.project': expectedProjectId },
+    },
+    // Candidato 3: Imagem não confiável
+    {
+      id: '222233334444',
+      name: `supabase_db_${expectedProjectId}`,
+      image: 'evil-registry.com/untrusted/postgres:17',
+      labels: { 'com.supabase.cli.project': expectedProjectId },
+    },
+    // Candidato 4: Label CLI divergente
+    {
+      id: '333344445555',
+      name: `supabase_db_${expectedProjectId}`,
+      image: rawImage,
+      labels: { 'com.supabase.cli.project': 'conflicting_project_id' },
+    },
+    // Candidato 5: Label Compose divergente
+    {
+      id: '444455556666',
+      name: `supabase_db_${expectedProjectId}`,
+      image: rawImage,
+      labels: {
+        'com.supabase.cli.project': expectedProjectId,
+        'com.docker.compose.project': 'conflicting_compose_project',
+      },
+    },
+  ];
+
+  const loggedMessages = [];
+  const mockLogger = {
+    error: (msg) => loggedMessages.push(msg),
+  };
+
+  assert.throws(
+    () => filterVerifiedContainers(mockCandidates, expectedProjectId, mockLogger),
+    /DISPOSABLE_CONTAINER_RESOLUTION_FAILED.*found 0/
+  );
+
+  // 1. Confirma que os diagnósticos estruturados foram emitidos
+  assert.ok(loggedMessages.length >= 6);
+  assert.ok(loggedMessages[0].includes('Total inspected: 5, Approved: 0'));
+
+  // 2. Confirma os códigos de rejeição e booleanos de cada candidato
+  assert.ok(loggedMessages[1].includes('reason=INVALID_HEX_ID'));
+  assert.ok(loggedMessages[1].includes('hexValid=false'));
+
+  assert.ok(loggedMessages[2].includes('reason=NAME_MISMATCH'));
+  assert.ok(loggedMessages[2].includes('nameMatch=false'));
+
+  assert.ok(loggedMessages[3].includes('reason=IMAGE_UNTRUSTED'));
+  assert.ok(loggedMessages[3].includes('imageMatch=false'));
+
+  assert.ok(loggedMessages[4].includes('reason=CLI_PROJECT_LABEL_MISMATCH'));
+  assert.ok(loggedMessages[4].includes('labelsMatch=false'));
+
+  assert.ok(loggedMessages[5].includes('reason=COMPOSE_PROJECT_LABEL_MISMATCH'));
+  assert.ok(loggedMessages[5].includes('labelsMatch=false'));
+
+  // 3. Confirma estritamente que nenhum dado bruto ou sensível foi vazado nos logs
+  const allLogs = loggedMessages.join('\n');
+  assert.ok(!allLogs.includes(secretRawToken), 'Token/nonce não deve constar nos logs');
+  assert.ok(!allLogs.includes(expectedProjectId), 'expectedProjectId não deve constar nos logs diagnósticos');
+  assert.ok(!allLogs.includes(rawImage), 'String da imagem não deve constar nos logs diagnósticos');
+  assert.ok(!allLogs.includes(rawId), 'ID do container não deve constar nos logs diagnósticos');
+  assert.ok(!allLogs.includes('conflicting_project_id'), 'Labels brutos não devem constar nos logs');
+  assert.ok(!allLogs.includes('conflicting_compose_project'), 'Labels de compose não devem constar nos logs');
+});
+
+test('resolve-disposable-container: inspectCandidateContainerDiagnostics retorna valores precisos para candidato aprovado', () => {
+  const projectId = 'mk9_valid_project_123';
+  const approved = {
+    containerId: 'aabbccddeeff',
+    containerName: `/supabase_db_${projectId}`,
+    image: 'public.ecr.aws/supabase/postgres:17.2.0.1',
+    labels: { 'com.supabase.cli.project': projectId },
+    expectedProjectId: projectId,
+  };
+
+  const diag = inspectCandidateContainerDiagnostics(approved);
+  assert.equal(diag.valid, true);
+  assert.equal(diag.reason, 'APPROVED');
+  assert.equal(diag.isHexValid, true);
+  assert.equal(diag.isNameMatch, true);
+  assert.equal(diag.isImageMatch, true);
+  assert.equal(diag.isLabelsMatch, true);
 });
