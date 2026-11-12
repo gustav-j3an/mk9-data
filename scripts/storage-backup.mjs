@@ -373,6 +373,7 @@ export async function restoreStorageLocal({ archiveDir, metadataSqlPath, localUr
   const quote = value => value == null ? 'NULL' : `'${String(value).replaceAll("'", "''")}'`;
   const jsonLiteral = value => value == null ? 'NULL::jsonb' : `${quote(JSON.stringify(value))}::jsonb`;
   const statements = [];
+  statements.push('ALTER TABLE storage.objects DISABLE TRIGGER update_objects_updated_at;');
   for (const bucket of manifest.buckets) {
     statements.push(`DO $restore$ DECLARE changed integer; BEGIN UPDATE storage.buckets SET created_at=${quote(bucket.created_at)}::timestamptz, updated_at=${quote(bucket.updated_at)}::timestamptz WHERE id=${quote(bucket.id ?? bucket.name)}; GET DIAGNOSTICS changed = ROW_COUNT; IF changed <> 1 THEN RAISE EXCEPTION 'restored bucket metadata missing'; END IF; END $restore$;`);
   }
@@ -381,6 +382,7 @@ export async function restoreStorageLocal({ archiveDir, metadataSqlPath, localUr
     if (!bucket) throw new Error('STORAGE_OBJECT_BUCKET_MISSING');
     statements.push(`DO $restore$ DECLARE changed integer; BEGIN UPDATE storage.objects SET id=${quote(item.id)}, created_at=${quote(item.created_at)}::timestamptz, updated_at=${quote(item.updated_at)}::timestamptz, last_accessed_at=${quote(item.last_accessed_at)}::timestamptz, metadata=${jsonLiteral(item.metadata)} WHERE bucket_id=${quote(bucket.id ?? bucket.name)} AND name=${quote(item.name)}; GET DIAGNOSTICS changed = ROW_COUNT; IF changed <> 1 THEN RAISE EXCEPTION 'restored object metadata missing'; END IF; END $restore$;`);
   }
+  statements.push('ALTER TABLE storage.objects ENABLE TRIGGER update_objects_updated_at;');
   if (!metadataSqlPath) throw new Error('RESTORE_METADATA_OUTPUT_REQUIRED');
   await writeFile(path.resolve(metadataSqlPath), `${statements.join('\n')}\n`, { flag: 'wx', mode: 0o600 });
   return checked;
