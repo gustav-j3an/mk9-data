@@ -163,6 +163,9 @@ export function assertStorageInventoryMatches(manifest, buckets, objects) {
         || !sameTimestamp(source.updated_at, restored.updated_at)
         || !sameTimestamp(source.last_accessed_at, restored.last_accessed_at)
         || JSON.stringify(stableJson(source.metadata)) !== JSON.stringify(stableJson(restored.metadata))) {
+      console.error('Storage object metadata mismatch details:');
+      console.error('  Source object:', JSON.stringify({ id: source.id, created_at: source.created_at, updated_at: source.updated_at, last_accessed_at: source.last_accessed_at, metadata: source.metadata }));
+      console.error('  Restored object:', JSON.stringify(restored ? { id: restored.id, created_at: restored.created_at, updated_at: restored.updated_at, last_accessed_at: restored.last_accessed_at, metadata: restored.metadata } : null));
       throw new Error('LOCAL_STORAGE_OBJECT_METADATA_MISMATCH');
     }
     const actualSize = Number(restored.size ?? restored.metadata?.size);
