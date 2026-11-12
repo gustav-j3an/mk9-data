@@ -57,6 +57,7 @@ import { filterPromoterAppointments, getMetricDisplayValue, getRegularizationCou
 import { getPromoterPortalViewStateKey, readPromoterPortalViewState, writePromoterPortalViewState } from '../utils/promoterPortalViewState';
 import { getScheduledRouteEligibility, getScheduledVisitAction, isRouteVisibleInOperationalHistory, isScheduledVisitActionRpcReady, type ScheduledVisitAction } from '../utils/scheduledVisitActions';
 import { canReviewOldOpenVisits, createRequestGate, findOwnOpenVisit, findReusableActiveCheckInVisit, formatOpenVisitConflictMessage, getOldOpenVisitCheckInBlockMessage, getOldOpenVisitsLabel, getPromoterOpenVisitAction, getStaleOpenVisits, isAnotherVisitInProgressError, isOpenVisitFromToday } from '../utils/visitCheckInConflict';
+import { getVisitStartErrorMessage } from '../utils/visitStartError';
 
 interface PromoterPortalViewProps {
   onNavigate: (screen: ScreenId) => void;
@@ -1002,6 +1003,15 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
 
     // Visitas vencidas serão encerradas no backend antes do novo check-in.
     // Uma visita ainda ativa hoje continua exigindo decisão explícita.
+    if (route.industria?.status !== 'ativo') {
+      onShowToast({
+        title: 'Indústria indisponível',
+        message: `A indústria ${route.industria?.nome || route.industria_codigo} está inativa ou não pôde ser confirmada. O check-in foi bloqueado.`,
+        type: 'warning'
+      });
+      return;
+    }
+
     if (activeVisit) {
       const isSameVisit = activeVisit.loja_codigo === route.loja_codigo && activeVisit.industria_codigo === route.industria_codigo;
       if (!isSameVisit) {
@@ -1040,7 +1050,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
 
       // Se houver visita já iniciada para esta rota e data, verificar se está ativa (em andamento)
       const reusableExisting = existingVisits && existingVisits.length > 0
-        ? findReusableActiveCheckInVisit(existingVisits as Visit[])
+        ? findReusableActiveCheckInVisit(existingVisits as Visit[], route.id)
         : undefined;
 
       if (reusableExisting) {
@@ -1114,7 +1124,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
               .eq('industria_codigo', route.industria_codigo)
               .eq('data_visita', todayStr);
 
-            const reusableVisit = findReusableActiveCheckInVisit((fallbackVisits || []) as Visit[]);
+            const reusableVisit = findReusableActiveCheckInVisit((fallbackVisits || []) as Visit[], route.id);
             if (reusableVisit) {
               visitData = reusableVisit;
               onShowToast({
@@ -1181,19 +1191,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
         return;
       }
 
-      let userMsg = 'Erro ao registrar check-in no servidor.';
-      if (err?.message) {
-        if (err.message.includes('row-level security') || err.code === '42501') {
-          userMsg = 'Acesso não autorizado pelas regras do sistema para esta matrícula.';
-        } else if (err.message.includes('foreign key') || err.code === '23503') {
-          userMsg = 'Dados da loja, indústria ou rota não encontrados no cadastro.';
-        } else if (err.message.includes('duplicate key') || err.code === '23505') {
-          userMsg = 'Já existe um registro de visita ativo para esta loja e data.';
-        } else {
-          // Sanitização de mensagem: evitar expor tokens, senhas ou URLs completas
-          userMsg = 'Não foi possível iniciar o atendimento. Tente novamente ou solicite apoio ao suporte.';
-        }
-      }
+      const userMsg = getVisitStartErrorMessage(err);
 
       onShowToast({
         title: 'Falha ao Iniciar Visita',

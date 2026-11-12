@@ -78,8 +78,15 @@ export function findOwnOpenVisit<T extends { promotor_matricula: string; status:
     && !('regularization_status' in visit && visit.regularization_status));
 }
 
-export function findReusableActiveCheckInVisit<T extends { status: string; regularization_status?: string | null }>(visits: T[]): T | undefined {
-  return visits.find(visit => visit.status === 'em_andamento' && !visit.regularization_status);
+export function findReusableActiveCheckInVisit<T extends {
+  status: string;
+  regularization_status?: string | null;
+  scheduled_date?: string | null;
+  rota_id?: string | null;
+}>(visits: T[], routeId?: string | null): T | undefined {
+  return visits.find(visit => visit.status === 'em_andamento'
+    && !visit.regularization_status
+    && (!visit.scheduled_date || !routeId || visit.rota_id === routeId));
 }
 
 export function isOpenVisitFromToday(visit: OperationalVisit, now: Date | string = new Date()): boolean {

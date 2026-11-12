@@ -114,6 +114,14 @@ test('check-in retry never reuses completed or administratively regularized visi
   assert.equal(findReusableActiveCheckInVisit([completed, regularized, openVisit])?.id, openVisit.id);
 });
 
+test('check-in retry does not resume a scheduled occurrence belonging to another route', () => {
+  const scheduledVisit = { ...openVisit, scheduled_date: '2026-11-11', rota_id: 'route-old' };
+  const sameRouteVisit = { ...openVisit, id: 'same-route', scheduled_date: '2026-11-11', rota_id: 'route-current' };
+
+  assert.equal(findReusableActiveCheckInVisit([scheduledVisit], 'route-current'), undefined);
+  assert.equal(findReusableActiveCheckInVisit([scheduledVisit, sameRouteVisit], 'route-current')?.id, 'same-route');
+});
+
 test('operationally completed visits are not considered open', () => {
   assert.equal(isOpenVisitFromToday({ ...openVisit, status: 'concluida' }, now), false);
 });
