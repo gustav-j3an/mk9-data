@@ -1,14 +1,36 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  isAuthorizedPostgresImage,
   verifyCandidateContainerMetadata,
   filterVerifiedContainers,
   verifyDatabaseNonceMatch,
 } from './resolve-disposable-container.mjs';
 
-test('resolve-disposable-container: cenário 1 - container correto identificado', () => {
+test('resolve-disposable-container: validação de imagens oficiais e não autorizadas', () => {
+  // Imagem oficial Docker Hub
+  assert.equal(isAuthorizedPostgresImage('supabase/postgres:17.2.0.1'), true);
+  assert.equal(isAuthorizedPostgresImage('supabase/postgres:15.8.1.085'), true);
+
+  // Imagem oficial Amazon ECR Public
+  assert.equal(isAuthorizedPostgresImage('public.ecr.aws/supabase/postgres:17.2.0.1'), true);
+  assert.equal(isAuthorizedPostgresImage('public.ecr.aws/supabase/postgres:17.6.1.134'), true);
+
+  // Imagens não autorizadas ou spoofed
+  assert.equal(isAuthorizedPostgresImage('evil-registry.com/supabase/postgres:17.2.0.1'), false);
+  assert.equal(isAuthorizedPostgresImage('attacker/postgres:17.2.0.1'), false);
+  assert.equal(isAuthorizedPostgresImage('postgres:17-alpine'), false);
+  assert.equal(isAuthorizedPostgresImage('supabase/gotrue:v2.158.0'), false);
+  assert.equal(isAuthorizedPostgresImage(''), false);
+  assert.equal(isAuthorizedPostgresImage(null), false);
+  assert.equal(isAuthorizedPostgresImage(undefined), false);
+});
+
+test('resolve-disposable-container: cenário 1 - container correto identificado (Docker Hub e Amazon ECR)', () => {
   const expectedProjectId = 'disposable_stack_a1b2c3d4';
-  const validCandidate = {
+
+  // 1.1 Docker Hub
+  const validDockerHub = {
     id: '77c8ec52dacd',
     name: '/supabase_db_disposable_stack_a1b2c3d4',
     image: 'supabase/postgres:17.2.0.1',
@@ -17,22 +39,41 @@ test('resolve-disposable-container: cenário 1 - container correto identificado'
       'com.docker.compose.project': 'disposable_stack_a1b2c3d4',
     },
   };
-
-  const metaCheck = verifyCandidateContainerMetadata({
-    containerId: validCandidate.id,
-    containerName: validCandidate.name,
-    image: validCandidate.image,
-    labels: validCandidate.labels,
+  const checkHub = verifyCandidateContainerMetadata({
+    containerId: validDockerHub.id,
+    containerName: validDockerHub.name,
+    image: validDockerHub.image,
+    labels: validDockerHub.labels,
     expectedProjectId,
   });
-  assert.equal(metaCheck.valid, true);
+  assert.equal(checkHub.valid, true);
 
-  const selected = filterVerifiedContainers([validCandidate], expectedProjectId);
-  assert.equal(selected.id, '77c8ec52dacd');
+  // 1.2 Amazon ECR Public (usado pelo Supabase CLI v3 em Linux)
+  const validEcr = {
+    id: '88d9fb63ebde',
+    name: '/supabase_db_disposable_stack_a1b2c3d4',
+    image: 'public.ecr.aws/supabase/postgres:17.2.0.1',
+    labels: {
+      'com.supabase.cli.project': 'disposable_stack_a1b2c3d4',
+      'com.docker.compose.project': 'disposable_stack_a1b2c3d4',
+    },
+  };
+  const checkEcr = verifyCandidateContainerMetadata({
+    containerId: validEcr.id,
+    containerName: validEcr.name,
+    image: validEcr.image,
+    labels: validEcr.labels,
+    expectedProjectId,
+  });
+  assert.equal(checkEcr.valid, true);
+
+  const selected = filterVerifiedContainers([validEcr], expectedProjectId);
+  assert.equal(selected.id, '88d9fb63ebde');
 
   // Nonce check verification
-  const execFn = (id, query) => {
-    assert.equal(id, '77c8ec52dacd');
+  const execFn = (id, query, db) => {
+    assert.equal(id, '88d9fb63ebde');
+    assert.equal(db, 'postgres');
     assert.ok(query.includes('mk9_backup_restore_nonce'));
     return 'secret-nonce-12345';
   };
