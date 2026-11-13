@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS public.profiles(id uuid PRIMARY KEY, name text, email
 CREATE TABLE IF NOT EXISTS public.promotores(matricula text PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS public.industrias(codigo text PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS public.lojas(codigo text PRIMARY KEY);
+INSERT INTO public.industrias(codigo) VALUES ('IND-007'), ('IND-ALPHA-1');
 CREATE TABLE IF NOT EXISTS public.rotas(
   loja_codigo text, industria_codigo text, promotor_matricula text, frequencia text,
   segunda boolean, terca boolean, quarta boolean, quinta boolean, sexta boolean, sabado boolean, domingo boolean

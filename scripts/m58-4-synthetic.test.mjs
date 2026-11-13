@@ -153,7 +153,7 @@ test('contract ACL assertion diagnoses effective, direct, and PUBLIC grants sepa
     'M58_4_CONTRACT_UPDATED_AT_TRIGGER_ANON_EXECUTE_UNEXPECTED',
     'M58_4_CONTRACT_UPDATED_AT_TRIGGER_API_ROLE_EXECUTE_UNEXPECTED',
   ]) assert.ok(assertion.includes(marker), `missing ACL diagnostic: ${marker}`);
-  assert.equal((assertion.match(/has_function_privilege\('anon'/g) ?? []).length, 6);
+  assert.equal((assertion.match(/has_function_privilege\('anon'/g) ?? []).length, 8);
   assert.equal((assertion.match(/aclexplode\(COALESCE\(proacl, acldefault\('f',proowner\)\)\)/g) ?? []).length, 6);
   assert.match(assertion, /a\.grantee=0 AND a\.privilege_type='EXECUTE'/);
   assert.match(assertion, /a\.grantee=\(SELECT oid FROM pg_roles WHERE rolname='anon'\).*a\.privilege_type='EXECUTE'/s);

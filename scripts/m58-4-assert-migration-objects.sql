@@ -203,15 +203,23 @@ BEGIN
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.industrias'::regclass AND conname='industrias_codigo_key' AND contype='u' AND pg_get_constraintdef(oid)='UNIQUE (codigo)')
      OR NOT EXISTS (SELECT 1 FROM pg_sequence WHERE seqrelid='public.industrias_codigo_seq'::regclass AND seqstart=1 AND seqincrement=1)
-     OR NOT has_sequence_privilege('authenticated','public.industrias_codigo_seq','USAGE')
-     OR NOT has_sequence_privilege('authenticated','public.industrias_codigo_seq','SELECT')
-     OR NOT has_function_privilege('authenticated','public.generate_industry_code()','EXECUTE')
-     OR NOT has_function_privilege('authenticated','public.get_next_industry_code()','EXECUTE') THEN
+     OR has_sequence_privilege('anon','public.industrias_codigo_seq','USAGE')
+     OR has_sequence_privilege('authenticated','public.industrias_codigo_seq','USAGE')
+     OR has_sequence_privilege('service_role','public.industrias_codigo_seq','USAGE')
+     OR has_sequence_privilege('anon','public.industrias_codigo_seq','SELECT')
+     OR has_sequence_privilege('authenticated','public.industrias_codigo_seq','SELECT')
+     OR has_sequence_privilege('service_role','public.industrias_codigo_seq','SELECT')
+     OR has_function_privilege('anon','public.generate_industry_code()','EXECUTE')
+     OR has_function_privilege('authenticated','public.generate_industry_code()','EXECUTE')
+     OR has_function_privilege('service_role','public.generate_industry_code()','EXECUTE')
+     OR NOT has_function_privilege('authenticated','public.get_next_industry_code()','EXECUTE')
+     OR has_function_privilege('anon','public.get_next_industry_code()','EXECUTE')
+     OR has_function_privilege('service_role','public.get_next_industry_code()','EXECUTE') THEN
     RAISE EXCEPTION 'M58_4_INDUSTRY_SEQUENCE_OR_ACL_MISMATCH';
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid='public.generate_industry_code()'::regprocedure AND prosecdef AND proconfig IS NULL)
-     OR NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid='public.get_next_industry_code()'::regprocedure AND prosecdef AND provolatile='s' AND proconfig IS NULL)
-     OR NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid='public.set_industria_codigo_trigger()'::regprocedure AND prosecdef AND proconfig IS NULL) THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid='public.generate_industry_code()'::regprocedure AND prosecdef AND proconfig @> ARRAY['search_path=pg_catalog, public'])
+     OR NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid='public.get_next_industry_code()'::regprocedure AND prosecdef AND provolatile='v' AND proconfig @> ARRAY['search_path=pg_catalog, public'])
+     OR NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid='public.set_industria_codigo_trigger()'::regprocedure AND prosecdef AND proconfig @> ARRAY['search_path=pg_catalog, public']) THEN
     RAISE EXCEPTION 'M58_4_INDUSTRY_FUNCTION_SECURITY_MISMATCH';
   END IF;
   SELECT count(*) INTO actual_count FROM pg_trigger WHERE tgrelid='public.visits'::regclass AND NOT tgisinternal;
