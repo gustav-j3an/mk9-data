@@ -86,6 +86,13 @@ psql "$DB_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/20261113190000_m59_cont
 psql "$DB_URL" -v ON_ERROR_STOP=1 -f scripts/m58-4-assert-migration-objects.sql >/dev/null
 psql "$DB_URL" -v ON_ERROR_STOP=1 -f scripts/m59-assert-structural-behavior.sql >/dev/null
 
+# Exercise codes beyond lpad's target width, which truncates values above 999.
+psql "$DB_URL" -v ON_ERROR_STOP=1 -c "SELECT setval('public.industrias_codigo_seq'::regclass, 999, true);" >/dev/null
+if [[ "$(psql "$DB_URL" -v ON_ERROR_STOP=1 -Atqc "SELECT public.get_next_industry_code()")" != 'IND-1000' ]]; then
+  echo 'M59_INDUSTRY_CODE_GENERATOR_TRUNCATED_AFTER_999' >&2
+  exit 1
+fi
+
 if psql "$DB_URL" -v ON_ERROR_STOP=1 -c "SET ROLE authenticated" -c "INSERT INTO public.industrias(codigo) VALUES ('bad code');" >/dev/null 2>&1; then
   echo 'M59_INVALID_INDUSTRY_CODE_WAS_ACCEPTED' >&2
   exit 1

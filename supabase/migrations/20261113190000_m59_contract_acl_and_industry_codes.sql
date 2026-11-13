@@ -84,9 +84,14 @@ SET search_path = pg_catalog, public
 AS $function$
 DECLARE
   candidate text;
+  sequence_value bigint;
 BEGIN
   LOOP
-    candidate := 'IND-' || lpad(nextval('public.industrias_codigo_seq'::regclass)::text, 3, '0');
+    sequence_value := nextval('public.industrias_codigo_seq'::regclass);
+    candidate := 'IND-' || CASE
+      WHEN sequence_value < 1000 THEN lpad(sequence_value::text, 3, '0')
+      ELSE sequence_value::text
+    END;
     EXIT WHEN NOT EXISTS (
       SELECT 1 FROM public.industrias i WHERE i.codigo = candidate
     );
