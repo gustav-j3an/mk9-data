@@ -1,0 +1,129 @@
+name: MK9 M60 integrated PostgreSQL 17 validation
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/m60-integrated-postgres17.yml'
+      - 'docs/m60-publication-runbook.md'
+      - 'scripts/m60-*'
+      - 'supabase/migrations/20261113190000_m59_contract_acl_and_industry_codes.sql'
+      - 'src/**'
+      - 'package.json'
+      - 'package-lock.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  integrated-validation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout Mission 60 branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Checkout pinned M37/M38 migration source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: gustav-j3an/mk9-data
+          ref: 080ebbb1c70a7eb7716d3f9669039fd127e00123
+          path: m38-source
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22.16.0'
+          cache: npm
+
+      - name: Install application dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Run application tests, typecheck, and build
+        run: |
+          npm test
+          npm run typecheck
+          npm run build
+
+      - name: Install PostgreSQL 17 client
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo install -d -m 0755 /usr/share/keyrings
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /usr/share/keyrings/postgresql.gpg
+          echo 'deb [signed-by=/usr/share/keyrings/postgresql.gpg] https://apt.postgresql.org/pub/repos/apt noble-pgdg main' | sudo tee /etc/apt/sources.list.d/postgresql.list >/dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-17
+          echo '/usr/lib/postgresql/17/bin' >> "$GITHUB_PATH"
+          test "$(/usr/lib/postgresql/17/bin/psql --version | cut -d ' ' -f 3 | cut -d . -f 1)" = '17'
+
+      - name: Install pinned Supabase CLI
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          curl -fsSL https://github.com/supabase/cli/releases/download/v3.0.0/supabase_3.0.0_linux_amd64.tar.gz -o "$RUNNER_TEMP/supabase-cli.tar.gz"
+          tar -xzf "$RUNNER_TEMP/supabase-cli.tar.gz" -C "$RUNNER_TEMP" supabase
+          sudo install "$RUNNER_TEMP/supabase" /usr/local/bin/supabase
+          test "$(supabase --version)" = '3.0.0'
+
+      - name: Run six-version synthetic ledger reconciliation
+        shell: bash
+        run: bash scripts/m58-4-synthetic-reconciliation.sh
+
+      - name: Start isolated Supabase PostgreSQL 17 stack
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          stack_dir="$RUNNER_TEMP/mk9-date-m60-cloud"
+          mkdir -p "$stack_dir"
+          cd "$stack_dir"
+          supabase init --force >/dev/null
+          sed -i 's/^major_version = .*/major_version = 17/' supabase/config.toml
+          supabase start -x realtime,storage-api,imgproxy,mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor >/dev/null
+          echo "M60_STACK_DIR=$stack_dir" >> "$GITHUB_ENV"
+          supabase status -o env | while IFS='=' read -r name value; do
+            case "$name" in
+              ANON_KEY|SUPABASE_ANON_KEY|SERVICE_ROLE_KEY|SUPABASE_SERVICE_ROLE_KEY|JWT_SECRET|POSTGRES_PASSWORD)
+                value="${value%\"}"
+                value="${value#\"}"
+                [ -z "$value" ] || echo "::add-mask::$value"
+                ;;
+            esac
+          done
+
+      - name: Apply M37/M38 sequence and run visit behavior suites
+        shell: bash
+        working-directory: m38-source
+        env:
+          SUPABASE_TEST_WORKDIR: ${{ runner.temp }}/mk9-date-m60-cloud
+          SUPABASE_TEST_API_URL: http://127.0.0.1:54321
+          PGHOST: 127.0.0.1
+          PGPORT: '54322'
+          PGUSER: postgres
+          PGPASSWORD: postgres
+          PGDATABASE: postgres
+        run: bash scripts/m37-recovery-postgres17.sh
+
+      - name: Apply M59 migration and verify integrated schema and industry generation
+        shell: bash
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: '54322'
+          PGUSER: postgres
+          PGPASSWORD: postgres
+          PGDATABASE: postgres
+        run: bash scripts/m60-integrated-postgres17.sh
+
+      - name: Stop isolated stack
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          if [ -f "$RUNNER_TEMP/mk9-date-m60-cloud/supabase/config.toml" ]; then
+            cd "$RUNNER_TEMP/mk9-date-m60-cloud"
+            supabase stop --no-backup >/dev/null 2>&1
+          fi
+          rm -rf "$RUNNER_TEMP/mk9-date-m60-cloud" "$RUNNER_TEMP/supabase" "$RUNNER_TEMP/supabase-cli.tar.gz"
