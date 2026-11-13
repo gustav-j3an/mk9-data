@@ -9,6 +9,8 @@ on:
       - '.github/workflows/m58-4-synthetic-reconciliation.yml'
       - 'scripts/m58-4-*'
       - 'scripts/m59-*'
+      - 'src/utils/industryCode*'
+      - 'src/views/IndustriesView.tsx'
       - 'supabase/migrations/**'
 
 permissions:
