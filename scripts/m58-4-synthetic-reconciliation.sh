@@ -135,10 +135,10 @@ psql "$DB_URL" -v ON_ERROR_STOP=1 -c 'DELETE FROM supabase_migrations.schema_mig
 [[ "$(psql "$DB_URL" -Atc 'SELECT count(*) FROM supabase_migrations.schema_migrations')" == 0 ]]
 node scripts/m58-4-ledger-setup.mjs "$ROOT/migrations-bundle/manifest.json" > "$ROOT/ledger-setup.sql"
 psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT/ledger-setup.sql" >/dev/null
-psql "$DB_URL" -v ON_ERROR_STOP=1 --tuples-only --no-align --file=scripts/backup-inventory.sql > "$ROOT/inventory-before.json"
+psql "$DB_URL" -q -v ON_ERROR_STOP=1 --tuples-only --no-align --file=scripts/backup-inventory.sql > "$ROOT/inventory-before.json"
 psql "$DB_URL" -v ON_ERROR_STOP=1 -Atc "SELECT COALESCE(json_agg(json_build_object('version',version,'statements',statements,'name',name) ORDER BY version), '[]'::json) FROM supabase_migrations.schema_migrations" > "$ROOT/ledger-before.json"
 psql "$DB_URL" -v ON_ERROR_STOP=1 -c "INSERT INTO supabase_migrations.schema_migrations(version, statements) VALUES ('20261009144200', ARRAY['synthetic ledger simulation']), ('20261010', ARRAY['synthetic ledger simulation']), ('20261011120000', ARRAY['synthetic ledger simulation']), ('20261011140000', ARRAY['synthetic ledger simulation']), ('20261017120000', ARRAY['synthetic ledger simulation']), ('20261017', ARRAY['synthetic ledger simulation']);" >/dev/null
-psql "$DB_URL" -v ON_ERROR_STOP=1 --tuples-only --no-align --file=scripts/backup-inventory.sql > "$ROOT/inventory-after.json"
+psql "$DB_URL" -q -v ON_ERROR_STOP=1 --tuples-only --no-align --file=scripts/backup-inventory.sql > "$ROOT/inventory-after.json"
 psql "$DB_URL" -v ON_ERROR_STOP=1 -Atc "SELECT COALESCE(json_agg(json_build_object('version',version,'statements',statements,'name',name) ORDER BY version), '[]'::json) FROM supabase_migrations.schema_migrations" > "$ROOT/ledger-after.json"
 node scripts/m58-4-assert-invariance.mjs "$ROOT/inventory-before.json" "$ROOT/inventory-after.json"
 node scripts/m58-4-assert-ledger-transition.mjs "$ROOT/ledger-before.json" "$ROOT/ledger-after.json"

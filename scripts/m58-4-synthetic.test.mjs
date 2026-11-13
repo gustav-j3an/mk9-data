@@ -190,6 +190,7 @@ test('synthetic workflow has no environment secrets and checks for remote config
   assert.match(script, /inet_server_addr/);
   assert.match(script, /127\.0\.0\.1:54322/);
   assert.match(script, /m58-4-assert-migration-objects\.sql/);
+  assert.match(script, /psql "\$DB_URL" -q -v ON_ERROR_STOP=1 --tuples-only --no-align --file=scripts\/backup-inventory\.sql/);
   assert.match(script, /expect_acl_rejection M58_4_CONTRACT_SYNC_ANON_EXECUTE_UNEXPECTED/);
   assert.match(script, /GRANT EXECUTE ON FUNCTION public\.sync_contratos_from_rotas\(\) TO PUBLIC/);
   assert.match(assertion, /has_function_privilege\('authenticated','public\.sync_contratos_from_rotas\(\)','EXECUTE'\)/);
