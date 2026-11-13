@@ -2,13 +2,13 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { isValidIndustryCode, normalizeIndustryCode } from './industryCode';
 
-describe('códigos de indústria', () => {
-  it('normaliza espaços externos e caixa', () => {
+describe('industry codes', () => {
+  it('normalizes whitespace and case', () => {
     assert.equal(normalizeIndustryCode(' ind-abc-01 '), 'IND-ABC-01');
     assert.equal(isValidIndustryCode(' ind-abc-01 '), true);
   });
 
-  it('aceita códigos de segmento alfanumérico e rejeita valores malformados', () => {
+  it('accepts alphanumeric segments and rejects malformed values', () => {
     for (const code of ['IND-001', 'IND-TEST-001', 'IND-A']) {
       assert.equal(isValidIndustryCode(code), true, code);
     }
