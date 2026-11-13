@@ -79,8 +79,38 @@ for migration in \
   supabase/migrations/20261017_create_avatars_storage_policies.sql; do
   psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$migration" >/dev/null
 done
-psql "$DB_URL" -v ON_ERROR_STOP=1 -f scripts/m58-4-assert-migration-objects.sql >/dev/null
 node scripts/m58-4-verify-function-bodies.mjs "$DB_URL"
+
+# Apply the forward-only Mission 59 fix after validating the historical migrations.
+psql "$DB_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/20261113190000_m59_contract_acl_and_industry_codes.sql >/dev/null
+psql "$DB_URL" -v ON_ERROR_STOP=1 -f scripts/m58-4-assert-migration-objects.sql >/dev/null
+psql "$DB_URL" -v ON_ERROR_STOP=1 -f scripts/m59-assert-structural-behavior.sql >/dev/null
+
+if psql "$DB_URL" -v ON_ERROR_STOP=1 -c "SET ROLE authenticated" -c "INSERT INTO public.industrias(codigo) VALUES ('bad code');" >/dev/null 2>&1; then
+  echo 'M59_INVALID_INDUSTRY_CODE_WAS_ACCEPTED' >&2
+  exit 1
+fi
+if psql "$DB_URL" -v ON_ERROR_STOP=1 -c "SET ROLE authenticated" -c "INSERT INTO public.industrias(codigo) VALUES ('IND-007');" >/dev/null 2>&1; then
+  echo 'M59_DUPLICATE_INDUSTRY_CODE_WAS_ACCEPTED' >&2
+  exit 1
+fi
+if output="$(psql "$DB_URL" -v ON_ERROR_STOP=1 \
+  -c 'SET ROLE authenticated' \
+  -c "INSERT INTO public.contratos_lojas(industria_codigo,loja_codigo,frequencia,visitas_por_semana,data_inicio_vigencia) VALUES ('IND-M59-CONTRACT','LOJ-M59-1','SEMANAL',1,current_date);" 2>&1)"; then
+  echo 'M59_CONTRACT_OVERLAP_TRIGGER_DID_NOT_REJECT_DUPLICATE' >&2
+  exit 1
+elif ! grep -Fq 'Conflito de vigência contratual' <<< "$output"; then
+  echo 'M59_CONTRACT_OVERLAP_FAILED_FOR_UNEXPECTED_REASON' >&2
+  exit 1
+fi
+
+# Independent authenticated sessions exercise the trigger-backed sequence concurrently.
+seq 1 20 | xargs -P 10 -I '{}' psql "$DB_URL" -v ON_ERROR_STOP=1 -q \
+  -c 'SET ROLE authenticated' \
+  -c 'INSERT INTO public.industrias(codigo) VALUES (NULL);' >/dev/null
+[[ "$(psql "$DB_URL" -Atc "SELECT count(*) = count(DISTINCT codigo) FROM public.industrias WHERE codigo ~ '^IND-[0-9]+$'")" == t ]]
+[[ "$(psql "$DB_URL" -Atc "SELECT count(*) FROM public.industrias WHERE codigo ~ '^IND-[0-9]{3,}$'")" == 22 ]]
+echo 'Mission 59 ACL, trigger, input-validation, uniqueness, and concurrent generation checks passed.'
 
 expect_acl_rejection() {
   local expected_marker="$1"

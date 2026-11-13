@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase';
 import type { IndustryItem, StoreItem, RouteItem, Visit, ToastMessage, ContratoLoja, PeriodoContratual, CreateContratoLojaDTO } from '../types';
 import { getMonthlyQuinzenalDates } from '../utils/routePlanner';
 import { omitWhatsAppGroupLink, writeWithOptionalWhatsAppGroupLink } from '../utils/industryWhatsAppCompatibility';
+import { isValidIndustryCode, normalizeIndustryCode } from '../utils/industryCode';
 import { isValidWhatsAppGroupLink, sanitizeWhatsAppGroupLink, openIndustryWhatsAppGroup } from '../utils/whatsappShare';
 import { analyzeRotasForContracts, contratosService, parseISODate, classificarParContratual } from '../lib/contratosService';
 import { StatCard, StatusBadge, DataTable, Column } from '../components/ui';
@@ -1308,11 +1309,21 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!formData.codigo.trim() || !formData.nome.trim()) {
+    const normalizedIndustryCode = normalizeIndustryCode(formData.codigo);
+    if (!formData.nome.trim()) {
       onShowToast({
         title: 'Campos Obrigatórios',
-        message: 'Código e Nome da Indústria são obrigatórios.',
+        message: 'O nome da indústria é obrigatório.',
         type: 'warning'
+      });
+      return;
+    }
+
+    if (normalizedIndustryCode && !isValidIndustryCode(normalizedIndustryCode)) {
+      onShowToast({
+        title: 'Código Inválido',
+        message: 'Use um código no formato IND-XXX, com letras, números e hífens.',
+        type: 'error'
       });
       return;
     }
@@ -1334,7 +1345,7 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
       if (!db) throw new Error('Cliente Supabase indisponível.');
 
       const payload = {
-        codigo: formData.codigo.trim(),
+        codigo: editingItem ? normalizedIndustryCode : normalizedIndustryCode || null,
         nome: formData.nome.trim(),
         cnpj: formData.cnpj.trim() || null,
         status: formData.status,
@@ -2760,19 +2771,24 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
                   <label className="text-[#171717]">CÓDIGO DA INDÚSTRIA (*)</label>
                   {!editingItem && (
                     <span className="text-[10px] text-purple-400 font-mono">
-                      (Gerado automaticamente se mantido)
+                      (Prévia automática; o banco reserva o código ao salvar)
                     </span>
                   )}
                 </div>
                 <input
                   type="text"
-                  required
+                  aria-invalid={Boolean(formData.codigo && !isValidIndustryCode(formData.codigo))}
                   value={formData.codigo}
                   onChange={(e) => setFormData({ ...formData, codigo: e.target.value.toUpperCase() })}
                   placeholder="Ex: IND-001"
                   disabled={Boolean(editingItem)}
                   className="w-full h-10 px-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-purple-500 disabled:opacity-50 font-mono uppercase"
                 />
+                {!editingItem && !formData.codigo && (
+                  <p className="text-[10px] text-[#77766F] mt-1">
+                    Se a prévia não carregar, deixe vazio e o banco atribuirá o próximo código ao salvar.
+                  </p>
+                )}
               </div>
 
               <div>
