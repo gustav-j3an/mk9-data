@@ -237,9 +237,6 @@ BEGIN
   IF NOT has_function_privilege('authenticated','public.sync_contratos_from_rotas()','EXECUTE') THEN
     RAISE EXCEPTION 'M58_4_CONTRACT_SYNC_AUTHENTICATED_EXECUTE_MISSING';
   END IF;
-  IF has_function_privilege('service_role','public.sync_contratos_from_rotas()','EXECUTE') THEN
-    RAISE EXCEPTION 'M58_4_CONTRACT_SYNC_SERVICE_ROLE_EXECUTE_UNEXPECTED';
-  END IF;
   IF has_function_privilege('anon','public.sync_contratos_from_rotas()','EXECUTE') THEN
     RAISE EXCEPTION 'M58_4_CONTRACT_SYNC_ANON_EXECUTE_UNEXPECTED'
       USING DETAIL = format('effective_anon_execute=true; acl=%s; direct_anon_execute=%s; public_execute=%s; anon_inherits_authenticated=%s',
@@ -251,6 +248,9 @@ BEGIN
           WHERE a.grantee=0 AND a.privilege_type='EXECUTE')
           FROM pg_proc WHERE oid='public.sync_contratos_from_rotas()'::regprocedure),
         pg_has_role('anon','authenticated','USAGE'));
+  END IF;
+  IF has_function_privilege('service_role','public.sync_contratos_from_rotas()','EXECUTE') THEN
+    RAISE EXCEPTION 'M58_4_CONTRACT_SYNC_SERVICE_ROLE_EXECUTE_UNEXPECTED';
   END IF;
   IF has_function_privilege('anon','public.check_contratos_vigencia_overlap()','EXECUTE') THEN
     RAISE EXCEPTION 'M58_4_CONTRACT_OVERLAP_TRIGGER_ANON_EXECUTE_UNEXPECTED'
