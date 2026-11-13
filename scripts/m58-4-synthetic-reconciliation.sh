@@ -61,11 +61,11 @@ node scripts/m58-4-disposable-target.mjs "$DB_URL" "$PROJECT_ID" "$NONCE"
 # Only after project name, exact count, image, and labels match do we write a nonce challenge.
 psql "$DB_URL" -v ON_ERROR_STOP=1 -c 'CREATE TABLE public.mk9_disposable_nonce(token text);' >/dev/null
 psql "$DB_URL" -v ON_ERROR_STOP=1 -c "INSERT INTO public.mk9_disposable_nonce VALUES ('${NONCE}');" >/dev/null
-CONTAINER_IPS="$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}},{{end}}' "$CONTAINER_ID" | sed 's/,$//')"
-[[ -n "$CONTAINER_IPS" ]]
+CONTAINER_NETWORKS="$(docker inspect --format '{{json .NetworkSettings.Networks}}' "$CONTAINER_ID")"
+[[ -n "$CONTAINER_NETWORKS" && "$CONTAINER_NETWORKS" != 'null' ]]
 PROBE="$(psql "$DB_URL" -v ON_ERROR_STOP=1 -F '|' -Atc "SELECT current_database(), inet_server_addr()::text, inet_server_port(), current_setting('server_version_num'), (SELECT count(*) FROM public.mk9_disposable_nonce WHERE token='${NONCE}');")"
-node scripts/m58-4-disposable-target.mjs "$DB_URL" "$PROJECT_ID" "$NONCE" "$PROBE" "$CONTAINER_IPS"
-RESOLVED="$(node scripts/resolve-disposable-container.mjs "$PROJECT_ID" "$NONCE")"
+node scripts/m58-4-disposable-target.mjs "$DB_URL" "$PROJECT_ID" "$NONCE" "$PROBE" "$CONTAINER_NETWORKS"
+RESOLVED="$(node scripts/resolve-disposable-container.mjs "$PROJECT_ID" "$NONCE" public.mk9_disposable_nonce)"
 [[ "${RESOLVED,,}" == "${CONTAINER_ID,,}" ]]
 echo 'Database nonce challenge verified the exact container.'
 
@@ -82,6 +82,37 @@ done
 psql "$DB_URL" -v ON_ERROR_STOP=1 -f scripts/m58-4-assert-migration-objects.sql >/dev/null
 node scripts/m58-4-verify-function-bodies.mjs "$DB_URL"
 
+expect_acl_rejection() {
+  local expected_marker="$1"
+  local grant_statement="$2"
+  local output
+  if output="$(psql "$DB_URL" -v ON_ERROR_STOP=1 -c "BEGIN; ${grant_statement}" -f scripts/m58-4-assert-migration-objects.sql 2>&1)"; then
+    echo 'M58_4_NEGATIVE_ACL_ASSERTION_FAILED' >&2
+    exit 1
+  fi
+  if ! grep -Fq "$expected_marker" <<< "$output"; then
+    local actual_marker
+    actual_marker="$(grep -oE 'M58_4_[A-Z0-9_]+' <<< "$output" | tail -n 1 || true)"
+    echo "M58_4_NEGATIVE_ACL_ASSERTION_WRONG_FAILURE expected=${expected_marker} actual=${actual_marker:-NO_M58_MARKER}" >&2
+    exit 1
+  fi
+  # A failed assertion aborts its transaction; the clean rerun proves the probe grant rolled back.
+  psql "$DB_URL" -v ON_ERROR_STOP=1 -f scripts/m58-4-assert-migration-objects.sql >/dev/null
+}
+
+expect_acl_rejection M58_4_CONTRACT_SYNC_AUTHENTICATED_EXECUTE_MISSING \
+  'REVOKE EXECUTE ON FUNCTION public.sync_contratos_from_rotas() FROM authenticated'
+expect_acl_rejection M58_4_CONTRACT_SYNC_ANON_EXECUTE_UNEXPECTED \
+  'GRANT EXECUTE ON FUNCTION public.sync_contratos_from_rotas() TO anon'
+expect_acl_rejection M58_4_CONTRACT_SYNC_ANON_EXECUTE_UNEXPECTED \
+  'GRANT EXECUTE ON FUNCTION public.sync_contratos_from_rotas() TO PUBLIC'
+expect_acl_rejection M58_4_CONTRACT_SYNC_SERVICE_ROLE_EXECUTE_UNEXPECTED \
+  'GRANT EXECUTE ON FUNCTION public.sync_contratos_from_rotas() TO service_role'
+expect_acl_rejection M58_4_CONTRACT_OVERLAP_TRIGGER_API_ROLE_EXECUTE_UNEXPECTED \
+  'GRANT EXECUTE ON FUNCTION public.check_contratos_vigencia_overlap() TO authenticated'
+expect_acl_rejection M58_4_CONTRACT_UPDATED_AT_TRIGGER_API_ROLE_EXECUTE_UNEXPECTED \
+  'GRANT EXECUTE ON FUNCTION public.handle_contratos_updated_at() TO service_role'
+
 # Prove the catalog assertions reject a divergent column and policy; each failed check
 # terminates its transaction, and a clean assertion pass immediately proves rollback.
 if psql "$DB_URL" -v ON_ERROR_STOP=1 -c 'BEGIN; ALTER TABLE public.system_settings RENAME COLUMN value TO value_mismatch;' -f scripts/m58-4-assert-migration-objects.sql >/dev/null 2>&1; then
@@ -94,16 +125,20 @@ if psql "$DB_URL" -v ON_ERROR_STOP=1 -c 'BEGIN; ALTER POLICY system_settings_sel
   exit 1
 fi
 psql "$DB_URL" -v ON_ERROR_STOP=1 -f scripts/m58-4-assert-migration-objects.sql >/dev/null
-echo 'Negative catalog probes rejected altered column and policy definitions; rollback was verified.'
+echo 'Negative ACL, column and policy probes were rejected; rollback was verified.'
 
 # Synthetic fixture ledger has exactly 17 pre-existing versions; none is a candidate version.
 node scripts/bundle-repository-migrations.mjs "$ROOT/migrations-bundle" >/dev/null
+# Supabase CLI may seed its own migration versions (including versions also used by this repo).
+# Reset only the already-verified disposable database ledger before loading the synthetic baseline.
+psql "$DB_URL" -v ON_ERROR_STOP=1 -c 'DELETE FROM supabase_migrations.schema_migrations' >/dev/null
+[[ "$(psql "$DB_URL" -Atc 'SELECT count(*) FROM supabase_migrations.schema_migrations')" == 0 ]]
 node scripts/m58-4-ledger-setup.mjs "$ROOT/migrations-bundle/manifest.json" > "$ROOT/ledger-setup.sql"
 psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT/ledger-setup.sql" >/dev/null
-psql "$DB_URL" -v ON_ERROR_STOP=1 --tuples-only --no-align --file=scripts/backup-inventory.sql > "$ROOT/inventory-before.json"
+psql "$DB_URL" -q -v ON_ERROR_STOP=1 --tuples-only --no-align --file=scripts/backup-inventory.sql > "$ROOT/inventory-before.json"
 psql "$DB_URL" -v ON_ERROR_STOP=1 -Atc "SELECT COALESCE(json_agg(json_build_object('version',version,'statements',statements,'name',name) ORDER BY version), '[]'::json) FROM supabase_migrations.schema_migrations" > "$ROOT/ledger-before.json"
 psql "$DB_URL" -v ON_ERROR_STOP=1 -c "INSERT INTO supabase_migrations.schema_migrations(version, statements) VALUES ('20261009144200', ARRAY['synthetic ledger simulation']), ('20261010', ARRAY['synthetic ledger simulation']), ('20261011120000', ARRAY['synthetic ledger simulation']), ('20261011140000', ARRAY['synthetic ledger simulation']), ('20261017120000', ARRAY['synthetic ledger simulation']), ('20261017', ARRAY['synthetic ledger simulation']);" >/dev/null
-psql "$DB_URL" -v ON_ERROR_STOP=1 --tuples-only --no-align --file=scripts/backup-inventory.sql > "$ROOT/inventory-after.json"
+psql "$DB_URL" -q -v ON_ERROR_STOP=1 --tuples-only --no-align --file=scripts/backup-inventory.sql > "$ROOT/inventory-after.json"
 psql "$DB_URL" -v ON_ERROR_STOP=1 -Atc "SELECT COALESCE(json_agg(json_build_object('version',version,'statements',statements,'name',name) ORDER BY version), '[]'::json) FROM supabase_migrations.schema_migrations" > "$ROOT/ledger-after.json"
 node scripts/m58-4-assert-invariance.mjs "$ROOT/inventory-before.json" "$ROOT/inventory-after.json"
 node scripts/m58-4-assert-ledger-transition.mjs "$ROOT/ledger-before.json" "$ROOT/ledger-after.json"
