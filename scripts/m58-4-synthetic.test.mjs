@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { assertInventoryInvariant } from './m58-4-assert-invariance.mjs';
 import { assertLedgerTransition, RECONCILED_VERSIONS } from './m58-4-assert-ledger-transition.mjs';
-import { assertDisposableConnectionProbe, assertDisposableTarget } from './m58-4-disposable-target.mjs';
+import { assertDisposableConnectionProbe, assertDisposableTarget, extractContainerNetworkAddresses } from './m58-4-disposable-target.mjs';
 import { assertFunctionBodyHash, EXPECTED_FUNCTIONS, sourceFunctionBody } from './m58-4-verify-function-bodies.mjs';
 
 test('synthetic ledger selects exactly 17 repository versions and excludes six candidates', async () => {
@@ -102,10 +102,30 @@ test('disposable connection guard rejects wrong host, database, identity and ser
   assert.throws(() => assertDisposableTarget({ databaseUrl, projectId: 'mk9_synth_other', nonce }), /IDENTITY_INVALID/);
   const goodProbe = { database: 'postgres', serverAddress: '172.20.0.4', serverPort: 5432, serverVersionNum: 170005, nonceCount: 1, containerIps: '172.20.0.4' };
   assert.equal(assertDisposableConnectionProbe(goodProbe), true);
+  const inspectNetworks = JSON.stringify({
+    bridge: { IPAddress: ' 172.20.0.4 ', GlobalIPv6Address: '' },
+    secondary: { IPAddress: '172.21.0.7/16', GlobalIPv6Address: '2001:0db8:0000:0000:0000:0000:0000:0001' },
+  });
+  assert.deepEqual(extractContainerNetworkAddresses(inspectNetworks), ['172.20.0.4', '172.21.0.7', '2001:db8::1']);
+  assert.equal(assertDisposableConnectionProbe({
+    ...goodProbe, serverAddress: '::ffff:172.20.0.4', containerIps: inspectNetworks,
+  }), true);
+  assert.equal(assertDisposableConnectionProbe({
+    ...goodProbe, serverAddress: '::ffff:ac14:0004', containerIps: inspectNetworks,
+  }), true);
+  assert.equal(assertDisposableConnectionProbe({
+    ...goodProbe, serverAddress: '2001:db8::1', serverPort: '5432', containerIps: inspectNetworks,
+  }), true);
+  assert.deepEqual(extractContainerNetworkAddresses(' 172.20.0.4,\n172.21.0.7, '), ['172.20.0.4', '172.21.0.7']);
+  assert.deepEqual(extractContainerNetworkAddresses('{invalid json'), []);
   for (const changes of [
     { serverAddress: '172.20.0.99' }, { database: 'production' }, { serverPort: 5433 },
     { serverVersionNum: 160000 }, { nonceCount: 0 }, { nonceCount: 2 },
   ]) assert.throws(() => assertDisposableConnectionProbe({ ...goodProbe, ...changes }));
+  assert.throws(() => assertDisposableConnectionProbe({ ...goodProbe, containerIps: '{invalid json' }), /no-valid-container-addresses/);
+  assert.throws(() => assertDisposableConnectionProbe({
+    ...goodProbe, serverAddress: '172.20.0.99', containerIps: inspectNetworks,
+  }), (error) => /server=172\.20\.0\.99/.test(error.message) && /docker=172\.20\.0\.4,172\.21\.0\.7,2001:db8::1/.test(error.message));
 });
 
 test('fixed function fingerprints detect altered SQL and recognize all six migration function sources', async () => {
@@ -134,6 +154,8 @@ test('synthetic workflow has no environment secrets and checks for remote config
   assert.match(workflow, /workflow_dispatch/);
   assert.match(script, /REMOTE_SUPABASE_CONFIGURATION_PRESENT/);
   assert.match(script, /mk9_disposable_nonce/);
+  assert.match(script, /docker inspect --format '\{\{json \.NetworkSettings\.Networks\}\}'/);
+  assert.match(script, /resolve-disposable-container\.mjs .*public\.mk9_disposable_nonce/);
   assert.match(script, /m58-4-verify-function-bodies\.mjs/);
   assert.match(script, /m58-4-assert-ledger-transition\.mjs/);
   assert.match(script, /inet_server_addr/);

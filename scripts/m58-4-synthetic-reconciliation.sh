@@ -61,11 +61,11 @@ node scripts/m58-4-disposable-target.mjs "$DB_URL" "$PROJECT_ID" "$NONCE"
 # Only after project name, exact count, image, and labels match do we write a nonce challenge.
 psql "$DB_URL" -v ON_ERROR_STOP=1 -c 'CREATE TABLE public.mk9_disposable_nonce(token text);' >/dev/null
 psql "$DB_URL" -v ON_ERROR_STOP=1 -c "INSERT INTO public.mk9_disposable_nonce VALUES ('${NONCE}');" >/dev/null
-CONTAINER_IPS="$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}},{{end}}' "$CONTAINER_ID" | sed 's/,$//')"
-[[ -n "$CONTAINER_IPS" ]]
+CONTAINER_NETWORKS="$(docker inspect --format '{{json .NetworkSettings.Networks}}' "$CONTAINER_ID")"
+[[ -n "$CONTAINER_NETWORKS" && "$CONTAINER_NETWORKS" != 'null' ]]
 PROBE="$(psql "$DB_URL" -v ON_ERROR_STOP=1 -F '|' -Atc "SELECT current_database(), inet_server_addr()::text, inet_server_port(), current_setting('server_version_num'), (SELECT count(*) FROM public.mk9_disposable_nonce WHERE token='${NONCE}');")"
-node scripts/m58-4-disposable-target.mjs "$DB_URL" "$PROJECT_ID" "$NONCE" "$PROBE" "$CONTAINER_IPS"
-RESOLVED="$(node scripts/resolve-disposable-container.mjs "$PROJECT_ID" "$NONCE")"
+node scripts/m58-4-disposable-target.mjs "$DB_URL" "$PROJECT_ID" "$NONCE" "$PROBE" "$CONTAINER_NETWORKS"
+RESOLVED="$(node scripts/resolve-disposable-container.mjs "$PROJECT_ID" "$NONCE" public.mk9_disposable_nonce)"
 [[ "${RESOLVED,,}" == "${CONTAINER_ID,,}" ]]
 echo 'Database nonce challenge verified the exact container.'
 
