@@ -287,7 +287,13 @@ export const calculateOperationalVisits = ({
   visits.forEach((v) => {
     const scheduledDate = v.scheduled_date || v.data_visita;
     const k = `${v.promotor_matricula}|${v.loja_codigo}|${v.industria_codigo}|${scheduledDate}`;
-    visitsMap.set(k, v);
+    const current = visitsMap.get(k);
+    const currentAttempt = current?.attempt_number || 1;
+    const candidateAttempt = v.attempt_number || 1;
+    const candidateIsNewer = candidateAttempt > currentAttempt
+      || (candidateAttempt === currentAttempt
+        && (Date.parse(v.created_at || '') || 0) > (Date.parse(current?.created_at || '') || 0));
+    if (!current || candidateIsNewer) visitsMap.set(k, v);
   });
 
   // 2.1 Pré-indexar visitas anteriores para consulta de histórico de rotas quinzenais

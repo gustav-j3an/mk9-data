@@ -18,7 +18,7 @@ export interface VisitWorkSchedule {
   hora_fim?: string | null;
 }
 
-interface OperationalVisit {
+export interface OperationalVisit {
   status: string;
   data_visita: string;
   started_at?: string | null;
@@ -78,10 +78,20 @@ export function findOwnOpenVisit<T extends { promotor_matricula: string; status:
     && !('regularization_status' in visit && visit.regularization_status));
 }
 
+export function findReusableActiveCheckInVisit<T extends { status: string; regularization_status?: string | null }>(visits: T[]): T | undefined {
+  return visits.find(visit => visit.status === 'em_andamento' && !visit.regularization_status);
+}
+
 export function isOpenVisitFromToday(visit: OperationalVisit, now: Date | string = new Date()): boolean {
   return visit.status === 'em_andamento'
     && !visit.regularization_status
     && visit.data_visita === getVisitOperationalDate(visit, now);
+}
+
+export function getStaleOpenVisits<T extends OperationalVisit>(visits: T[], now: Date | string = new Date()): T[] {
+  return visits.filter(visit => visit.status === 'em_andamento'
+    && !visit.regularization_status
+    && !isOpenVisitFromToday(visit, now));
 }
 
 export function formatOpenVisitConflictMessage(
@@ -89,21 +99,21 @@ export function formatOpenVisitConflictMessage(
   now: Date | string = new Date()
 ): string {
   if (visit && !isOpenVisitFromToday(visit, now)) {
-    return 'Existe uma visita antiga que precisa de regularização administrativa.';
+    return 'A visita antiga será encerrada como não realizada antes de liberar o novo atendimento.';
   }
   return 'Não foi possível iniciar a visita. Existe outro atendimento ativo. Use “Continuar Visita”.';
 }
 
 export function getOldOpenVisitsLabel(count: number): string {
-  return `${count} ${count === 1 ? 'visita antiga aguardando regularização administrativa' : 'visitas antigas aguardando regularização administrativa'}.`;
+  return `${count} ${count === 1 ? 'visita antiga aguardando encerramento automático' : 'visitas antigas aguardando encerramento automático'}.`;
 }
 
 export function getOldOpenVisitCheckInBlockMessage(): string {
-  return 'Novos check-ins estão bloqueados pelo servidor enquanto houver visita antiga em aberto. A regularização é administrativa.';
+  return 'Esta visita antiga será registrada como não realizada automaticamente no fechamento do dia operacional. Você pode iniciar outro atendimento; a data original, o horário de início, a justificativa e as evidências permanecem no histórico.';
 }
 
-export function getPromoterOpenVisitAction(visit: OperationalVisit, now: Date | string = new Date()): 'continue_today' | 'administrative_regularization' {
-  return isOpenVisitFromToday(visit, now) ? 'continue_today' : 'administrative_regularization';
+export function getPromoterOpenVisitAction(visit: OperationalVisit, now: Date | string = new Date()): 'continue_today' | 'automatic_expiry' {
+  return isOpenVisitFromToday(visit, now) ? 'continue_today' : 'automatic_expiry';
 }
 
 export function canReviewOldOpenVisits(role: string | null | undefined): boolean {
