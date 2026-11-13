@@ -141,6 +141,7 @@ test('fixed function fingerprints detect altered SQL and recognize all six migra
 test('synthetic workflow has no environment secrets and checks for remote configuration', async () => {
   const workflow = await readFile('.github/workflows/m58-4-synthetic-reconciliation.yml', 'utf8');
   const script = await readFile('scripts/m58-4-synthetic-reconciliation.sh', 'utf8');
+  const fixture = await readFile('scripts/m58-4-synthetic-fixture.sql', 'utf8');
   assert.doesNotMatch(workflow, /secrets\./i);
   assert.doesNotMatch(workflow, /^\s+environment:/mi);
   assert.doesNotMatch(workflow, /upload-artifact|cache:/i);
@@ -163,4 +164,7 @@ test('synthetic workflow has no environment secrets and checks for remote config
   assert.match(script, /m58-4-assert-migration-objects\.sql/);
   assert.match(script, /ALTER TABLE public\.system_settings RENAME COLUMN value/);
   assert.match(script, /ALTER POLICY system_settings_select_authenticated/);
+  assert.match(fixture, /M58_4_SUPABASE_SYSTEM_OBJECTS_MISSING/);
+  assert.doesNotMatch(fixture, /CREATE\s+(?:TABLE|OR REPLACE FUNCTION)\s+(?:IF NOT EXISTS\s+)?(?:auth\.|storage\.)/i);
+  assert.doesNotMatch(fixture, /ALTER TABLE\s+storage\.objects/i);
 });

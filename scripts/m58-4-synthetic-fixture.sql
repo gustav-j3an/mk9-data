@@ -1,11 +1,17 @@
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 DO $$ BEGIN CREATE ROLE anon; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE ROLE authenticated; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-CREATE SCHEMA IF NOT EXISTS auth;
-CREATE SCHEMA IF NOT EXISTS storage;
-CREATE TABLE IF NOT EXISTS auth.users(id uuid PRIMARY KEY);
-CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $$ SELECT NULL::uuid $$;
-CREATE OR REPLACE FUNCTION storage.foldername(text) RETURNS text[] LANGUAGE sql IMMUTABLE AS $$ SELECT string_to_array($1, '/') $$;
+DO $m58$
+BEGIN
+  IF to_regclass('auth.users') IS NULL
+     OR to_regprocedure('auth.uid()') IS NULL
+     OR to_regclass('storage.objects') IS NULL
+     OR to_regprocedure('storage.foldername(text)') IS NULL
+     OR NOT EXISTS (SELECT 1 FROM pg_class WHERE oid=to_regclass('storage.objects') AND relrowsecurity) THEN
+    RAISE EXCEPTION 'M58_4_SUPABASE_SYSTEM_OBJECTS_MISSING';
+  END IF;
+END
+$m58$;
 CREATE TABLE IF NOT EXISTS public.profiles(id uuid PRIMARY KEY, name text, email text, role text);
 CREATE TABLE IF NOT EXISTS public.promotores(matricula text PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS public.industrias(codigo text PRIMARY KEY);
@@ -23,13 +29,11 @@ CREATE TABLE IF NOT EXISTS public.visit_checklist_items(visit_id uuid);
 CREATE TABLE IF NOT EXISTS public.visit_photos(visit_id uuid);
 CREATE TABLE IF NOT EXISTS public.visit_occurrences(visit_id uuid);
 CREATE TABLE IF NOT EXISTS public.visit_product_validity(visit_id uuid);
-CREATE TABLE IF NOT EXISTS storage.objects(bucket_id text, name text);
 ALTER TABLE public.visits ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.visit_checklist_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.visit_photos ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.visit_occurrences ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.visit_product_validity ENABLE ROW LEVEL SECURITY;
-ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
 CREATE OR REPLACE FUNCTION public.is_admin() RETURNS boolean LANGUAGE sql STABLE AS $$ SELECT false $$;
 CREATE OR REPLACE FUNCTION public.is_admin_or_gestor() RETURNS boolean LANGUAGE sql STABLE AS $$ SELECT false $$;
 CREATE OR REPLACE FUNCTION public.get_auth_promotor_matricula() RETURNS text LANGUAGE sql STABLE AS $$ SELECT NULL::text $$;
