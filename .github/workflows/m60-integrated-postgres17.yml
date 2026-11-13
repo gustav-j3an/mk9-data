@@ -25,14 +25,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Checkout pinned M37/M38 migration source
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          repository: gustav-j3an/mk9-data
-          ref: 080ebbb1c70a7eb7716d3f9669039fd127e00123
-          path: m38-source
-          persist-credentials: false
-
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
@@ -47,6 +39,14 @@ jobs:
           npm test
           npm run typecheck
           npm run build
+
+      - name: Checkout pinned M37/M38 migration source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: gustav-j3an/mk9-data
+          ref: 080ebbb1c70a7eb7716d3f9669039fd127e00123
+          path: m38-source
+          persist-credentials: false
 
       - name: Install PostgreSQL 17 client
         shell: bash
