@@ -82,6 +82,35 @@ done
 psql "$DB_URL" -v ON_ERROR_STOP=1 -f scripts/m58-4-assert-migration-objects.sql >/dev/null
 node scripts/m58-4-verify-function-bodies.mjs "$DB_URL"
 
+expect_acl_rejection() {
+  local expected_marker="$1"
+  local grant_statement="$2"
+  local output
+  if output="$(psql "$DB_URL" -v ON_ERROR_STOP=1 -c "BEGIN; ${grant_statement}" -f scripts/m58-4-assert-migration-objects.sql 2>&1)"; then
+    echo 'M58_4_NEGATIVE_ACL_ASSERTION_FAILED' >&2
+    exit 1
+  fi
+  if ! grep -Fq "$expected_marker" <<< "$output"; then
+    echo 'M58_4_NEGATIVE_ACL_ASSERTION_WRONG_FAILURE' >&2
+    exit 1
+  fi
+  # A failed assertion aborts its transaction; the clean rerun proves the probe grant rolled back.
+  psql "$DB_URL" -v ON_ERROR_STOP=1 -f scripts/m58-4-assert-migration-objects.sql >/dev/null
+}
+
+expect_acl_rejection M58_4_CONTRACT_SYNC_AUTHENTICATED_EXECUTE_MISSING \
+  'REVOKE EXECUTE ON FUNCTION public.sync_contratos_from_rotas() FROM authenticated'
+expect_acl_rejection M58_4_CONTRACT_SYNC_ANON_EXECUTE_UNEXPECTED \
+  'GRANT EXECUTE ON FUNCTION public.sync_contratos_from_rotas() TO anon'
+expect_acl_rejection M58_4_CONTRACT_SYNC_ANON_EXECUTE_UNEXPECTED \
+  'GRANT EXECUTE ON FUNCTION public.sync_contratos_from_rotas() TO PUBLIC'
+expect_acl_rejection M58_4_CONTRACT_SYNC_SERVICE_ROLE_EXECUTE_UNEXPECTED \
+  'GRANT EXECUTE ON FUNCTION public.sync_contratos_from_rotas() TO service_role'
+expect_acl_rejection M58_4_CONTRACT_OVERLAP_TRIGGER_API_ROLE_EXECUTE_UNEXPECTED \
+  'GRANT EXECUTE ON FUNCTION public.check_contratos_vigencia_overlap() TO authenticated'
+expect_acl_rejection M58_4_CONTRACT_UPDATED_AT_TRIGGER_API_ROLE_EXECUTE_UNEXPECTED \
+  'GRANT EXECUTE ON FUNCTION public.handle_contratos_updated_at() TO service_role'
+
 # Prove the catalog assertions reject a divergent column and policy; each failed check
 # terminates its transaction, and a clean assertion pass immediately proves rollback.
 if psql "$DB_URL" -v ON_ERROR_STOP=1 -c 'BEGIN; ALTER TABLE public.system_settings RENAME COLUMN value TO value_mismatch;' -f scripts/m58-4-assert-migration-objects.sql >/dev/null 2>&1; then
@@ -94,7 +123,7 @@ if psql "$DB_URL" -v ON_ERROR_STOP=1 -c 'BEGIN; ALTER POLICY system_settings_sel
   exit 1
 fi
 psql "$DB_URL" -v ON_ERROR_STOP=1 -f scripts/m58-4-assert-migration-objects.sql >/dev/null
-echo 'Negative catalog probes rejected altered column and policy definitions; rollback was verified.'
+echo 'Negative ACL, column and policy probes were rejected; rollback was verified.'
 
 # Synthetic fixture ledger has exactly 17 pre-existing versions; none is a candidate version.
 node scripts/bundle-repository-migrations.mjs "$ROOT/migrations-bundle" >/dev/null

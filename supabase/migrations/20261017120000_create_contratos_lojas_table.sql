@@ -349,11 +349,11 @@ END;
 $$;
 
 -- 8. GESTÃO ESTRITA DE PRIVILÉGIOS DE EXECUÇÃO
--- Por padrão no PostgreSQL, funções recém-criadas concedem EXECUTE ao pseudo-papel PUBLIC.
--- Revogamos explicitamente de PUBLIC para garantir menor privilégio:
-REVOKE EXECUTE ON FUNCTION public.check_contratos_vigencia_overlap() FROM PUBLIC;
-REVOKE EXECUTE ON FUNCTION public.handle_contratos_updated_at() FROM PUBLIC;
-REVOKE EXECUTE ON FUNCTION public.sync_contratos_from_rotas() FROM PUBLIC;
+-- A configuração padrão do Supabase também pode conceder EXECUTE diretamente
+-- aos papéis da API ao criar funções. Removemos esses grants explícitos além de PUBLIC.
+REVOKE EXECUTE ON FUNCTION public.check_contratos_vigencia_overlap() FROM PUBLIC, anon, authenticated, service_role;
+REVOKE EXECUTE ON FUNCTION public.handle_contratos_updated_at() FROM PUBLIC, anon, authenticated, service_role;
+REVOKE EXECUTE ON FUNCTION public.sync_contratos_from_rotas() FROM PUBLIC, anon, authenticated, service_role;
 
 -- Funções acionadas por gatilho (check_contratos_vigencia_overlap e handle_contratos_updated_at)
 -- são disparadas internamente pelo PostgreSQL no contexto do comando DML do usuário na tabela.

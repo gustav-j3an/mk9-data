@@ -144,23 +144,27 @@ test('contract ACL assertion diagnoses effective, direct, and PUBLIC grants sepa
   for (const marker of [
     'M58_4_CONTRACT_SYNC_AUTHENTICATED_EXECUTE_MISSING',
     'M58_4_CONTRACT_SYNC_ANON_EXECUTE_UNEXPECTED',
+    'M58_4_CONTRACT_SYNC_SERVICE_ROLE_EXECUTE_UNEXPECTED',
     'M58_4_CONTRACT_OVERLAP_TRIGGER_ANON_EXECUTE_UNEXPECTED',
+    'M58_4_CONTRACT_OVERLAP_TRIGGER_API_ROLE_EXECUTE_UNEXPECTED',
     'M58_4_CONTRACT_UPDATED_AT_TRIGGER_ANON_EXECUTE_UNEXPECTED',
+    'M58_4_CONTRACT_UPDATED_AT_TRIGGER_API_ROLE_EXECUTE_UNEXPECTED',
   ]) assert.ok(assertion.includes(marker), `missing ACL diagnostic: ${marker}`);
   assert.equal((assertion.match(/has_function_privilege\('anon'/g) ?? []).length, 6);
   assert.equal((assertion.match(/aclexplode\(COALESCE\(proacl, acldefault\('f',proowner\)\)\)/g) ?? []).length, 6);
   assert.match(assertion, /a\.grantee=0 AND a\.privilege_type='EXECUTE'/);
   assert.match(assertion, /a\.grantee=\(SELECT oid FROM pg_roles WHERE rolname='anon'\).*a\.privilege_type='EXECUTE'/s);
   assert.match(assertion, /pg_has_role\('anon','authenticated','USAGE'\)/);
-  assert.match(migration, /REVOKE EXECUTE ON FUNCTION public\.check_contratos_vigencia_overlap\(\) FROM PUBLIC;/);
-  assert.match(migration, /REVOKE EXECUTE ON FUNCTION public\.handle_contratos_updated_at\(\) FROM PUBLIC;/);
-  assert.match(migration, /REVOKE EXECUTE ON FUNCTION public\.sync_contratos_from_rotas\(\) FROM PUBLIC;/);
+  assert.match(migration, /REVOKE EXECUTE ON FUNCTION public\.check_contratos_vigencia_overlap\(\) FROM PUBLIC, anon, authenticated, service_role;/);
+  assert.match(migration, /REVOKE EXECUTE ON FUNCTION public\.handle_contratos_updated_at\(\) FROM PUBLIC, anon, authenticated, service_role;/);
+  assert.match(migration, /REVOKE EXECUTE ON FUNCTION public\.sync_contratos_from_rotas\(\) FROM PUBLIC, anon, authenticated, service_role;/);
   assert.match(migration, /GRANT EXECUTE ON FUNCTION public\.sync_contratos_from_rotas\(\) TO authenticated;/);
 });
 
 test('synthetic workflow has no environment secrets and checks for remote configuration', async () => {
   const workflow = await readFile('.github/workflows/m58-4-synthetic-reconciliation.yml', 'utf8');
   const script = await readFile('scripts/m58-4-synthetic-reconciliation.sh', 'utf8');
+  const assertion = await readFile('scripts/m58-4-assert-migration-objects.sql', 'utf8');
   const fixture = await readFile('scripts/m58-4-synthetic-fixture.sql', 'utf8');
   assert.doesNotMatch(workflow, /secrets\./i);
   assert.doesNotMatch(workflow, /^\s+environment:/mi);
@@ -182,6 +186,10 @@ test('synthetic workflow has no environment secrets and checks for remote config
   assert.match(script, /inet_server_addr/);
   assert.match(script, /127\.0\.0\.1:54322/);
   assert.match(script, /m58-4-assert-migration-objects\.sql/);
+  assert.match(script, /expect_acl_rejection M58_4_CONTRACT_SYNC_ANON_EXECUTE_UNEXPECTED/);
+  assert.match(script, /GRANT EXECUTE ON FUNCTION public\.sync_contratos_from_rotas\(\) TO PUBLIC/);
+  assert.match(assertion, /has_function_privilege\('authenticated','public\.sync_contratos_from_rotas\(\)','EXECUTE'\)/);
+  assert.match(assertion, /has_function_privilege\('service_role','public\.sync_contratos_from_rotas\(\)','EXECUTE'\)/);
   assert.match(script, /ALTER TABLE public\.system_settings RENAME COLUMN value/);
   assert.match(script, /ALTER POLICY system_settings_select_authenticated/);
   assert.match(fixture, /M58_4_SUPABASE_SYSTEM_OBJECTS_MISSING/);
