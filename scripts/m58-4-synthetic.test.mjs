@@ -126,6 +126,11 @@ test('synthetic workflow has no environment secrets and checks for remote config
   assert.doesNotMatch(workflow, /upload-artifact|cache:/i);
   assert.match(workflow, /permissions:\s+contents:\s+read/);
   assert.ok([...workflow.matchAll(/uses:\s*([^\s#]+)/g)].every(([, action]) => /@[0-9a-f]{40}$/i.test(action)));
+  assert.match(workflow, /export PATH="\/usr\/lib\/postgresql\/17\/bin:\$PATH"/);
+  assert.match(workflow, /command -v psql\)" = '\/usr\/lib\/postgresql\/17\/bin\/psql'/);
+  assert.match(workflow, /command -v pg_dump\)" = '\/usr\/lib\/postgresql\/17\/bin\/pg_dump'/);
+  assert.match(workflow, /psql --version \| grep -q '\^psql \(PostgreSQL\) 17\\\.'/);
+  assert.match(workflow, /pg_dump --version \| grep -q '\^pg_dump \(PostgreSQL\) 17\\\.'/);
   assert.match(workflow, /workflow_dispatch/);
   assert.match(script, /REMOTE_SUPABASE_CONFIGURATION_PRESENT/);
   assert.match(script, /mk9_disposable_nonce/);
