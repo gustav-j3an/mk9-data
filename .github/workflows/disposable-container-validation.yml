@@ -48,7 +48,9 @@ jobs:
           echo "=== Executing isolated disposable container identity validation ==="
 
           # 1. Generate unique nonce and project id
-          NONCE="$(node -e 'import("node:crypto").then(c => console.log(c.randomBytes(16).toString("hex")))')"
+          # Supabase CLI 3.0.0 truncates project names to at most 40 characters in container naming.
+          # 14 bytes = 28 hex chars + 12 prefix chars = exactly 40 chars (112 bits entropy).
+          NONCE="$(node -e 'import("node:crypto").then(c => console.log(c.randomBytes(14).toString("hex")))')"
           PROJECT_ID="mk9_restore_${NONCE}"
           STACK_DIR="$RUNNER_TEMP/stacks/${PROJECT_ID}"
           mkdir -p "$STACK_DIR"
