@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS public.system_settings (
 
 -- Inserção idempotente dos valores iniciais seguros (Modo IMPLANTACAO)
 INSERT INTO public.system_settings (key, value, description)
-VALUES
+VALUES 
   ('operation_mode', '"IMPLANTACAO"'::jsonb, 'Modo operacional global: IMPLANTACAO ou OPERACAO_OFICIAL'),
   ('official_start_date', 'null'::jsonb, 'Data de início oficial das atividades operacionais (YYYY-MM-DD)')
 ON CONFLICT (key) DO NOTHING;
@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS public.system_settings_audit_log (
 );
 
 -- Criar índice para ordenação rápida do histórico de auditoria
-CREATE INDEX IF NOT EXISTS idx_system_settings_audit_log_changed_at
+CREATE INDEX IF NOT EXISTS idx_system_settings_audit_log_changed_at 
   ON public.system_settings_audit_log (changed_at DESC);
 
 -- 3. HABILITAR ROW LEVEL SECURITY (RLS)

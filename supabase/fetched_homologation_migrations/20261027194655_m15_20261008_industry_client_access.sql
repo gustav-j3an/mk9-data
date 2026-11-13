@@ -9,10 +9,10 @@
 DO $$
 BEGIN
   IF NOT EXISTS (
-    SELECT 1 FROM information_schema.columns
+    SELECT 1 FROM information_schema.columns 
     WHERE table_schema = 'public' AND table_name = 'profiles' AND column_name = 'industria_codigo'
   ) THEN
-    ALTER TABLE public.profiles
+    ALTER TABLE public.profiles 
     ADD COLUMN industria_codigo TEXT REFERENCES public.industrias(codigo) ON DELETE RESTRICT ON UPDATE CASCADE;
   END IF;
 END $$;
@@ -21,7 +21,7 @@ END $$;
 DO $$
 BEGIN
   ALTER TABLE public.profiles DROP CONSTRAINT IF EXISTS profiles_role_check;
-  ALTER TABLE public.profiles ADD CONSTRAINT profiles_role_check
+  ALTER TABLE public.profiles ADD CONSTRAINT profiles_role_check 
     CHECK (role IN ('admin', 'gestor', 'operador', 'promotor', 'client_industry'));
 EXCEPTION
   WHEN OTHERS THEN NULL;

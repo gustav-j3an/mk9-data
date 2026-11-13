@@ -3,7 +3,7 @@
 -- ==============================================================================
 
 -- Reestruturar rotas de forma segura
-DO $$
+DO $$ 
 BEGIN
   -- 1. Remover colunas obsoletas 'data' e 'sequencia' se existirem
   IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='rotas' AND column_name='data') THEN

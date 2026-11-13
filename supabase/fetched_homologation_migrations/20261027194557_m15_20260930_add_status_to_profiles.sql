@@ -3,7 +3,7 @@
 -- ==============================================================================
 
 -- 1. Adicionar coluna status na tabela public.profiles se não existir
-ALTER TABLE public.profiles
+ALTER TABLE public.profiles 
 ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'ativo' CHECK (status IN ('ativo', 'inativo'));
 
 -- 2. Atualizar Trigger prevent_role_change para permitir admins alterarem papéis e bloqueios

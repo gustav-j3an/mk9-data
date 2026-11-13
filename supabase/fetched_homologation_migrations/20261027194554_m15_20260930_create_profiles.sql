@@ -28,8 +28,8 @@ SET search_path = public, pg_temp
 STABLE
 AS $$
   SELECT EXISTS (
-    SELECT 1
-    FROM public.profiles
+    SELECT 1 
+    FROM public.profiles 
     WHERE id = auth.uid() AND role = 'admin'
   );
 $$;
@@ -133,8 +133,8 @@ CREATE TRIGGER on_auth_user_created
 -- PROMOÇÃO MANUAL DO PRIMEIRO ADMINISTRADOR
 -- Execute no SQL Editor após rodar este script:
 --
--- UPDATE public.profiles
--- SET role = 'admin'
+-- UPDATE public.profiles 
+-- SET role = 'admin' 
 -- WHERE email = 'gustavj3anmk9@gmail.com';
 -- ==============================================================================
 ;

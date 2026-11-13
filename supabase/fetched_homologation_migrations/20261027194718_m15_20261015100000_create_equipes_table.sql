@@ -71,7 +71,7 @@ BEGIN
   LOOP
     next_num := nextval('public.equipes_codigo_seq');
     candidate_code := 'EQP-' || lpad(next_num::text, 3, '0');
-
+    
     -- Verifica se o código candidato já existe na tabela (ex: inserido manualmente fora da sequence)
     IF NOT EXISTS (SELECT 1 FROM public.equipes WHERE codigo = candidate_code) THEN
       RETURN candidate_code;
@@ -109,7 +109,7 @@ BEGIN
   WHERE codigo ~ '^EQP-\d+$';
 
   -- 2. Inspecionar o estado atual da SEQUENCE
-  SELECT s.last_value, s.is_called INTO v_last_val, v_is_called
+  SELECT s.last_value, s.is_called INTO v_last_val, v_is_called 
   FROM public.equipes_codigo_seq s;
 
   IF NOT v_is_called THEN
@@ -222,26 +222,26 @@ DECLARE
   max_num INT;
 BEGIN
   IF EXISTS (
-    SELECT 1
-    FROM information_schema.tables
+    SELECT 1 
+    FROM information_schema.tables 
     WHERE table_schema = 'public' AND table_name = 'promotores'
   ) THEN
     INSERT INTO public.equipes (nome, regional, supervisor_nome, status)
     SELECT
       TRIM(p.equipe) AS nome,
-      CASE
-        WHEN COUNT(DISTINCT NULLIF(TRIM(p.uf), '')) = 1
+      CASE 
+        WHEN COUNT(DISTINCT NULLIF(TRIM(p.uf), '')) = 1 
         THEN MAX(NULLIF(TRIM(p.uf), ''))
-        ELSE NULL
+        ELSE NULL 
       END AS regional,
-      CASE
-        WHEN COUNT(DISTINCT NULLIF(TRIM(p.supervisor), '')) = 1
+      CASE 
+        WHEN COUNT(DISTINCT NULLIF(TRIM(p.supervisor), '')) = 1 
         THEN MAX(NULLIF(TRIM(p.supervisor), ''))
-        ELSE NULL
+        ELSE NULL 
       END AS supervisor_nome,
       'ativa' AS status
     FROM public.promotores p
-    WHERE p.equipe IS NOT NULL
+    WHERE p.equipe IS NOT NULL 
       AND TRIM(p.equipe) <> ''
     GROUP BY TRIM(p.equipe)
     ON CONFLICT (nome) DO NOTHING;

@@ -7,9 +7,9 @@
 DO $$
 BEGIN
   IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint
-    WHERE conrelid = 'public.industrias'::regclass
-      AND contype = 'u'
+    SELECT 1 FROM pg_constraint 
+    WHERE conrelid = 'public.industrias'::regclass 
+      AND contype = 'u' 
       AND conname = 'industrias_codigo_key'
   ) THEN
     ALTER TABLE public.industrias ADD CONSTRAINT industrias_codigo_key UNIQUE (codigo);
@@ -80,7 +80,7 @@ BEGIN
   FROM public.industrias
   WHERE codigo ~ '^IND-\d+$';
 
-  SELECT s.last_value, s.is_called INTO v_last_val, v_is_called
+  SELECT s.last_value, s.is_called INTO v_last_val, v_is_called 
   FROM public.industrias_codigo_seq s;
 
   IF NOT v_is_called THEN

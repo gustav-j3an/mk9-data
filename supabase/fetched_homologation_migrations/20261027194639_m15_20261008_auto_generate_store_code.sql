@@ -6,9 +6,9 @@
 DO $$
 BEGIN
   IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint
-    WHERE conrelid = 'public.lojas'::regclass
-      AND contype = 'u'
+    SELECT 1 FROM pg_constraint 
+    WHERE conrelid = 'public.lojas'::regclass 
+      AND contype = 'u' 
       AND conname = 'lojas_codigo_key'
   ) THEN
     ALTER TABLE public.lojas ADD CONSTRAINT lojas_codigo_key UNIQUE (codigo);

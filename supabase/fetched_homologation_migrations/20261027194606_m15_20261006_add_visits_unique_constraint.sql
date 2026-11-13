@@ -8,11 +8,11 @@
 DO $$
 BEGIN
   IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint
+    SELECT 1 FROM pg_constraint 
     WHERE conname = 'visits_promotor_loja_industria_data_unique'
   ) THEN
     ALTER TABLE public.visits
-    ADD CONSTRAINT visits_promotor_loja_industria_data_unique
+    ADD CONSTRAINT visits_promotor_loja_industria_data_unique 
     UNIQUE (promotor_matricula, loja_codigo, industria_codigo, data_visita);
   END IF;
 END $$;

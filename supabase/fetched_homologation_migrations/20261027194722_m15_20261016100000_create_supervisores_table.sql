@@ -79,7 +79,7 @@ BEGIN
   LOOP
     next_num := nextval('public.supervisores_codigo_seq');
     candidate_code := 'SUP-' || lpad(next_num::text, 3, '0');
-
+    
     IF NOT EXISTS (SELECT 1 FROM public.supervisores WHERE codigo = candidate_code) THEN
       RETURN candidate_code;
     END IF;
@@ -111,7 +111,7 @@ BEGIN
   FROM public.supervisores
   WHERE codigo ~ '^SUP-\d+$';
 
-  SELECT s.last_value, s.is_called INTO v_last_val, v_is_called
+  SELECT s.last_value, s.is_called INTO v_last_val, v_is_called 
   FROM public.supervisores_codigo_seq s;
 
   IF NOT v_is_called THEN
@@ -183,12 +183,12 @@ CREATE TRIGGER trigger_supervisores_updated_at
 DO $$
 BEGIN
   IF NOT EXISTS (
-    SELECT 1 FROM information_schema.columns
+    SELECT 1 FROM information_schema.columns 
     WHERE table_schema = 'public' AND table_name = 'equipes' AND column_name = 'supervisor_id'
   ) THEN
-    ALTER TABLE public.equipes
+    ALTER TABLE public.equipes 
       ADD COLUMN supervisor_id UUID REFERENCES public.supervisores(id) ON DELETE SET NULL;
-
+    
     CREATE INDEX IF NOT EXISTS idx_equipes_supervisor_id ON public.equipes (supervisor_id);
   END IF;
 END $$;
@@ -255,7 +255,7 @@ BEGIN
     WHERE supervisor_nome IS NOT NULL AND TRIM(supervisor_nome) <> '' AND TRIM(supervisor_nome) <> 'Nenhum'
   )
   INSERT INTO public.supervisores (nome, regional, status)
-  SELECT
+  SELECT 
     ns.nome_limpo AS nome,
     -- Obter regional se houver consenso na base de promotores
     (

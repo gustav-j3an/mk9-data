@@ -13,14 +13,14 @@ CREATE TABLE IF NOT EXISTS public.contratos_lojas (
   industria_codigo TEXT NOT NULL REFERENCES public.industrias(codigo) ON DELETE RESTRICT ON UPDATE CASCADE,
   loja_codigo TEXT NOT NULL REFERENCES public.lojas(codigo) ON DELETE RESTRICT ON UPDATE CASCADE,
   frequencia TEXT NOT NULL DEFAULT 'SEMANAL' CHECK (frequencia IN ('SEMANAL', 'QUINZENAL', 'MENSAL')),
-
+  
   -- Para SEMANAL: quantidade de visitas por semana (1 a 7).
   -- Para QUINZENAL e MENSAL: NULL (pois a frequência quinzenal ou mensal não se mede por visitas por semana).
   visitas_por_semana INTEGER CHECK (
     (frequencia = 'SEMANAL' AND visitas_por_semana IS NOT NULL AND visitas_por_semana >= 1 AND visitas_por_semana <= 7) OR
     (frequencia IN ('QUINZENAL', 'MENSAL') AND visitas_por_semana IS NULL)
   ),
-
+  
   -- Dias previstos de atendimento (quando aplicável contratualmente)
   segunda BOOLEAN NOT NULL DEFAULT FALSE,
   terca BOOLEAN NOT NULL DEFAULT FALSE,
@@ -247,7 +247,7 @@ BEGIN
 
   -- Percorrer agrupamento de rotas por indústria e loja
   FOR r IN (
-    SELECT
+    SELECT 
       industria_codigo,
       loja_codigo,
       MAX(frequencia) as frequencia,

@@ -39,7 +39,7 @@ BEGIN
     -- Grupo 1 (PRM-024, LOJ-0097, IND-001, 2026-10-02)
     '4dda4b2a-aa85-4ce8-a162-ba684d3f3fc0',
     '1ace8b3a-d049-4116-a1af-ddc2baddcc09',
-
+    
     -- Grupo 2 (PRM-060, LOJ-0367, IND-001, 2026-10-06)
     '86896272-df25-47c5-90ee-385e7d00b6dd',
     '97e74478-dbcf-46cb-8634-f44e0ae69aa6',
