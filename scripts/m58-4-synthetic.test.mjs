@@ -14,13 +14,16 @@ test('synthetic ledger selects exactly 17 repository versions and excludes six c
   try {
     const versions = [
       '20261009144200', '20261010', '20261011120000', '20261011140000',
-      '20261017120000', '20261017', ...Array.from({ length: 20 }, (_, i) => `202609${String(i + 1).padStart(2, '0')}`),
+      '20261017120000', '20261017', '20260901', '20260901',
+      ...Array.from({ length: 20 }, (_, i) => `202609${String(i + 1).padStart(2, '0')}`),
     ];
     const manifest = path.join(dir, 'manifest.json');
     await writeFile(manifest, JSON.stringify({ migrations: versions.map((version) => ({ version })) }));
     const result = spawnSync(process.execPath, ['scripts/m58-4-ledger-setup.mjs', manifest], { encoding: 'utf8' });
     assert.equal(result.status, 0, result.stderr);
     assert.equal((result.stdout.match(/synthetic baseline only/g) ?? []).length, 17);
+    const seededVersions = [...result.stdout.matchAll(/\('([0-9]+)', ARRAY/g)].map(([, version]) => version);
+    assert.equal(new Set(seededVersions).size, 17);
     for (const candidate of versions.slice(0, 6)) assert.equal(result.stdout.includes(`('${candidate}'`), false);
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -183,6 +186,7 @@ test('synthetic workflow has no environment secrets and checks for remote config
   assert.match(script, /resolve-disposable-container\.mjs .*public\.mk9_disposable_nonce/);
   assert.match(script, /m58-4-verify-function-bodies\.mjs/);
   assert.match(script, /m58-4-assert-ledger-transition\.mjs/);
+  assert.match(script, /DELETE FROM supabase_migrations\.schema_migrations/);
   assert.match(script, /inet_server_addr/);
   assert.match(script, /127\.0\.0\.1:54322/);
   assert.match(script, /m58-4-assert-migration-objects\.sql/);

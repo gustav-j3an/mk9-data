@@ -129,6 +129,10 @@ echo 'Negative ACL, column and policy probes were rejected; rollback was verifie
 
 # Synthetic fixture ledger has exactly 17 pre-existing versions; none is a candidate version.
 node scripts/bundle-repository-migrations.mjs "$ROOT/migrations-bundle" >/dev/null
+# Supabase CLI may seed its own migration versions (including versions also used by this repo).
+# Reset only the already-verified disposable database ledger before loading the synthetic baseline.
+psql "$DB_URL" -v ON_ERROR_STOP=1 -c 'DELETE FROM supabase_migrations.schema_migrations' >/dev/null
+[[ "$(psql "$DB_URL" -Atc 'SELECT count(*) FROM supabase_migrations.schema_migrations')" == 0 ]]
 node scripts/m58-4-ledger-setup.mjs "$ROOT/migrations-bundle/manifest.json" > "$ROOT/ledger-setup.sql"
 psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT/ledger-setup.sql" >/dev/null
 psql "$DB_URL" -v ON_ERROR_STOP=1 --tuples-only --no-align --file=scripts/backup-inventory.sql > "$ROOT/inventory-before.json"
