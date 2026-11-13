@@ -91,7 +91,9 @@ expect_acl_rejection() {
     exit 1
   fi
   if ! grep -Fq "$expected_marker" <<< "$output"; then
-    echo 'M58_4_NEGATIVE_ACL_ASSERTION_WRONG_FAILURE' >&2
+    local actual_marker
+    actual_marker="$(grep -oE 'M58_4_[A-Z0-9_]+' <<< "$output" | tail -n 1 || true)"
+    echo "M58_4_NEGATIVE_ACL_ASSERTION_WRONG_FAILURE expected=${expected_marker} actual=${actual_marker:-NO_M58_MARKER}" >&2
     exit 1
   fi
   # A failed assertion aborts its transaction; the clean rerun proves the probe grant rolled back.
