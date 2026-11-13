@@ -55,10 +55,16 @@ COMPOSE_LABEL="$(docker inspect --format '{{ index .Config.Labels "com.docker.co
 echo 'Container metadata verified: unique ephemeral project, official PostgreSQL image, matching labels.'
 
 DB_URL='postgresql://postgres:postgres@127.0.0.1:54322/postgres?sslmode=disable'
+unset PGHOST PGPORT PGDATABASE PGUSER PGSSLMODE PGSSLROOTCERT PGHOSTADDR PGOPTIONS PGSERVICE PGSERVICEFILE
 export PGPASSWORD=postgres
+node scripts/m58-4-disposable-target.mjs "$DB_URL" "$PROJECT_ID" "$NONCE"
 # Only after project name, exact count, image, and labels match do we write a nonce challenge.
 psql "$DB_URL" -v ON_ERROR_STOP=1 -c 'CREATE TABLE public.mk9_disposable_nonce(token text);' >/dev/null
 psql "$DB_URL" -v ON_ERROR_STOP=1 -c "INSERT INTO public.mk9_disposable_nonce VALUES ('${NONCE}');" >/dev/null
+CONTAINER_IPS="$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}},{{end}}' "$CONTAINER_ID" | sed 's/,$//')"
+[[ -n "$CONTAINER_IPS" ]]
+PROBE="$(psql "$DB_URL" -v ON_ERROR_STOP=1 -F '|' -Atc "SELECT current_database(), inet_server_addr()::text, inet_server_port(), current_setting('server_version_num'), (SELECT count(*) FROM public.mk9_disposable_nonce WHERE token='${NONCE}');")"
+node scripts/m58-4-disposable-target.mjs "$DB_URL" "$PROJECT_ID" "$NONCE" "$PROBE" "$CONTAINER_IPS"
 RESOLVED="$(node scripts/resolve-disposable-container.mjs "$PROJECT_ID" "$NONCE")"
 [[ "${RESOLVED,,}" == "${CONTAINER_ID,,}" ]]
 echo 'Database nonce challenge verified the exact container.'
@@ -74,15 +80,33 @@ for migration in \
   psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$migration" >/dev/null
 done
 psql "$DB_URL" -v ON_ERROR_STOP=1 -f scripts/m58-4-assert-migration-objects.sql >/dev/null
+node scripts/m58-4-verify-function-bodies.mjs "$DB_URL"
+
+# Prove the catalog assertions reject a divergent column and policy; each failed check
+# terminates its transaction, and a clean assertion pass immediately proves rollback.
+if psql "$DB_URL" -v ON_ERROR_STOP=1 -c 'BEGIN; ALTER TABLE public.system_settings RENAME COLUMN value TO value_mismatch;' -f scripts/m58-4-assert-migration-objects.sql >/dev/null 2>&1; then
+  echo 'M58_4_NEGATIVE_COLUMN_ASSERTION_FAILED' >&2
+  exit 1
+fi
+psql "$DB_URL" -v ON_ERROR_STOP=1 -f scripts/m58-4-assert-migration-objects.sql >/dev/null
+if psql "$DB_URL" -v ON_ERROR_STOP=1 -c 'BEGIN; ALTER POLICY system_settings_select_authenticated ON public.system_settings USING (false);' -f scripts/m58-4-assert-migration-objects.sql >/dev/null 2>&1; then
+  echo 'M58_4_NEGATIVE_POLICY_ASSERTION_FAILED' >&2
+  exit 1
+fi
+psql "$DB_URL" -v ON_ERROR_STOP=1 -f scripts/m58-4-assert-migration-objects.sql >/dev/null
+echo 'Negative catalog probes rejected altered column and policy definitions; rollback was verified.'
 
 # Synthetic fixture ledger has exactly 17 pre-existing versions; none is a candidate version.
 node scripts/bundle-repository-migrations.mjs "$ROOT/migrations-bundle" >/dev/null
 node scripts/m58-4-ledger-setup.mjs "$ROOT/migrations-bundle/manifest.json" > "$ROOT/ledger-setup.sql"
 psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$ROOT/ledger-setup.sql" >/dev/null
 psql "$DB_URL" -v ON_ERROR_STOP=1 --tuples-only --no-align --file=scripts/backup-inventory.sql > "$ROOT/inventory-before.json"
+psql "$DB_URL" -v ON_ERROR_STOP=1 -Atc "SELECT COALESCE(json_agg(json_build_object('version',version,'statements',statements,'name',name) ORDER BY version), '[]'::json) FROM supabase_migrations.schema_migrations" > "$ROOT/ledger-before.json"
 psql "$DB_URL" -v ON_ERROR_STOP=1 -c "INSERT INTO supabase_migrations.schema_migrations(version, statements) VALUES ('20261009144200', ARRAY['synthetic ledger simulation']), ('20261010', ARRAY['synthetic ledger simulation']), ('20261011120000', ARRAY['synthetic ledger simulation']), ('20261011140000', ARRAY['synthetic ledger simulation']), ('20261017120000', ARRAY['synthetic ledger simulation']), ('20261017', ARRAY['synthetic ledger simulation']);" >/dev/null
 psql "$DB_URL" -v ON_ERROR_STOP=1 --tuples-only --no-align --file=scripts/backup-inventory.sql > "$ROOT/inventory-after.json"
+psql "$DB_URL" -v ON_ERROR_STOP=1 -Atc "SELECT COALESCE(json_agg(json_build_object('version',version,'statements',statements,'name',name) ORDER BY version), '[]'::json) FROM supabase_migrations.schema_migrations" > "$ROOT/ledger-after.json"
 node scripts/m58-4-assert-invariance.mjs "$ROOT/inventory-before.json" "$ROOT/inventory-after.json"
+node scripts/m58-4-assert-ledger-transition.mjs "$ROOT/ledger-before.json" "$ROOT/ledger-after.json"
 pg_dump --data-only --schema=supabase_migrations "$DB_URL" > "$ROOT/migration-history-data.sql"
 node scripts/reconcile-migrations.mjs "$ROOT/migration-history-data.sql" "$ROOT/migrations-bundle/manifest.json"
 [[ "$(psql "$DB_URL" -Atc 'SELECT count(*) FROM supabase_migrations.schema_migrations')" == 23 ]]
