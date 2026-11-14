@@ -295,6 +295,58 @@ function Get-Sha256([string]$Path) {
     (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 
+function Get-StorageObjectToken([string]$BucketName, [string]$ObjectKey) {
+    $bucketBytes = [Text.Encoding]::UTF8.GetBytes($BucketName)
+    $keyBytes = [Text.Encoding]::UTF8.GetBytes($ObjectKey)
+    $payload = New-Object byte[] (4 + $bucketBytes.Length + $keyBytes.Length)
+    [Buffer]::BlockCopy([BitConverter]::GetBytes([int]$bucketBytes.Length), 0, $payload, 0, 4)
+    [Buffer]::BlockCopy($bucketBytes, 0, $payload, 4, $bucketBytes.Length)
+    [Buffer]::BlockCopy($keyBytes, 0, $payload, 4 + $bucketBytes.Length, $keyBytes.Length)
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { return ([BitConverter]::ToString($sha.ComputeHash($payload))).Replace('-', '').ToLowerInvariant() }
+    finally { $sha.Dispose(); [Array]::Clear($payload, 0, $payload.Length) }
+}
+
+function Register-StorageObjectToken([hashtable]$Registry, [string]$Token, [string]$BucketName, [string]$ObjectKey) {
+    if ($Token -notmatch '^[0-9a-f]{64}$') { throw 'STORAGE_OBJECT_TOKEN_INVALID' }
+    $identity = [string]$BucketName.Length + ':' + $BucketName + [string]$ObjectKey.Length + ':' + $ObjectKey
+    if ($Registry.ContainsKey($Token)) {
+        if ($Registry[$Token] -ceq $identity) { throw 'STORAGE_OBJECT_DUPLICATE' }
+        throw 'STORAGE_OBJECT_TOKEN_COLLISION'
+    }
+    $Registry[$Token] = $identity
+}
+
+function Get-StorageObjectBlobPath([string]$ObjectDataRoot, [string]$BucketName, [string]$ObjectKey, [hashtable]$Registry) {
+    $token = Get-StorageObjectToken $BucketName $ObjectKey
+    Register-StorageObjectToken $Registry $token $BucketName $ObjectKey
+    $fileName = $token + '.blob'
+    $candidatePath = Join-Path $ObjectDataRoot $fileName
+    if ($candidatePath.Length -gt 240) { throw 'STORAGE_OBJECT_PATH_TOO_LONG' }
+    $fullPath = [IO.Path]::GetFullPath($candidatePath)
+    $rootPrefix = [IO.Path]::GetFullPath($ObjectDataRoot).TrimEnd('\') + '\'
+    if (-not $fullPath.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) { throw 'STORAGE_OBJECT_PATH_INVALID' }
+    if (Test-Path -LiteralPath $fullPath) { throw 'STORAGE_OBJECT_PATH_COLLISION' }
+    return [pscustomobject]@{ FullPath = $fullPath; ManifestPath = 'storage/objects/' + $fileName; Token = $token }
+}
+
+function Get-StorageEntryName($Entry) {
+    if ($null -eq $Entry -or $null -eq $Entry.PSObject.Properties['name']) { throw 'STORAGE_OBJECT_NAME_MISSING' }
+    $property = $Entry.PSObject.Properties['name']
+    if ($property.Value -isnot [string]) { throw 'STORAGE_OBJECT_NAME_INVALID' }
+    if ([string]::IsNullOrEmpty([string]$property.Value)) { throw 'STORAGE_OBJECT_NAME_MISSING' }
+    return [string]$property.Value
+}
+
+function Get-SafePathErrorCategory($Exception) {
+    $inner = if ($null -ne $Exception.InnerException) { $Exception.InnerException } else { $Exception }
+    if ($inner -is [IO.PathTooLongException]) { return 'PATH_TOO_LONG' }
+    if ($inner -is [System.ArgumentNullException]) { return 'PATH_EMPTY' }
+    if ($inner -is [System.ArgumentException] -or $inner -is [System.NotSupportedException]) { return 'PATH_INVALID' }
+    if ($inner -is [IO.IOException]) { return 'PATH_IO_ERROR' }
+    return 'OTHER'
+}
+
 function Test-PgDumpCompatibility($Connection, [string]$Directory, [string]$Prefix = 'pgdump-compat') {
     $dumpPath = Join-Path $Directory ($Prefix + '.dump')
     $dumpResult = Invoke-CapturedNative (Join-Path $script:PgBin 'pg_dump.exe') @('--schema-only', '-h', $Connection.Host, '-p', [string]$Connection.Port, '-U', $Connection.User, '-d', 'postgres', '-Fc', '-f', $dumpPath)
@@ -333,6 +385,8 @@ function Get-SafeFailureMetadata($ErrorRecord) {
         if ([string]::IsNullOrWhiteSpace($commandName)) { try { $commandName = [string]$invocation.InvocationName } catch { } }
     }
     try { $parameterName = [string]$exception.ParameterName } catch { }
+    $innerExceptionType = ''
+    try { if ($null -ne $exception.InnerException) { $innerExceptionType = $exception.InnerException.GetType().Name } } catch { }
     if ($null -ne $invocation) {
         try { $fileName = [IO.Path]::GetFileName([string]$invocation.ScriptName) } catch { }
         try { $lineNumber = [int]$invocation.ScriptLineNumber } catch { }
@@ -346,6 +400,8 @@ function Get-SafeFailureMetadata($ErrorRecord) {
         ParameterName = $parameterName
         FileName = $fileName
         LineNumber = $lineNumber
+        InnerExceptionType = $innerExceptionType
+        ErrorCategory = Get-SafePathErrorCategory $exception
     }
 }
 
@@ -373,22 +429,23 @@ function ConvertTo-StorageBucketItems($Response) {
 
 function Get-SafeFailureCode([System.Management.Automation.ErrorRecord]$ErrorRecord) {
     $code = [string]$ErrorRecord.Exception.Message
-    if ($code -in @('STORAGE_BUCKET_NAME_MISSING', 'STORAGE_BUCKET_NAME_INVALID')) { return $code }
+    if ($code -in @('STORAGE_BUCKET_NAME_MISSING', 'STORAGE_BUCKET_NAME_INVALID', 'STORAGE_OBJECT_NAME_MISSING', 'STORAGE_OBJECT_NAME_INVALID', 'STORAGE_OBJECT_TOKEN_INVALID', 'STORAGE_OBJECT_DUPLICATE', 'STORAGE_OBJECT_TOKEN_COLLISION', 'STORAGE_OBJECT_PATH_INVALID', 'STORAGE_OBJECT_PATH_TOO_LONG', 'STORAGE_OBJECT_PATH_COLLISION')) { return $code }
     return ''
 }
 
-function Write-Manifest([string]$Root, [hashtable]$Counts) {
+function Write-Manifest([string]$Root, [hashtable]$Counts, [object[]]$StorageObjects = @()) {
     $files = @()
     foreach ($file in Get-ChildItem -LiteralPath $Root -File -Recurse | Where-Object { $_.Name -ne 'pgpass.conf' } | Sort-Object FullName) {
         $relative = $file.FullName.Substring($Root.Length).TrimStart('\') -replace '\\', '/'
         $files += [ordered]@{ path = $relative; bytes = $file.Length; sha256 = (Get-Sha256 $file.FullName) }
     }
     $manifest = [ordered]@{
-        format = 'mk9-production-backup-v1'
+        format = 'mk9-production-backup-v2'
         projectRef = $script:ProjectRef
         createdAtUtc = [DateTime]::UtcNow.ToString('o')
         counts = $Counts
         files = $files
+        storageObjects = @($StorageObjects)
     }
     $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $Root 'manifest.json') -Encoding UTF8
 }
@@ -397,8 +454,22 @@ function Assert-Manifest([string]$Root) {
     $manifestPath = Join-Path $Root 'manifest.json'
     if (-not (Test-Path -LiteralPath $manifestPath)) { throw 'Manifest ausente no pacote recuperado.' }
     $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-    if ($manifest.projectRef -ne $script:ProjectRef) { throw 'Manifest pertence a outro projeto.' }
+    if ($manifest.projectRef -ne $script:ProjectRef -or $manifest.format -ne 'mk9-production-backup-v2') { throw 'Manifest pertence a outro projeto ou formato.' }
     $expectedPaths = @($manifest.files | ForEach-Object { $_.path })
+    $storageObjects = @($manifest.storageObjects)
+    if ($storageObjects.Count -ne [int]$manifest.counts.storageObjects) { throw 'Storage mapping count does not match the manifest count.' }
+    $mappedPaths = @{}
+    foreach ($storageObject in $storageObjects) {
+        if ([string]::IsNullOrEmpty([string]$storageObject.bucket) -or [string]::IsNullOrEmpty([string]$storageObject.key) -or [string]$storageObject.path -notmatch '^storage/objects/[0-9a-f]{64}\.blob$') { throw 'Storage mapping contains an invalid entry.' }
+        $token = Split-Path -Leaf ([string]$storageObject.path) -ErrorAction Stop
+        $token = $token.Substring(0, $token.Length - 5)
+        if ((Get-StorageObjectToken ([string]$storageObject.bucket) ([string]$storageObject.key)) -cne $token) { throw 'Storage mapping token does not match its original key.' }
+        if ($mappedPaths.ContainsKey([string]$storageObject.path)) { throw 'Storage mapping contains a local-path collision.' }
+        $mappedPaths[[string]$storageObject.path] = $true
+        if ($expectedPaths -cnotcontains [string]$storageObject.path) { throw 'Storage mapping references a missing payload file.' }
+    }
+    $storageFilePaths = @($expectedPaths | Where-Object { $_ -match '^storage/objects/[0-9a-f]{64}\.blob$' })
+    if ($storageFilePaths.Count -ne $storageObjects.Count) { throw 'Storage payload files and original-key mappings do not match.' }
     foreach ($entry in $manifest.files) {
         $candidate = [IO.Path]::GetFullPath((Join-Path $Root ($entry.path -replace '/', '\')))
         $prefix = [IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'
@@ -422,13 +493,19 @@ function Invoke-SelfTest {
     New-Item -ItemType Directory -Path $testRoot | Out-Null
     try {
         $payload = Join-Path $testRoot 'payload'
-        New-Item -ItemType Directory -Path (Join-Path $payload 'storage\fixture-bucket') -Force | Out-Null
         New-Item -ItemType Directory -Path (Join-Path $payload 'auth') -Force | Out-Null
+        $fixtureBucketName = 'fixture-bucket'
+        $fixtureObjectKey = 'folder/CON. /invalid?:name.txt/文件.txt'
+        $fixtureObjectRoot = Join-Path $payload 'storage\objects'
+        New-Item -ItemType Directory -Path $fixtureObjectRoot -Force | Out-Null
+        $fixtureTokenRegistry = @{}
+        $fixtureObjectPath = Get-StorageObjectBlobPath $fixtureObjectRoot $fixtureBucketName $fixtureObjectKey $fixtureTokenRegistry
         Set-Content -LiteralPath (Join-Path $payload 'database.dump') -Value 'synthetic-database-fixture' -Encoding ASCII
         Set-Content -LiteralPath (Join-Path $payload 'auth\users.json') -Value '{"users":[{"id":"fixture-user"}]}' -Encoding UTF8
-        Set-Content -LiteralPath (Join-Path $payload 'storage\fixture-bucket\fixture.txt') -Value 'synthetic-storage-fixture' -Encoding ASCII
+        Set-Content -LiteralPath $fixtureObjectPath.FullPath -Value 'synthetic-storage-fixture' -Encoding ASCII
         Set-Content -LiteralPath (Join-Path $payload 'pgpass.conf') -Value 'synthetic-secret-must-not-enter-archive' -Encoding ASCII
-        Write-Manifest $payload @{ authUsers = 1; storageBuckets = 1; storageObjects = 1; databaseObjects = 1 }
+        $fixtureObjectMap = @([ordered]@{ bucket = $fixtureBucketName; key = $fixtureObjectKey; path = $fixtureObjectPath.ManifestPath })
+        Write-Manifest $payload @{ authUsers = 1; storageBuckets = 1; storageObjects = 1; databaseObjects = 1 } $fixtureObjectMap
         if ((Get-Content (Join-Path $payload 'manifest.json') -Raw) -match 'pgpass.conf') { throw 'Temporary password file was added to the manifest.' }
         Assert-Manifest $payload
         Compress-Archive -Path (Join-Path $payload 'database.dump'),(Join-Path $payload 'auth'),(Join-Path $payload 'storage'),(Join-Path $payload 'manifest.json') -DestinationPath $plain -CompressionLevel Optimal
@@ -448,8 +525,21 @@ function Invoke-SelfTest {
         Expand-Archive -LiteralPath $decrypted -DestinationPath $extract
         Assert-Manifest $extract
         if ((Get-Content (Join-Path $extract 'auth\users.json') -Raw) -notmatch 'fixture-user') { throw 'Fixture Auth nÃ£o foi recuperado.' }
-        if ((Get-Content (Join-Path $extract 'storage\fixture-bucket\fixture.txt') -Raw) -notmatch 'synthetic-storage-fixture') { throw 'Fixture Storage nÃ£o foi recuperado.' }
-        Set-Content -LiteralPath (Join-Path $extract 'storage\fixture-bucket\fixture.txt') -Value 'tampered' -Encoding ASCII
+        $recoveredManifest = Get-Content -LiteralPath (Join-Path $extract 'manifest.json') -Raw | ConvertFrom-Json
+        $recoveredStorageMap = @($recoveredManifest.storageObjects)
+        if ($recoveredStorageMap.Count -ne 1 -or $recoveredStorageMap[0].bucket -ne $fixtureBucketName -or $recoveredStorageMap[0].key -ne $fixtureObjectKey) { throw 'Fixture Storage original-key mapping was not recovered.' }
+        $recoveredMapEntry = $recoveredStorageMap[0]
+        $recoveredObjectPath = Join-Path $extract ($recoveredStorageMap[0].path -replace '/', '\')
+        if ((Get-Content -LiteralPath $recoveredObjectPath -Raw) -notmatch 'synthetic-storage-fixture') { throw 'Fixture Storage nÃ£o foi recuperado.' }
+        $recoveredMapEntry.key = 'tampered-key'
+        Set-Content -LiteralPath (Join-Path $extract 'manifest.json') -Value ($recoveredManifest | ConvertTo-Json -Depth 8) -Encoding UTF8
+        $mappingTamperRejected = $false
+        try { Assert-Manifest $extract } catch { $mappingTamperRejected = $true }
+        if (-not $mappingTamperRejected) { throw 'Storage original-key mapping tampering was not detected.' }
+        $recoveredMapEntry.key = $fixtureObjectKey
+        Set-Content -LiteralPath (Join-Path $extract 'manifest.json') -Value ($recoveredManifest | ConvertTo-Json -Depth 8) -Encoding UTF8
+        Assert-Manifest $extract
+        Set-Content -LiteralPath $recoveredObjectPath -Value 'tampered' -Encoding ASCII
         $integrityFailed = $false
         try { Assert-Manifest $extract } catch { $integrityFailed = $true }
         if (-not $integrityFailed) { throw 'Internal-file integrity failure was not detected.' }
@@ -527,6 +617,32 @@ function Invoke-SelfTest {
         $normalizedSyntheticRelative = $syntheticRelative -replace '\\', '/'
         $correctedSyntheticQueue.Enqueue([string]$normalizedSyntheticRelative)
         if ($correctedSyntheticQueue.Dequeue() -ne 'synthetic-folder/child') { throw 'Storage queue method-call correction regression test failed.' }
+        $edgeTokenRegistry = @{}
+        $edgeKeys = @('CON', 'NUL.txt', 'invalid?:name.txt', 'trailing.', 'trailing ', 'Case.txt', 'case.txt', 'unicode-ç漢字/child', ('long-' + ('x' * 300)))
+        $edgeTokens = @()
+        foreach ($edgeKey in $edgeKeys) {
+            $edgePath = Get-StorageObjectBlobPath $fixtureObjectRoot 'fixture-bucket' $edgeKey $edgeTokenRegistry
+            $edgeTokens += $edgePath.Token
+            if ($edgePath.ManifestPath -notmatch '^storage/objects/[0-9a-f]{64}\.blob$' -or $edgePath.FullPath.Length -gt 240) { throw 'Windows-safe storage path regression test failed.' }
+        }
+        if (@($edgeTokens | Select-Object -Unique).Count -ne $edgeKeys.Count) { throw 'Case-sensitive storage object keys collided in local paths.' }
+        $syntheticCollisionRegistry = @{}
+        $forcedCollisionToken = 'a' * 64
+        Register-StorageObjectToken $syntheticCollisionRegistry $forcedCollisionToken 'fixture-bucket' 'first-key'
+        $collisionRejected = $false
+        try { Register-StorageObjectToken $syntheticCollisionRegistry $forcedCollisionToken 'fixture-bucket' 'second-key' } catch { $collisionRejected = (Get-SafeFailureCode $_) -eq 'STORAGE_OBJECT_TOKEN_COLLISION' }
+        if (-not $collisionRejected) { throw 'Storage hash collision regression test failed.' }
+        $duplicateRejected = $false
+        try { Register-StorageObjectToken $syntheticCollisionRegistry $forcedCollisionToken 'fixture-bucket' 'first-key' } catch { $duplicateRejected = (Get-SafeFailureCode $_) -eq 'STORAGE_OBJECT_DUPLICATE' }
+        if (-not $duplicateRejected) { throw 'Duplicate storage object regression test failed.' }
+        $longPathRejected = $false
+        try { Get-StorageObjectBlobPath (Join-Path $testRoot ('r' * 160)) 'fixture-bucket' 'long-root-key' @{} | Out-Null } catch { $longPathRejected = (Get-SafeFailureCode $_) -eq 'STORAGE_OBJECT_PATH_TOO_LONG' }
+        if (-not $longPathRejected) { throw 'Long Windows storage path regression test failed.' }
+        $invalidPathFailure = $null
+        try { [IO.Path]::GetFullPath((Join-Path $testRoot 'synthetic?invalid')) | Out-Null } catch { $invalidPathFailure = $_ }
+        $invalidPathMetadata = Get-SafeFailureMetadata $invalidPathFailure
+        if ($invalidPathMetadata.FailureType -ne 'MethodInvocationException' -or $invalidPathMetadata.InnerExceptionType -ne 'ArgumentException' -or $invalidPathMetadata.ErrorCategory -ne 'PATH_INVALID') { throw 'Sanitized Windows path-error classification regression test failed.' }
+        if ((Get-SafePathErrorCategory ([IO.PathTooLongException]::new())) -ne 'PATH_TOO_LONG' -or (Get-SafePathErrorCategory ([System.ArgumentNullException]::new())) -ne 'PATH_EMPTY' -or (Get-SafePathErrorCategory ([System.Exception]::new())) -ne 'OTHER') { throw 'Storage path error category regression test failed.' }
         $fakeApiError = [pscustomobject]@{ Exception = [ArgumentException]::new('invalid header') }
         if ((Get-SafeApiDiagnosticCode $fakeApiError) -ne 'SUPABASE_API_HEADER_VALUE_INVALID' -or (Test-ApiHeaderValue "bad`nkey") -or -not (Test-ApiHeaderValue 'synthetic-api-key_123')) { throw 'API diagnostic-code regression test failed.' }
         $directSettings = Get-DatabaseConnectionSettings ([pscustomobject]@{ projectRef = $script:ProjectRef })
@@ -943,6 +1059,10 @@ function Invoke-ProductionBackup {
 
         $storageRoot = Join-Path $work 'storage'
         New-Item -ItemType Directory -Path $storageRoot | Out-Null
+        $objectDataRoot = Join-Path $storageRoot 'objects'
+        New-Item -ItemType Directory -Path $objectDataRoot -Force | Out-Null
+        $storageObjectMappings = [Collections.Generic.List[object]]::new()
+        $storageTokenRegistry = @{}
         $stage = 'storage-bucket-list'
         $failureSubstage = 'storage-bucket-list-api'
         $bucketResponse = Invoke-RestMethod -Method Get -Uri "$($script:ProjectUrl)/storage/v1/bucket" -Headers $headers -TimeoutSec 60
@@ -951,8 +1071,6 @@ function Invoke-ProductionBackup {
         foreach ($bucket in $buckets) {
             $failureSubstage = 'storage-bucket-folder-create'
             $bucketName = Get-StorageBucketName $bucket
-            $bucketRoot = Join-Path $storageRoot $bucketName
-            New-Item -ItemType Directory -Path $bucketRoot -Force | Out-Null
             $failureSubstage = ''
             $queue = [Collections.Generic.Queue[string]]::new()
             $queue.Enqueue('')
@@ -961,25 +1079,27 @@ function Invoke-ProductionBackup {
                 $offset = 0
                 do {
                     $stage = 'storage-object-list'
+                    $failureSubstage = 'storage-object-list-api'
                     $body = @{ prefix = $prefix; limit = 1000; offset = $offset; sortBy = @{ column = 'name'; order = 'asc' } } | ConvertTo-Json -Compress
                     $listUri = "$($script:ProjectUrl)/storage/v1/object/list/$([uri]::EscapeDataString($bucketName))"
-                    $items = @(Invoke-RestMethod -Method Post -Uri $listUri -Headers $headers -ContentType 'application/json' -Body $body -TimeoutSec 60)
+                    $itemResponse = Invoke-RestMethod -Method Post -Uri $listUri -Headers $headers -ContentType 'application/json' -Body $body -TimeoutSec 60
+                    $items = @(ConvertTo-StorageBucketItems $itemResponse)
                     foreach ($item in $items) {
-                        $relative = if ($prefix) { "$prefix/$($item.name)" } else { [string]$item.name }
-                        $relative = $relative -replace '/', '\'
-                        $target = [IO.Path]::GetFullPath((Join-Path $bucketRoot $relative))
-                        $bucketPrefix = [IO.Path]::GetFullPath($bucketRoot).TrimEnd('\') + '\'
-                        if (-not $target.StartsWith($bucketPrefix, [StringComparison]::OrdinalIgnoreCase)) { throw 'Storage retornou caminho fora do bucket.' }
+                        $failureSubstage = 'storage-object-name-validation'
+                        $itemName = Get-StorageEntryName $item
+                        $objectKey = if ($prefix) { "$prefix/$itemName" } else { $itemName }
                         if ($null -eq $item.id) {
-                            $queueRelative = $relative -replace '\\', '/'
-                            $queue.Enqueue([string]$queueRelative)
-                            New-Item -ItemType Directory -Path $target -Force | Out-Null
+                            $failureSubstage = 'storage-object-directory-queue'
+                            $queue.Enqueue([string]$objectKey)
                         } else {
                             $stage = 'storage-object-download'
-                            New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force | Out-Null
-                            $encodedPath = (($relative -replace '\\', '/') -split '/' | ForEach-Object { [uri]::EscapeDataString($_) }) -join '/'
+                            $failureSubstage = 'storage-object-local-path-map'
+                            $objectPath = Get-StorageObjectBlobPath $objectDataRoot $bucketName $objectKey $storageTokenRegistry
+                            $encodedPath = ($objectKey -split '/' | ForEach-Object { [uri]::EscapeDataString($_) }) -join '/'
                             $downloadUri = "$($script:ProjectUrl)/storage/v1/object/authenticated/$([uri]::EscapeDataString($bucketName))/$encodedPath"
-                            Invoke-WebRequest -Method Get -Uri $downloadUri -Headers $headers -OutFile $target -TimeoutSec 180
+                            $failureSubstage = 'storage-object-download'
+                            Invoke-WebRequest -Method Get -Uri $downloadUri -Headers $headers -OutFile $objectPath.FullPath -TimeoutSec 180
+                            $storageObjectMappings.Add([ordered]@{ bucket = $bucketName; key = $objectKey; path = $objectPath.ManifestPath })
                             $storageCount++
                         }
                     }
@@ -990,7 +1110,8 @@ function Invoke-ProductionBackup {
 
         $counts = @{ authUsers = $users.Count; storageBuckets = $buckets.Count; storageObjects = $storageCount; databaseObjects = $dbObjects }
         $stage = 'manifest-build'
-        Write-Manifest $work $counts
+        $failureSubstage = 'manifest-build'
+        Write-Manifest $work $counts $storageObjectMappings.ToArray()
         $stage = 'archive-create'
         Compress-Archive -Path (Join-Path $work 'database.dump'),(Join-Path $work 'database.toc.txt'),(Join-Path $work 'auth'),(Join-Path $work 'storage'),(Join-Path $work 'manifest.json') -DestinationPath $zip -CompressionLevel Optimal
         $stage = 'age-encryption'
@@ -1016,13 +1137,16 @@ function Invoke-ProductionBackup {
         if (Test-Path -LiteralPath $final) { Remove-Item -LiteralPath $final -Force }
         $failure = [ordered]@{ status = 'FAILED'; projectRef = $script:ProjectRef; completedAtUtc = [DateTime]::UtcNow.ToString('o'); error = 'Falha em uma etapa; backup nÃ£o Ã© considerado vÃ¡lido.' }
         $failure.failedStage = $stage
-        $failure.failedSubstage = if ($stage -eq 'storage-bucket-list' -and $failureSubstage) { $failureSubstage } else { $stage }
+        $failure.failedSubstage = if ($failureSubstage) { $failureSubstage } else { $stage }
+        $failure.failedOperation = $failure.failedSubstage
         $safeFailure = Get-SafeFailureMetadata $_
         $failure.failureType = $safeFailure.FailureType
         $failure.failedCommand = $safeFailure.CommandName
         $failure.failedParameter = $safeFailure.ParameterName
         $failure.failedFile = $safeFailure.FileName
         $failure.failedLine = $safeFailure.LineNumber
+        $failure.innerExceptionType = $safeFailure.InnerExceptionType
+        $failure.errorCategory = $safeFailure.ErrorCategory
         $safeFailureCode = Get-SafeFailureCode $_
         if ($safeFailureCode) { $failure.failureCode = $safeFailureCode }
         $failure | ConvertTo-Json | Set-Content -LiteralPath $reportPath -Encoding UTF8
