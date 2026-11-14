@@ -1,14 +1,21 @@
-name: MK9 production backup and restore validation
+name: MK9 production backup to private Google Drive
 
 on:
   workflow_dispatch:
     inputs:
-      project_ref:
-        description: Supabase project reference (must be production)
+      mode:
+        description: Run a synthetic Drive upload test or an authorized production backup
         required: true
+        type: choice
+        options:
+          - synthetic-test
+          - production-backup
+      confirm_production_backup:
+        description: Type BACKUP_PRODUCTION only for an authorized production export
+        required: false
         type: string
-      confirm_artifact_access:
-        description: Confirm this encrypted file will be stored as a short-lived GitHub artifact in a public repository
+      confirm_private_zero_cost_destination:
+        description: Confirm private Drive access and enough existing storage without purchase
         required: true
         type: boolean
         default: false
@@ -21,43 +28,41 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  backup-and-restore:
-    if: github.ref == 'refs/heads/main'
+  backup:
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      inputs.confirm_private_zero_cost_destination &&
+      (inputs.mode == 'synthetic-test' || inputs.confirm_production_backup == 'BACKUP_PRODUCTION')
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
+    timeout-minutes: 120
     environment: production-backup
-    # Global job env strictly contains non-sensitive variables only.
-    # Production secrets are scoped strictly to the specific steps requiring them.
-    env:
-      GITHUB_REF: ${{ github.ref }}
-      INPUT_PROJECT_REF: ${{ inputs.project_ref }}
-      INPUT_CONFIRM_ARTIFACT_ACCESS: ${{ inputs.confirm_artifact_access }}
-      SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
-      SUPABASE_PROJECT_URL: ${{ vars.SUPABASE_PROJECT_URL }}
-      SUPABASE_POOLER_HOST: ${{ vars.SUPABASE_POOLER_HOST }}
     steps:
-      - name: Check out isolated production backup implementation
+      - name: Check out reviewed main revision
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          # Check out strictly pinned to the approved commit SHA (or environment variable if configured)
-          # ensuring runtime immutability against subsequent branch pushes.
-          ref: ${{ vars.APPROVED_COMMIT_SHA || 'e6297aec7eb374498aa4ca158c50e16319be51c6' }}
           persist-credentials: false
 
-      - name: Set up Node.js
+      - name: Enforce reviewed backup revision
+        env:
+          APPROVED_BACKUP_COMMIT: ${{ vars.APPROVED_BACKUP_COMMIT }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$GITHUB_REF" == refs/heads/main ]]
+          [[ "$APPROVED_BACKUP_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$(git rev-parse HEAD)" == "$APPROVED_BACKUP_COMMIT" ]]
+
+      - name: Set up Node.js for Auth and Storage export
+        if: inputs.mode == 'production-backup'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '22.16.0'
 
-      - name: Run preflight and security checks
-        env:
-          APPROVED_COMMIT_SHA: ${{ vars.APPROVED_COMMIT_SHA || 'e6297aec7eb374498aa4ca158c50e16319be51c6' }}
-          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          BACKUP_GPG_PASSPHRASE: ${{ secrets.BACKUP_GPG_PASSPHRASE }}
-        run: node scripts/production-preflight.mjs
+      - name: Install locked export dependencies
+        if: inputs.mode == 'production-backup'
+        run: npm ci --no-audit --no-fund
 
-      - name: Install PostgreSQL 17 client and GPG
+      - name: Install PostgreSQL 17 client and age
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -65,37 +70,77 @@ jobs:
           curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /usr/share/keyrings/postgresql.gpg
           echo 'deb [signed-by=/usr/share/keyrings/postgresql.gpg] https://apt.postgresql.org/pub/repos/apt noble-pgdg main' | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
           sudo apt-get update -qq
-          sudo apt-get install -y -qq postgresql-client-17 gpg
-          export PATH="/usr/lib/postgresql/17/bin:$PATH"
-          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
+          sudo apt-get install -y -qq postgresql-client-17 age
+          echo '/usr/lib/postgresql/17/bin' >> "$GITHUB_PATH"
           pg_dump --version | grep -q '^pg_dump (PostgreSQL) 17\.'
-          docker --version
+          age --version
 
-      - name: Install pinned Supabase CLI
+      - name: Preflight private Drive destination (no production access)
+        env:
+          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
+          GOOGLE_DRIVE_BACKUP_FOLDER_NAME: ${{ vars.GOOGLE_DRIVE_BACKUP_FOLDER_NAME }}
+        run: python3 scripts/mk9-drive-backup.py preflight
+
+      - name: Prepare synthetic archive
+        if: inputs.mode == 'synthetic-test'
+        env:
+          AGE_RECIPIENT: ${{ secrets.AGE_RECIPIENT }}
         shell: bash
         run: |
           set -Eeuo pipefail
-          curl -fsSL https://github.com/supabase/cli/releases/download/v3.0.0/supabase_3.0.0_linux_amd64.tar.gz -o "$RUNNER_TEMP/supabase-cli.tar.gz"
-          tar -xzf "$RUNNER_TEMP/supabase-cli.tar.gz" -C "$RUNNER_TEMP" supabase
-          sudo install "$RUNNER_TEMP/supabase" /usr/local/bin/supabase
-          test "$(supabase --version)" = "3.0.0"
+          synthetic="$RUNNER_TEMP/mk9-drive-synthetic-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.txt"
+          archive="$RUNNER_TEMP/mk9-drive-synthetic-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.tar.gz.age"
+          printf 'MK9 synthetic backup test; run=%s attempt=%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > "$synthetic"
+          tar -C "$RUNNER_TEMP" -czf - "$(basename "$synthetic")" | age -r "$AGE_RECIPIENT" -o "$archive"
+          rm -f -- "$synthetic"
+          echo "MK9_SYNTHETIC_ARCHIVE=$archive" >> "$GITHUB_ENV"
 
-      - name: Export, restore-test, and encrypt production backup
+      - name: Upload and verify synthetic archive, then remove it from Drive
+        if: inputs.mode == 'synthetic-test'
         env:
+          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
+          GOOGLE_DRIVE_BACKUP_FOLDER_NAME: ${{ vars.GOOGLE_DRIVE_BACKUP_FOLDER_NAME }}
+          AGE_RECIPIENT: ${{ secrets.AGE_RECIPIENT }}
+        run: python3 scripts/mk9-drive-backup.py upload --file "$MK9_SYNTHETIC_ARCHIVE" --delete-after-verify
+
+      - name: Export and encrypt production backup
+        if: inputs.mode == 'production-backup'
+        env:
+          INPUT_CONFIRM_PRODUCTION_BACKUP: ${{ inputs.confirm_production_backup }}
+          GITHUB_REF: ${{ github.ref }}
+          SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+          SUPABASE_PROJECT_URL: ${{ vars.SUPABASE_PROJECT_URL }}
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          BACKUP_GPG_PASSPHRASE: ${{ secrets.BACKUP_GPG_PASSPHRASE }}
-        shell: bash
-        run: bash scripts/mk9-supabase-production-backup.sh
+          AGE_RECIPIENT: ${{ secrets.AGE_RECIPIENT }}
+          RUNNER_TEMP: ${{ runner.temp }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+          GITHUB_ACTIONS: 'true'
+        run: bash scripts/mk9-production-backup.sh
 
-      - name: Upload encrypted backup artifact (1 day)
-        if: success()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: mk9-production-backup-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/mk9-production-backup-${{ github.run_id }}-${{ github.run_attempt }}.tar.gz.gpg
-          if-no-files-found: error
-          retention-days: 1
-          compression-level: 0
-          overwrite: false
-          include-hidden-files: false
+      - name: Upload and verify encrypted production archive
+        if: inputs.mode == 'production-backup'
+        env:
+          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
+          GOOGLE_DRIVE_BACKUP_FOLDER_NAME: ${{ vars.GOOGLE_DRIVE_BACKUP_FOLDER_NAME }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          python3 scripts/mk9-drive-backup.py upload \
+            --file "$RUNNER_TEMP/mk9-production-backup-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.tar.gz.age"
+
+      - name: Remove local archives and temporary plaintext
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -f -- "$RUNNER_TEMP"/mk9-prod-backup-"${GITHUB_RUN_ID}"-"${GITHUB_RUN_ATTEMPT}".tar.gz.age
+          rm -f -- "$RUNNER_TEMP"/mk9-production-backup-"${GITHUB_RUN_ID}"-"${GITHUB_RUN_ATTEMPT}".tar.gz.age
+          rm -f -- "$RUNNER_TEMP"/mk9-drive-synthetic-"${GITHUB_RUN_ID}"-"${GITHUB_RUN_ATTEMPT}".{txt,tar.gz.age}
