@@ -132,6 +132,18 @@ function Get-Sha256([string]$Path) {
     (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 
+function Write-FailureReport([string]$Path, [string]$Stage, [string]$FailureType) {
+    $failure = [ordered]@{
+        status = 'FAILED'
+        projectRef = $script:ProjectRef
+        completedAtUtc = [DateTime]::UtcNow.ToString('o')
+        failedStage = $Stage
+        failureType = $FailureType
+        error = 'Falha em uma etapa; backup nao e considerado valido.'
+    }
+    $failure | ConvertTo-Json | Set-Content -LiteralPath $Path -Encoding UTF8
+}
+
 function Write-Manifest([string]$Root, [hashtable]$Counts) {
     $files = @()
     foreach ($file in Get-ChildItem -LiteralPath $Root -File -Recurse | Where-Object { $_.Name -ne 'pgpass.conf' } | Sort-Object FullName) {
@@ -217,6 +229,12 @@ function Invoke-SelfTest {
         if ($LASTEXITCODE -ne 0) { $failedAsExpected = $true }
         $ErrorActionPreference = $previousPreference
         if (-not $failedAsExpected) { throw 'O teste nÃ£o detectou arquivo cifrado invÃ¡lido.' }
+        $failureReportPath = Join-Path $testRoot 'synthetic-failure.report.json'
+        Write-FailureReport $failureReportPath 'synthetic-stage' 'SyntheticException'
+        $failureReport = Get-Content -LiteralPath $failureReportPath -Raw | ConvertFrom-Json
+        if ($failureReport.failedStage -ne 'synthetic-stage' -or $failureReport.failureType -ne 'SyntheticException' -or $failureReport.PSObject.Properties.Name -contains 'message') {
+            throw 'Failure-report regression test failed.'
+        }
         Write-Host 'SELF-TEST OK: fixture, manifesto, SHA-256, criptografia, descriptografia, integridade e falha de ciphertext.'
     }
     finally {
@@ -247,8 +265,7 @@ function Invoke-ProductionBackup {
     $final = Join-Path $script:BackupRoot "mk9-production-$runId.zip.age"
     if (Test-Path -LiteralPath $final) { throw 'Backup target already exists; refusing to overwrite.' }
     $reportPath = Join-Path $script:BackupRoot "mk9-production-$runId.report.json"
-    New-Item -ItemType Directory -Path $work | Out-Null
-    Set-Acl -LiteralPath $work -AclObject (Get-Acl -LiteralPath $script:BackupRoot)
+    $stage = 'initialize-private-work-directory'
     $pgpass = Join-Path $work 'pgpass.conf'
     $zip = Join-Path $work 'backup.zip'
     $recovery = Join-Path $work 'recovered.zip'
@@ -262,19 +279,25 @@ function Invoke-ProductionBackup {
     $dbPassword = $dbCredential.GetNetworkCredential().Password
     $apiKey = $apiCredential.GetNetworkCredential().Password
     try {
+        Protect-PrivateDirectory $work
+        $stage = 'write-postgresql-password-file'
         $pgpassLine = 'db.xzmbesqhxcnuokjwrbnw.supabase.co:5432:postgres:postgres.' + $script:ProjectRef + ':' + (Escape-PgPass $dbPassword)
         Set-Content -LiteralPath $pgpass -Value $pgpassLine -Encoding ASCII
         $hostName = "db.$($script:ProjectRef).supabase.co"
+        $stage = 'postgresql-readiness-preflight'
         $readyOutput = & (Join-Path $script:PgBin 'pg_isready.exe') -h $hostName -p 5432 -d postgres -U $dbCredential.UserName -t 8 2>$null
         if ($LASTEXITCODE -ne 0) { throw 'Preflight PostgreSQL falhou; verifique rede, senha e disponibilidade do projeto.' }
+        $stage = 'postgresql-identity-preflight'
         $identity = & (Join-Path $script:PgBin 'psql.exe') -X -A -t -v ON_ERROR_STOP=1 -h $hostName -p 5432 -d postgres -U $dbCredential.UserName -c 'select current_database()' 2>$null
         if ($LASTEXITCODE -ne 0 -or ($identity | Out-String).Trim() -ne 'postgres') { throw 'Preflight SQL nÃ£o confirmou o banco postgres.' }
 
         $headers = @{ apikey = $apiKey; Authorization = "Bearer $apiKey" }
+        $stage = 'auth-api-preflight'
         $settings = Invoke-RestMethod -Method Get -Uri "$($script:ProjectUrl)/auth/v1/settings" -Headers $headers -TimeoutSec 30
         if (-not $settings) { throw 'Preflight Auth nÃ£o confirmou a identidade do projeto.' }
 
         $databaseDump = Join-Path $work 'database.dump'
+        $stage = 'postgresql-export'
         & (Join-Path $script:PgBin 'pg_dump.exe') -h $hostName -p 5432 -U $dbCredential.UserName -d postgres -Fc -f $databaseDump 2>$null
         if ($LASTEXITCODE -ne 0 -or -not (Test-Path $databaseDump) -or (Get-Item $databaseDump).Length -eq 0) { throw 'pg_dump falhou; nenhum backup serÃ¡ declarado vÃ¡lido.' }
         & (Join-Path $script:PgBin 'pg_restore.exe') --list $databaseDump 2>$null | Out-File -FilePath (Join-Path $work 'database.toc.txt') -Encoding ASCII
@@ -286,6 +309,7 @@ function Invoke-ProductionBackup {
         New-Item -ItemType Directory -Path $authDir | Out-Null
         $users = [Collections.Generic.List[object]]::new()
         $page = 1
+        $stage = 'auth-users-export'
         do {
             $response = Invoke-RestMethod -Method Get -Uri "$($script:ProjectUrl)/auth/v1/admin/users?page=$page`&per_page=1000" -Headers $headers -TimeoutSec 60
             $batch = @($response.users)
@@ -296,6 +320,7 @@ function Invoke-ProductionBackup {
 
         $storageRoot = Join-Path $work 'storage'
         New-Item -ItemType Directory -Path $storageRoot | Out-Null
+        $stage = 'storage-bucket-list'
         $buckets = @(Invoke-RestMethod -Method Get -Uri "$($script:ProjectUrl)/storage/v1/bucket" -Headers $headers -TimeoutSec 60)
         $storageCount = 0
         foreach ($bucket in $buckets) {
@@ -307,6 +332,7 @@ function Invoke-ProductionBackup {
                 $prefix = $queue.Dequeue()
                 $offset = 0
                 do {
+                    $stage = 'storage-object-list'
                     $body = @{ prefix = $prefix; limit = 1000; offset = $offset; sortBy = @{ column = 'name'; order = 'asc' } } | ConvertTo-Json -Compress
                     $listUri = "$($script:ProjectUrl)/storage/v1/object/list/$([uri]::EscapeDataString($bucket.name))"
                     $items = @(Invoke-RestMethod -Method Post -Uri $listUri -Headers $headers -ContentType 'application/json' -Body $body -TimeoutSec 60)
@@ -320,6 +346,7 @@ function Invoke-ProductionBackup {
                             $queue.Enqueue($relative -replace '\\', '/')
                             New-Item -ItemType Directory -Path $target -Force | Out-Null
                         } else {
+                            $stage = 'storage-object-download'
                             New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force | Out-Null
                             $encodedPath = (($relative -replace '\\', '/') -split '/' | ForEach-Object { [uri]::EscapeDataString($_) }) -join '/'
                             $downloadUri = "$($script:ProjectUrl)/storage/v1/object/authenticated/$([uri]::EscapeDataString($bucket.name))/$encodedPath"
@@ -333,17 +360,24 @@ function Invoke-ProductionBackup {
         }
 
         $counts = @{ authUsers = $users.Count; storageBuckets = $buckets.Count; storageObjects = $storageCount; databaseObjects = $dbObjects }
+        $stage = 'manifest-build'
         Write-Manifest $work $counts
+        $stage = 'archive-create'
         Compress-Archive -Path (Join-Path $work 'database.dump'),(Join-Path $work 'database.toc.txt'),(Join-Path $work 'auth'),(Join-Path $work 'storage'),(Join-Path $work 'manifest.json') -DestinationPath $zip -CompressionLevel Optimal
+        $stage = 'age-encryption'
         & $script:AgeExe -r $config.ageRecipient -o $final $zip 2>$null
         if ($LASTEXITCODE -ne 0 -or -not (Test-Path $final)) { throw 'Criptografia do backup falhou.' }
         $cipherHash = Get-Sha256 $final
+        $stage = 'age-decryption-validation'
         & $script:AgeExe -d -i $script:IdentityPath -o $recovery $final 2>$null
         if ($LASTEXITCODE -ne 0) { throw 'Teste de descriptografia do backup falhou.' }
         Expand-Archive -LiteralPath $recovery -DestinationPath $extract
+        $stage = 'internal-manifest-validation'
         Assert-Manifest $extract
+        $stage = 'postgresql-dump-recovery-validation'
         & (Join-Path $script:PgBin 'pg_restore.exe') --list (Join-Path $extract 'database.dump') 2>$null | Out-Null
         if ($LASTEXITCODE -ne 0) { throw 'O dump recuperado nÃ£o passou na validaÃ§Ã£o pg_restore.' }
+        $stage = 'success-report'
         $report = [ordered]@{ status = 'SUCCESS'; projectRef = $script:ProjectRef; completedAtUtc = [DateTime]::UtcNow.ToString('o'); encryptedFile = [IO.Path]::GetFileName($final); encryptedBytes = (Get-Item $final).Length; encryptedSha256 = $cipherHash; counts = $counts; recoveryValidation = 'PASSED' }
         $report | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $reportPath -Encoding UTF8
         Write-Host "Backup completo validado: $final"
@@ -352,6 +386,8 @@ function Invoke-ProductionBackup {
     catch {
         if (Test-Path -LiteralPath $final) { Remove-Item -LiteralPath $final -Force }
         $failure = [ordered]@{ status = 'FAILED'; projectRef = $script:ProjectRef; completedAtUtc = [DateTime]::UtcNow.ToString('o'); error = 'Falha em uma etapa; backup nÃ£o Ã© considerado vÃ¡lido.' }
+        $failure.failedStage = $stage
+        $failure.failureType = if ($_.Exception) { $_.Exception.GetType().Name } else { 'UnknownException' }
         $failure | ConvertTo-Json | Set-Content -LiteralPath $reportPath -Encoding UTF8
         Write-Error 'Backup interrompido. Detalhes sensÃ­veis foram omitidos; consulte o relatÃ³rio de falha.'
         exit 1
