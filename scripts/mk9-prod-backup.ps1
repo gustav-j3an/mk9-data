@@ -1,7 +1,8 @@
 ﻿[CmdletBinding()]
 param(
     [switch]$Configure,
-    [switch]$SelfTest
+    [switch]$SelfTest,
+    [switch]$TestAcl
 )
 
 Set-StrictMode -Version Latest
@@ -20,16 +21,73 @@ $script:IdentityPath = Join-Path $script:ConfigHome 'age-identity.txt'
 $script:BackupRoot = Join-Path $script:ConfigHome 'Backups'
 
 function Protect-PrivateDirectory([string]$Path) {
-    New-Item -ItemType Directory -Path $Path -Force | Out-Null
-    $acl = New-Object System.Security.AccessControl.DirectorySecurity
+    $directory = [System.IO.DirectoryInfo]::new([IO.Path]::GetFullPath($Path))
+    $directory.Create()
+    $directory.Refresh()
+    if (($directory.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw 'The private directory cannot be a reparse point.'
+    }
+
+    # Load and persist only the DACL. A fresh DirectorySecurity is marked as
+    # modifying owner/group/audit sections too, which makes Set-Acl demand
+    # SeSecurityPrivilege even though this operation only needs access rules.
+    $acl = $directory.GetAccessControl([System.Security.AccessControl.AccessControlSections]::Access)
     $acl.SetAccessRuleProtection($true, $false)
+    foreach ($existingRule in @($acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))) {
+        $acl.RemoveAccessRuleSpecific($existingRule)
+    }
     $currentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-    foreach ($sid in @($currentSid, [System.Security.Principal.SecurityIdentifier]::new('S-1-5-18'))) {
-        $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
-            $sid, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
+    $systemSid = [System.Security.Principal.SecurityIdentifier]::new('S-1-5-18')
+    $inheritance = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+    foreach ($sid in @($currentSid, $systemSid)) {
+        $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
+            $sid,
+            [System.Security.AccessControl.FileSystemRights]::Modify,
+            $inheritance,
+            [System.Security.AccessControl.PropagationFlags]::None,
+            [System.Security.AccessControl.AccessControlType]::Allow)
         $acl.AddAccessRule($rule)
     }
-    Set-Acl -LiteralPath $Path -AclObject $acl
+    $directory.SetAccessControl($acl)
+}
+
+function Invoke-AclRegressionTest {
+    $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('mk9-acl-regression-' + [guid]::NewGuid().ToString('N'))
+    try {
+        $directory = [System.IO.DirectoryInfo]::new($testRoot)
+        $directory.Create()
+        $ownerBefore = $directory.GetAccessControl([System.Security.AccessControl.AccessControlSections]::Owner).GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+        Protect-PrivateDirectory $testRoot
+        $security = $directory.GetAccessControl([System.Security.AccessControl.AccessControlSections]::Access)
+        if (-not $security.AreAccessRulesProtected) { throw 'DACL inheritance was not disabled.' }
+        $rules = @($security.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
+        $expectedSids = @([System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value, 'S-1-5-18') | Sort-Object -Unique
+        $actualSids = @($rules | ForEach-Object { $_.IdentityReference.Value } | Sort-Object -Unique)
+        if (Compare-Object $expectedSids $actualSids) { throw 'The protected DACL contains unexpected or missing principals.' }
+        $expectedRights = [System.Security.AccessControl.FileSystemRights]::Modify -bor [System.Security.AccessControl.FileSystemRights]::Synchronize
+        if (@($rules | Where-Object { $_.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow -or $_.FileSystemRights -ne $expectedRights }).Count -ne 0) {
+            throw 'Unexpected access rule in the protected DACL.'
+        }
+        $ownerAfter = $directory.GetAccessControl([System.Security.AccessControl.AccessControlSections]::Owner).GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+        if ($ownerAfter -ne $ownerBefore) { throw 'The ACL operation changed the directory owner.' }
+
+        $childPath = Join-Path $testRoot 'child'
+        [System.IO.Directory]::CreateDirectory($childPath) | Out-Null
+        $childAcl = (Get-Item -LiteralPath $childPath).GetAccessControl([System.Security.AccessControl.AccessControlSections]::Access)
+        $childSids = @($childAcl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]) | ForEach-Object { $_.IdentityReference.Value } | Sort-Object -Unique)
+        if (Compare-Object $expectedSids $childSids) { throw 'The protected DACL did not inherit to a child directory.' }
+
+        $blockedPath = Join-Path $testRoot 'not-a-directory'
+        Set-Content -LiteralPath $blockedPath -Value 'synthetic fixture' -Encoding ASCII
+        $failedClosed = $false
+        try { Protect-PrivateDirectory $blockedPath } catch { $failedClosed = $true }
+        if (-not $failedClosed) { throw 'ACL failure did not stop private-directory setup.' }
+        Write-Host 'ACL regression test passed: DACL-only update, user + SYSTEM, owner unchanged, inheritance protected.'
+    }
+    finally {
+        if (Test-Path -LiteralPath $testRoot) { Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction Stop }
+        if (Test-Path -LiteralPath $testRoot) { throw 'ACL regression test cleanup failed.' }
+    }
 }
 
 function Assert-Tools {
@@ -316,6 +374,7 @@ function Invoke-ProductionBackup {
     }
 }
 
+if ($TestAcl) { Invoke-AclRegressionTest; exit 0 }
 if ($SelfTest) { Invoke-SelfTest; exit 0 }
 if ($Configure) { Invoke-Configure; exit 0 }
 Invoke-ProductionBackup
