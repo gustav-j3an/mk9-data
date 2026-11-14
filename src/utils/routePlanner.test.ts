@@ -54,6 +54,26 @@ function runAllTests() {
   const daysRange = createMockDaysRange();
   const todayStr = '2026-10-08';
 
+  // Tentativas distintas da mesma ocorrência são mantidas no histórico; a
+  // agenda operacional representa o status da tentativa mais recente.
+  {
+    const route = createMockRoute();
+    const result = calculateOperationalVisits({
+      routes: [route],
+      visits: [
+        { id: 'attempt-1', rota_id: route.id, promotor_matricula: route.promotor_matricula, loja_codigo: route.loja_codigo, industria_codigo: route.industria_codigo, data_visita: '2026-10-08', scheduled_date: '2026-10-07', status: 'nao_realizada', attempt_number: 1, created_at: '2026-10-07T10:00:00Z' },
+        { id: 'attempt-2', rota_id: route.id, promotor_matricula: route.promotor_matricula, loja_codigo: route.loja_codigo, industria_codigo: route.industria_codigo, data_visita: '2026-10-08', scheduled_date: '2026-10-07', status: 'em_andamento', attempt_number: 2, occurrence_root_visit_id: 'attempt-1', created_at: '2026-10-08T10:00:00Z' }
+      ] as Visit[],
+      daysRange,
+      todayStr,
+      operationMode: 'IMPLANTACAO'
+    });
+    const occurrence = result.find((item) => item.dataStr === '2026-10-07');
+    console.assert(occurrence?.visitObj?.id === 'attempt-2', 'Retry T1: deve mostrar a tentativa mais recente na ocorrência semanal');
+    console.assert(occurrence?.status === 'em_andamento', 'Retry T1: o status operacional vem da tentativa mais recente');
+    console.log('[OK] Retry T1: a grade semanal seleciona a tentativa mais recente sem mesclar o histórico');
+  }
+
   // --------------------------------------------------------------------------
   // TESTE 1: Implantação sem visitas registradas
   // --------------------------------------------------------------------------
