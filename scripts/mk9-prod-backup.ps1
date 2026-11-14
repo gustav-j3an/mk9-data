@@ -147,21 +147,51 @@ function Invoke-ConfigureApiCredential {
     Write-Host 'The local DPAPI service_role credential was updated. Supabase was not contacted.'
 }
 
-function Save-DpapiDatabaseCredential([string]$Path, [string]$UserName, [Security.SecureString]$Password) {
+function Save-DpapiDatabaseCredential([string]$Path, [string]$UserName, [Security.SecureString]$Password, [switch]$SimulatePostReplaceFailure) {
     if ($Password.Length -eq 0) { throw 'DATABASE_PASSWORD_EMPTY' }
     $parent = Split-Path -Parent $Path
     Protect-PrivateDirectory $parent
     $temporaryPath = Join-Path $parent ('.database-credential-' + [guid]::NewGuid().ToString('N') + '.xml')
+    $backupPath = Join-Path $parent ('.database-credential-rollback-' + [guid]::NewGuid().ToString('N') + '.xml')
+    $failedReplacementPath = Join-Path $parent ('.database-credential-failed-' + [guid]::NewGuid().ToString('N') + '.xml')
+    $hadOriginal = Test-Path -LiteralPath $Path -PathType Leaf
+    $replacementComplete = $false
     try {
         $credential = New-Object System.Management.Automation.PSCredential($UserName, $Password)
         $credential | Export-Clixml -LiteralPath $temporaryPath -ErrorAction Stop
         $roundTrip = Import-Clixml -LiteralPath $temporaryPath -ErrorAction Stop
         if ($roundTrip.UserName -ne $UserName -or $roundTrip.Password.Length -ne $Password.Length) { throw 'DATABASE_CREDENTIAL_DPAPI_VERIFY_FAILED' }
-        if (Test-Path -LiteralPath $Path -PathType Leaf) { [IO.File]::Replace($temporaryPath, $Path, $null) }
-        else { [IO.File]::Move($temporaryPath, $Path) }
+        if ($hadOriginal) {
+            [IO.File]::Replace($temporaryPath, $Path, $backupPath)
+            try {
+                if ($SimulatePostReplaceFailure) { throw 'SYNTHETIC_POST_REPLACE_FAILURE' }
+                $installed = Import-Clixml -LiteralPath $Path -ErrorAction Stop
+                if ($installed.UserName -ne $UserName -or $installed.Password.Length -ne $Password.Length) { throw 'DATABASE_CREDENTIAL_INSTALL_VERIFY_FAILED' }
+                $replacementComplete = $true
+            } catch {
+                if (Test-Path -LiteralPath $backupPath -PathType Leaf) {
+                    [IO.File]::Replace($backupPath, $Path, $failedReplacementPath)
+                    if (Test-Path -LiteralPath $failedReplacementPath -PathType Leaf) { Remove-Item -LiteralPath $failedReplacementPath -Force -ErrorAction Stop }
+                }
+                throw
+            }
+        } else {
+            [IO.File]::Move($temporaryPath, $Path)
+            try {
+                if ($SimulatePostReplaceFailure) { throw 'SYNTHETIC_POST_REPLACE_FAILURE' }
+                $installed = Import-Clixml -LiteralPath $Path -ErrorAction Stop
+                if ($installed.UserName -ne $UserName -or $installed.Password.Length -ne $Password.Length) { throw 'DATABASE_CREDENTIAL_INSTALL_VERIFY_FAILED' }
+                $replacementComplete = $true
+            } catch {
+                if (Test-Path -LiteralPath $Path -PathType Leaf) { Remove-Item -LiteralPath $Path -Force -ErrorAction Stop }
+                throw
+            }
+        }
+        if ($replacementComplete -and (Test-Path -LiteralPath $backupPath -PathType Leaf)) { Remove-Item -LiteralPath $backupPath -Force -ErrorAction Stop }
     } finally {
         $credential = $null
         $roundTrip = $null
+        $installed = $null
         if (Test-Path -LiteralPath $temporaryPath) { Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue }
     }
 }
@@ -401,9 +431,30 @@ function Invoke-SelfTest {
         Save-DpapiDatabaseCredential $fixtureCredentialPath 'postgres.xzmbesqhxcnuokjwrbnw' $fixturePassword
         $fixtureCredential = Import-Clixml -LiteralPath $fixtureCredentialPath
         if ($fixtureCredential.UserName -ne 'postgres.xzmbesqhxcnuokjwrbnw' -or $fixtureCredential.Password.Length -ne $fixturePassword.Length) { throw 'DPAPI database credential regression test failed.' }
+        $legacyReplaceInput = Join-Path $testRoot 'legacy-replace-input.xml'
+        Set-Content -LiteralPath $legacyReplaceInput -Value 'synthetic-invalid-replacement' -Encoding ASCII
+        $legacyNullBackupRejected = $false
+        try { [IO.File]::Replace($legacyReplaceInput, $fixtureCredentialPath, $null) } catch { $legacyNullBackupRejected = $true }
+        if (-not $legacyNullBackupRejected) { throw 'Regression fixture did not reproduce File.Replace with a null backup path.' }
+        $afterLegacyFailure = Import-Clixml -LiteralPath $fixtureCredentialPath
+        if ($afterLegacyFailure.UserName -ne 'postgres.xzmbesqhxcnuokjwrbnw' -or $afterLegacyFailure.Password.Length -ne $fixturePassword.Length) { throw 'Legacy replacement failure changed the previous DPAPI credential.' }
+
+        $updatedFixturePassword = ConvertTo-SecureString 'synthetic-db-password-updated' -AsPlainText -Force
+        $postReplaceFailureRecovered = $false
+        try { Save-DpapiDatabaseCredential $fixtureCredentialPath 'postgres.xzmbesqhxcnuokjwrbnw' $updatedFixturePassword -SimulatePostReplaceFailure } catch { $postReplaceFailureRecovered = $_.Exception.Message -eq 'SYNTHETIC_POST_REPLACE_FAILURE' }
+        if (-not $postReplaceFailureRecovered) { throw 'Post-replacement failure injection did not trigger.' }
+        $afterRollback = Import-Clixml -LiteralPath $fixtureCredentialPath
+        if ($afterRollback.UserName -ne 'postgres.xzmbesqhxcnuokjwrbnw' -or $afterRollback.GetNetworkCredential().Password -ne 'synthetic-db-password') { throw 'Rollback did not restore the prior DPAPI credential.' }
+        if (@(Get-ChildItem -LiteralPath $testRoot -File -Filter '.database-credential-*').Count -ne 0) { throw 'Failed DPAPI replacement left transaction files.' }
+
+        Save-DpapiDatabaseCredential $fixtureCredentialPath 'postgres.xzmbesqhxcnuokjwrbnw' $updatedFixturePassword
+        $afterSuccess = Import-Clixml -LiteralPath $fixtureCredentialPath
+        if ($afterSuccess.UserName -ne 'postgres.xzmbesqhxcnuokjwrbnw' -or $afterSuccess.GetNetworkCredential().Password -ne 'synthetic-db-password-updated') { throw 'Successful DPAPI credential replacement failed.' }
+        if (@(Get-ChildItem -LiteralPath $testRoot -File -Filter '.database-credential-*').Count -ne 0) { throw 'DPAPI credential transaction left temporary files.' }
         $fixturePassword.Dispose()
+        $updatedFixturePassword.Dispose()
         $fixtureCredential = $null
-        Write-Host 'SELF-TEST OK: fixture, manifesto, SHA-256, criptografia, descriptografia, integridade e falha de ciphertext.'
+        Write-Host 'SELF-TEST OK: age, manifesto, integridade, DPAPI atomic replacement, rollback and synthetic fixtures.'
     }
     finally {
         if (Test-Path -LiteralPath $testRoot) { Remove-Item -LiteralPath $testRoot -Recurse -Force }
