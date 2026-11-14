@@ -5,7 +5,8 @@ param(
     [switch]$TestAcl,
     [switch]$Diagnose,
     [switch]$ConfigureApiCredential,
-    [switch]$ConfigureDatabaseEndpoint
+    [switch]$ConfigureDatabaseEndpoint,
+    [switch]$ConfigureDatabaseCredential
 )
 
 Set-StrictMode -Version Latest
@@ -144,6 +145,42 @@ function Invoke-ConfigureApiCredential {
     $apiCredential | Export-Clixml -LiteralPath $script:ApiCredentialPath -Force
     $apiKeyForValidation = $null
     Write-Host 'The local DPAPI service_role credential was updated. Supabase was not contacted.'
+}
+
+function Save-DpapiDatabaseCredential([string]$Path, [string]$UserName, [Security.SecureString]$Password) {
+    if ($Password.Length -eq 0) { throw 'DATABASE_PASSWORD_EMPTY' }
+    $parent = Split-Path -Parent $Path
+    Protect-PrivateDirectory $parent
+    $temporaryPath = Join-Path $parent ('.database-credential-' + [guid]::NewGuid().ToString('N') + '.xml')
+    try {
+        $credential = New-Object System.Management.Automation.PSCredential($UserName, $Password)
+        $credential | Export-Clixml -LiteralPath $temporaryPath -ErrorAction Stop
+        $roundTrip = Import-Clixml -LiteralPath $temporaryPath -ErrorAction Stop
+        if ($roundTrip.UserName -ne $UserName -or $roundTrip.Password.Length -ne $Password.Length) { throw 'DATABASE_CREDENTIAL_DPAPI_VERIFY_FAILED' }
+        if (Test-Path -LiteralPath $Path -PathType Leaf) { [IO.File]::Replace($temporaryPath, $Path, $null) }
+        else { [IO.File]::Move($temporaryPath, $Path) }
+    } finally {
+        $credential = $null
+        $roundTrip = $null
+        if (Test-Path -LiteralPath $temporaryPath) { Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+function Invoke-ConfigureDatabaseCredential {
+    foreach ($requiredPath in @($script:ConfigPath, $script:DbCredentialPath)) {
+        if (-not (Test-Path -LiteralPath $requiredPath -PathType Leaf)) { throw 'LOCAL_DATABASE_CONFIGURATION_MISSING' }
+    }
+    $config = Get-Content -LiteralPath $script:ConfigPath -Raw | ConvertFrom-Json
+    if ($config.projectRef -ne $script:ProjectRef -or $config.projectUrl -ne $script:ProjectUrl) { throw 'LOCAL_PROJECT_REF_MISMATCH' }
+    $connection = Get-DatabaseConnectionSettings $config
+    $securePassword = $null
+    try {
+        $securePassword = Read-Host 'Current PostgreSQL database password (secure input; no server change)' -AsSecureString
+        Save-DpapiDatabaseCredential $script:DbCredentialPath $connection.User $securePassword
+        Write-Host 'The local DPAPI PostgreSQL credential was updated for the configured connection mode. Supabase was not contacted.'
+    } finally {
+        if ($null -ne $securePassword) { $securePassword.Dispose() }
+    }
 }
 
 function Get-DatabaseConnectionSettings($Config) {
@@ -359,6 +396,13 @@ function Invoke-SelfTest {
         $invalidCaRejected = $false
         try { Assert-SupabaseCaCertificate $invalidCa } catch { $invalidCaRejected = $_.Exception.Message -eq 'PG_TLS_ROOT_CERT_INVALID' }
         if (-not $invalidCaRejected) { throw 'Invalid TLS CA was not rejected.' }
+        $fixturePassword = ConvertTo-SecureString 'synthetic-db-password' -AsPlainText -Force
+        $fixtureCredentialPath = Join-Path $testRoot 'database.credential.xml'
+        Save-DpapiDatabaseCredential $fixtureCredentialPath 'postgres.xzmbesqhxcnuokjwrbnw' $fixturePassword
+        $fixtureCredential = Import-Clixml -LiteralPath $fixtureCredentialPath
+        if ($fixtureCredential.UserName -ne 'postgres.xzmbesqhxcnuokjwrbnw' -or $fixtureCredential.Password.Length -ne $fixturePassword.Length) { throw 'DPAPI database credential regression test failed.' }
+        $fixturePassword.Dispose()
+        $fixtureCredential = $null
         Write-Host 'SELF-TEST OK: fixture, manifesto, SHA-256, criptografia, descriptografia, integridade e falha de ciphertext.'
     }
     finally {
@@ -826,5 +870,6 @@ if ($SelfTest) { Invoke-SelfTest; exit 0 }
 if ($Configure) { Invoke-Configure; exit 0 }
 if ($ConfigureApiCredential) { Invoke-ConfigureApiCredential; exit 0 }
 if ($ConfigureDatabaseEndpoint) { Invoke-ConfigureDatabaseEndpoint; exit 0 }
+if ($ConfigureDatabaseCredential) { Invoke-ConfigureDatabaseCredential; exit 0 }
 if ($Diagnose) { Invoke-ProductionDiagnostics; exit 0 }
 Invoke-ProductionBackup
