@@ -349,6 +349,21 @@ function Get-SafeFailureMetadata($ErrorRecord) {
     }
 }
 
+function Get-StorageBucketName($Bucket) {
+    if ($null -eq $Bucket -or $null -eq $Bucket.PSObject.Properties['name'] -or [string]::IsNullOrWhiteSpace([string]$Bucket.name)) {
+        throw 'STORAGE_BUCKET_NAME_MISSING'
+    }
+    $name = [string]$Bucket.name
+    if ($name -in @('.', '..') -or $name -match '[\\/:*?"<>|]') { throw 'STORAGE_BUCKET_NAME_INVALID' }
+    return $name
+}
+
+function Get-SafeFailureCode([System.Management.Automation.ErrorRecord]$ErrorRecord) {
+    $code = [string]$ErrorRecord.Exception.Message
+    if ($code -in @('STORAGE_BUCKET_NAME_MISSING', 'STORAGE_BUCKET_NAME_INVALID')) { return $code }
+    return ''
+}
+
 function Write-Manifest([string]$Root, [hashtable]$Counts) {
     $files = @()
     foreach ($file in Get-ChildItem -LiteralPath $Root -File -Recurse | Where-Object { $_.Name -ne 'pgpass.conf' } | Sort-Object FullName) {
@@ -445,6 +460,21 @@ function Invoke-SelfTest {
         $localFailureMetadata = Get-SafeFailureMetadata $syntheticLocalBindingFailure
         if ($localFailureMetadata.FailureType -notmatch '^ParameterBinding' -or $localFailureMetadata.CommandName -ne 'New-Item' -or $localFailureMetadata.ParameterName -ne 'Path' -or $localFailureMetadata.FileName -ne 'mk9-prod-backup.ps1' -or $localFailureMetadata.LineNumber -lt 1) {
             throw 'Local storage parameter-binding diagnostic regression test failed.'
+        }
+        $missingBucketRejected = $false
+        $missingBucketError = $null
+        try { Get-StorageBucketName ([pscustomobject]@{ id = 'synthetic-bucket' }) | Out-Null } catch { $missingBucketError = $_ }
+        $missingBucketRejected = (Get-SafeFailureCode $missingBucketError) -eq 'STORAGE_BUCKET_NAME_MISSING'
+        $nullBucketNameRejected = $false
+        $nullBucketNameError = $null
+        try { Get-StorageBucketName ([pscustomobject]@{ name = $null }) | Out-Null } catch { $nullBucketNameError = $_ }
+        $nullBucketNameRejected = (Get-SafeFailureCode $nullBucketNameError) -eq 'STORAGE_BUCKET_NAME_MISSING'
+        $invalidBucketRejected = $false
+        $invalidBucketError = $null
+        try { Get-StorageBucketName ([pscustomobject]@{ name = '..' }) | Out-Null } catch { $invalidBucketError = $_ }
+        $invalidBucketRejected = (Get-SafeFailureCode $invalidBucketError) -eq 'STORAGE_BUCKET_NAME_INVALID'
+        if (-not $missingBucketRejected -or -not $nullBucketNameRejected -or -not $invalidBucketRejected -or (Get-StorageBucketName ([pscustomobject]@{ name = 'synthetic-bucket' })) -ne 'synthetic-bucket') {
+            throw 'Storage bucket-name validation regression test failed.'
         }
         $syntheticApiBindingFailure = $null
         try { Invoke-RestMethod -Method Get -Uri 'https://example.invalid' -TimeoutSec 'not-an-integer' -ErrorAction Stop | Out-Null } catch { $syntheticApiBindingFailure = $_ }
@@ -884,7 +914,8 @@ function Invoke-ProductionBackup {
         $storageCount = 0
         foreach ($bucket in $buckets) {
             $failureSubstage = 'storage-bucket-folder-create'
-            $bucketRoot = Join-Path $storageRoot $bucket.name
+            $bucketName = Get-StorageBucketName $bucket
+            $bucketRoot = Join-Path $storageRoot $bucketName
             New-Item -ItemType Directory -Path $bucketRoot -Force | Out-Null
             $failureSubstage = ''
             $queue = [Collections.Generic.Queue[string]]::new()
@@ -895,7 +926,7 @@ function Invoke-ProductionBackup {
                 do {
                     $stage = 'storage-object-list'
                     $body = @{ prefix = $prefix; limit = 1000; offset = $offset; sortBy = @{ column = 'name'; order = 'asc' } } | ConvertTo-Json -Compress
-                    $listUri = "$($script:ProjectUrl)/storage/v1/object/list/$([uri]::EscapeDataString($bucket.name))"
+                    $listUri = "$($script:ProjectUrl)/storage/v1/object/list/$([uri]::EscapeDataString($bucketName))"
                     $items = @(Invoke-RestMethod -Method Post -Uri $listUri -Headers $headers -ContentType 'application/json' -Body $body -TimeoutSec 60)
                     foreach ($item in $items) {
                         $relative = if ($prefix) { "$prefix/$($item.name)" } else { [string]$item.name }
@@ -910,7 +941,7 @@ function Invoke-ProductionBackup {
                             $stage = 'storage-object-download'
                             New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force | Out-Null
                             $encodedPath = (($relative -replace '\\', '/') -split '/' | ForEach-Object { [uri]::EscapeDataString($_) }) -join '/'
-                            $downloadUri = "$($script:ProjectUrl)/storage/v1/object/authenticated/$([uri]::EscapeDataString($bucket.name))/$encodedPath"
+                            $downloadUri = "$($script:ProjectUrl)/storage/v1/object/authenticated/$([uri]::EscapeDataString($bucketName))/$encodedPath"
                             Invoke-WebRequest -Method Get -Uri $downloadUri -Headers $headers -OutFile $target -TimeoutSec 180
                             $storageCount++
                         }
@@ -955,6 +986,8 @@ function Invoke-ProductionBackup {
         $failure.failedParameter = $safeFailure.ParameterName
         $failure.failedFile = $safeFailure.FileName
         $failure.failedLine = $safeFailure.LineNumber
+        $safeFailureCode = Get-SafeFailureCode $_
+        if ($safeFailureCode) { $failure.failureCode = $safeFailureCode }
         $failure | ConvertTo-Json | Set-Content -LiteralPath $reportPath -Encoding UTF8
         Write-Error 'Backup interrompido. Detalhes sensÃ­veis foram omitidos; consulte o relatÃ³rio de falha.'
         exit 1
