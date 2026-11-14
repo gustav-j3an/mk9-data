@@ -4,7 +4,8 @@ param(
     [switch]$SelfTest,
     [switch]$TestAcl,
     [switch]$Diagnose,
-    [switch]$ConfigureApiCredential
+    [switch]$ConfigureApiCredential,
+    [switch]$ConfigureDatabaseEndpoint
 )
 
 Set-StrictMode -Version Latest
@@ -17,6 +18,7 @@ $script:AgeExe = (Get-Command age -ErrorAction SilentlyContinue).Source
 $script:AgeKeygenExe = (Get-Command age-keygen -ErrorAction SilentlyContinue).Source
 $script:ConfigHome = Join-Path $env:LOCALAPPDATA 'MK9-Date\ProductionBackup'
 $script:ConfigPath = Join-Path $script:ConfigHome 'config.json'
+$script:CaCertPath = Join-Path $script:ConfigHome 'supabase-prod-ca-2021.crt'
 $script:DbCredentialPath = Join-Path $script:ConfigHome 'database.credential.xml'
 $script:ApiCredentialPath = Join-Path $script:ConfigHome 'service-role.credential.xml'
 $script:IdentityPath = Join-Path $script:ConfigHome 'age-identity.txt'
@@ -125,7 +127,7 @@ function Invoke-Configure {
     $apiCredential = New-Object System.Management.Automation.PSCredential('service_role', $serviceKey)
     $dbCredential | Export-Clixml -LiteralPath $script:DbCredentialPath -Force
     $apiCredential | Export-Clixml -LiteralPath $script:ApiCredentialPath -Force
-    $config = [ordered]@{ projectRef = $script:ProjectRef; projectUrl = $script:ProjectUrl; ageRecipient = $recipient }
+    $config = [ordered]@{ projectRef = $script:ProjectRef; projectUrl = $script:ProjectUrl; ageRecipient = $recipient; sslRootCertPath = $script:CaCertPath; databaseConnectionMode = 'direct' }
     $config | ConvertTo-Json | Set-Content -LiteralPath $script:ConfigPath -Encoding UTF8
     Write-Host "ConfiguraÃ§Ã£o protegida salva em $script:ConfigHome"
 }
@@ -144,8 +146,99 @@ function Invoke-ConfigureApiCredential {
     Write-Host 'The local DPAPI service_role credential was updated. Supabase was not contacted.'
 }
 
+function Get-DatabaseConnectionSettings($Config) {
+    $mode = if ($Config.PSObject.Properties.Name -contains 'databaseConnectionMode') { [string]$Config.databaseConnectionMode } else { 'direct' }
+    if ($mode -eq 'direct') {
+        return [pscustomobject]@{ Mode = 'direct'; Host = "db.$($script:ProjectRef).supabase.co"; Port = 5432; User = 'postgres' }
+    }
+    if ($mode -eq 'session-pooler') {
+        if ($Config.PSObject.Properties.Name -notcontains 'poolerHost' -or [string]$Config.poolerHost -notmatch '^aws-\d+-[a-z0-9-]+\.pooler\.supabase\.com$') {
+            throw 'PG_POOLER_HOST_NOT_CONFIGURED'
+        }
+        return [pscustomobject]@{ Mode = 'session-pooler'; Host = [string]$Config.poolerHost; Port = 5432; User = "postgres.$($script:ProjectRef)" }
+    }
+    throw 'PG_CONNECTION_MODE_INVALID'
+}
+
+function Assert-SupabaseCaCertificate([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw 'PG_TLS_ROOT_CERT_MISSING' }
+    try {
+        $pem = Get-Content -LiteralPath $Path -Raw
+        $match = [regex]::Match($pem, '-----BEGIN CERTIFICATE-----\s*([A-Za-z0-9+/=\r\n]+)\s*-----END CERTIFICATE-----')
+        if (-not $match.Success) { throw 'PG_TLS_ROOT_CERT_INVALID' }
+        $der = [Convert]::FromBase64String(($match.Groups[1].Value -replace '\s', ''))
+        $certificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($der)
+        $now = [DateTime]::UtcNow
+        $isCa = $false
+        foreach ($extension in $certificate.Extensions) {
+            if ($extension -is [System.Security.Cryptography.X509Certificates.X509BasicConstraintsExtension] -and $extension.CertificateAuthority) { $isCa = $true }
+        }
+        if (-not $isCa -or $certificate.Subject -notmatch '(?i)supabase' -or $certificate.NotBefore.ToUniversalTime() -gt $now -or $certificate.NotAfter.ToUniversalTime() -lt $now) { throw 'PG_TLS_ROOT_CERT_INVALID' }
+    } catch {
+        if ($_.Exception.Message -match '^PG_TLS_ROOT_CERT_[A-Z_]+$') { throw }
+        throw 'PG_TLS_ROOT_CERT_INVALID'
+    }
+}
+
+function Install-LocalSupabaseCaCertificate([string]$SourcePath) {
+    if (-not (Test-Path -LiteralPath $SourcePath -PathType Leaf)) { throw 'PG_TLS_ROOT_CERT_MISSING' }
+    Assert-SupabaseCaCertificate $SourcePath
+    if (Test-Path -LiteralPath $script:CaCertPath -PathType Leaf) {
+        Assert-SupabaseCaCertificate $script:CaCertPath
+    } else {
+        Copy-Item -LiteralPath $SourcePath -Destination $script:CaCertPath
+    }
+    return $script:CaCertPath
+}
+
+function Get-DatabaseTlsSettings($Config) {
+    $path = if ($Config.PSObject.Properties.Name -contains 'sslRootCertPath') { [string]$Config.sslRootCertPath } else { $script:CaCertPath }
+    Assert-SupabaseCaCertificate $path
+    return [IO.Path]::GetFullPath($path)
+}
+
+function Invoke-ConfigureDatabaseEndpoint {
+    if (-not (Test-Path -LiteralPath $script:ConfigPath -PathType Leaf)) { throw 'Run -Configure before selecting a database endpoint.' }
+    Protect-PrivateDirectory $script:ConfigHome
+    $config = Get-Content -LiteralPath $script:ConfigPath -Raw | ConvertFrom-Json
+    if ($config.projectRef -ne $script:ProjectRef -or $config.projectUrl -ne $script:ProjectUrl) { throw 'LOCAL_PROJECT_REF_MISMATCH' }
+    $mode = (Read-Host 'Connection mode: direct or session-pooler').Trim().ToLowerInvariant()
+    if ($mode -eq 'direct') {
+        $config | Add-Member -NotePropertyName databaseConnectionMode -NotePropertyValue 'direct' -Force
+        $poolerHost = (Read-Host 'Optional exact Session pooler hostname for IPv4 fallback (blank to skip)').Trim().ToLowerInvariant()
+        if ($poolerHost) {
+            if ($poolerHost -notmatch '^aws-\d+-[a-z0-9-]+\.pooler\.supabase\.com$') { throw 'PG_POOLER_HOST_INVALID' }
+            $config | Add-Member -NotePropertyName poolerHost -NotePropertyValue $poolerHost -Force
+        } else {
+            $config.PSObject.Properties.Remove('poolerHost')
+        }
+    } elseif ($mode -eq 'session-pooler') {
+        $poolerHost = (Read-Host 'Paste the exact Session pooler hostname from Supabase Connect').Trim().ToLowerInvariant()
+        if ($poolerHost -notmatch '^aws-\d+-[a-z0-9-]+\.pooler\.supabase\.com$') { throw 'PG_POOLER_HOST_INVALID' }
+        $config | Add-Member -NotePropertyName databaseConnectionMode -NotePropertyValue 'session-pooler' -Force
+        $config | Add-Member -NotePropertyName poolerHost -NotePropertyValue $poolerHost -Force
+    } else { throw 'PG_CONNECTION_MODE_INVALID' }
+    $caSource = (Read-Host 'Path to the Supabase CA certificate downloaded from Database Settings').Trim().Trim('"')
+    $config | Add-Member -NotePropertyName sslRootCertPath -NotePropertyValue (Install-LocalSupabaseCaCertificate $caSource) -Force
+    $config | ConvertTo-Json | Set-Content -LiteralPath $script:ConfigPath -Encoding UTF8
+    Write-Host 'Database endpoint mode saved in the private local configuration.'
+}
+
 function Get-Sha256([string]$Path) {
     (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+
+function Test-PgDumpCompatibility($Connection, [string]$Directory, [string]$Prefix = 'pgdump-compat') {
+    $dumpPath = Join-Path $Directory ($Prefix + '.dump')
+    $dumpResult = Invoke-CapturedNative (Join-Path $script:PgBin 'pg_dump.exe') @('--schema-only', '-h', $Connection.Host, '-p', [string]$Connection.Port, '-U', $Connection.User, '-d', 'postgres', '-Fc', '-f', $dumpPath)
+    if ($dumpResult.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $dumpPath -PathType Leaf) -or (Get-Item -LiteralPath $dumpPath).Length -eq 0) {
+        if (Test-Path -LiteralPath $dumpPath) { Remove-Item -LiteralPath $dumpPath -Force -ErrorAction SilentlyContinue }
+        return 'PGDUMP_COMPATIBILITY_PROBE_FAILED'
+    }
+    $tocResult = Invoke-CapturedNative (Join-Path $script:PgBin 'pg_restore.exe') @('--list', $dumpPath)
+    Remove-Item -LiteralPath $dumpPath -Force -ErrorAction SilentlyContinue
+    if ($tocResult.ExitCode -ne 0) { return 'PGDUMP_COMPATIBILITY_TOC_FAILED' }
+    return 'PGDUMP_CONNECTION_COMPATIBLE'
 }
 
 function Write-FailureReport([string]$Path, [string]$Stage, [string]$FailureType) {
@@ -256,6 +349,16 @@ function Invoke-SelfTest {
         }
         $fakeApiError = [pscustomobject]@{ Exception = [ArgumentException]::new('invalid header') }
         if ((Get-SafeApiDiagnosticCode $fakeApiError) -ne 'SUPABASE_API_HEADER_VALUE_INVALID' -or (Test-ApiHeaderValue "bad`nkey") -or -not (Test-ApiHeaderValue 'synthetic-api-key_123')) { throw 'API diagnostic-code regression test failed.' }
+        $directSettings = Get-DatabaseConnectionSettings ([pscustomobject]@{ projectRef = $script:ProjectRef })
+        $poolerSettings = Get-DatabaseConnectionSettings ([pscustomobject]@{ databaseConnectionMode = 'session-pooler'; poolerHost = 'aws-1-sa-east-1.pooler.supabase.com' })
+        $badPoolerRejected = $false
+        try { Get-DatabaseConnectionSettings ([pscustomobject]@{ databaseConnectionMode = 'session-pooler'; poolerHost = 'untrusted.example.com' }) | Out-Null } catch { $badPoolerRejected = $true }
+        if ($directSettings.Host -ne "db.$($script:ProjectRef).supabase.co" -or $directSettings.User -ne 'postgres' -or $poolerSettings.User -ne "postgres.$($script:ProjectRef)" -or $poolerSettings.Port -ne 5432 -or -not $badPoolerRejected) { throw 'Database endpoint configuration regression test failed.' }
+        $invalidCa = Join-Path $testRoot 'invalid-ca.crt'
+        Set-Content -LiteralPath $invalidCa -Value 'synthetic-invalid-certificate' -Encoding ASCII
+        $invalidCaRejected = $false
+        try { Assert-SupabaseCaCertificate $invalidCa } catch { $invalidCaRejected = $_.Exception.Message -eq 'PG_TLS_ROOT_CERT_INVALID' }
+        if (-not $invalidCaRejected) { throw 'Invalid TLS CA was not rejected.' }
         Write-Host 'SELF-TEST OK: fixture, manifesto, SHA-256, criptografia, descriptografia, integridade e falha de ciphertext.'
     }
     finally {
@@ -379,25 +482,49 @@ function Invoke-ProductionDiagnostics {
     $previousPgPassFile = $env:PGPASSFILE
     $hadSslMode = Test-Path Env:\PGSSLMODE
     $previousSslMode = $env:PGSSLMODE
+    $hadSslRootCert = Test-Path Env:\PGSSLROOTCERT
+    $previousSslRootCert = $env:PGSSLROOTCERT
+    $sslCertPath = $null
+    try {
+        $sslCertPath = Get-DatabaseTlsSettings $config
+        Add-DiagnosticResult $results 'postgresql-tls-root-certificate' 'None' 'PG_TLS_ROOT_CERT_VALID'
+    } catch {
+        $tlsCode = if ($_.Exception.Message -match '^PG_TLS_ROOT_CERT_[A-Z_]+$') { $_.Exception.Message } else { 'PG_TLS_ROOT_CERT_INVALID' }
+        Add-DiagnosticResult $results 'postgresql-tls-root-certificate' $_.Exception.GetType().Name $tlsCode
+    }
     try {
         if ($null -ne $storedDbCredential -and $null -ne $apiCredential) {
             Protect-PrivateDirectory $diagWork
             $pgpass = Join-Path $diagWork 'pgpass.conf'
-            $env:PGPASSFILE = $pgpass
-            $env:PGSSLMODE = 'require'
             $dbPassword = $storedDbCredential.GetNetworkCredential().Password
-            $directPgPassLine = "db.$($script:ProjectRef).supabase.co:5432:postgres:postgres:$((Escape-PgPass $dbPassword))"
-            Set-Content -LiteralPath $pgpass -Value $directPgPassLine -Encoding ASCII
+            $connection = Get-DatabaseConnectionSettings $config
+            if ($null -eq $sslCertPath) {
+                Add-DiagnosticResult $results 'postgresql-readiness' 'Skipped' 'PG_TLS_ROOT_CERT_MISSING_OR_INVALID'
+                Add-DiagnosticResult $results 'postgresql-project-identity' 'Skipped' 'PG_TLS_ROOT_CERT_MISSING_OR_INVALID'
+            } else {
+                $env:PGPASSFILE = $pgpass
+                $env:PGSSLMODE = 'verify-full'
+                $env:PGSSLROOTCERT = $sslCertPath
+                $pgpassLine = "$($connection.Host):$($connection.Port):postgres:$($connection.User):$((Escape-PgPass $dbPassword))"
+                Set-Content -LiteralPath $pgpass -Value $pgpassLine -Encoding ASCII
 
-            $pgReady = Invoke-CapturedNative (Join-Path $script:PgBin 'pg_isready.exe') @('-h', "db.$($script:ProjectRef).supabase.co", '-p', '5432', '-d', 'postgres', '-U', 'postgres', '-t', '8')
+                $query = "select current_database() || '|' || current_user || '|' || current_setting('server_version_num')"
+                $pgReady = Invoke-CapturedNative (Join-Path $script:PgBin 'pg_isready.exe') @('-h', $connection.Host, '-p', [string]$connection.Port, '-d', 'postgres', '-U', $connection.User, '-t', '8')
             if ($pgReady.ExitCode -eq 0) {
                 Add-DiagnosticResult $results 'postgresql-readiness' 'None' 'PG_SERVER_ACCEPTING_CONNECTIONS'
-                $query = "select current_database() || '|' || current_user || '|' || current_setting('server_version_num')"
-                $pgIdentity = Invoke-CapturedNative (Join-Path $script:PgBin 'psql.exe') @('-X', '-A', '-t', '-w', '-v', 'ON_ERROR_STOP=1', '-h', "db.$($script:ProjectRef).supabase.co", '-p', '5432', '-d', 'postgres', '-U', 'postgres', '-c', $query)
+                $pgIdentity = Invoke-CapturedNative (Join-Path $script:PgBin 'psql.exe') @('-X', '-A', '-t', '-w', '-v', 'ON_ERROR_STOP=1', '-h', $connection.Host, '-p', [string]$connection.Port, '-d', 'postgres', '-U', $connection.User, '-c', $query)
                 if ($pgIdentity.ExitCode -eq 0) {
                     $identityParts = ($pgIdentity.Output.Trim() -split '\|')
                     if ($identityParts.Count -eq 3 -and $identityParts[0] -eq 'postgres' -and $identityParts[1] -eq 'postgres' -and $identityParts[2] -match '^17\d+$') {
                         Add-DiagnosticResult $results 'postgresql-project-identity' 'None' 'PRODUCTION_POSTGRES_17_CONFIRMED'
+                        if ($connection.Mode -eq 'session-pooler') {
+                            $compatibilityCode = Test-PgDumpCompatibility $connection $diagWork 'session-pooler-pgdump-compat'
+                            if ($compatibilityCode -eq 'PGDUMP_CONNECTION_COMPATIBLE') {
+                                Add-DiagnosticResult $results 'pg-dump-session-pooler-compatibility' 'None' 'PGDUMP_SESSION_POOLER_COMPATIBLE'
+                            } else {
+                                Add-DiagnosticResult $results 'pg-dump-session-pooler-compatibility' 'PostgreSQLClientError' $compatibilityCode
+                            }
+                        }
                     } else {
                         Add-DiagnosticResult $results 'postgresql-project-identity' 'IdentityMismatch' 'PG_DATABASE_ROLE_OR_VERSION_MISMATCH'
                     }
@@ -407,19 +534,40 @@ function Invoke-ProductionDiagnostics {
             } else {
                 Add-DiagnosticResult $results 'postgresql-readiness' 'PostgreSQLClientError' (Get-PostgresDiagnosticCode $pgReady.ExitCode $pgReady.Output)
                 Add-DiagnosticResult $results 'postgresql-project-identity' 'NotRun' 'PG_READINESS_FAILED'
-                if ($config.PSObject.Properties.Name -contains 'poolerHost' -and $config.poolerHost -match '^aws-\d+-[a-z0-9-]+\.pooler\.supabase\.com$') {
-                    $poolerHost = [string]$config.poolerHost
-                    $poolerPgPassLine = "$($poolerHost):5432:postgres:postgres.$($script:ProjectRef):$((Escape-PgPass $dbPassword))"
+                if ($connection.Mode -eq 'direct' -and $config.PSObject.Properties.Name -contains 'poolerHost') {
+                    $poolerConfig = [pscustomobject]@{ databaseConnectionMode = 'session-pooler'; poolerHost = $config.poolerHost }
+                    $pooler = Get-DatabaseConnectionSettings $poolerConfig
+                    $poolerPgPassLine = "$($pooler.Host):$($pooler.Port):postgres:$($pooler.User):$((Escape-PgPass $dbPassword))"
                     Add-Content -LiteralPath $pgpass -Value $poolerPgPassLine -Encoding ASCII
-                    $poolerReady = Invoke-CapturedNative (Join-Path $script:PgBin 'pg_isready.exe') @('-h', $poolerHost, '-p', '5432', '-d', 'postgres', '-U', "postgres.$($script:ProjectRef)", '-t', '8')
+                    $poolerReady = Invoke-CapturedNative (Join-Path $script:PgBin 'pg_isready.exe') @('-h', $pooler.Host, '-p', [string]$pooler.Port, '-d', 'postgres', '-U', $pooler.User, '-t', '8')
                     if ($poolerReady.ExitCode -eq 0) {
                         Add-DiagnosticResult $results 'postgresql-pooler-readiness' 'None' 'PG_POOLER_ACCEPTING_CONNECTIONS'
+                        $poolerIdentity = Invoke-CapturedNative (Join-Path $script:PgBin 'psql.exe') @('-X', '-A', '-t', '-w', '-v', 'ON_ERROR_STOP=1', '-h', $pooler.Host, '-p', [string]$pooler.Port, '-d', 'postgres', '-U', $pooler.User, '-c', $query)
+                        if ($poolerIdentity.ExitCode -eq 0) {
+                            $identityParts = ($poolerIdentity.Output.Trim() -split '\|')
+                            if ($identityParts.Count -eq 3 -and $identityParts[0] -eq 'postgres' -and $identityParts[1] -eq 'postgres' -and $identityParts[2] -match '^17\d+$') {
+                                for ($resultIndex = $results.Count - 1; $resultIndex -ge 0; $resultIndex--) {
+                                    if (($results[$resultIndex].stage -eq 'postgresql-readiness' -and $results[$resultIndex].code -eq 'PG_SERVER_UNREACHABLE') -or ($results[$resultIndex].stage -eq 'postgresql-project-identity' -and $results[$resultIndex].code -eq 'PG_READINESS_FAILED')) { $results.RemoveAt($resultIndex) }
+                                }
+                                Add-DiagnosticResult $results 'postgresql-project-identity' 'None' 'PRODUCTION_POSTGRES_17_CONFIRMED'
+                                Add-DiagnosticResult $results 'postgresql-readiness' 'None' 'PG_POOLER_READ_ONLY_IDENTITY_CONFIRMED'
+                                Add-DiagnosticResult $results 'postgresql-direct-readiness' 'Unavailable' 'PG_DIRECT_UNAVAILABLE_POOLER_VERIFIED'
+                                $compatibilityCode = Test-PgDumpCompatibility $pooler $diagWork 'pooler-pgdump-compat'
+                                if ($compatibilityCode -eq 'PGDUMP_CONNECTION_COMPATIBLE') { Add-DiagnosticResult $results 'pg-dump-session-pooler-compatibility' 'None' 'PGDUMP_SESSION_POOLER_COMPATIBLE' }
+                                else { Add-DiagnosticResult $results 'pg-dump-session-pooler-compatibility' 'PostgreSQLClientError' $compatibilityCode }
+                            } else {
+                                Add-DiagnosticResult $results 'postgresql-project-identity' 'IdentityMismatch' 'PG_DATABASE_ROLE_OR_VERSION_MISMATCH'
+                            }
+                        } else {
+                            Add-DiagnosticResult $results 'postgresql-project-identity' 'PostgreSQLClientError' (Get-PostgresDiagnosticCode $poolerIdentity.ExitCode $poolerIdentity.Output)
+                        }
                     } else {
                         Add-DiagnosticResult $results 'postgresql-pooler-readiness' 'PostgreSQLClientError' (Get-PostgresDiagnosticCode $poolerReady.ExitCode $poolerReady.Output)
                     }
-                } else {
+                } elseif ($connection.Mode -eq 'direct') {
                     Add-DiagnosticResult $results 'postgresql-pooler-readiness' 'NotConfigured' 'PG_POOLER_HOST_NOT_CONFIGURED'
                 }
+            }
             }
             $dbPassword = $null
 
@@ -459,6 +607,7 @@ function Invoke-ProductionDiagnostics {
     finally {
         if ($hadPgPassFile) { $env:PGPASSFILE = $previousPgPassFile } else { Remove-Item Env:\PGPASSFILE -ErrorAction SilentlyContinue }
         if ($hadSslMode) { $env:PGSSLMODE = $previousSslMode } else { Remove-Item Env:\PGSSLMODE -ErrorAction SilentlyContinue }
+        if ($hadSslRootCert) { $env:PGSSLROOTCERT = $previousSslRootCert } else { Remove-Item Env:\PGSSLROOTCERT -ErrorAction SilentlyContinue }
         $dbPassword = $null; $apiKey = $null
         if (Test-Path -LiteralPath $diagWork) { Remove-Item -LiteralPath $diagWork -Recurse -Force -ErrorAction SilentlyContinue }
     }
@@ -470,7 +619,7 @@ function Invoke-ProductionDiagnostics {
         Add-DiagnosticResult $results 'diagnostic-report' $_.Exception.GetType().Name 'LOCAL_REPORT_WRITE_FAILED'
     }
     foreach ($result in $results) { Write-Output "$($result.stage) $($result.failureType) $($result.code)" }
-    if (@($results | Where-Object { $_.code -notmatch '(_OK|_MATCH|_CONFIRMED|_CONNECTIONS|_REQUEST_OK)$' }).Count -gt 0) { exit 2 }
+    if (@($results | Where-Object { $_.code -notmatch '(_OK|_MATCH|_CONFIRMED|_CONNECTIONS|_REQUEST_OK)$' -and $_.code -ne 'PG_DIRECT_UNAVAILABLE_POOLER_VERIFIED' }).Count -gt 0) { exit 2 }
     exit 0
 }
 
@@ -482,12 +631,14 @@ function Invoke-ProductionBackup {
     $config = Get-Content -LiteralPath $script:ConfigPath -Raw | ConvertFrom-Json
     if ($config.projectRef -ne $script:ProjectRef -or $config.projectUrl -ne $script:ProjectUrl) { throw 'Destino configurado nÃ£o Ã© o projeto de produÃ§Ã£o autorizado.' }
     if ($config.ageRecipient -notmatch '^age1[0-9a-z]+$') { throw 'DestinatÃ¡rio age invÃ¡lido na configuraÃ§Ã£o.' }
+    $sslCertPath = Get-DatabaseTlsSettings $config
     $derived = (& $script:AgeKeygenExe -y $script:IdentityPath 2>$null | Select-Object -Last 1).Trim()
     if ($LASTEXITCODE -ne 0 -or $derived -ne $config.ageRecipient) { throw 'Identidade age nÃ£o corresponde ao destinatÃ¡rio configurado.' }
     $storedDbCredential = Import-Clixml -LiteralPath $script:DbCredentialPath
     $apiCredential = Import-Clixml -LiteralPath $script:ApiCredentialPath
     if ($storedDbCredential.UserName -notin @('postgres', "postgres.$($script:ProjectRef)") -or $apiCredential.UserName -ne 'service_role') { throw 'As credenciais protegidas nÃ£o sÃ£o do formato esperado.' }
-    $dbCredential = New-Object System.Management.Automation.PSCredential('postgres', $storedDbCredential.Password)
+    $connection = Get-DatabaseConnectionSettings $config
+    $dbCredential = New-Object System.Management.Automation.PSCredential($connection.User, $storedDbCredential.Password)
 
     Protect-PrivateDirectory $script:BackupRoot
     $runId = [DateTime]::Now.ToString('yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
@@ -504,31 +655,60 @@ function Invoke-ProductionBackup {
     $previousPgPassFile = $env:PGPASSFILE
     $hadSslMode = Test-Path Env:\PGSSLMODE
     $previousSslMode = $env:PGSSLMODE
+    $hadSslRootCert = Test-Path Env:\PGSSLROOTCERT
+    $previousSslRootCert = $env:PGSSLROOTCERT
     $env:PGPASSFILE = $pgpass
-    $env:PGSSLMODE = 'require'
+    $env:PGSSLMODE = 'verify-full'
+    $env:PGSSLROOTCERT = $sslCertPath
     $dbPassword = $dbCredential.GetNetworkCredential().Password
     $apiKey = $apiCredential.GetNetworkCredential().Password
+    $poolerCompatibilityValidated = $false
     try {
         Protect-PrivateDirectory $work
         $stage = 'write-postgresql-password-file'
-        $pgpassLine = 'db.xzmbesqhxcnuokjwrbnw.supabase.co:5432:postgres:postgres.' + $script:ProjectRef + ':' + (Escape-PgPass $dbPassword)
+        $pgpassLine = "$($connection.Host):$($connection.Port):postgres:$($connection.User):$((Escape-PgPass $dbPassword))"
         Set-Content -LiteralPath $pgpass -Value $pgpassLine -Encoding ASCII
-        $hostName = "db.$($script:ProjectRef).supabase.co"
         $stage = 'postgresql-readiness-preflight'
-        $readyOutput = & (Join-Path $script:PgBin 'pg_isready.exe') -h $hostName -p 5432 -d postgres -U $dbCredential.UserName -t 8 2>$null
+        $readyOutput = & (Join-Path $script:PgBin 'pg_isready.exe') -h $connection.Host -p $connection.Port -d postgres -U $dbCredential.UserName -t 8 2>$null
+        if ($LASTEXITCODE -ne 0 -and $connection.Mode -eq 'direct' -and $config.PSObject.Properties.Name -contains 'poolerHost') {
+            $pooler = Get-DatabaseConnectionSettings ([pscustomobject]@{ databaseConnectionMode = 'session-pooler'; poolerHost = $config.poolerHost })
+            Add-Content -LiteralPath $pgpass -Value "$($pooler.Host):$($pooler.Port):postgres:$($pooler.User):$((Escape-PgPass $dbPassword))" -Encoding ASCII
+            $readyOutput = & (Join-Path $script:PgBin 'pg_isready.exe') -h $pooler.Host -p $pooler.Port -d postgres -U $pooler.User -t 8 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                $poolerIdentity = & (Join-Path $script:PgBin 'psql.exe') -X -A -t -w -v ON_ERROR_STOP=1 -h $pooler.Host -p $pooler.Port -d postgres -U $pooler.User -c "select current_database() || '|' || current_user || '|' || current_setting('server_version_num')" 2>$null
+                $poolerIdentityParts = (($poolerIdentity | Out-String).Trim() -split '\|')
+                if ($LASTEXITCODE -eq 0 -and $poolerIdentityParts.Count -eq 3 -and $poolerIdentityParts[0] -eq 'postgres' -and $poolerIdentityParts[1] -eq 'postgres' -and $poolerIdentityParts[2] -match '^17\d+$') {
+                    $connection = $pooler
+                    $dbCredential = New-Object System.Management.Automation.PSCredential($connection.User, $storedDbCredential.Password)
+                    $compatibilityCode = Test-PgDumpCompatibility $connection $work 'backup-pooler-pgdump-compat'
+                    if ($compatibilityCode -ne 'PGDUMP_CONNECTION_COMPATIBLE') { throw 'pg_dump session-pooler compatibility preflight failed.' }
+                    $poolerCompatibilityValidated = $true
+                } else { throw 'Session pooler did not confirm the production database identity.' }
+            }
+        }
         if ($LASTEXITCODE -ne 0) { throw 'Preflight PostgreSQL falhou; verifique rede, senha e disponibilidade do projeto.' }
         $stage = 'postgresql-identity-preflight'
-        $identity = & (Join-Path $script:PgBin 'psql.exe') -X -A -t -v ON_ERROR_STOP=1 -h $hostName -p 5432 -d postgres -U $dbCredential.UserName -c 'select current_database()' 2>$null
-        if ($LASTEXITCODE -ne 0 -or ($identity | Out-String).Trim() -ne 'postgres') { throw 'Preflight SQL nÃ£o confirmou o banco postgres.' }
+        $identity = & (Join-Path $script:PgBin 'psql.exe') -X -A -t -w -v ON_ERROR_STOP=1 -h $connection.Host -p $connection.Port -d postgres -U $dbCredential.UserName -c "select current_database() || '|' || current_user || '|' || current_setting('server_version_num')" 2>$null
+        $identityParts = (($identity | Out-String).Trim() -split '\|')
+        if ($LASTEXITCODE -ne 0 -or $identityParts.Count -ne 3 -or $identityParts[0] -ne 'postgres' -or $identityParts[1] -ne 'postgres' -or $identityParts[2] -notmatch '^17\d+$') { throw 'Preflight SQL nÃ£o confirmou identidade do banco PostgreSQL 17.' }
+        if ($connection.Mode -eq 'session-pooler' -and -not $poolerCompatibilityValidated) {
+            $compatibilityCode = Test-PgDumpCompatibility $connection $work 'backup-pooler-pgdump-compat'
+            if ($compatibilityCode -ne 'PGDUMP_CONNECTION_COMPATIBLE') { throw 'pg_dump session-pooler compatibility preflight failed.' }
+        }
 
+        if (-not (Test-ApiHeaderValue $apiKey)) { throw 'API_CREDENTIAL_HEADER_INVALID' }
         $headers = @{ apikey = $apiKey; Authorization = "Bearer $apiKey" }
         $stage = 'auth-api-preflight'
-        $settings = Invoke-RestMethod -Method Get -Uri "$($script:ProjectUrl)/auth/v1/settings" -Headers $headers -TimeoutSec 30
-        if (-not $settings) { throw 'Preflight Auth nÃ£o confirmou a identidade do projeto.' }
+        $authPreflight = Invoke-RestMethod -Method Get -Uri "$($script:ProjectUrl)/auth/v1/admin/users?page=1`&per_page=1" -Headers $headers -TimeoutSec 30
+        if ($null -eq $authPreflight.PSObject.Properties['users']) { throw 'AUTH_RESPONSE_SHAPE_INVALID' }
+        $authPreflight = $null
+        $stage = 'storage-api-preflight'
+        $storagePreflight = @(Invoke-RestMethod -Method Get -Uri "$($script:ProjectUrl)/storage/v1/bucket" -Headers $headers -TimeoutSec 30)
+        $storagePreflight = $null
 
         $databaseDump = Join-Path $work 'database.dump'
         $stage = 'postgresql-export'
-        & (Join-Path $script:PgBin 'pg_dump.exe') -h $hostName -p 5432 -U $dbCredential.UserName -d postgres -Fc -f $databaseDump 2>$null
+        & (Join-Path $script:PgBin 'pg_dump.exe') -h $connection.Host -p $connection.Port -U $dbCredential.UserName -d postgres -Fc -f $databaseDump 2>$null
         if ($LASTEXITCODE -ne 0 -or -not (Test-Path $databaseDump) -or (Get-Item $databaseDump).Length -eq 0) { throw 'pg_dump falhou; nenhum backup serÃ¡ declarado vÃ¡lido.' }
         & (Join-Path $script:PgBin 'pg_restore.exe') --list $databaseDump 2>$null | Out-File -FilePath (Join-Path $work 'database.toc.txt') -Encoding ASCII
         if ($LASTEXITCODE -ne 0) { throw 'ValidaÃ§Ã£o TOC de pg_dump falhou.' }
@@ -625,6 +805,7 @@ function Invoke-ProductionBackup {
     finally {
         if ($hadPgPassFile) { $env:PGPASSFILE = $previousPgPassFile } else { Remove-Item Env:\PGPASSFILE -ErrorAction SilentlyContinue }
         if ($hadSslMode) { $env:PGSSLMODE = $previousSslMode } else { Remove-Item Env:\PGSSLMODE -ErrorAction SilentlyContinue }
+        if ($hadSslRootCert) { $env:PGSSLROOTCERT = $previousSslRootCert } else { Remove-Item Env:\PGSSLROOTCERT -ErrorAction SilentlyContinue }
         $dbPassword = $null; $apiKey = $null
         $cleanupFailed = $false
         try {
@@ -644,5 +825,6 @@ if ($TestAcl) { Invoke-AclRegressionTest; exit 0 }
 if ($SelfTest) { Invoke-SelfTest; exit 0 }
 if ($Configure) { Invoke-Configure; exit 0 }
 if ($ConfigureApiCredential) { Invoke-ConfigureApiCredential; exit 0 }
+if ($ConfigureDatabaseEndpoint) { Invoke-ConfigureDatabaseEndpoint; exit 0 }
 if ($Diagnose) { Invoke-ProductionDiagnostics; exit 0 }
 Invoke-ProductionBackup
