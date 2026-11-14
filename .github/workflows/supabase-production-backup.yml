@@ -7,8 +7,8 @@ on:
         description: Type BACKUP_PRODUCTION to confirm an authorized production export
         required: true
         type: string
-      confirm_zero_cost_quota:
-        description: Confirm sufficient included GitHub Actions/storage quota and no overage billing for this run
+      confirm_private_zero_cost_destination:
+        description: Confirm the configured existing private destination has no incremental charge and is not GitHub artifacts
         required: true
         type: boolean
         default: false
@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   backup:
-    if: github.ref == 'refs/heads/main' && github.event.repository.visibility == 'private' && inputs.confirm_production_backup == 'BACKUP_PRODUCTION' && inputs.confirm_zero_cost_quota
+    if: github.ref == 'refs/heads/main' && inputs.confirm_production_backup == 'BACKUP_PRODUCTION' && inputs.confirm_private_zero_cost_destination
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     environment: production-backup
@@ -61,16 +61,24 @@ jobs:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           AGE_RECIPIENT: ${{ secrets.AGE_RECIPIENT }}
+          BACKUP_DESTINATION_HOST: ${{ vars.BACKUP_DESTINATION_HOST }}
+          BACKUP_UPLOAD_URL: ${{ secrets.BACKUP_UPLOAD_URL }}
         run: bash scripts/mk9-production-backup.sh
 
-      - name: Upload encrypted private artifact (one day)
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        with:
-          name: mk9-production-backup-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/mk9-production-backup-${{ github.run_id }}-${{ github.run_attempt }}.tar.gz.age
-          if-no-files-found: error
-          retention-days: 1
-          compression-level: 0
+      - name: Upload encrypted archive to configured private destination
+        shell: bash
+        env:
+          BACKUP_UPLOAD_URL: ${{ secrets.BACKUP_UPLOAD_URL }}
+          BACKUP_DESTINATION_HOST: ${{ vars.BACKUP_DESTINATION_HOST }}
+        run: |
+          set -Eeuo pipefail
+          archive="$RUNNER_TEMP/mk9-production-backup-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.tar.gz.age"
+          test -s "$archive"
+          actual_host="$(python3 -c 'import os,urllib.parse; print(urllib.parse.urlsplit(os.environ["BACKUP_UPLOAD_URL"]).hostname or "")')"
+          test -n "$actual_host" && test "$actual_host" = "$BACKUP_DESTINATION_HOST"
+          status="$(curl --silent --output /dev/null --write-out '%{http_code}' --upload-file "$archive" "$BACKUP_UPLOAD_URL" 2>/dev/null)" || { echo 'M65_BACKUP_UPLOAD_FAILED'; exit 1; }
+          [[ "$status" =~ ^2[0-9][0-9]$ ]] || { echo 'M65_BACKUP_DESTINATION_REJECTED_UPLOAD'; exit 1; }
+          sha256sum "$archive" | cut -d ' ' -f 1
 
       - name: Remove archive from runner workspace
         if: always()
