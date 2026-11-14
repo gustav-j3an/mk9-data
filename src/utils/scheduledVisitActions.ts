@@ -1,4 +1,5 @@
 import type { OperationalVisitStatus, OperationalVisitItem } from './routePlanner';
+import type { RouteItem, Visit } from '../types';
 
 export type ScheduledVisitAction = 'advance' | 'recover';
 
@@ -6,6 +7,19 @@ export interface ScheduledActionDecision {
   allowed: boolean;
   action?: ScheduledVisitAction;
   reason?: string;
+  isSameDayConflict?: boolean;
+}
+
+export type ScheduledRouteEligibility = 'active' | 'closed' | 'unavailable';
+
+export function getScheduledRouteEligibility(route: Pick<RouteItem, 'encerrada_em' | 'industria'> | null | undefined): ScheduledRouteEligibility {
+  if (!route || route.industria?.status !== 'ativo') return 'unavailable';
+  if (route.encerrada_em) return 'closed';
+  return 'active';
+}
+
+export function isRouteVisibleInOperationalHistory(route: Pick<RouteItem, 'encerrada_em'>, historyStart: string): boolean {
+  return !route.encerrada_em || String(route.encerrada_em).slice(0, 10) >= historyStart;
 }
 
 export function isScheduledVisitActionRpcReady(error: { code?: unknown; message?: unknown } | null | undefined): boolean {
@@ -13,17 +27,21 @@ export function isScheduledVisitActionRpcReady(error: { code?: unknown; message?
 }
 
 export function getScheduledVisitAction(input: {
-  item: Pick<OperationalVisitItem, 'routeId' | 'dataStr' | 'status' | 'frequencia' | 'visitObj'>;
+  item: Pick<OperationalVisitItem, 'routeId' | 'dataStr' | 'status' | 'frequencia' | 'visitObj'> & Partial<Pick<OperationalVisitItem, 'lojaCodigo' | 'industriaCodigo'>>;
   today: string;
   weekStart: string;
   weekEnd: string;
   authorized: boolean;
   hasActiveVisit: boolean;
+  routeEligibility: ScheduledRouteEligibility;
+  todayVisits?: Pick<Visit, 'loja_codigo' | 'industria_codigo' | 'status' | 'scheduled_date'>[];
 }): ScheduledActionDecision {
-  const { item } = input;
+  const { item, todayVisits = [] } = input;
   if (!input.authorized) return { allowed: false, reason: 'A operação ainda não está autorizada.' };
   if (input.hasActiveVisit) return { allowed: false, reason: 'Finalize o atendimento atual antes de iniciar outra visita.' };
   if (!item.routeId) return { allowed: false, reason: 'A programação não está vinculada a uma rota fixa.' };
+  if (input.routeEligibility === 'closed') return { allowed: false, reason: 'Esta rota foi encerrada e não pode iniciar novos atendimentos.' };
+  if (input.routeEligibility !== 'active') return { allowed: false, reason: 'Não foi possível confirmar que a rota e a indústria estão ativas.' };
   if ((item.frequencia || '').toUpperCase() !== 'SEMANAL') {
     return { allowed: false, reason: 'Esta frequência ainda não pode ser validada pelo servidor para antecipação ou recuperação.' };
   }
@@ -33,6 +51,30 @@ export function getScheduledVisitAction(input: {
   if (item.visitObj?.status === 'concluida' || item.visitObj?.status === 'em_andamento' || item.visitObj?.started_at) {
     return { allowed: false, reason: 'Esta ocorrência já possui atendimento iniciado ou concluído.' };
   }
+
+  // Prevenção de duplicidade: a mesma ocorrência programada (scheduled_date) não pode ser executada duas vezes.
+  // Múltiplas ocorrências programadas distintas (ex: segunda, quarta, quinta) para a mesma loja/indústria
+  // podem ser recuperadas e concluídas separadamente no mesmo dia efetivo (Missão 37.52).
+  if (item.lojaCodigo && item.industriaCodigo && todayVisits.length > 0) {
+    const isSameOccurrenceExecutedToday = todayVisits.some(
+      (v) =>
+        v.loja_codigo === item.lojaCodigo &&
+        v.industria_codigo === item.industriaCodigo &&
+        (v.status === 'concluida' || v.status === 'em_andamento') &&
+        (v.scheduled_date === item.dataStr)
+    );
+    if (isSameOccurrenceExecutedToday) {
+      const isRecovery = item.dataStr >= input.weekStart && item.dataStr < input.today;
+      const isAdvance = item.dataStr > input.today && item.dataStr <= input.weekEnd;
+      return {
+        allowed: false,
+        action: isRecovery ? 'recover' : isAdvance ? 'advance' : undefined,
+        reason: 'Esta ocorrência programada já foi atendida hoje.',
+        isSameDayConflict: true
+      };
+    }
+  }
+
   if (item.dataStr > input.today && item.dataStr <= input.weekEnd && item.status === 'planejada') {
     return { allowed: true, action: 'advance' };
   }

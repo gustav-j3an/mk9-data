@@ -6,7 +6,16 @@ on:
       - '.github/workflows/m60-integrated-postgres17.yml'
       - 'docs/m60-publication-runbook.md'
       - 'scripts/m60-*'
+      - 'scripts/m65-*'
+      - 'scripts/mk9-*'
+      - 'scripts/m37-*'
+      - 'scripts/m38-*'
+      - 'scripts/run-m37-m38-functional-tests.sh'
+      - 'scripts/m58-4-*'
+      - 'supabase/migrations/202611*'
+      - 'supabase/fetched_homologation_migrations/**'
       - 'supabase/migrations/20261113190000_m59_contract_acl_and_industry_codes.sql'
+      - 'supabase/migrations/20261114014936_m65_secure_visits_insert_policy.sql'
       - 'src/**'
       - 'package.json'
       - 'package-lock.json'
@@ -40,13 +49,13 @@ jobs:
           npm run typecheck
           npm run build
 
-      - name: Checkout pinned M37/M38 migration source
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          repository: gustav-j3an/mk9-data
-          ref: 080ebbb1c70a7eb7716d3f9669039fd127e00123
-          path: m38-source
-          persist-credentials: false
+      - name: Validate protected backup tooling syntax without executing it
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash -n scripts/mk9-production-backup.sh
+          node --check scripts/mk9-export-auth.mjs
+          node --check scripts/mk9-export-storage.mjs
 
       - name: Install PostgreSQL 17 client
         shell: bash
@@ -96,7 +105,6 @@ jobs:
 
       - name: Apply M37/M38 sequence and run visit behavior suites
         shell: bash
-        working-directory: m38-source
         env:
           SUPABASE_TEST_WORKDIR: ${{ runner.temp }}/mk9-date-m60-cloud
           SUPABASE_TEST_API_URL: http://127.0.0.1:54321

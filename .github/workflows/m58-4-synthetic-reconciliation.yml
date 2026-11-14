@@ -4,12 +4,11 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
-      - '.github/workflows/m58-4-synthetic-reconciliation.yml'
       - 'scripts/m58-4-*'
       - 'scripts/m59-*'
       - 'src/utils/industryCode*'
       - 'src/views/IndustriesView.tsx'
-      - 'supabase/migrations/**'
+      - 'supabase/migrations/202610*'
 
 permissions:
   contents: read
