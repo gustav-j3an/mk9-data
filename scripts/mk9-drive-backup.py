@@ -20,6 +20,7 @@ API_BASE = "https://www.googleapis.com/drive/v3"
 UPLOAD_BASE = "https://www.googleapis.com/upload/drive/v3"
 DRIVE_FILE_SCOPE = "https://www.googleapis.com/auth/drive.file"
 DEFAULT_FOLDER_NAME = "MK9 DATE Production Backups"
+SYNTHETIC_FOLDER_NAME = "MK9 DATE Synthetic Backup Tests"
 CHUNK_SIZE = 8 * 1024 * 1024  # multiple of Drive's 256 KiB resumable-upload granularity
 MAX_RETRIES = 5
 
@@ -319,9 +320,19 @@ def preflight() -> None:
     print("GOOGLE_DRIVE_PRIVATE_DESTINATION_READY")
 
 
-def upload(file_path: Path, delete_after_verify: bool) -> None:
+def _delete_uploaded_file(file_id: str, token: str) -> None:
+    try:
+        _api_json("DELETE", f"{API_BASE}/files/{urllib.parse.quote(file_id, safe='')}", token)
+    except Exception as exc:
+        raise BackupError("GOOGLE_DRIVE_SYNTHETIC_CLEANUP_FAILED") from exc
+
+
+def upload(file_path: Path, synthetic_test: bool) -> None:
     if not file_path.is_file() or file_path.suffix != ".age":
         raise BackupError("ENCRYPTED_ARCHIVE_REQUIRED")
+    expected_folder = SYNTHETIC_FOLDER_NAME if synthetic_test else DEFAULT_FOLDER_NAME
+    if _folder_name() != expected_folder:
+        raise BackupError("GOOGLE_DRIVE_BACKUP_FOLDER_MISMATCH")
     expected = _fingerprints(file_path)
     size, sha256, _ = expected
     if size <= 0:
@@ -330,16 +341,27 @@ def upload(file_path: Path, delete_after_verify: bool) -> None:
     folder_id = ensure_private_folder(token)
     run_id = os.environ.get("GITHUB_RUN_ID", "local")
     attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "1")
-    prefix = "mk9-drive-synthetic" if "synthetic" in file_path.name else "mk9-production-backup"
+    prefix = "mk9-drive-synthetic" if synthetic_test else "mk9-production-backup"
     file_name = f"{prefix}-{run_id}-{attempt}.tar.gz.age"
     if not re.fullmatch(r"[A-Za-z0-9._-]{1,180}", file_name):
         raise BackupError("GOOGLE_DRIVE_BACKUP_FILE_NAME_INVALID")
     uploaded = _upload_resumable(file_path, token, folder_id, file_name, run_id, size, sha256)
-    file_id = _verify_stored_file(file_path, token, folder_id, uploaded, expected)
-    if delete_after_verify:
-        _api_json("DELETE", f"{API_BASE}/files/{urllib.parse.quote(file_id, safe='')}", token)
+    file_id = uploaded.get("id")
+    if not isinstance(file_id, str) or not file_id:
+        raise BackupError("GOOGLE_DRIVE_UPLOAD_NOT_CONFIRMED")
+    if synthetic_test:
+        try:
+            _verify_stored_file(file_path, token, folder_id, uploaded, expected)
+        except Exception as verification_error:
+            try:
+                _delete_uploaded_file(file_id, token)
+            except BackupError as cleanup_error:
+                raise BackupError("GOOGLE_DRIVE_SYNTHETIC_VERIFICATION_AND_CLEANUP_FAILED") from cleanup_error
+            raise verification_error
+        _delete_uploaded_file(file_id, token)
         print(f"GOOGLE_DRIVE_SYNTHETIC_UPLOAD_VERIFIED_AND_DELETED bytes={size} sha256={sha256}")
     else:
+        _verify_stored_file(file_path, token, folder_id, uploaded, expected)
         print(f"GOOGLE_DRIVE_BACKUP_STORED_AND_VERIFIED bytes={size} sha256={sha256}")
 
 
@@ -349,13 +371,13 @@ def main(argv: list[str] | None = None) -> int:
     subparsers.add_parser("preflight")
     upload_parser = subparsers.add_parser("upload")
     upload_parser.add_argument("--file", required=True, type=Path)
-    upload_parser.add_argument("--delete-after-verify", action="store_true")
+    upload_parser.add_argument("--synthetic-test", action="store_true")
     args = parser.parse_args(argv)
     try:
         if args.command == "preflight":
             preflight()
         else:
-            upload(args.file, args.delete_after_verify)
+            upload(args.file, args.synthetic_test)
     except BackupError as exc:
         print(str(exc), file=sys.stderr)
         return 1

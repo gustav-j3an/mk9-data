@@ -36,8 +36,9 @@ class FakeResponse:
 
 
 class FakeDriveAPI:
-    def __init__(self, archive_bytes):
+    def __init__(self, archive_bytes, corrupt_md5=False):
         self.archive_bytes = archive_bytes
+        self.corrupt_md5 = corrupt_md5
         self.folder_id = "private-folder-id"
         self.file_id = "synthetic-file-id"
         self.folder_created = False
@@ -102,7 +103,9 @@ class FakeDriveAPI:
                 "id": self.file_id,
                 "name": self.upload_metadata["name"],
                 "size": str(len(self.archive_bytes)),
-                "md5Checksum": hashlib.md5(self.archive_bytes, usedforsecurity=False).hexdigest(),
+                "md5Checksum": "bad-checksum" if self.corrupt_md5 else hashlib.md5(
+                    self.archive_bytes, usedforsecurity=False
+                ).hexdigest(),
                 "appProperties": self.upload_metadata["appProperties"],
                 "parents": [self.folder_id],
                 "shared": False,
@@ -121,14 +124,14 @@ class DriveBackupTests(unittest.TestCase):
             "GOOGLE_OAUTH_CLIENT_ID": "synthetic-client-id",
             "GOOGLE_OAUTH_CLIENT_SECRET": "synthetic-client-secret",
             "GOOGLE_OAUTH_REFRESH_TOKEN": "synthetic-refresh-token",
-            "GOOGLE_DRIVE_BACKUP_FOLDER_NAME": drive.DEFAULT_FOLDER_NAME,
+            "GOOGLE_DRIVE_BACKUP_FOLDER_NAME": drive.SYNTHETIC_FOLDER_NAME,
             "GITHUB_RUN_ID": "12345",
             "GITHUB_RUN_ATTEMPT": "1",
         })
         self.environment.start()
         self.addCleanup(self.environment.stop)
 
-    def test_private_folder_is_created_and_reused(self):
+    def test_synthetic_private_folder_is_created_and_reused(self):
         fake = FakeDriveAPI(b"unused")
         with patch.object(drive, "OPENER", fake):
             token = drive.get_access_token()
@@ -146,12 +149,52 @@ class DriveBackupTests(unittest.TestCase):
             output = io.StringIO()
             with patch.object(drive, "OPENER", fake), patch.object(drive, "CHUNK_SIZE", 16), \
                     contextlib.redirect_stdout(output):
-                drive.upload(archive, delete_after_verify=True)
+                drive.upload(archive, synthetic_test=True)
             self.assertEqual(bytes(fake.uploaded), archive_bytes)
             self.assertTrue(fake.deleted)
             self.assertIn(hashlib.sha256(archive_bytes).hexdigest(), output.getvalue())
             self.assertNotIn("synthetic-access-token", output.getvalue())
             self.assertNotIn("upload_id", output.getvalue())
+
+    def test_synthetic_archive_is_deleted_when_integrity_verification_fails(self):
+        archive_bytes = b"synthetic-encrypted-fixture"
+        fake = FakeDriveAPI(archive_bytes, corrupt_md5=True)
+        with tempfile.TemporaryDirectory() as temporary:
+            archive = Path(temporary) / "synthetic-backup.tar.gz.age"
+            archive.write_bytes(archive_bytes)
+            with patch.object(drive, "OPENER", fake), patch.object(drive, "CHUNK_SIZE", 16):
+                with self.assertRaisesRegex(drive.BackupError, "CHECKSUM_MISMATCH"):
+                    drive.upload(archive, synthetic_test=True)
+            self.assertTrue(fake.deleted)
+
+    def test_synthetic_mode_rejects_production_folder_before_authentication(self):
+        os.environ["GOOGLE_DRIVE_BACKUP_FOLDER_NAME"] = drive.DEFAULT_FOLDER_NAME
+        with tempfile.TemporaryDirectory() as temporary:
+            archive = Path(temporary) / "synthetic-backup.tar.gz.age"
+            archive.write_bytes(b"synthetic-ciphertext")
+            with self.assertRaisesRegex(drive.BackupError, "FOLDER_MISMATCH"):
+                drive.upload(archive, synthetic_test=True)
+
+    def test_synthetic_cleanup_failure_is_reported_without_sensitive_details(self):
+        archive_bytes = b"synthetic-encrypted-fixture"
+        fake = FakeDriveAPI(archive_bytes, corrupt_md5=True)
+        original_open = fake.open
+
+        def fail_delete(request, timeout=60):
+            if request.get_method() == "DELETE":
+                raise OSError("synthetic failure containing a fake token")
+            return original_open(request, timeout)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            archive = Path(temporary) / "synthetic-backup.tar.gz.age"
+            archive.write_bytes(archive_bytes)
+            stderr = io.StringIO()
+            with patch.object(drive, "OPENER", type("FakeOpener", (), {"open": staticmethod(fail_delete)})()), \
+                    patch.object(drive, "CHUNK_SIZE", 16), contextlib.redirect_stderr(stderr):
+                result = drive.main(["upload", "--synthetic-test", "--file", str(archive)])
+            self.assertEqual(result, 1)
+            self.assertIn("GOOGLE_DRIVE_SYNTHETIC_VERIFICATION_AND_CLEANUP_FAILED", stderr.getvalue())
+            self.assertNotIn("fake token", stderr.getvalue())
 
     def test_shared_folder_is_rejected(self):
         with self.assertRaisesRegex(drive.BackupError, "IS_SHARED"):

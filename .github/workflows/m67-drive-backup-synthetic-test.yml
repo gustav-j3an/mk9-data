@@ -1,0 +1,73 @@
+name: M67 isolated Google Drive synthetic test
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic-drive-test:
+    if: github.ref == 'refs/heads/codex/m67-google-drive-backup'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: drive-backup-test
+    steps:
+      - name: Check out the selected M67 branch commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Enforce reviewed synthetic-test commit
+        env:
+          APPROVED_DRIVE_TEST_COMMIT: ${{ vars.APPROVED_DRIVE_TEST_COMMIT }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$GITHUB_REF" == refs/heads/codex/m67-google-drive-backup ]]
+          [[ "$APPROVED_DRIVE_TEST_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+          [[ "$GITHUB_SHA" == "$APPROVED_DRIVE_TEST_COMMIT" ]]
+
+      - name: Install age
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq age
+          age --version
+
+      - name: Create a synthetic encrypted fixture
+        env:
+          AGE_RECIPIENT: ${{ secrets.AGE_RECIPIENT }}
+          RUNNER_TEMP: ${{ runner.temp }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          synthetic="$RUNNER_TEMP/mk9-drive-synthetic-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.txt"
+          archive="$RUNNER_TEMP/mk9-drive-synthetic-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.tar.gz.age"
+          printf 'MK9 synthetic Drive test; run=%s attempt=%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > "$synthetic"
+          tar -C "$RUNNER_TEMP" -czf - "$(basename "$synthetic")" | age -r "$AGE_RECIPIENT" -o "$archive"
+          rm -f -- "$synthetic"
+          test -s "$archive"
+          echo "MK9_SYNTHETIC_ARCHIVE=$archive" >> "$GITHUB_ENV"
+
+      - name: Upload, download, verify and delete synthetic Drive object
+        env:
+          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
+          AGE_RECIPIENT: ${{ secrets.AGE_RECIPIENT }}
+          GOOGLE_DRIVE_BACKUP_FOLDER_NAME: ${{ vars.GOOGLE_DRIVE_BACKUP_FOLDER_NAME }}
+          RUNNER_TEMP: ${{ runner.temp }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: python3 scripts/mk9-drive-backup.py upload --synthetic-test --file "$MK9_SYNTHETIC_ARCHIVE"
+
+      - name: Remove local synthetic files
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -f -- "$RUNNER_TEMP"/mk9-drive-synthetic-"${GITHUB_RUN_ID}"-"${GITHUB_RUN_ATTEMPT}".{txt,tar.gz.age}

@@ -4,10 +4,12 @@ on:
   pull_request:
     paths:
       - '.github/workflows/m67-drive-backup-tests.yml'
+      - '.github/workflows/m67-drive-backup-synthetic-test.yml'
       - '.github/workflows/supabase-production-backup.yml'
       - 'scripts/mk9-drive-backup.py'
       - 'scripts/mk9-production-backup.sh'
       - 'tests/test_mk9_drive_backup.py'
+      - 'tests/test_m67_drive_backup_workflows.py'
   push:
     branches:
       - 'codex/m67-google-drive-backup'
@@ -24,8 +26,10 @@ jobs:
         with:
           persist-credentials: false
       - name: Check Python syntax
-        run: python3 -m py_compile scripts/mk9-drive-backup.py tests/test_mk9_drive_backup.py
+        run: python3 -m py_compile scripts/mk9-drive-backup.py tests/test_mk9_drive_backup.py tests/test_m67_drive_backup_workflows.py
       - name: Check backup shell syntax
         run: bash -n scripts/mk9-production-backup.sh
       - name: Test OAuth, resumable upload, privacy and integrity with synthetic fixtures
         run: python3 -m unittest discover -s tests -p 'test_mk9_drive_backup.py' -v
+      - name: Test workflow isolation and credential boundaries
+        run: python3 -m unittest discover -s tests -p 'test_m67_drive_backup_workflows.py' -v

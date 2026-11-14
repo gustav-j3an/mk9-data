@@ -1,11 +1,11 @@
-name: MK9 production backup to private Google Drive
+name: MK9 protected production backup
 
 on:
   workflow_dispatch:
     inputs:
       mode:
-        description: Run a synthetic Drive upload test or an authorized production backup
-        required: true
+        description: Select a Drive-only test on the M67 branch or production backup on main
+        required: false
         type: choice
         options:
           - synthetic-test
@@ -16,7 +16,7 @@ on:
         type: string
       confirm_private_zero_cost_destination:
         description: Confirm private Drive access and enough existing storage without purchase
-        required: true
+        required: false
         type: boolean
         default: false
 
@@ -28,11 +28,16 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  backup:
+  synthetic-drive-test:
+    if: github.ref == 'refs/heads/codex/m67-google-drive-backup'
+    uses: ./.github/workflows/m67-drive-backup-synthetic-test.yml
+
+  production-backup:
     if: >-
       github.ref == 'refs/heads/main' &&
-      inputs.confirm_private_zero_cost_destination &&
-      (inputs.mode == 'synthetic-test' || inputs.confirm_production_backup == 'BACKUP_PRODUCTION')
+      inputs.mode == 'production-backup' &&
+      inputs.confirm_production_backup == 'BACKUP_PRODUCTION' &&
+      inputs.confirm_private_zero_cost_destination
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     environment: production-backup
@@ -53,13 +58,11 @@ jobs:
           [[ "$(git rev-parse HEAD)" == "$APPROVED_BACKUP_COMMIT" ]]
 
       - name: Set up Node.js for Auth and Storage export
-        if: inputs.mode == 'production-backup'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '22.16.0'
 
       - name: Install locked export dependencies
-        if: inputs.mode == 'production-backup'
         run: npm ci --no-audit --no-fund
 
       - name: Install PostgreSQL 17 client and age
@@ -75,7 +78,7 @@ jobs:
           pg_dump --version | grep -q '^pg_dump (PostgreSQL) 17\.'
           age --version
 
-      - name: Preflight private Drive destination (no production access)
+      - name: Preflight private production Drive destination
         env:
           GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
           GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
@@ -83,32 +86,7 @@ jobs:
           GOOGLE_DRIVE_BACKUP_FOLDER_NAME: ${{ vars.GOOGLE_DRIVE_BACKUP_FOLDER_NAME }}
         run: python3 scripts/mk9-drive-backup.py preflight
 
-      - name: Prepare synthetic archive
-        if: inputs.mode == 'synthetic-test'
-        env:
-          AGE_RECIPIENT: ${{ secrets.AGE_RECIPIENT }}
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          synthetic="$RUNNER_TEMP/mk9-drive-synthetic-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.txt"
-          archive="$RUNNER_TEMP/mk9-drive-synthetic-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.tar.gz.age"
-          printf 'MK9 synthetic backup test; run=%s attempt=%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > "$synthetic"
-          tar -C "$RUNNER_TEMP" -czf - "$(basename "$synthetic")" | age -r "$AGE_RECIPIENT" -o "$archive"
-          rm -f -- "$synthetic"
-          echo "MK9_SYNTHETIC_ARCHIVE=$archive" >> "$GITHUB_ENV"
-
-      - name: Upload and verify synthetic archive, then remove it from Drive
-        if: inputs.mode == 'synthetic-test'
-        env:
-          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
-          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
-          GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
-          GOOGLE_DRIVE_BACKUP_FOLDER_NAME: ${{ vars.GOOGLE_DRIVE_BACKUP_FOLDER_NAME }}
-          AGE_RECIPIENT: ${{ secrets.AGE_RECIPIENT }}
-        run: python3 scripts/mk9-drive-backup.py upload --file "$MK9_SYNTHETIC_ARCHIVE" --delete-after-verify
-
       - name: Export and encrypt production backup
-        if: inputs.mode == 'production-backup'
         env:
           INPUT_CONFIRM_PRODUCTION_BACKUP: ${{ inputs.confirm_production_backup }}
           GITHUB_REF: ${{ github.ref }}
@@ -124,7 +102,6 @@ jobs:
         run: bash scripts/mk9-production-backup.sh
 
       - name: Upload and verify encrypted production archive
-        if: inputs.mode == 'production-backup'
         env:
           GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
           GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
@@ -136,11 +113,10 @@ jobs:
           python3 scripts/mk9-drive-backup.py upload \
             --file "$RUNNER_TEMP/mk9-production-backup-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.tar.gz.age"
 
-      - name: Remove local archives and temporary plaintext
+      - name: Remove local archive and temporary plaintext
         if: always()
         shell: bash
         run: |
           set -Eeuo pipefail
           rm -f -- "$RUNNER_TEMP"/mk9-prod-backup-"${GITHUB_RUN_ID}"-"${GITHUB_RUN_ATTEMPT}".tar.gz.age
           rm -f -- "$RUNNER_TEMP"/mk9-production-backup-"${GITHUB_RUN_ID}"-"${GITHUB_RUN_ATTEMPT}".tar.gz.age
-          rm -f -- "$RUNNER_TEMP"/mk9-drive-synthetic-"${GITHUB_RUN_ID}"-"${GITHUB_RUN_ATTEMPT}".{txt,tar.gz.age}

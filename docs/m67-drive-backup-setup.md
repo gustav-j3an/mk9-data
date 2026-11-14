@@ -81,3 +81,18 @@ O arquivo contém dump lógico completo do banco, esquema e usuários Auth expor
 5. Mantenha pelo menos a cópia atual e a anterior no Drive privado; apague cópias antigas somente depois de conferir a nova integridade e a restauração.
 
 O workflow não executa restauração real. O teste sintético valida somente o canal de upload e remoção. O ensaio de recuperação com dados reais permanece separado e requer destino descartável, isolado e autorização explícita.
+
+## Teste sintético isolado M67 (sem merge na `main`)
+
+O teste isolado usa o workflow reutilizável `.github/workflows/m67-drive-backup-synthetic-test.yml`, chamado pelo workflow de dispatch já existente em `main` (`.github/workflows/supabase-production-backup.yml`). O evento deve selecionar a branch `codex/m67-google-drive-backup`; o job sintético só aceita esse ref. O workflow não cria artifacts e não chama Vercel. O push/PR pode gerar automaticamente um deployment Preview pela integração Git do Vercel, mas esse fluxo não publica em produção.
+
+Antes de executar:
+
+1. Em GitHub → **Settings → Environments**, crie `drive-backup-test`.
+2. Em **Deployment protection rules**, exija revisor, habilite **Prevent self-review** e desabilite bypass administrativo. Em **Deployment branches and tags**, permita apenas `codex/m67-google-drive-backup`.
+3. Cadastre somente estes quatro **Environment secrets**: `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, `GOOGLE_OAUTH_REFRESH_TOKEN` e `AGE_RECIPIENT`. Não cadastre credenciais Supabase ou Vercel nesse environment.
+4. Cadastre somente estas duas **Environment variables**: `APPROVED_DRIVE_TEST_COMMIT` com o SHA completo de 40 caracteres do commit revisado da branch, e `GOOGLE_DRIVE_BACKUP_FOLDER_NAME` com o valor exato `MK9 DATE Synthetic Backup Tests`.
+5. Abra **Actions → MK9 protected production backup → Run workflow**, selecione `codex/m67-google-drive-backup` como branch e inicie o dispatch. O arquivo de workflow precisa existir no default branch para aparecer no GitHub Actions; esta implementação preserva esse caminho já existente. O evento executa o conteúdo da branch selecionada, onde o workflow reutilizável local está presente. Se a interface mostrar campos antigos da versão de `main`, eles não habilitam o job de produção: o job sintético é selecionado pelo ref M67, enquanto o job de produção exige `main`, modo explícito, confirmação literal e aprovação separada.
+6. O revisor aprova o deployment do environment `drive-backup-test`. O job então confere que `HEAD`, `GITHUB_SHA` e `APPROVED_DRIVE_TEST_COMMIT` são idênticos antes de instalar `age` ou acessar as credenciais do Drive.
+
+O job cria conteúdo fictício cifrado, envia somente para a pasta sintética, baixa e verifica o objeto e tenta apagá-lo mesmo se a verificação falhar. Uma falha de exclusão é reportada sem imprimir detalhes sensíveis. Arquivos temporários locais são removidos por etapa `always()`. Nenhum upload foi executado durante esta implementação.
