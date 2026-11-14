@@ -8,7 +8,19 @@ fail() { echo "M65_BACKUP_PREFLIGHT_FAILED:$1" >&2; exit 1; }
 [[ "${INPUT_CONFIRM_PRODUCTION_BACKUP:-}" == BACKUP_PRODUCTION ]] || fail "explicit-confirmation-required"
 [[ "${SUPABASE_PROJECT_REF:-}" == xzmbesqhxcnuokjwrbnw ]] || fail "production-project-ref-mismatch"
 [[ -n "${SUPABASE_DB_URL:-}" && -n "${SUPABASE_SERVICE_ROLE_KEY:-}" && -n "${SUPABASE_PROJECT_URL:-}" && -n "${AGE_RECIPIENT:-}" ]] || fail "required-secrets-missing"
+[[ -n "${BACKUP_UPLOAD_URL:-}" && -n "${BACKUP_DESTINATION_HOST:-}" ]] || fail "private-backup-destination-missing"
 [[ "$AGE_RECIPIENT" =~ ^age1[0-9a-z]+$ ]] || fail "invalid-age-recipient"
+python3 - <<'PY' || fail "backup-destination-not-allowed"
+import os, sys, urllib.parse
+u = urllib.parse.urlsplit(os.environ['BACKUP_UPLOAD_URL'])
+h = u.hostname or ''
+allowed = (u.scheme == 'https' and h == os.environ['BACKUP_DESTINATION_HOST']
+           and not u.username and not u.password and not u.fragment
+           and h not in ('github.com', 'githubusercontent.com')
+           and not h.endswith('.githubusercontent.com')
+           and not h.endswith('.supabase.co'))
+sys.exit(0 if allowed else 1)
+PY
 python3 - <<'PY' || fail "project-url-does-not-identify-production"
 import os, sys, urllib.parse
 u = urllib.parse.urlsplit(os.environ['SUPABASE_PROJECT_URL'])

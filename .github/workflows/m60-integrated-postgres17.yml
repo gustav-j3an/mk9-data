@@ -7,6 +7,7 @@ on:
       - 'docs/m60-publication-runbook.md'
       - 'scripts/m60-*'
       - 'scripts/m65-*'
+      - 'scripts/mk9-*'
       - 'scripts/m37-*'
       - 'scripts/m38-*'
       - 'scripts/run-m37-m38-functional-tests.sh'
@@ -47,6 +48,14 @@ jobs:
           npm test
           npm run typecheck
           npm run build
+
+      - name: Validate protected backup tooling syntax without executing it
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash -n scripts/mk9-production-backup.sh
+          node --check scripts/mk9-export-auth.mjs
+          node --check scripts/mk9-export-storage.mjs
 
       - name: Install PostgreSQL 17 client
         shell: bash
