@@ -7,6 +7,10 @@ INSERT INTO auth.users(id, email) VALUES
 INSERT INTO public.promotores(matricula,nome,cidade,uf,status) VALUES
  ('M65P1','Synthetic promoter','Test','SP','ativo'),
  ('M65P2','Synthetic unauthorized promoter','Test','SP','ativo');
+INSERT INTO public.lojas(codigo,nome,cidade,uf,endereco,status) VALUES
+ ('M65L1','M65 synthetic store 1','Test','SP','Synthetic','ativo'),
+ ('M65L2','M65 synthetic store 2','Test','SP','Synthetic','ativo'),
+ ('M65L3','M65 synthetic store 3','Test','SP','Synthetic','ativo');
 INSERT INTO public.profiles(id,email,name,role,promotor_matricula,status) VALUES
  ('6599a000-0000-4000-8000-000000000001','m65-promoter@example.invalid','M65 promoter','promotor','M65P1','ativo'),
  ('6599a000-0000-4000-8000-000000000002','m65-admin@example.invalid','M65 admin','admin',NULL,'ativo')
@@ -26,13 +30,13 @@ INSERT INTO public.promoter_operation_authorizations(promotor_matricula,status,j
 SET LOCAL ROLE authenticated;
 SELECT set_config('request.jwt.claim.sub','6599a000-0000-4000-8000-000000000001',true);
 INSERT INTO public.visits(promotor_matricula,loja_codigo,industria_codigo,data_visita)
-VALUES ('M65P1','M37L1','M37IA',DATE '2099-01-01');
+VALUES ('M65P1','M65L1','M37IA',DATE '2099-01-01');
 
 DO $assert$
 BEGIN
   BEGIN
     INSERT INTO public.visits(promotor_matricula,loja_codigo,industria_codigo,data_visita)
-    VALUES ('M65P2','M37L2','M37IA',DATE '2099-01-02');
+    VALUES ('M65P2','M65L2','M37IA',DATE '2099-01-02');
     RAISE EXCEPTION 'M65_UNAUTHORIZED_PROMOTER_INSERT_ACCEPTED';
   EXCEPTION WHEN insufficient_privilege THEN NULL;
   END;
@@ -44,7 +48,7 @@ SET LOCAL ROLE authenticated;
 SELECT set_config('request.jwt.claim.sub','6599a000-0000-4000-8000-000000000002',true);
 -- Preserve the current admin/gestor authorization behavior.
 INSERT INTO public.visits(promotor_matricula,loja_codigo,industria_codigo,data_visita)
-VALUES ('M65P2','M37L3','M37IA',DATE '2099-01-03');
+VALUES ('M65P2','M65L3','M37IA',DATE '2099-01-03');
 
 RESET ROLE;
 ROLLBACK;
