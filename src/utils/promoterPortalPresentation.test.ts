@@ -11,6 +11,7 @@ import {
   getRegularizationCounts,
   getRegularizationPresentation,
   isUnresolvedVisitInProgress,
+  isAutomaticallyClosedVisit,
   PROMOTER_APPOINTMENT_TABS
 } from './promoterPortalPresentation';
 
@@ -44,7 +45,20 @@ test('weekly metrics separate scheduled, active, completed and missed visits; to
   assert.deepEqual(getWeeklyPromoterMetricCounts([
     { status: 'planejada' }, { status: 'em_andamento' }, { status: 'pendente' },
     { status: 'concluida' }, { status: 'concluida' }, { status: 'nao_realizada' }
-  ]), { scheduled: 1, completed: 2, inProgress: 1, notDone: 1 });
+  ]), { scheduled: 1, completed: 2, inProgress: 1, notDone: 1, automaticallyClosed: 0 });
+});
+
+test('automatic closures have a separate count, never count as completed or other missed visits', () => {
+  const autoClosed = { status: 'nao_realizada', isAutomaticallyClosed: true };
+  const cancelled = { status: 'nao_realizada', isAutomaticallyClosed: false };
+  const counts = getWeeklyPromoterMetricCounts([autoClosed, cancelled]);
+  assert.deepEqual(counts, { scheduled: 0, completed: 0, inProgress: 0, notDone: 1, automaticallyClosed: 1 });
+  assert.equal(isAutomaticallyClosedVisit({ status: 'nao_realizada', lifecycle_action: 'auto_closed_at_day_end' }), true);
+  assert.equal(isAutomaticallyClosedVisit({ status: 'nao_realizada', lifecycle_action: 'promoter_cancelled' }), false);
+  assert.deepEqual(filterPromoterAppointments([
+    { id: 'auto', status: 'nao_realizada', visitObj: { status: 'nao_realizada', lifecycle_action: 'auto_closed_at_day_end' } },
+    { id: 'other', status: 'nao_realizada', visitObj: { status: 'nao_realizada', lifecycle_action: 'promoter_cancelled' } }
+  ], 'encerrada_automaticamente').map(item => item.id), ['auto']);
 });
 
 test('late overdue pending records count as missed and an unperformed filter includes administrative closures', () => {
@@ -93,7 +107,7 @@ test('administrative resolutions stay separate from active and completed operati
 });
 
 test('future planned visits stay scheduled and are not counted as not done', () => {
-  assert.deepEqual(getWeeklyPromoterMetricCounts([{ status: 'planejada' }]), { scheduled: 1, completed: 0, inProgress: 0, notDone: 0 });
+  assert.deepEqual(getWeeklyPromoterMetricCounts([{ status: 'planejada' }]), { scheduled: 1, completed: 0, inProgress: 0, notDone: 0, automaticallyClosed: 0 });
 });
 
 test('scheduled appointments group by date in chronological order without merging stores or industries', () => {

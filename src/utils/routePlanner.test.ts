@@ -1,5 +1,25 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
 import { calculateOperationalVisits, DayOfWeekDate } from './routePlanner';
 import type { RouteItem, Visit } from '../types';
+
+test('retry history retains prior attempts while the scheduled occurrence is counted once', () => {
+  const route = createMockRoute();
+  const result = calculateOperationalVisits({
+    routes: [route],
+    visits: [
+      { id: 'attempt-1', rota_id: route.id, promotor_matricula: route.promotor_matricula, loja_codigo: route.loja_codigo, industria_codigo: route.industria_codigo, data_visita: '2026-10-08', scheduled_date: '2026-10-07', status: 'nao_realizada', attempt_number: 1, created_at: '2026-10-07T10:00:00Z' },
+      { id: 'attempt-2', rota_id: route.id, promotor_matricula: route.promotor_matricula, loja_codigo: route.loja_codigo, industria_codigo: route.industria_codigo, data_visita: '2026-10-08', scheduled_date: '2026-10-07', status: 'em_andamento', attempt_number: 2, occurrence_root_visit_id: 'attempt-1', created_at: '2026-10-08T10:00:00Z' }
+    ] as Visit[],
+    daysRange: createMockDaysRange(),
+    todayStr: '2026-10-08',
+    operationMode: 'IMPLANTACAO'
+  });
+  const occurrence = result.filter(item => item.dataStr === '2026-10-07');
+  assert.equal(occurrence.length, 1);
+  assert.equal(occurrence[0].visitObj?.id, 'attempt-2');
+  assert.deepEqual(occurrence[0].attemptHistory?.map(attempt => attempt.id), ['attempt-1', 'attempt-2']);
+});
 
 function createMockDaysRange(): DayOfWeekDate[] {
   // Semana de exemplo: 2026-10-05 (Segunda) até 2026-10-11 (Domingo)
@@ -71,6 +91,8 @@ function runAllTests() {
     const occurrence = result.find((item) => item.dataStr === '2026-10-07');
     console.assert(occurrence?.visitObj?.id === 'attempt-2', 'Retry T1: deve mostrar a tentativa mais recente na ocorrência semanal');
     console.assert(occurrence?.status === 'em_andamento', 'Retry T1: o status operacional vem da tentativa mais recente');
+    console.assert(occurrence?.attemptHistory?.map(attempt => attempt.id).join(',') === 'attempt-1,attempt-2', 'Retry T1: histórico conserva ambas as tentativas');
+    console.assert(result.filter(item => item.dataStr === '2026-10-07').length === 1, 'Retry T1: a ocorrência aparece uma única vez na agenda/indicadores');
     console.log('[OK] Retry T1: a grade semanal seleciona a tentativa mais recente sem mesclar o histórico');
   }
 
