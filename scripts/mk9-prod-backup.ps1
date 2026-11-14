@@ -2,7 +2,9 @@
 param(
     [switch]$Configure,
     [switch]$SelfTest,
-    [switch]$TestAcl
+    [switch]$TestAcl,
+    [switch]$Diagnose,
+    [switch]$ConfigureApiCredential
 )
 
 Set-StrictMode -Version Latest
@@ -108,7 +110,7 @@ function Invoke-Configure {
     Assert-Tools
     Protect-PrivateDirectory $script:ConfigHome
     Write-Host 'Informe uma vez as credenciais do projeto de produÃ§Ã£o. O XML serÃ¡ protegido por DPAPI para este usuÃ¡rio do Windows.'
-    $dbPassword = Read-Host 'Senha do usuÃ¡rio PostgreSQL postgres.xzmbesqhxcnuokjwrbnw' -AsSecureString
+    $dbPassword = Read-Host 'Senha do usuario PostgreSQL direto postgres' -AsSecureString
     $serviceKey = Read-Host 'Chave service_role do projeto de produÃ§Ã£o' -AsSecureString
     $recipient = (Read-Host 'DestinatÃ¡rio age pÃºblico (age1...)').Trim()
     $identitySource = (Read-Host 'Caminho da identidade privada age correspondente').Trim().Trim('"')
@@ -119,13 +121,27 @@ function Invoke-Configure {
     $identityContent = Get-Content -LiteralPath $identitySource -Raw
     if ($identityContent -notmatch 'AGE-SECRET-KEY-1') { throw 'O arquivo nÃ£o contÃ©m uma identidade privada age vÃ¡lida.' }
     Copy-Item -LiteralPath $identitySource -Destination $script:IdentityPath -Force
-    $dbCredential = New-Object System.Management.Automation.PSCredential('postgres.xzmbesqhxcnuokjwrbnw', $dbPassword)
+    $dbCredential = New-Object System.Management.Automation.PSCredential('postgres', $dbPassword)
     $apiCredential = New-Object System.Management.Automation.PSCredential('service_role', $serviceKey)
     $dbCredential | Export-Clixml -LiteralPath $script:DbCredentialPath -Force
     $apiCredential | Export-Clixml -LiteralPath $script:ApiCredentialPath -Force
     $config = [ordered]@{ projectRef = $script:ProjectRef; projectUrl = $script:ProjectUrl; ageRecipient = $recipient }
     $config | ConvertTo-Json | Set-Content -LiteralPath $script:ConfigPath -Encoding UTF8
     Write-Host "ConfiguraÃ§Ã£o protegida salva em $script:ConfigHome"
+}
+
+function Invoke-ConfigureApiCredential {
+    Protect-PrivateDirectory $script:ConfigHome
+    $secureApiKey = Read-Host 'Current Supabase service_role key (secure input; no server change)' -AsSecureString
+    $apiKeyForValidation = (New-Object System.Net.NetworkCredential('', $secureApiKey)).Password
+    if (-not (Test-ApiHeaderValue $apiKeyForValidation)) {
+        $apiKeyForValidation = $null
+        throw 'The local API credential contains invalid header characters; it was not saved.'
+    }
+    $apiCredential = New-Object System.Management.Automation.PSCredential('service_role', $secureApiKey)
+    $apiCredential | Export-Clixml -LiteralPath $script:ApiCredentialPath -Force
+    $apiKeyForValidation = $null
+    Write-Host 'The local DPAPI service_role credential was updated. Supabase was not contacted.'
 }
 
 function Get-Sha256([string]$Path) {
@@ -235,6 +251,11 @@ function Invoke-SelfTest {
         if ($failureReport.failedStage -ne 'synthetic-stage' -or $failureReport.failureType -ne 'SyntheticException' -or $failureReport.PSObject.Properties.Name -contains 'message') {
             throw 'Failure-report regression test failed.'
         }
+        if ((Get-PostgresDiagnosticCode 2 'no response') -ne 'PG_SERVER_UNREACHABLE' -or (Get-PostgresDiagnosticCode 1 'password authentication failed') -ne 'PG_CREDENTIAL_OR_ROLE_REJECTED') {
+            throw 'PostgreSQL diagnostic-code regression test failed.'
+        }
+        $fakeApiError = [pscustomobject]@{ Exception = [ArgumentException]::new('invalid header') }
+        if ((Get-SafeApiDiagnosticCode $fakeApiError) -ne 'SUPABASE_API_HEADER_VALUE_INVALID' -or (Test-ApiHeaderValue "bad`nkey") -or -not (Test-ApiHeaderValue 'synthetic-api-key_123')) { throw 'API diagnostic-code regression test failed.' }
         Write-Host 'SELF-TEST OK: fixture, manifesto, SHA-256, criptografia, descriptografia, integridade e falha de ciphertext.'
     }
     finally {
@@ -244,6 +265,214 @@ function Invoke-SelfTest {
 }
 
 function Escape-PgPass([string]$Value) { $Value.Replace('\', '\\').Replace(':', '\:') }
+
+function Get-PostgresDiagnosticCode([int]$ExitCode, [string]$Output) {
+    if ($Output -match '(?i)password authentication failed|authentication failed|role .* does not exist') { return 'PG_CREDENTIAL_OR_ROLE_REJECTED' }
+    if ($Output -match '(?i)could not translate host name|name or service not known|no such host') { return 'PG_DNS_RESOLUTION_FAILED' }
+    if ($Output -match '(?i)ssl|tls|certificate') { return 'PG_TLS_NEGOTIATION_FAILED' }
+    if ($ExitCode -eq 2 -or $Output -match '(?i)timeout|no response|could not connect to server|connection refused') { return 'PG_SERVER_UNREACHABLE' }
+    return "PG_PREFLIGHT_EXIT_$ExitCode"
+}
+
+function Get-SafeApiDiagnosticCode($ErrorRecord) {
+    $message = [string]$ErrorRecord.Exception.Message
+    if ($message -match '(?i)header|carriage return|newline|line break') { return 'SUPABASE_API_HEADER_VALUE_INVALID' }
+    if ($message -match '(?i)uri|url') { return 'SUPABASE_API_URL_INVALID' }
+    $status = $null
+    try { $status = [int]$ErrorRecord.Exception.Response.StatusCode } catch { }
+    if ($status -eq 401 -or $status -eq 403) { return 'SUPABASE_API_CREDENTIAL_REJECTED' }
+    if ($status -ge 500) { return 'SUPABASE_API_SERVER_ERROR' }
+    if ($status -eq 404) { return 'SUPABASE_API_ENDPOINT_NOT_FOUND' }
+    $webStatus = ''
+    try { $webStatus = [string]$ErrorRecord.Exception.Status } catch { }
+    if ($webStatus -match 'NameResolutionFailure') { return 'SUPABASE_API_DNS_FAILED' }
+    if ($webStatus -match 'ConnectFailure|Timeout') { return 'SUPABASE_API_UNREACHABLE' }
+    if ($ErrorRecord.Exception -is [ArgumentException]) { return 'SUPABASE_API_ARGUMENT_REJECTED' }
+    return 'SUPABASE_API_REQUEST_FAILED'
+}
+
+function Test-ApiHeaderValue([string]$Value) {
+    return (-not [string]::IsNullOrWhiteSpace($Value) -and $Value.Length -le 4096 -and $Value -notmatch '[^\x21-\x7E]')
+}
+
+function Invoke-CapturedNative([string]$Executable, [string[]]$Arguments) {
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $output = @(& $Executable @Arguments 2>&1)
+        $exitCode = $LASTEXITCODE
+        $text = ($output | ForEach-Object { $_.ToString() }) -join "`n"
+        return [pscustomobject]@{ ExitCode = $exitCode; Output = $text }
+    }
+    finally { $ErrorActionPreference = $previousPreference }
+}
+
+function Test-PrivateDirectoryAcl([string]$Path) {
+    $directory = [System.IO.DirectoryInfo]::new([IO.Path]::GetFullPath($Path))
+    if (-not $directory.Exists) { throw 'PRIVATE_DIRECTORY_MISSING' }
+    $security = $directory.GetAccessControl([System.Security.AccessControl.AccessControlSections]::Access)
+    if (-not $security.AreAccessRulesProtected) { throw 'PRIVATE_DIRECTORY_DACL_INHERITS' }
+    $rules = @($security.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
+    $expectedSids = @([System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value, 'S-1-5-18') | Sort-Object -Unique
+    $actualSids = @($rules | ForEach-Object { $_.IdentityReference.Value } | Sort-Object -Unique)
+    if (Compare-Object $expectedSids $actualSids) { throw 'PRIVATE_DIRECTORY_PRINCIPALS_INVALID' }
+    $expectedRights = [System.Security.AccessControl.FileSystemRights]::Modify -bor [System.Security.AccessControl.FileSystemRights]::Synchronize
+    if (@($rules | Where-Object { $_.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow -or $_.FileSystemRights -ne $expectedRights }).Count -ne 0) {
+        throw 'PRIVATE_DIRECTORY_RIGHTS_INVALID'
+    }
+}
+
+function Add-DiagnosticResult([Collections.Generic.List[object]]$Results, [string]$Stage, [string]$FailureType, [string]$Code) {
+    $Results.Add([ordered]@{ stage = $Stage; failureType = $FailureType; code = $Code })
+}
+
+function Invoke-ProductionDiagnostics {
+    $results = [Collections.Generic.List[object]]::new()
+    $config = $null
+    $storedDbCredential = $null
+    $apiCredential = $null
+    try {
+        Assert-Tools
+        Add-DiagnosticResult $results 'local-dependencies' 'None' 'DEPENDENCIES_OK'
+    } catch {
+        Add-DiagnosticResult $results 'local-dependencies' $_.Exception.GetType().Name 'DEPENDENCY_CHECK_FAILED'
+    }
+
+    try {
+        foreach ($path in @($script:ConfigPath, $script:DbCredentialPath, $script:ApiCredentialPath, $script:IdentityPath)) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw 'LOCAL_CONFIGURATION_MISSING' }
+        }
+        $config = Get-Content -LiteralPath $script:ConfigPath -Raw | ConvertFrom-Json
+        if ($config.projectRef -ne $script:ProjectRef -or $config.projectUrl -ne $script:ProjectUrl) { throw 'LOCAL_PROJECT_REF_MISMATCH' }
+        $storedDbCredential = Import-Clixml -LiteralPath $script:DbCredentialPath
+        $apiCredential = Import-Clixml -LiteralPath $script:ApiCredentialPath
+        if ($storedDbCredential.UserName -notin @('postgres', "postgres.$($script:ProjectRef)") -or $storedDbCredential.Password.Length -eq 0) { throw 'LOCAL_DATABASE_CREDENTIAL_INVALID' }
+        if ($apiCredential.UserName -ne 'service_role' -or $apiCredential.Password.Length -eq 0) { throw 'LOCAL_API_CREDENTIAL_INVALID' }
+        Add-DiagnosticResult $results 'local-dpapi-configuration' 'None' 'DPAPI_CREDENTIALS_OK'
+        Add-DiagnosticResult $results 'project-identity' 'None' 'PRODUCTION_PROJECT_REF_MATCH'
+    } catch {
+        $safeCode = if ($_.Exception.Message -match '^LOCAL_[A-Z_]+$') { $_.Exception.Message } else { 'LOCAL_CONFIGURATION_CHECK_FAILED' }
+        Add-DiagnosticResult $results 'local-dpapi-configuration' $_.Exception.GetType().Name $safeCode
+    }
+
+    try {
+        $derived = (& $script:AgeKeygenExe -y $script:IdentityPath 2>$null | Select-Object -Last 1).Trim()
+        if ($LASTEXITCODE -ne 0 -or $derived -ne $config.ageRecipient) { throw 'AGE_RECIPIENT_MISMATCH' }
+        Add-DiagnosticResult $results 'age-key-match' 'None' 'AGE_RECIPIENT_MATCH'
+    } catch {
+        Add-DiagnosticResult $results 'age-key-match' $_.Exception.GetType().Name 'AGE_KEY_CHECK_FAILED'
+    }
+
+    foreach ($pathInfo in @(@{ Stage = 'config-directory-acl'; Path = $script:ConfigHome }, @{ Stage = 'backup-directory-acl'; Path = $script:BackupRoot })) {
+        try {
+            Test-PrivateDirectoryAcl $pathInfo.Path
+            Add-DiagnosticResult $results $pathInfo.Stage 'None' 'PRIVATE_DACL_OK'
+        } catch {
+            $safeCode = if ($_.Exception.Message -match '^PRIVATE_[A-Z_]+$') { $_.Exception.Message } else { 'PRIVATE_DACL_CHECK_FAILED' }
+            Add-DiagnosticResult $results $pathInfo.Stage $_.Exception.GetType().Name $safeCode
+        }
+    }
+
+    $diagWork = Join-Path $script:ConfigHome ('.diagnostic-' + [guid]::NewGuid().ToString('N'))
+    $diagnosticReportPath = $null
+    $hadPgPassFile = Test-Path Env:\PGPASSFILE
+    $previousPgPassFile = $env:PGPASSFILE
+    $hadSslMode = Test-Path Env:\PGSSLMODE
+    $previousSslMode = $env:PGSSLMODE
+    try {
+        if ($null -ne $storedDbCredential -and $null -ne $apiCredential) {
+            Protect-PrivateDirectory $diagWork
+            $pgpass = Join-Path $diagWork 'pgpass.conf'
+            $env:PGPASSFILE = $pgpass
+            $env:PGSSLMODE = 'require'
+            $dbPassword = $storedDbCredential.GetNetworkCredential().Password
+            $directPgPassLine = "db.$($script:ProjectRef).supabase.co:5432:postgres:postgres:$((Escape-PgPass $dbPassword))"
+            Set-Content -LiteralPath $pgpass -Value $directPgPassLine -Encoding ASCII
+
+            $pgReady = Invoke-CapturedNative (Join-Path $script:PgBin 'pg_isready.exe') @('-h', "db.$($script:ProjectRef).supabase.co", '-p', '5432', '-d', 'postgres', '-U', 'postgres', '-t', '8')
+            if ($pgReady.ExitCode -eq 0) {
+                Add-DiagnosticResult $results 'postgresql-readiness' 'None' 'PG_SERVER_ACCEPTING_CONNECTIONS'
+                $query = "select current_database() || '|' || current_user || '|' || current_setting('server_version_num')"
+                $pgIdentity = Invoke-CapturedNative (Join-Path $script:PgBin 'psql.exe') @('-X', '-A', '-t', '-w', '-v', 'ON_ERROR_STOP=1', '-h', "db.$($script:ProjectRef).supabase.co", '-p', '5432', '-d', 'postgres', '-U', 'postgres', '-c', $query)
+                if ($pgIdentity.ExitCode -eq 0) {
+                    $identityParts = ($pgIdentity.Output.Trim() -split '\|')
+                    if ($identityParts.Count -eq 3 -and $identityParts[0] -eq 'postgres' -and $identityParts[1] -eq 'postgres' -and $identityParts[2] -match '^17\d+$') {
+                        Add-DiagnosticResult $results 'postgresql-project-identity' 'None' 'PRODUCTION_POSTGRES_17_CONFIRMED'
+                    } else {
+                        Add-DiagnosticResult $results 'postgresql-project-identity' 'IdentityMismatch' 'PG_DATABASE_ROLE_OR_VERSION_MISMATCH'
+                    }
+                } else {
+                    Add-DiagnosticResult $results 'postgresql-project-identity' 'PostgreSQLClientError' (Get-PostgresDiagnosticCode $pgIdentity.ExitCode $pgIdentity.Output)
+                }
+            } else {
+                Add-DiagnosticResult $results 'postgresql-readiness' 'PostgreSQLClientError' (Get-PostgresDiagnosticCode $pgReady.ExitCode $pgReady.Output)
+                Add-DiagnosticResult $results 'postgresql-project-identity' 'NotRun' 'PG_READINESS_FAILED'
+                if ($config.PSObject.Properties.Name -contains 'poolerHost' -and $config.poolerHost -match '^aws-\d+-[a-z0-9-]+\.pooler\.supabase\.com$') {
+                    $poolerHost = [string]$config.poolerHost
+                    $poolerPgPassLine = "$($poolerHost):5432:postgres:postgres.$($script:ProjectRef):$((Escape-PgPass $dbPassword))"
+                    Add-Content -LiteralPath $pgpass -Value $poolerPgPassLine -Encoding ASCII
+                    $poolerReady = Invoke-CapturedNative (Join-Path $script:PgBin 'pg_isready.exe') @('-h', $poolerHost, '-p', '5432', '-d', 'postgres', '-U', "postgres.$($script:ProjectRef)", '-t', '8')
+                    if ($poolerReady.ExitCode -eq 0) {
+                        Add-DiagnosticResult $results 'postgresql-pooler-readiness' 'None' 'PG_POOLER_ACCEPTING_CONNECTIONS'
+                    } else {
+                        Add-DiagnosticResult $results 'postgresql-pooler-readiness' 'PostgreSQLClientError' (Get-PostgresDiagnosticCode $poolerReady.ExitCode $poolerReady.Output)
+                    }
+                } else {
+                    Add-DiagnosticResult $results 'postgresql-pooler-readiness' 'NotConfigured' 'PG_POOLER_HOST_NOT_CONFIGURED'
+                }
+            }
+            $dbPassword = $null
+
+            $apiKey = $apiCredential.GetNetworkCredential().Password
+            if (-not (Test-ApiHeaderValue $apiKey)) {
+                Add-DiagnosticResult $results 'supabase-api-credential-format' 'CredentialFormatError' 'API_CREDENTIAL_HEADER_INVALID'
+                Add-DiagnosticResult $results 'supabase-auth-api' 'Skipped' 'API_CREDENTIAL_FORMAT_INVALID'
+                Add-DiagnosticResult $results 'supabase-storage-api' 'Skipped' 'API_CREDENTIAL_FORMAT_INVALID'
+            } else {
+                $headers = @{ apikey = $apiKey; Authorization = "Bearer $apiKey" }
+                try {
+                    $authResponse = Invoke-RestMethod -Method Get -Uri "$($script:ProjectUrl)/auth/v1/admin/users?page=1`&per_page=1" -Headers $headers -TimeoutSec 30 -ErrorAction Stop
+                    if ($null -ne $authResponse.PSObject.Properties['users']) { Add-DiagnosticResult $results 'supabase-auth-api' 'None' 'AUTH_READ_ONLY_REQUEST_OK' }
+                    else { Add-DiagnosticResult $results 'supabase-auth-api' 'InvalidResponse' 'AUTH_RESPONSE_SHAPE_INVALID' }
+                    $authResponse = $null
+                } catch {
+                    Add-DiagnosticResult $results 'supabase-auth-api' $_.Exception.GetType().Name (Get-SafeApiDiagnosticCode $_)
+                }
+                try {
+                    $bucketResponse = @(Invoke-RestMethod -Method Get -Uri "$($script:ProjectUrl)/storage/v1/bucket" -Headers $headers -TimeoutSec 30 -ErrorAction Stop)
+                    Add-DiagnosticResult $results 'supabase-storage-api' 'None' 'STORAGE_READ_ONLY_REQUEST_OK'
+                    $bucketResponse = $null
+                } catch {
+                    Add-DiagnosticResult $results 'supabase-storage-api' $_.Exception.GetType().Name (Get-SafeApiDiagnosticCode $_)
+                }
+            }
+            $apiKey = $null
+        } else {
+            Add-DiagnosticResult $results 'postgresql-readiness' 'Skipped' 'LOCAL_CREDENTIALS_UNAVAILABLE'
+            Add-DiagnosticResult $results 'postgresql-project-identity' 'Skipped' 'LOCAL_CREDENTIALS_UNAVAILABLE'
+            Add-DiagnosticResult $results 'supabase-auth-api' 'Skipped' 'LOCAL_CREDENTIALS_UNAVAILABLE'
+            Add-DiagnosticResult $results 'supabase-storage-api' 'Skipped' 'LOCAL_CREDENTIALS_UNAVAILABLE'
+        }
+    } catch {
+        Add-DiagnosticResult $results 'diagnostic-execution' $_.Exception.GetType().Name 'DIAGNOSTIC_SETUP_FAILED'
+    }
+    finally {
+        if ($hadPgPassFile) { $env:PGPASSFILE = $previousPgPassFile } else { Remove-Item Env:\PGPASSFILE -ErrorAction SilentlyContinue }
+        if ($hadSslMode) { $env:PGSSLMODE = $previousSslMode } else { Remove-Item Env:\PGSSLMODE -ErrorAction SilentlyContinue }
+        $dbPassword = $null; $apiKey = $null
+        if (Test-Path -LiteralPath $diagWork) { Remove-Item -LiteralPath $diagWork -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+
+    try {
+        $diagnosticReportPath = Join-Path $script:BackupRoot ('diagnostic-' + [guid]::NewGuid().ToString('N') + '.json')
+        @{ results = @($results) } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $diagnosticReportPath -Encoding UTF8
+    } catch {
+        Add-DiagnosticResult $results 'diagnostic-report' $_.Exception.GetType().Name 'LOCAL_REPORT_WRITE_FAILED'
+    }
+    foreach ($result in $results) { Write-Output "$($result.stage) $($result.failureType) $($result.code)" }
+    if (@($results | Where-Object { $_.code -notmatch '(_OK|_MATCH|_CONFIRMED|_CONNECTIONS|_REQUEST_OK)$' }).Count -gt 0) { exit 2 }
+    exit 0
+}
 
 function Invoke-ProductionBackup {
     Assert-Tools
@@ -255,9 +484,10 @@ function Invoke-ProductionBackup {
     if ($config.ageRecipient -notmatch '^age1[0-9a-z]+$') { throw 'DestinatÃ¡rio age invÃ¡lido na configuraÃ§Ã£o.' }
     $derived = (& $script:AgeKeygenExe -y $script:IdentityPath 2>$null | Select-Object -Last 1).Trim()
     if ($LASTEXITCODE -ne 0 -or $derived -ne $config.ageRecipient) { throw 'Identidade age nÃ£o corresponde ao destinatÃ¡rio configurado.' }
-    $dbCredential = Import-Clixml -LiteralPath $script:DbCredentialPath
+    $storedDbCredential = Import-Clixml -LiteralPath $script:DbCredentialPath
     $apiCredential = Import-Clixml -LiteralPath $script:ApiCredentialPath
-    if ($dbCredential.UserName -ne "postgres.$($script:ProjectRef)" -or $apiCredential.UserName -ne 'service_role') { throw 'As credenciais protegidas nÃ£o sÃ£o do formato esperado.' }
+    if ($storedDbCredential.UserName -notin @('postgres', "postgres.$($script:ProjectRef)") -or $apiCredential.UserName -ne 'service_role') { throw 'As credenciais protegidas nÃ£o sÃ£o do formato esperado.' }
+    $dbCredential = New-Object System.Management.Automation.PSCredential('postgres', $storedDbCredential.Password)
 
     Protect-PrivateDirectory $script:BackupRoot
     $runId = [DateTime]::Now.ToString('yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
@@ -413,4 +643,6 @@ function Invoke-ProductionBackup {
 if ($TestAcl) { Invoke-AclRegressionTest; exit 0 }
 if ($SelfTest) { Invoke-SelfTest; exit 0 }
 if ($Configure) { Invoke-Configure; exit 0 }
+if ($ConfigureApiCredential) { Invoke-ConfigureApiCredential; exit 0 }
+if ($Diagnose) { Invoke-ProductionDiagnostics; exit 0 }
 Invoke-ProductionBackup
