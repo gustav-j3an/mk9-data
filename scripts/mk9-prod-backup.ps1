@@ -320,6 +320,35 @@ function Write-FailureReport([string]$Path, [string]$Stage, [string]$FailureType
     $failure | ConvertTo-Json | Set-Content -LiteralPath $Path -Encoding UTF8
 }
 
+function Get-SafeFailureMetadata($ErrorRecord) {
+    $exception = $ErrorRecord.Exception
+    $invocation = $ErrorRecord.InvocationInfo
+    $commandName = ''
+    $parameterName = ''
+    $fileName = ''
+    $lineNumber = 0
+    try { $commandName = [string]$exception.CommandName } catch { }
+    if ([string]::IsNullOrWhiteSpace($commandName) -and $null -ne $invocation) {
+        try { $commandName = [string]$invocation.MyCommand.Name } catch { }
+        if ([string]::IsNullOrWhiteSpace($commandName)) { try { $commandName = [string]$invocation.InvocationName } catch { } }
+    }
+    try { $parameterName = [string]$exception.ParameterName } catch { }
+    if ($null -ne $invocation) {
+        try { $fileName = [IO.Path]::GetFileName([string]$invocation.ScriptName) } catch { }
+        try { $lineNumber = [int]$invocation.ScriptLineNumber } catch { }
+    }
+    if ($commandName -notmatch '^[A-Za-z][A-Za-z0-9_.-]{0,79}$') { $commandName = '' }
+    if ($parameterName -notmatch '^[A-Za-z][A-Za-z0-9_.-]{0,79}$') { $parameterName = '' }
+    if ($fileName -notmatch '^[A-Za-z0-9_.-]{1,120}$') { $fileName = '' }
+    return [pscustomobject]@{
+        FailureType = if ($exception) { $exception.GetType().Name } else { 'UnknownException' }
+        CommandName = $commandName
+        ParameterName = $parameterName
+        FileName = $fileName
+        LineNumber = $lineNumber
+    }
+}
+
 function Write-Manifest([string]$Root, [hashtable]$Counts) {
     $files = @()
     foreach ($file in Get-ChildItem -LiteralPath $Root -File -Recurse | Where-Object { $_.Name -ne 'pgpass.conf' } | Sort-Object FullName) {
@@ -410,6 +439,18 @@ function Invoke-SelfTest {
         $failureReport = Get-Content -LiteralPath $failureReportPath -Raw | ConvertFrom-Json
         if ($failureReport.failedStage -ne 'synthetic-stage' -or $failureReport.failureType -ne 'SyntheticException' -or $failureReport.PSObject.Properties.Name -contains 'message') {
             throw 'Failure-report regression test failed.'
+        }
+        $syntheticLocalBindingFailure = $null
+        try { New-Item -ItemType Directory -Path $null -ErrorAction Stop | Out-Null } catch { $syntheticLocalBindingFailure = $_ }
+        $localFailureMetadata = Get-SafeFailureMetadata $syntheticLocalBindingFailure
+        if ($localFailureMetadata.FailureType -notmatch '^ParameterBinding' -or $localFailureMetadata.CommandName -ne 'New-Item' -or $localFailureMetadata.ParameterName -ne 'Path' -or $localFailureMetadata.FileName -ne 'mk9-prod-backup.ps1' -or $localFailureMetadata.LineNumber -lt 1) {
+            throw 'Local storage parameter-binding diagnostic regression test failed.'
+        }
+        $syntheticApiBindingFailure = $null
+        try { Invoke-RestMethod -Method Get -Uri 'https://example.invalid' -TimeoutSec 'not-an-integer' -ErrorAction Stop | Out-Null } catch { $syntheticApiBindingFailure = $_ }
+        $apiFailureMetadata = Get-SafeFailureMetadata $syntheticApiBindingFailure
+        if ($apiFailureMetadata.FailureType -notmatch '^ParameterBinding' -or $apiFailureMetadata.CommandName -ne 'Invoke-RestMethod' -or $apiFailureMetadata.ParameterName -ne 'TimeoutSec' -or $apiFailureMetadata.LineNumber -lt 1) {
+            throw 'Storage API parameter-binding diagnostic regression test failed.'
         }
         if ((Get-PostgresDiagnosticCode 2 'no response') -ne 'PG_SERVER_UNREACHABLE' -or
             (Get-PostgresDiagnosticCode 1 'password authentication failed for user [redacted]') -ne 'PG_PASSWORD_REJECTED' -or
@@ -753,6 +794,7 @@ function Invoke-ProductionBackup {
     if (Test-Path -LiteralPath $final) { throw 'Backup target already exists; refusing to overwrite.' }
     $reportPath = Join-Path $script:BackupRoot "mk9-production-$runId.report.json"
     $stage = 'initialize-private-work-directory'
+    $failureSubstage = $null
     $pgpass = Join-Path $work 'pgpass.conf'
     $zip = Join-Path $work 'backup.zip'
     $recovery = Join-Path $work 'recovered.zip'
@@ -837,11 +879,14 @@ function Invoke-ProductionBackup {
         $storageRoot = Join-Path $work 'storage'
         New-Item -ItemType Directory -Path $storageRoot | Out-Null
         $stage = 'storage-bucket-list'
+        $failureSubstage = 'storage-bucket-list-api'
         $buckets = @(Invoke-RestMethod -Method Get -Uri "$($script:ProjectUrl)/storage/v1/bucket" -Headers $headers -TimeoutSec 60)
         $storageCount = 0
         foreach ($bucket in $buckets) {
+            $failureSubstage = 'storage-bucket-folder-create'
             $bucketRoot = Join-Path $storageRoot $bucket.name
             New-Item -ItemType Directory -Path $bucketRoot -Force | Out-Null
+            $failureSubstage = ''
             $queue = [Collections.Generic.Queue[string]]::new()
             $queue.Enqueue('')
             while ($queue.Count -gt 0) {
@@ -903,7 +948,13 @@ function Invoke-ProductionBackup {
         if (Test-Path -LiteralPath $final) { Remove-Item -LiteralPath $final -Force }
         $failure = [ordered]@{ status = 'FAILED'; projectRef = $script:ProjectRef; completedAtUtc = [DateTime]::UtcNow.ToString('o'); error = 'Falha em uma etapa; backup nÃ£o Ã© considerado vÃ¡lido.' }
         $failure.failedStage = $stage
-        $failure.failureType = if ($_.Exception) { $_.Exception.GetType().Name } else { 'UnknownException' }
+        $failure.failedSubstage = if ($stage -eq 'storage-bucket-list' -and $failureSubstage) { $failureSubstage } else { $stage }
+        $safeFailure = Get-SafeFailureMetadata $_
+        $failure.failureType = $safeFailure.FailureType
+        $failure.failedCommand = $safeFailure.CommandName
+        $failure.failedParameter = $safeFailure.ParameterName
+        $failure.failedFile = $safeFailure.FileName
+        $failure.failedLine = $safeFailure.LineNumber
         $failure | ConvertTo-Json | Set-Content -LiteralPath $reportPath -Encoding UTF8
         Write-Error 'Backup interrompido. Detalhes sensÃ­veis foram omitidos; consulte o relatÃ³rio de falha.'
         exit 1
