@@ -9,7 +9,13 @@ INSERT INTO public.promotores(matricula,nome,cidade,uf,status) VALUES
  ('M65P2','Synthetic unauthorized promoter','Test','SP','ativo');
 INSERT INTO public.profiles(id,email,name,role,promotor_matricula,status) VALUES
  ('6599a000-0000-4000-8000-000000000001','m65-promoter@example.invalid','M65 promoter','promotor','M65P1','ativo'),
- ('6599a000-0000-4000-8000-000000000002','m65-admin@example.invalid','M65 admin','admin',NULL,'ativo');
+ ('6599a000-0000-4000-8000-000000000002','m65-admin@example.invalid','M65 admin','admin',NULL,'ativo')
+ON CONFLICT (id) DO UPDATE SET
+ email=EXCLUDED.email,
+ name=EXCLUDED.name,
+ role=EXCLUDED.role,
+ promotor_matricula=EXCLUDED.promotor_matricula,
+ status=EXCLUDED.status;
 INSERT INTO public.system_settings(key,value) VALUES ('operation_mode','"IMPLANTACAO"');
 INSERT INTO public.promoter_operation_authorizations(promotor_matricula,status,justification) VALUES
  ('M65P1','liberado','Synthetic regression'),
