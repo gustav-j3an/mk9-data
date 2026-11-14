@@ -57,7 +57,7 @@ node scripts/mk9-export-auth.mjs "$work/auth-users.jsonl"
 node scripts/mk9-export-storage.mjs "$work/storage-objects"
 unset PGPASSWORD safe_db_url SUPABASE_DB_URL SUPABASE_SERVICE_ROLE_KEY
 
-(cd "$work" && find . -type f -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
+(cd "$work" && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
 tar -C "$work" -czf - . | age -r "$AGE_RECIPIENT" -o "$archive"
 test -s "$archive" || fail "encrypted-archive-missing"
 age -d -r "$AGE_RECIPIENT" "$archive" >/dev/null 2>&1 && fail "recipient-key-is-not-private"
