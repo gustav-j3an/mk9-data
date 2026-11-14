@@ -7,6 +7,8 @@ INSERT INTO auth.users(id, email) VALUES
 INSERT INTO public.promotores(matricula,nome,cidade,uf,status) VALUES
  ('M65P1','Synthetic promoter','Test','SP','ativo'),
  ('M65P2','Synthetic unauthorized promoter','Test','SP','ativo');
+INSERT INTO public.industrias(codigo,nome,status) VALUES
+ ('IND-M65-001','M65 synthetic industry','ativo');
 INSERT INTO public.lojas(codigo,nome,cidade,uf,endereco,status) VALUES
  ('M65L1','M65 synthetic store 1','Test','SP','Synthetic','ativo'),
  ('M65L2','M65 synthetic store 2','Test','SP','Synthetic','ativo'),
@@ -30,13 +32,13 @@ INSERT INTO public.promoter_operation_authorizations(promotor_matricula,status,j
 SET LOCAL ROLE authenticated;
 SELECT set_config('request.jwt.claim.sub','6599a000-0000-4000-8000-000000000001',true);
 INSERT INTO public.visits(promotor_matricula,loja_codigo,industria_codigo,data_visita)
-VALUES ('M65P1','M65L1','M37IA',DATE '2099-01-01');
+VALUES ('M65P1','M65L1','IND-M65-001',DATE '2099-01-01');
 
 DO $assert$
 BEGIN
   BEGIN
     INSERT INTO public.visits(promotor_matricula,loja_codigo,industria_codigo,data_visita)
-    VALUES ('M65P2','M65L2','M37IA',DATE '2099-01-02');
+    VALUES ('M65P2','M65L2','IND-M65-001',DATE '2099-01-02');
     RAISE EXCEPTION 'M65_UNAUTHORIZED_PROMOTER_INSERT_ACCEPTED';
   EXCEPTION WHEN insufficient_privilege THEN NULL;
   END;
@@ -48,7 +50,7 @@ SET LOCAL ROLE authenticated;
 SELECT set_config('request.jwt.claim.sub','6599a000-0000-4000-8000-000000000002',true);
 -- Preserve the current admin/gestor authorization behavior.
 INSERT INTO public.visits(promotor_matricula,loja_codigo,industria_codigo,data_visita)
-VALUES ('M65P2','M65L3','M37IA',DATE '2099-01-03');
+VALUES ('M65P2','M65L3','IND-M65-001',DATE '2099-01-03');
 
 RESET ROLE;
 ROLLBACK;
