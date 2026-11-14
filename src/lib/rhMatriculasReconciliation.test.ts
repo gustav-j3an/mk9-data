@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { test } from 'node:test';
-import * as XLSX from 'xlsx';
+import * as XLSX from '@e965/xlsx';
 import { parseRhRosterWorkbook, rosterDivergences, validateRhRoster, type RhInternalPerson, type RhRosterRow } from './rhMatriculasReconciliation';
 
 const rosterRow = (overrides: Partial<RhRosterRow> = {}): RhRosterRow => ({

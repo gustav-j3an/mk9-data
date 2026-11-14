@@ -20,6 +20,8 @@ async function scan(directory) {
       const content = await readFile(path);
       assert.ok(!secrets.some(secret => content.includes(Buffer.from(secret))), `Secret found in ${path}`);
       assert.ok(!content.includes(Buffer.from('MK9_FALTAS_API_KEY')), `Server configuration found in ${path}`);
+      assert.ok(!content.includes(Buffer.from('xzmbesqhxcnuokjwrbnw')), `Production Supabase project found in ${path}`);
+      assert.ok(!content.includes(Buffer.from('gqikfyqvzgjwzunhdwla')), `Legacy production Supabase project found in ${path}`);
       files++;
     }
   }

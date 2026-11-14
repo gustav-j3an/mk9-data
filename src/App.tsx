@@ -1,36 +1,37 @@
-import React, { useState, useEffect } from 'react';
+import React, { lazy, Suspense, useState, useEffect } from 'react';
 import { BrowserRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { ScreenId, ToastMessage } from './types';
 import { AppShell } from './components/AppShell';
-import { CockpitView } from './views/CockpitView';
-import { OperationalDashboardView } from './views/OperationalDashboardView';
-import { VisitsTrackingView } from './views/VisitsTrackingView';
-import { AttendanceControlView } from './views/AttendanceControlView';
-import { TeamsManagementView } from './views/TeamsManagementView';
-import { SupervisorsManagementView } from './views/SupervisorsManagementView';
-import { FreelancersView } from './views/FreelancersView';
-import { DailiesControlView } from './views/DailiesControlView';
-import { PromotersView } from './views/PromotersView';
-import { DesignSystemView } from './views/DesignSystemView';
-import { UsersPermissionsView } from './views/UsersPermissionsView';
-import { ImportView } from './views/ImportView';
-import { RoutesView } from './views/RoutesView';
-import { IndustriesView } from './views/IndustriesView';
-import { StoresView } from './views/StoresView';
-import { PromoterPortalView } from './views/PromoterPortalView';
-import { IndustryPortalView } from './views/IndustryPortalView';
-import { ProfileView } from './views/ProfileView';
 import { RhAbsencesView } from './views/RhAbsencesView';
 import { RhAccessProvider, useRhAccess } from './lib/rhAccess';
 import { FaltasAtestadosAccessProvider, useFaltasAtestadosAccess } from './lib/faltasAtestadosAccess';
-import { FaltasAtestadosModule } from './views/FaltasAtestadosModule';
 import { RhMatriculasAccessProvider, useRhMatriculasAccess } from './lib/rhMatriculasAccess';
-import { RhMatriculasReconciliationView } from './views/RhMatriculasReconciliationView';
 import { AuthProvider, useAuth } from './auth/AuthProvider';
 import { LoginPage } from './auth/LoginPage';
 import { ResetPasswordPage } from './auth/ResetPasswordPage';
 import { ProtectedRoute } from './auth/ProtectedRoute';
 import { defaultScreenForRole, roleCanOpenScreen, screenFromPath, screenPath } from './navigation';
+
+const AttendanceControlView = lazy(() => import('./views/AttendanceControlView').then(({ AttendanceControlView }) => ({ default: AttendanceControlView })));
+const ImportView = lazy(() => import('./views/ImportView').then(({ ImportView }) => ({ default: ImportView })));
+const IndustryPortalView = lazy(() => import('./views/IndustryPortalView').then(({ IndustryPortalView }) => ({ default: IndustryPortalView })));
+const VisitsTrackingView = lazy(() => import('./views/VisitsTrackingView').then(({ VisitsTrackingView }) => ({ default: VisitsTrackingView })));
+const TeamsManagementView = lazy(() => import('./views/TeamsManagementView').then(({ TeamsManagementView }) => ({ default: TeamsManagementView })));
+const SupervisorsManagementView = lazy(() => import('./views/SupervisorsManagementView').then(({ SupervisorsManagementView }) => ({ default: SupervisorsManagementView })));
+const FreelancersView = lazy(() => import('./views/FreelancersView').then(({ FreelancersView }) => ({ default: FreelancersView })));
+const DailiesControlView = lazy(() => import('./views/DailiesControlView').then(({ DailiesControlView }) => ({ default: DailiesControlView })));
+const PromotersView = lazy(() => import('./views/PromotersView').then(({ PromotersView }) => ({ default: PromotersView })));
+const DesignSystemView = lazy(() => import('./views/DesignSystemView').then(({ DesignSystemView }) => ({ default: DesignSystemView })));
+const UsersPermissionsView = lazy(() => import('./views/UsersPermissionsView').then(({ UsersPermissionsView }) => ({ default: UsersPermissionsView })));
+const RoutesView = lazy(() => import('./views/RoutesView').then(({ RoutesView }) => ({ default: RoutesView })));
+const IndustriesView = lazy(() => import('./views/IndustriesView').then(({ IndustriesView }) => ({ default: IndustriesView })));
+const StoresView = lazy(() => import('./views/StoresView').then(({ StoresView }) => ({ default: StoresView })));
+const PromoterPortalView = lazy(() => import('./views/PromoterPortalView').then(({ PromoterPortalView }) => ({ default: PromoterPortalView })));
+const ProfileView = lazy(() => import('./views/ProfileView').then(({ ProfileView }) => ({ default: ProfileView })));
+const FaltasAtestadosModule = lazy(() => import('./views/FaltasAtestadosModule').then(({ FaltasAtestadosModule }) => ({ default: FaltasAtestadosModule })));
+const RhMatriculasReconciliationView = lazy(() => import('./views/RhMatriculasReconciliationView').then(({ RhMatriculasReconciliationView }) => ({ default: RhMatriculasReconciliationView })));
+const CockpitView = lazy(() => import('./views/CockpitView').then(({ CockpitView }) => ({ default: CockpitView })));
+const OperationalDashboardView = lazy(() => import('./views/OperationalDashboardView').then(({ OperationalDashboardView }) => ({ default: OperationalDashboardView })));
 
 function isScreenAllowedForRole(screen: ScreenId, role: string, rhAllowed = false, faltasAtestadosAllowed = false, rhMatriculasAllowed = false): boolean {
   if (screen === 'faltas-atestados') return faltasAtestadosAllowed;
@@ -120,6 +121,7 @@ function Dashboard() {
       toasts={toasts}
       onDismissToast={dismissToast}
     >
+      <Suspense fallback={<div className="flex min-h-48 items-center justify-center text-sm text-neutral-500">Carregando tela...</div>}>
       {activeScreen === 'faltas-atestados' && <FaltasAtestadosModule />}
       {activeScreen === 'rh-matriculas' && <RhMatriculasReconciliationView />}
       {activeScreen === 'rh-ausencias' && <RhAbsencesView />}
@@ -177,6 +179,7 @@ function Dashboard() {
       {activeScreen === 'meu-perfil' && (
         <ProfileView onNavigate={handleNavigate} onShowToast={addToast} />
       )}
+      </Suspense>
     </AppShell>
   );
 }

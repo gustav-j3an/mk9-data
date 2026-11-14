@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { isMissingTable, readPages, validateOverride } from './attendanceService';
-import * as XLSX from 'xlsx';
+import * as XLSX from '@e965/xlsx';
 import { exportRows } from '../utils/attendanceEngine';
 
 test('paginação mantém todas as linhas após o limite padrão da API', async () => {

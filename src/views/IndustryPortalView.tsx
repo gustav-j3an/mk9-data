@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useAuth } from '../auth/AuthProvider';
 import { supabase } from '../lib/supabase';
-import * as XLSX from 'xlsx';
+import * as XLSX from '@e965/xlsx';
 import type { Visit, RouteItem, ToastMessage, VisitPhoto, SystemSettingsState } from '../types';
 import { fetchSystemSettings } from '../lib/systemSettings';
 import {

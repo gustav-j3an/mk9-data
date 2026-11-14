@@ -4,7 +4,7 @@ import { fetchAttendance, saveAttendance, resolveCrmAttendance, fetchAttendanceA
 import { LABELS, filterRoster, exportRows, zoned, type PresenceItem, type OverrideStatus } from '../utils/attendanceEngine';
 import { type PromoterOperationalSummary, type PromoterVisitDetail, type RouteExecutionStatus } from '../utils/visitActivityEngine';
 import { calculateOperationalMetrics, filterPromoterSummaries, type RouteStatusFilter } from '../utils/attendanceFilters';
-import * as XLSX from 'xlsx';
+import * as XLSX from '@e965/xlsx';
 
 interface AttendanceControlViewProps {
   onNavigate: (screen: ScreenId) => void;

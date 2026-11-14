@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../auth/AuthProvider';
 import { supabase } from '../lib/supabase';
-import * as XLSX from 'xlsx';
+import * as XLSX from '@e965/xlsx';
 import type { ToastMessage, ImportType, ImportRowError, ImportHistoryRecord } from '../types';
 import { generateXLSXTemplate, generateCSVTemplate, TEMPLATE_SPECS } from '../utils/templateGenerator';
 
