@@ -518,6 +518,15 @@ function Invoke-SelfTest {
         }
         $flatSyntheticBuckets = @(ConvertTo-StorageBucketItems $syntheticBuckets)
         if ($syntheticRestResponse.Count -ne 1 -or $syntheticRestResponse[0] -isnot [array] -or $syntheticBuckets.Count -ne 2 -or $flatSyntheticBuckets.Count -ne 2 -or $syntheticBucketCount -ne 2 -or @(Get-ChildItem -LiteralPath $syntheticBucketRoot -Directory).Count -ne 2) { throw 'Storage JSON parsing and bucket iteration regression test failed.' }
+        $syntheticQueue = [Collections.Generic.Queue[string]]::new()
+        $syntheticRelative = 'synthetic-folder\child'
+        $queueMethodFailure = $null
+        try { $syntheticQueue.Enqueue($syntheticRelative -replace '\\', '/') } catch { $queueMethodFailure = $_ }
+        if ($null -eq $queueMethodFailure -or $queueMethodFailure.Exception.GetType().Name -ne 'MethodException') { throw 'Storage queue method-call regression fixture did not reproduce the prior MethodException.' }
+        $correctedSyntheticQueue = [Collections.Generic.Queue[string]]::new()
+        $normalizedSyntheticRelative = $syntheticRelative -replace '\\', '/'
+        $correctedSyntheticQueue.Enqueue([string]$normalizedSyntheticRelative)
+        if ($correctedSyntheticQueue.Dequeue() -ne 'synthetic-folder/child') { throw 'Storage queue method-call correction regression test failed.' }
         $fakeApiError = [pscustomobject]@{ Exception = [ArgumentException]::new('invalid header') }
         if ((Get-SafeApiDiagnosticCode $fakeApiError) -ne 'SUPABASE_API_HEADER_VALUE_INVALID' -or (Test-ApiHeaderValue "bad`nkey") -or -not (Test-ApiHeaderValue 'synthetic-api-key_123')) { throw 'API diagnostic-code regression test failed.' }
         $directSettings = Get-DatabaseConnectionSettings ([pscustomobject]@{ projectRef = $script:ProjectRef })
@@ -962,7 +971,8 @@ function Invoke-ProductionBackup {
                         $bucketPrefix = [IO.Path]::GetFullPath($bucketRoot).TrimEnd('\') + '\'
                         if (-not $target.StartsWith($bucketPrefix, [StringComparison]::OrdinalIgnoreCase)) { throw 'Storage retornou caminho fora do bucket.' }
                         if ($null -eq $item.id) {
-                            $queue.Enqueue($relative -replace '\\', '/')
+                            $queueRelative = $relative -replace '\\', '/'
+                            $queue.Enqueue([string]$queueRelative)
                             New-Item -ItemType Directory -Path $target -Force | Out-Null
                         } else {
                             $stage = 'storage-object-download'
