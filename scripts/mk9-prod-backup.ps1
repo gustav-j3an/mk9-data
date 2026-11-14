@@ -411,8 +411,15 @@ function Invoke-SelfTest {
         if ($failureReport.failedStage -ne 'synthetic-stage' -or $failureReport.failureType -ne 'SyntheticException' -or $failureReport.PSObject.Properties.Name -contains 'message') {
             throw 'Failure-report regression test failed.'
         }
-        if ((Get-PostgresDiagnosticCode 2 'no response') -ne 'PG_SERVER_UNREACHABLE' -or (Get-PostgresDiagnosticCode 1 'password authentication failed') -ne 'PG_CREDENTIAL_OR_ROLE_REJECTED') {
+        if ((Get-PostgresDiagnosticCode 2 'no response') -ne 'PG_SERVER_UNREACHABLE' -or
+            (Get-PostgresDiagnosticCode 1 'password authentication failed for user [redacted]') -ne 'PG_PASSWORD_REJECTED' -or
+            (Get-PostgresDiagnosticCode 1 'role [redacted] does not exist') -ne 'PG_ROLE_NOT_FOUND' -or
+            (Get-PostgresDiagnosticCode 1 'database [redacted] does not exist') -ne 'PG_DATABASE_NOT_FOUND' -or
+            (Get-PostgresDiagnosticCode 2 'fe_sendauth: no password supplied') -ne 'PG_PASSWORD_FILE_OR_DELIVERY_ERROR') {
             throw 'PostgreSQL diagnostic-code regression test failed.'
+        }
+        if ((Escape-PgPass 'synthetic:colon\slash') -cne 'synthetic\:colon\\slash' -or (Escape-PgPass 'synthetic-ascii') -cne 'synthetic-ascii') {
+            throw 'PostgreSQL password-file escaping regression test failed.'
         }
         $fakeApiError = [pscustomobject]@{ Exception = [ArgumentException]::new('invalid header') }
         if ((Get-SafeApiDiagnosticCode $fakeApiError) -ne 'SUPABASE_API_HEADER_VALUE_INVALID' -or (Test-ApiHeaderValue "bad`nkey") -or -not (Test-ApiHeaderValue 'synthetic-api-key_123')) { throw 'API diagnostic-code regression test failed.' }
@@ -465,7 +472,11 @@ function Invoke-SelfTest {
 function Escape-PgPass([string]$Value) { $Value.Replace('\', '\\').Replace(':', '\:') }
 
 function Get-PostgresDiagnosticCode([int]$ExitCode, [string]$Output) {
-    if ($Output -match '(?i)password authentication failed|authentication failed|role .* does not exist') { return 'PG_CREDENTIAL_OR_ROLE_REJECTED' }
+    if ($Output -match '(?i)password authentication failed|authentication failed') { return 'PG_PASSWORD_REJECTED' }
+    if ($Output -match '(?i)role .* does not exist') { return 'PG_ROLE_NOT_FOUND' }
+    if ($Output -match '(?i)database .* does not exist') { return 'PG_DATABASE_NOT_FOUND' }
+    if ($Output -match '(?i)no password supplied|password file .* (?:not found|invalid)|could not open password file') { return 'PG_PASSWORD_FILE_OR_DELIVERY_ERROR' }
+    if ($Output -match '(?i)invalid connection option|missing .* in connection string|invalid port number') { return 'PG_CONNECTION_CONFIGURATION_ERROR' }
     if ($Output -match '(?i)could not translate host name|name or service not known|no such host') { return 'PG_DNS_RESOLUTION_FAILED' }
     if ($Output -match '(?i)ssl|tls|certificate') { return 'PG_TLS_NEGOTIATION_FAILED' }
     if ($ExitCode -eq 2 -or $Output -match '(?i)timeout|no response|could not connect to server|connection refused') { return 'PG_SERVER_UNREACHABLE' }
