@@ -358,6 +358,19 @@ function Get-StorageBucketName($Bucket) {
     return $name
 }
 
+function ConvertTo-StorageBucketItems($Response) {
+    $items = [Collections.Generic.List[object]]::new()
+    foreach ($item in $Response) {
+        if ($null -eq $item) { $items.Add($null); continue }
+        if ($item -is [array]) {
+            foreach ($nestedItem in $item) { $items.Add($nestedItem) }
+        } else {
+            $items.Add($item)
+        }
+    }
+    return $items.ToArray()
+}
+
 function Get-SafeFailureCode([System.Management.Automation.ErrorRecord]$ErrorRecord) {
     $code = [string]$ErrorRecord.Exception.Message
     if ($code -in @('STORAGE_BUCKET_NAME_MISSING', 'STORAGE_BUCKET_NAME_INVALID')) { return $code }
@@ -492,6 +505,19 @@ function Invoke-SelfTest {
         if ((Escape-PgPass 'synthetic:colon\slash') -cne 'synthetic\:colon\\slash' -or (Escape-PgPass 'synthetic-ascii') -cne 'synthetic-ascii') {
             throw 'PostgreSQL password-file escaping regression test failed.'
         }
+        $syntheticBucketJson = '[{"name":"synthetic-a"},{"name":"synthetic-b"}]'
+        $syntheticRestResponse = @(ConvertFrom-Json -InputObject $syntheticBucketJson -ErrorAction Stop)
+        $syntheticBuckets = @(ConvertTo-StorageBucketItems $syntheticRestResponse)
+        $syntheticBucketRoot = Join-Path $testRoot 'parsed-buckets'
+        New-Item -ItemType Directory -Path $syntheticBucketRoot -Force | Out-Null
+        $syntheticBucketCount = 0
+        foreach ($syntheticBucket in $syntheticBuckets) {
+            $syntheticBucketName = Get-StorageBucketName $syntheticBucket
+            New-Item -ItemType Directory -Path (Join-Path $syntheticBucketRoot $syntheticBucketName) -Force | Out-Null
+            $syntheticBucketCount++
+        }
+        $flatSyntheticBuckets = @(ConvertTo-StorageBucketItems $syntheticBuckets)
+        if ($syntheticRestResponse.Count -ne 1 -or $syntheticRestResponse[0] -isnot [array] -or $syntheticBuckets.Count -ne 2 -or $flatSyntheticBuckets.Count -ne 2 -or $syntheticBucketCount -ne 2 -or @(Get-ChildItem -LiteralPath $syntheticBucketRoot -Directory).Count -ne 2) { throw 'Storage JSON parsing and bucket iteration regression test failed.' }
         $fakeApiError = [pscustomobject]@{ Exception = [ArgumentException]::new('invalid header') }
         if ((Get-SafeApiDiagnosticCode $fakeApiError) -ne 'SUPABASE_API_HEADER_VALUE_INVALID' -or (Test-ApiHeaderValue "bad`nkey") -or -not (Test-ApiHeaderValue 'synthetic-api-key_123')) { throw 'API diagnostic-code regression test failed.' }
         $directSettings = Get-DatabaseConnectionSettings ([pscustomobject]@{ projectRef = $script:ProjectRef })
@@ -910,7 +936,8 @@ function Invoke-ProductionBackup {
         New-Item -ItemType Directory -Path $storageRoot | Out-Null
         $stage = 'storage-bucket-list'
         $failureSubstage = 'storage-bucket-list-api'
-        $buckets = @(Invoke-RestMethod -Method Get -Uri "$($script:ProjectUrl)/storage/v1/bucket" -Headers $headers -TimeoutSec 60)
+        $bucketResponse = Invoke-RestMethod -Method Get -Uri "$($script:ProjectUrl)/storage/v1/bucket" -Headers $headers -TimeoutSec 60
+        $buckets = @(ConvertTo-StorageBucketItems $bucketResponse)
         $storageCount = 0
         foreach ($bucket in $buckets) {
             $failureSubstage = 'storage-bucket-folder-create'
