@@ -16,7 +16,8 @@ ON CONFLICT (id) DO UPDATE SET
  role=EXCLUDED.role,
  promotor_matricula=EXCLUDED.promotor_matricula,
  status=EXCLUDED.status;
-INSERT INTO public.system_settings(key,value) VALUES ('operation_mode','"IMPLANTACAO"');
+INSERT INTO public.system_settings(key,value) VALUES ('operation_mode','"IMPLANTACAO"')
+ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value;
 INSERT INTO public.promoter_operation_authorizations(promotor_matricula,status,justification) VALUES
  ('M65P1','liberado','Synthetic regression'),
  ('M65P2','bloqueado','Synthetic regression');
