@@ -23,7 +23,7 @@ export const DEFAULT_PROMOTER_PORTAL_VIEW_STATE: PromoterPortalViewState = {
   statusFilter: 'all'
 };
 
-const FILTERS = new Set(['all', 'planejada', 'em_andamento', 'pendente', 'concluida', 'nao_realizada']);
+const FILTERS = new Set(['all', 'planejada', 'em_andamento', 'pendente', 'concluida', 'nao_realizada', 'encerrada_automaticamente']);
 
 export function getPromoterPortalViewStateKey(userId: string | null | undefined): string | null {
   return userId ? `mk9:promoter-portal-view:${userId}` : null;

@@ -58,6 +58,52 @@ test('visita de 04/11 deixa de ser recuperável depois do fim da semana em 08/11
   }).allowed, false);
 });
 
+test('M38: visita encerrada automaticamente pode ser recuperada no dia seguinte dentro da mesma semana', () => {
+  const closedVisit = {
+    id: 'attempt-1', status: 'nao_realizada', started_at: '2026-11-03T20:00:00-03:00',
+    completed_at: null, lifecycle_action: 'auto_closed_at_day_end'
+  } as const;
+  const result = getScheduledVisitAction({
+    ...common,
+    today: '2026-11-04', weekStart: '2026-11-02', weekEnd: '2026-11-08',
+    item: { ...base, dataStr: '2026-11-03', status: 'nao_realizada', visitObj: closedVisit } as typeof base
+  });
+  assert.deepEqual(result, { allowed: true, action: 'recover' });
+});
+
+test('M38: encerramento automático expira na virada para a semana seguinte', () => {
+  const result = getScheduledVisitAction({
+    ...common,
+    today: '2026-11-09', weekStart: '2026-11-09', weekEnd: '2026-11-15',
+    item: { ...base, dataStr: '2026-11-08', status: 'nao_realizada', visitObj: { status: 'nao_realizada', started_at: '2026-11-08T19:00:00Z', lifecycle_action: 'auto_closed_at_day_end' } } as typeof base
+  });
+  assert.equal(result.allowed, false);
+});
+
+test('M38: tentativa concluída não pode ser recuperada', () => {
+  const result = getScheduledVisitAction({
+    ...common,
+    item: { ...base, dataStr: '2026-10-21', status: 'nao_realizada', visitObj: { status: 'concluida', started_at: '2026-10-21T10:00:00Z', completed_at: '2026-10-21T11:00:00Z', lifecycle_action: 'auto_closed_at_day_end' } } as typeof base
+  });
+  assert.equal(result.allowed, false);
+});
+
+test('M38: nao_realizada iniciada sem auditoria de encerramento automático permanece bloqueada', () => {
+  const result = getScheduledVisitAction({
+    ...common,
+    item: { ...base, dataStr: '2026-10-21', status: 'nao_realizada', visitObj: { status: 'nao_realizada', started_at: '2026-10-21T10:00:00Z' } } as typeof base
+  });
+  assert.equal(result.allowed, false);
+});
+
+test('M37/M38: quinzenal sem programação confirmada pela RPC permanece bloqueada', () => {
+  const result = getScheduledVisitAction({
+    ...common,
+    item: { ...base, frequencia: 'QUINZENAL', dataStr: '2026-10-21', status: 'nao_realizada', visitObj: { status: 'nao_realizada', started_at: '2026-10-20T23:00:00Z', lifecycle_action: 'auto_closed_at_day_end' } } as typeof base
+  });
+  assert.equal(result.allowed, false);
+});
+
 test('rota atualmente encerrada bloqueia recuperação independentemente da data de encerramento', () => {
   const plannedDate = '2026-11-04';
   const closedDates = ['2026-11-03', plannedDate, '2026-11-05'];

@@ -36,6 +36,13 @@ test('portal presentation state restores the selected tab, week and filters', ()
   assert.deepEqual(readPromoterPortalViewState(storage, key), state);
 });
 
+test('automatic-closure history filter survives local view-state restoration', () => {
+  const storage = memoryStorage();
+  const key = getPromoterPortalViewStateKey('user-a');
+  writePromoterPortalViewState(storage, key, { ...DEFAULT_PROMOTER_PORTAL_VIEW_STATE, statusFilter: 'encerrada_automaticamente' });
+  assert.equal(readPromoterPortalViewState(storage, key).statusFilter, 'encerrada_automaticamente');
+});
+
 test('invalid or unavailable stored state falls back safely', () => {
   assert.deepEqual(readPromoterPortalViewState(null, 'key'), DEFAULT_PROMOTER_PORTAL_VIEW_STATE);
   assert.deepEqual(readPromoterPortalViewState(memoryStorage({ key: '{broken' }), 'key'), DEFAULT_PROMOTER_PORTAL_VIEW_STATE);

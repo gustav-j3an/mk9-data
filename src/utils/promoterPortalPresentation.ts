@@ -3,7 +3,11 @@ export const PROMOTER_APPOINTMENT_TABS = [
   { id: 'history', label: 'Histórico' }
 ] as const;
 export type PromoterAppointmentsTab = typeof PROMOTER_APPOINTMENT_TABS[number]['id'];
-export type PromoterMetricStatus = 'planejada' | 'em_andamento' | 'pendente' | 'concluida' | 'nao_realizada';
+export type PromoterMetricStatus = 'planejada' | 'em_andamento' | 'pendente' | 'concluida' | 'nao_realizada' | 'encerrada_automaticamente';
+
+export function isAutomaticallyClosedVisit(visit: { status?: string; lifecycle_action?: string | null } | null | undefined): boolean {
+  return visit?.status === 'nao_realizada' && visit.lifecycle_action === 'auto_closed_at_day_end';
+}
 
 export interface PromoterAppointmentGroup<T> {
   date: string;
@@ -12,15 +16,16 @@ export interface PromoterAppointmentGroup<T> {
 
 export function getAppointmentsTabForMetric(status: PromoterMetricStatus): PromoterAppointmentsTab {
   if (status === 'pendente') return 'history';
-  if (status === 'concluida' || status === 'nao_realizada') return 'history';
+  if (status === 'concluida' || status === 'nao_realizada' || status === 'encerrada_automaticamente') return 'history';
   return 'today';
 }
 
-export function filterPromoterAppointments<T extends { status: string; isPastOverdue?: boolean; regularization_status?: string | null; visitObj?: { regularization_status?: string | null } | null }>(
+export function filterPromoterAppointments<T extends { status: string; isPastOverdue?: boolean; regularization_status?: string | null; visitObj?: { status?: string; lifecycle_action?: string | null; regularization_status?: string | null } | null }>(
   appointments: T[],
   status: 'all' | PromoterMetricStatus
 ): T[] {
   return status === 'all' ? appointments : appointments.filter(appointment => {
+    if (status === 'encerrada_automaticamente') return isAutomaticallyClosedVisit(appointment.visitObj);
     const regularization = appointment.regularization_status || appointment.visitObj?.regularization_status;
     if (status === 'nao_realizada' && (regularization === 'closed_without_execution_proof'
       || (appointment.status === 'pendente' && appointment.isPastOverdue))) return true;
@@ -53,16 +58,18 @@ export function getWeeklyPromoterMetricCounts(appointments: Array<{
   isPastOverdue?: boolean;
   regularization_status?: string | null;
   visitObj?: { regularization_status?: string | null } | null;
+  isAutomaticallyClosed?: boolean;
 }>) {
   return appointments.reduce((counts, appointment) => {
     const regularization = appointment.regularization_status || appointment.visitObj?.regularization_status;
     if (appointment.status === 'planejada') counts.scheduled += 1;
     if (appointment.status === 'concluida' || regularization === 'administratively_completed_with_proof') counts.completed += 1;
     if (appointment.status === 'em_andamento' && !regularization) counts.inProgress += 1;
-    if (appointment.status === 'nao_realizada' || (appointment.status === 'pendente' && appointment.isPastOverdue)
+    if (appointment.isAutomaticallyClosed) counts.automaticallyClosed += 1;
+    else if (appointment.status === 'nao_realizada' || (appointment.status === 'pendente' && appointment.isPastOverdue)
       || regularization === 'closed_without_execution_proof') counts.notDone += 1;
     return counts;
-  }, { scheduled: 0, completed: 0, inProgress: 0, notDone: 0 });
+  }, { scheduled: 0, completed: 0, inProgress: 0, notDone: 0, automaticallyClosed: 0 });
 }
 
 export function getMetricDisplayValue(value: number, loading: boolean, hasError: boolean): number | '—' {

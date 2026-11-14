@@ -22,6 +22,7 @@ export interface OperationalVisitItem {
   completedAt?: string | null;
   duracaoFormatada?: string | null;
   visitObj?: Visit | null;
+  attemptHistory?: Visit[];
   isPastOverdue: boolean;
   priorityOrder: number;
   isRealExecution?: boolean;
@@ -284,12 +285,16 @@ export const calculateOperationalVisits = ({
 
   // 2. Indexar visitas reais pela chave única: `promotor_matricula|loja_codigo|industria_codigo|data_visita`
   const visitsMap = new Map<string, Visit>();
+  const visitsHistoryMap = new Map<string, Visit[]>();
   visits.forEach((v) => {
     const scheduledDate = v.scheduled_date || v.data_visita;
     const k = `${v.promotor_matricula}|${v.loja_codigo}|${v.industria_codigo}|${scheduledDate}`;
     const current = visitsMap.get(k);
     const currentAttempt = current?.attempt_number || 1;
     const candidateAttempt = v.attempt_number || 1;
+    const occurrenceHistory = visitsHistoryMap.get(k) || [];
+    occurrenceHistory.push(v);
+    visitsHistoryMap.set(k, occurrenceHistory);
     const candidateIsNewer = candidateAttempt > currentAttempt
       || (candidateAttempt === currentAttempt
         && (Date.parse(v.created_at || '') || 0) > (Date.parse(current?.created_at || '') || 0));
@@ -573,6 +578,7 @@ export const calculateOperationalVisits = ({
           completedAt,
           duracaoFormatada,
           visitObj: v || null,
+          attemptHistory: visitsHistoryMap.get(key)?.slice().sort((left, right) => (left.attempt_number || 1) - (right.attempt_number || 1)) || (v ? [v] : []),
           isPastOverdue,
           priorityOrder,
           isRealExecution
@@ -637,6 +643,7 @@ export const calculateOperationalVisits = ({
       completedAt: v.completed_at || null,
       duracaoFormatada,
       visitObj: v,
+      attemptHistory: visitsHistoryMap.get(key)?.slice().sort((left, right) => (left.attempt_number || 1) - (right.attempt_number || 1)) || [v],
       isPastOverdue: false,
       priorityOrder,
       isRealExecution: true

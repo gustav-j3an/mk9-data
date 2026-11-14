@@ -249,6 +249,7 @@ export interface PromoterOperationAuthorization {
 }
 
 export type VisitStatus = 'pendente' | 'em_andamento' | 'concluida' | 'nao_realizada';
+export type VisitLifecycleAction = 'promoter_cancelled' | 'auto_closed_at_day_end';
 
 export interface Visit {
   id: string;
@@ -263,6 +264,8 @@ export interface Visit {
   attempt_number?: number;
   /** First visit row in the retry chain; null for attempt 1 and non-scheduled visits. */
   occurrence_root_visit_id?: string | null;
+  /** Lifecycle audit action, enriched from visit_lifecycle_audit for read-only presentation. */
+  lifecycle_action?: VisitLifecycleAction | null;
   started_at?: string | null;
   gps_accuracy_meters?: number | null;
   checkout_latitude?: number | null;

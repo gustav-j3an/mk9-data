@@ -53,7 +53,7 @@ import {
 } from '../lib/routesService';
 import { isWhatsAppShareableVisit } from '../utils/whatsappShare';
 import { loadRoutesWithClosureFallback } from '../utils/routeClosureCompatibility';
-import { filterPromoterAppointments, getMetricDisplayValue, getRegularizationCounts, getRegularizationPresentation, getWeeklyPromoterMetricCounts, PROMOTER_APPOINTMENT_TABS, type PromoterAppointmentsTab } from '../utils/promoterPortalPresentation';
+import { filterPromoterAppointments, getMetricDisplayValue, getRegularizationCounts, getRegularizationPresentation, getWeeklyPromoterMetricCounts, isAutomaticallyClosedVisit, PROMOTER_APPOINTMENT_TABS, type PromoterAppointmentsTab } from '../utils/promoterPortalPresentation';
 import { getPromoterPortalViewStateKey, readPromoterPortalViewState, writePromoterPortalViewState } from '../utils/promoterPortalViewState';
 import { getScheduledRouteEligibility, getScheduledVisitAction, isRouteVisibleInOperationalHistory, isScheduledVisitActionRpcReady, type ScheduledVisitAction } from '../utils/scheduledVisitActions';
 import { canReviewOldOpenVisits, createRequestGate, findOwnOpenVisit, findReusableActiveCheckInVisit, formatOpenVisitConflictMessage, getOldOpenVisitCheckInBlockMessage, getOldOpenVisitsLabel, getPromoterOpenVisitAction, getStaleOpenVisits, isAnotherVisitInProgressError, isOpenVisitFromToday } from '../utils/visitCheckInConflict';
@@ -132,7 +132,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
   const [weekVisits, setWeekVisits] = useState<Visit[]>([]);
   const [selectedDayDateStr, setSelectedDayDateStr] = useState<string>(initialPortalViewState.selectedDayDateStr || getLocalDateString(new Date()));
   const [weekHistoryFilterMode, setWeekHistoryFilterMode] = useState<'day' | 'all'>(initialPortalViewState.weekHistoryFilterMode);
-  const [statusFilter, setStatusFilter] = useState<'all' | 'planejada' | 'em_andamento' | 'pendente' | 'concluida' | 'nao_realizada'>(initialPortalViewState.statusFilter);
+  const [statusFilter, setStatusFilter] = useState<'all' | 'planejada' | 'em_andamento' | 'pendente' | 'concluida' | 'nao_realizada' | 'encerrada_automaticamente'>(initialPortalViewState.statusFilter);
   const [appointmentsTab, setAppointmentsTab] = useState<PromoterAppointmentsTab>(initialPortalViewState.appointmentsTab);
   const [operationMode, setOperationMode] = useState<OperationMode | 'DESCONHECIDO'>('DESCONHECIDO');
   const [officialStartDate, setOfficialStartDate] = useState<string | null>(null);
@@ -503,12 +503,37 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
       setOperationalRoutes(rawRoutes.filter((route) => isRouteVisibleInOperationalHistory(route, historyStartStr)));
 
       const visits = (visitsRes.data as unknown as Visit[]) || [];
-      const openVisits = selectPastVisitsFromAgenda(visits, todayStr);
+      const lifecycleVisitIds = visits
+        .filter(visit => visit.status === 'nao_realizada' && Boolean(visit.started_at) && !visit.completed_at && !visit.regularization_status)
+        .map(visit => visit.id);
+      let visitsWithLifecycle = visits;
+      if (promotorMatricula && lifecycleVisitIds.length > 0) {
+        // The migration exposes an authenticated, promoter-scoped SELECT policy.
+        // If unavailable (older schema or read error), recovery stays fail-closed.
+        const lifecycleActions = new Map<string, Visit['lifecycle_action']>();
+        let lifecycleReadComplete = true;
+        for (let index = 0; index < lifecycleVisitIds.length; index += 100) {
+          const ids = lifecycleVisitIds.slice(index, index + 100);
+          const lifecycleResult = await fetchAllQueryPages<{ visit_id: string; action: Visit['lifecycle_action'] }>(
+            (from, to) => db.from('visit_lifecycle_audit').select('visit_id, action')
+              .in('visit_id', ids).range(from, to)
+          );
+          if (lifecycleResult.error) {
+            lifecycleReadComplete = false;
+            break;
+          }
+          lifecycleResult.data.forEach(row => lifecycleActions.set(row.visit_id, row.action));
+        }
+        if (lifecycleReadComplete) {
+          visitsWithLifecycle = visits.map(visit => ({ ...visit, lifecycle_action: lifecycleActions.get(visit.id) || null }));
+        }
+      }
+      const openVisits = selectPastVisitsFromAgenda(visitsWithLifecycle, todayStr);
       const activeVisits = (activeVisitsRes.data as unknown as Visit[]) || [];
 
       // Consolidar todas as visitas adicionando as em aberto
       const visitsMap = new Map<string, Visit>();
-      visits.forEach((v) => visitsMap.set(v.id, v));
+      visitsWithLifecycle.forEach((v) => visitsMap.set(v.id, v));
       openVisits.forEach((v) => visitsMap.set(v.id, v));
       activeVisits.forEach((v) => visitsMap.set(v.id, v));
       const allConsolidatedVisits = Array.from(visitsMap.values());
@@ -959,7 +984,11 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
   const realUf = promoterDetails?.uf || profile?.promotor_uf;
   // Meta de execução diária baseada nas visitas previstas para hoje.
   const totalPlanned = todayOperationalVisits.filter(v => v.status !== 'nao_realizada' && !v.visitObj?.regularization_status).length;
-  const weeklyMetrics = useMemo(() => getWeeklyPromoterMetricCounts(weekOperationalVisits), [weekOperationalVisits]);
+  const weekItemsWithLifecycle = useMemo(() => weekOperationalVisits.map(item => ({
+    ...item,
+    isAutomaticallyClosed: isAutomaticallyClosedVisit(item.visitObj)
+  })), [weekOperationalVisits]);
+  const weeklyMetrics = useMemo(() => getWeeklyPromoterMetricCounts(weekItemsWithLifecycle), [weekItemsWithLifecycle]);
   const todayCompletedCount = todayOperationalVisits.filter((v) => v.status === 'concluida').length;
   const executionPerc = totalPlanned > 0 ? Math.round((todayCompletedCount / totalPlanned) * 100) : 0;
   const metricText = (value: number) => getMetricDisplayValue(value, loading, Boolean(loadError));
@@ -3041,12 +3070,13 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
         </div>
 
         <p className="text-xs font-semibold text-[#5F5F5F]">Semana de {weekDaysRange[0]?.dateStr.split('-').reverse().join('/')} a {weekDaysRange[6]?.dateStr.split('-').reverse().join('/')}</p>
-        <div aria-label="Indicadores semanais" className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+        <div aria-label="Indicadores semanais" className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
           {[
             { label: 'Total previsto', value: weekOperationalVisits.length, color: 'text-[#171717]', filter: 'all' as const },
             { label: 'Concluídas', value: weeklyMetrics.completed, color: 'text-emerald-700', filter: 'concluida' as const },
             { label: 'Em andamento', value: weeklyMetrics.inProgress, color: 'text-amber-800', filter: 'em_andamento' as const },
             { label: 'Não realizadas', value: weeklyMetrics.notDone, color: 'text-rose-700', filter: 'nao_realizada' as const },
+            { label: 'Encerradas automaticamente', value: weeklyMetrics.automaticallyClosed, color: 'text-orange-700', filter: 'encerrada_automaticamente' as const },
             { label: 'Programadas restantes', value: weeklyMetrics.scheduled, color: 'text-[#171717]', filter: 'planejada' as const }
           ].map(({ label, value, color, filter }) => (
             <button key={label} type="button" aria-pressed={statusFilter === filter}
@@ -3077,6 +3107,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                     <option value="pendente">Pendentes</option>
                     <option value="concluida">Concluídas</option>
                     <option value="nao_realizada">Não realizadas</option>
+                    <option value="encerrada_automaticamente">Encerradas automaticamente</option>
                   </select>
                   <div role="group" aria-label="Escopo do histórico" className="inline-flex rounded-lg border border-[#CFCDC5] bg-[#EAE8E2] p-0.5">
                     <button type="button" aria-pressed={weekHistoryFilterMode === 'all'} onClick={() => setWeekHistoryFilterMode('all')}
@@ -3099,7 +3130,8 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                   const isSelected = weekHistoryFilterMode === 'day' && day.dateStr === selectedDayDateStr;
                   const dayVisits = historicalAttendanceVisits.filter((v) => v.dataStr === day.dateStr);
                   const attendanceCount = dayVisits.length;
-                  const notDoneCount = dayVisits.filter((v) => v.status === 'nao_realizada').length;
+                  const automaticallyClosedCount = dayVisits.filter((v) => isAutomaticallyClosedVisit(v.visitObj)).length;
+                  const notDoneCount = dayVisits.filter((v) => v.status === 'nao_realizada' && !isAutomaticallyClosedVisit(v.visitObj)).length;
                   const completedCount = dayVisits.filter((v) => v.status === 'concluida').length;
                   const resolutionCounts = getRegularizationCounts(dayVisits.map((visit) => ({
                     status: visit.status,
@@ -3152,6 +3184,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                       <div className={`flex flex-wrap items-center gap-1.5 text-[10px] pt-1 border-t ${isSelected ? 'border-white/20' : 'border-[#CFCDC5]/60'}`}>
                         {completedCount > 0 && <span className={`font-bold ${isSelected ? 'text-emerald-300' : 'text-emerald-700'}`}>Concluídas {completedCount}</span>}
                         {notDoneCount > 0 && <span className={`font-bold ${isSelected ? 'text-rose-300' : 'text-rose-700'}`}>Não realizadas {notDoneCount}</span>}
+                        {automaticallyClosedCount > 0 && <span className={`font-bold ${isSelected ? 'text-orange-200' : 'text-orange-700'}`}>Encerradas automaticamente {automaticallyClosedCount}</span>}
                         {inProgressCount > 0 && <span className={`font-bold ${isSelected ? 'text-amber-300' : 'text-amber-800'}`}>Em andamento {inProgressCount}</span>}
                         {resolutionCounts.administrativelyCompleted > 0 && <span className={`font-bold ${isSelected ? 'text-purple-200' : 'text-purple-800'}`}>Concluídas administrativamente {resolutionCounts.administrativelyCompleted}</span>}
                         {resolutionCounts.closedWithoutProof > 0 && <span className={`font-bold ${isSelected ? 'text-purple-200' : 'text-purple-800'}`}>Encerradas sem comprovação {resolutionCounts.closedWithoutProof}</span>}
@@ -3295,7 +3328,11 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                             {regularizationLabel || (item.status === 'concluida' && (isCompletedLate ? '🟢 Concluída com atraso' : '🟢 Concluída'))}
                         {!regularizationLabel && item.status === 'em_andamento' && '🔵 Em andamento'}
                             {item.status === 'pendente' && (item.isPastOverdue ? '🔴 Pendente (Atrasada)' : '🔴 Pendente')}
-                            {item.status === 'nao_realizada' && '🟠 Não realizada'}
+                            {item.status === 'nao_realizada' && isAutomaticallyClosedVisit(item.visitObj)
+                              ? actionDecision.allowed && actionDecision.action === 'recover' && scheduledActionRpcStatus === 'ready' ? '🟠 Pendente de recuperação' : '🟠 Encerrada automaticamente'
+                              : item.status === 'nao_realizada' && item.visitObj?.lifecycle_action === 'promoter_cancelled'
+                                ? '🟠 Cancelada pelo promotor'
+                                : item.status === 'nao_realizada' && '🟠 Não realizada'}
                             {item.status === 'planejada' && '⚪ Planejada'}
                           </span>
                         </div>
@@ -3317,6 +3354,15 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                           <span>Frequência: <strong className="text-[#0E7490] font-bold">{item.frequencia}</strong></span>
                           {item.completedAt && (
                             <span>Concluído às: <strong className="text-emerald-700 font-bold">{new Date(item.completedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</strong></span>
+                          )}
+                          {item.attemptHistory && item.attemptHistory.length > 1 && (
+                            <span aria-label={`${item.attemptHistory.length} tentativas no histórico`}>
+                              Histórico: {item.attemptHistory.map((attempt, attemptIndex) => (
+                                <React.Fragment key={attempt.id}>
+                                  {attemptIndex > 0 ? ' · ' : ''}Tentativa {attempt.attempt_number || attemptIndex + 1}: {attempt.status === 'concluida' ? 'concluída' : attempt.status === 'em_andamento' ? 'em andamento' : isAutomaticallyClosedVisit(attempt) ? 'encerrada automaticamente' : 'não realizada'}
+                                </React.Fragment>
+                              ))}
+                            </span>
                           )}
                         </div>
                       </div>

@@ -48,8 +48,11 @@ export function getScheduledVisitAction(input: {
   if (item.visitObj?.regularization_status) {
     return { allowed: false, reason: 'Esta ocorrência já foi regularizada administrativamente.' };
   }
-  if (item.visitObj?.status === 'concluida' || item.visitObj?.status === 'em_andamento' || item.visitObj?.started_at) {
+  if (item.visitObj?.status === 'concluida' || item.visitObj?.status === 'em_andamento' || item.visitObj?.completed_at) {
     return { allowed: false, reason: 'Esta ocorrência já possui atendimento iniciado ou concluído.' };
+  }
+  if (item.visitObj?.started_at && item.visitObj.lifecycle_action !== 'auto_closed_at_day_end') {
+    return { allowed: false, reason: 'Esta tentativa iniciada não foi encerrada automaticamente e não pode ser recuperada por esta ação.' };
   }
 
   // Prevenção de duplicidade: a mesma ocorrência programada (scheduled_date) não pode ser executada duas vezes.
