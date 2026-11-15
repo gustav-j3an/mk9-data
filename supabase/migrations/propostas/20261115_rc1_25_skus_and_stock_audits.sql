@@ -4,6 +4,23 @@
 -- Status: PENDENTE DE APROVAÇÃO (NÃO APLICADA - EM CONFORMIDADE COM REGRA RC1.25)
 -- ==============================================================================
 
+-- 0. PRÉ-REQUISITOS IDEMPOTENTES DE ESTRUTURA PARA ITENS DE CHECKLIST
+-- Garante que a tabela public.visit_checklist_items possua a coluna updated_at
+-- e a restrição de unicidade necessária para o upsert na RPC save_completed_visit_edit.
+ALTER TABLE public.visit_checklist_items ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'public.visit_checklist_items'::regclass
+      AND conname = 'uq_visit_checklist_item'
+  ) THEN
+    ALTER TABLE public.visit_checklist_items
+      ADD CONSTRAINT uq_visit_checklist_item UNIQUE (visit_id, item_key);
+  END IF;
+END $$;
+
 -- 1. TABELA DE CATÁLOGO OFICIAL E SUGESTÕES DE SKUs (industria_skus)
 CREATE TABLE IF NOT EXISTS public.industria_skus (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -321,6 +338,13 @@ BEGIN
 END;
 $$;
 REVOKE ALL ON FUNCTION public.check_visit_promotor_update_integrity() FROM PUBLIC, anon;
+
+-- Garante que o trigger de integridade da visita esteja ativo e vinculado à tabela visits
+DROP TRIGGER IF EXISTS trg_visit_promotor_update_integrity ON public.visits;
+CREATE TRIGGER trg_visit_promotor_update_integrity
+  BEFORE UPDATE ON public.visits
+  FOR EACH ROW
+  EXECUTE FUNCTION public.check_visit_promotor_update_integrity();
 
 CREATE OR REPLACE FUNCTION public.save_completed_visit_edit(
   p_visit_id UUID,

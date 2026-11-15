@@ -8,27 +8,18 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 DO $$ BEGIN CREATE ROLE anon; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE ROLE authenticated; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
--- 2. Schema auth e auth.users
+-- 2. Schema auth e permissões para postgres
 -- No Supabase CLI (PostgreSQL 17), o schema auth e a tabela auth.users já existem nativamente
--- e são de propriedade de supabase_admin. A role postgres NÃO é dona do schema auth.
--- Portanto, NÃO executamos DDL em auth (nada de CREATE SCHEMA auth ou CREATE TABLE auth.users).
--- Em vez disso, apenas concedemos USAGE no schema auth para postgres, caso necessário.
+-- e pertencem a supabase_admin. A role postgres precisa de USAGE no schema auth e ALL na tabela auth.users.
 DO $$
 BEGIN
   BEGIN
     EXECUTE 'GRANT USAGE ON SCHEMA auth TO postgres';
+    EXECUTE 'GRANT ALL ON TABLE auth.users TO postgres';
   EXCEPTION WHEN OTHERS THEN
     NULL;
   END;
 END $$;
-
--- 3. Schema storage
--- O Supabase CLI já cria o schema storage e storage.objects nativamente.
--- Criamos funções auxiliares apenas se não existirem.
-CREATE OR REPLACE FUNCTION storage.foldername(text)
-RETURNS TEXT[] LANGUAGE sql IMMUTABLE AS $$
-  SELECT string_to_array($1, '/')
-$$;
 
 -- 4. Funções auxiliares auth (compatibilidade com JWT em testes locais)
 CREATE OR REPLACE FUNCTION auth.uid()
@@ -225,3 +216,26 @@ RETURNS BOOLEAN LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$
       AND v.status = 'em_andamento'
   );
 $$;
+
+-- 8. Configurações do sistema e autorizações operacionais (compatibilidade com attendance_check_in)
+CREATE TABLE IF NOT EXISTS public.system_settings (
+  key TEXT PRIMARY KEY,
+  value JSONB NOT NULL,
+  description TEXT,
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+INSERT INTO public.system_settings (key, value)
+VALUES ('operation_mode', '"OPERACAO_OFICIAL"'::jsonb)
+ON CONFLICT (key) DO NOTHING;
+
+CREATE OR REPLACE FUNCTION public.is_promotor_authorized(p_promotor_matricula TEXT)
+RETURNS BOOLEAN LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$
+  SELECT true;
+$$;
+
+-- 9. Concessão de privilégios públicos para papéis de aplicação
+GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
+GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated, service_role;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated, service_role;
+GRANT ALL ON ALL ROUTINES IN SCHEMA public TO anon, authenticated, service_role;
