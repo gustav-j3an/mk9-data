@@ -50,4 +50,6 @@ test('RC1.25 Security: validates RPC single-use authorization token & immutable 
   // 8. Gate de integridade de checkout de SKUs
   assert.match(sql, /guard_visit_sku_stock_finalization/);
   assert.match(sql, /Todos os SKUs ativos precisam ser conferidos ou justificados antes do checkout/);
+  assert.match(sql, /attendance_private\.visit_lifecycle_authorizations/);
+  assert.match(sql, /attendance_private\.scheduled_recovery_authorizations/);
 });

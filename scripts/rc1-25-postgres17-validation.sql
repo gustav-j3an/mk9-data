@@ -23,6 +23,8 @@ DECLARE
   v_visit_open UUID := gen_random_uuid();
   v_visit_completed UUID := gen_random_uuid();
   v_visit_other UUID := gen_random_uuid();
+  v_visit_recovery UUID := gen_random_uuid();
+  v_visit_cancel UUID := gen_random_uuid();
   v_token UUID;
   v_res JSONB;
   v_err_caught BOOLEAN := false;
@@ -54,6 +56,12 @@ BEGIN
 
   INSERT INTO public.visits (id, promotor_matricula, loja_codigo, industria_codigo, data_visita, started_at, completed_at, status, observacao_geral)
   VALUES (v_visit_other, 'PROM_RC25_2', v_store_code, v_ind_code, CURRENT_DATE, clock_timestamp() - interval '2 hours', clock_timestamp() - interval '1 hour', 'concluida', 'Visita Outro Promotor');
+
+  INSERT INTO public.visits (id, promotor_matricula, loja_codigo, industria_codigo, data_visita, scheduled_date, status)
+  VALUES (v_visit_recovery, 'PROM_RC25_1', v_store_code, v_ind_code, CURRENT_DATE, CURRENT_DATE, 'pendente');
+
+  INSERT INTO public.visits (id, promotor_matricula, loja_codigo, industria_codigo, data_visita, started_at, status)
+  VALUES (v_visit_cancel, 'PROM_RC25_1', v_store_code, v_ind_code, CURRENT_DATE, clock_timestamp(), 'em_andamento');
 
   -- Simular autenticação como promotor titular (PROM_RC25_1)
   EXECUTE format('SET LOCAL "request.jwt.claim.sub" = %L', v_promotor_uid::text);
@@ -245,7 +253,41 @@ BEGIN
     RAISE EXCEPTION 'FALHA NO TESTE 9: Rollback não desfez alteração em visits!';
   END IF;
 
-  RAISE NOTICE '=== TODOS OS 9 TESTES FUNCIONAIS REAIS EM POSTGRESQL 17 PASSARAM COM SUCESSO! ===';
+  -- TESTE 10: Recuperação M37 continua exigindo e consumindo autorização.
+  INSERT INTO attendance_private.scheduled_recovery_authorizations (
+    visit_id, promotor_matricula, data_visita, scheduled_date
+  ) VALUES (v_visit_recovery, 'PROM_RC25_1', CURRENT_DATE, CURRENT_DATE);
+
+  UPDATE public.visits
+  SET status = 'em_andamento', started_at = clock_timestamp()
+  WHERE id = v_visit_recovery;
+
+  IF (SELECT status FROM public.visits WHERE id = v_visit_recovery) <> 'em_andamento'
+     OR EXISTS (SELECT 1 FROM attendance_private.scheduled_recovery_authorizations WHERE visit_id = v_visit_recovery) THEN
+    RAISE EXCEPTION 'FALHA NO TESTE 10: Recuperação M37 não autorizada ou autorização não consumida';
+  END IF;
+  RAISE NOTICE 'TESTE 10 OK: Recuperação M37 e consumo da autorização preservados.';
+
+  -- TESTE 11: Cancelamento M38 continua exigindo autorização de ciclo de vida.
+  INSERT INTO attendance_private.visit_lifecycle_authorizations (
+    visit_id, promotor_matricula, action, actor_type, actor_id, reason
+  ) VALUES (
+    v_visit_cancel, 'PROM_RC25_1', 'promoter_cancelled', 'promoter', v_promotor_uid,
+    'teste de cancelamento autorizado'
+  );
+
+  UPDATE public.visits
+  SET status = 'nao_realizada',
+      motivo_nao_realizada = 'Cancelada pelo promotor: teste de cancelamento autorizado'
+  WHERE id = v_visit_cancel;
+
+  IF (SELECT status FROM public.visits WHERE id = v_visit_cancel) <> 'nao_realizada'
+     OR EXISTS (SELECT 1 FROM attendance_private.visit_lifecycle_authorizations WHERE visit_id = v_visit_cancel) THEN
+    RAISE EXCEPTION 'FALHA NO TESTE 11: Cancelamento M38 não autorizado ou autorização não consumida';
+  END IF;
+  RAISE NOTICE 'TESTE 11 OK: Cancelamento M38 e consumo da autorização preservados.';
+
+  RAISE NOTICE '=== TODOS OS 11 TESTES FUNCIONAIS REAIS EM POSTGRESQL 17 PASSARAM COM SUCESSO! ===';
 END $$;
 
 ROLLBACK;

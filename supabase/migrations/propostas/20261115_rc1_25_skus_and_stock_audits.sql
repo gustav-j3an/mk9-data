@@ -246,10 +246,65 @@ REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public.visit_edits_audit_log FROM PUB
 CREATE OR REPLACE FUNCTION public.check_visit_promotor_update_integrity()
 RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
 DECLARE
+  v_authorized boolean := false;
+  v_lifecycle_action text;
+  v_lifecycle_actor_type text;
+  v_lifecycle_actor_id uuid;
+  v_lifecycle_reason text;
   v_auth_token_text TEXT;
   v_auth_token UUID;
   v_audit_entry public.visit_edits_audit_log%ROWTYPE;
 BEGIN
+  -- Preserva as autorizações de cancelamento e encerramento do M38.
+  IF TG_OP = 'UPDATE' THEN
+    DELETE FROM attendance_private.visit_lifecycle_authorizations a
+    WHERE a.visit_id = OLD.id
+      AND a.promotor_matricula = OLD.promotor_matricula
+      AND ((a.actor_type = 'promoter' AND a.actor_id = auth.uid())
+        OR (a.actor_type = 'system' AND a.actor_id IS NULL))
+    RETURNING a.action, a.actor_type, a.actor_id, a.reason
+      INTO v_lifecycle_action, v_lifecycle_actor_type, v_lifecycle_actor_id, v_lifecycle_reason;
+  END IF;
+
+  IF v_lifecycle_action IS NOT NULL THEN
+    IF OLD.status <> 'em_andamento' OR NEW.status <> 'nao_realizada'
+       OR OLD.started_at IS NULL OR OLD.completed_at IS NOT NULL
+       OR NEW.completed_at IS DISTINCT FROM OLD.completed_at
+       OR NEW.started_at IS DISTINCT FROM OLD.started_at
+       OR NEW.promotor_matricula IS DISTINCT FROM OLD.promotor_matricula
+       OR NEW.loja_codigo IS DISTINCT FROM OLD.loja_codigo
+       OR NEW.industria_codigo IS DISTINCT FROM OLD.industria_codigo
+       OR NEW.rota_id IS DISTINCT FROM OLD.rota_id
+       OR NEW.data_visita IS DISTINCT FROM OLD.data_visita
+       OR NEW.scheduled_date IS DISTINCT FROM OLD.scheduled_date
+       OR NEW.latitude IS DISTINCT FROM OLD.latitude
+       OR NEW.longitude IS DISTINCT FROM OLD.longitude
+       OR NEW.gps_accuracy_meters IS DISTINCT FROM OLD.gps_accuracy_meters
+       OR NEW.checkout_latitude IS DISTINCT FROM OLD.checkout_latitude
+       OR NEW.checkout_longitude IS DISTINCT FROM OLD.checkout_longitude
+       OR NEW.checkout_accuracy_meters IS DISTINCT FROM OLD.checkout_accuracy_meters
+       OR NEW.work_schedule_id IS DISTINCT FROM OLD.work_schedule_id
+       OR NEW.regularization_status IS DISTINCT FROM OLD.regularization_status
+       OR NEW.observacao_geral IS DISTINCT FROM OLD.observacao_geral
+       OR NEW.motivo_nao_realizada IS DISTINCT FROM
+          (CASE WHEN v_lifecycle_action = 'auto_closed_at_day_end' THEN v_lifecycle_reason
+                ELSE 'Cancelada pelo promotor: ' || v_lifecycle_reason END) THEN
+      RAISE EXCEPTION 'Invalid authorised visit cancellation transition' USING ERRCODE = '42501';
+    END IF;
+    IF v_lifecycle_action = 'promoter_cancelled'
+       AND (v_lifecycle_actor_type <> 'promoter'
+         OR v_lifecycle_actor_id IS DISTINCT FROM auth.uid()
+         OR OLD.promotor_matricula IS DISTINCT FROM public.get_auth_promotor_matricula()) THEN
+      RAISE EXCEPTION 'Visit not owned by authenticated promoter' USING ERRCODE = '42501';
+    END IF;
+    IF v_lifecycle_action = 'auto_closed_at_day_end'
+       AND (v_lifecycle_actor_type <> 'system' OR v_lifecycle_actor_id IS NOT NULL
+         OR OLD.started_at >= (((clock_timestamp() AT TIME ZONE 'America/Sao_Paulo')::date)::timestamp AT TIME ZONE 'America/Sao_Paulo')) THEN
+      RAISE EXCEPTION 'Automatic visit closure is not due' USING ERRCODE = '42501';
+    END IF;
+    RETURN NEW;
+  END IF;
+
   IF auth.uid() IS NULL AND session_user IN ('postgres','supabase_admin') THEN RETURN NEW; END IF;
   IF public.is_admin_or_gestor() THEN RETURN NEW; END IF;
   IF OLD.promotor_matricula IS DISTINCT FROM public.get_auth_promotor_matricula()
@@ -265,6 +320,8 @@ BEGIN
     v_auth_token := NULL;
   END IF;
 
+  -- O token autoriza apenas a edição de uma visita concluída; não substitui
+  -- as autorizações de recuperação temporal do M37/M38.
   IF OLD.started_at IS NOT NULL AND NOT attendance_private.is_visit_in_current_operational_day(OLD.id) THEN
     -- Visita antiga: se for uma edição autorizada via token de uso único na RPC, permite; caso contrário, bloqueia
     IF NOT (OLD.status = 'concluida' AND NEW.status = 'concluida' AND v_auth_token IS NOT NULL) THEN
@@ -280,6 +337,27 @@ BEGIN
     RAISE EXCEPTION 'Check-in is immutable' USING ERRCODE='42501';
   END IF;
 
+  IF to_regclass('attendance_private.scheduled_recovery_authorizations') IS NOT NULL THEN
+    DELETE FROM attendance_private.scheduled_recovery_authorizations a
+    WHERE a.visit_id = OLD.id
+      AND a.promotor_matricula = OLD.promotor_matricula
+      AND a.data_visita = NEW.data_visita
+      AND a.scheduled_date = NEW.scheduled_date
+    RETURNING true INTO v_authorized;
+  END IF;
+
+  IF coalesce(v_authorized, false) THEN
+    IF (NEW.promotor_matricula,NEW.loja_codigo,NEW.industria_codigo,NEW.rota_id)
+       IS DISTINCT FROM (OLD.promotor_matricula,OLD.loja_codigo,OLD.industria_codigo,OLD.rota_id) THEN
+      RAISE EXCEPTION 'Visit identity is immutable' USING ERRCODE='42501';
+    END IF;
+    IF OLD.started_at IS NOT NULL OR OLD.completed_at IS NOT NULL OR OLD.regularization_status IS NOT NULL THEN
+      RAISE EXCEPTION 'Only an unstarted occurrence without regularization can be recovered' USING ERRCODE='42501';
+    END IF;
+    IF OLD.status NOT IN ('pendente', 'nao_realizada') OR NEW.status <> 'em_andamento' OR NEW.started_at IS NULL THEN
+      RAISE EXCEPTION 'Invalid scheduled recovery transition' USING ERRCODE='42501';
+    END IF;
+  ELSE
   IF OLD.status IN ('concluida','nao_realizada') THEN
     -- Permite alteração de observacao_geral e updated_at em visita concluída
     -- EXCLUSIVAMENTE sob validação e consumo imediato de um token de autorização de uso único
@@ -299,6 +377,10 @@ BEGIN
         RAISE EXCEPTION 'Token de autorização de edição inválido, expirado ou já reutilizado' USING ERRCODE='42501';
       END IF;
 
+      IF (v_audit_entry.old_value ->> 'observacao_geral') IS DISTINCT FROM OLD.observacao_geral THEN
+        RAISE EXCEPTION 'O valor original da observação não corresponde à auditoria' USING ERRCODE='42501';
+      END IF;
+
       -- Consumo atômico e imediato do token de uso único
       UPDATE public.visit_edits_audit_log
       SET token_consumed_at = clock_timestamp()
@@ -315,7 +397,10 @@ BEGIN
           NEW.gps_accuracy_meters, NEW.checkout_accuracy_meters, NEW.work_schedule_id, NEW.regularization_status)
          IS DISTINCT FROM
          (OLD.completed_at, OLD.latitude, OLD.longitude, OLD.checkout_latitude, OLD.checkout_longitude,
-          OLD.gps_accuracy_meters, OLD.checkout_accuracy_meters, OLD.work_schedule_id, OLD.regularization_status) THEN
+          OLD.gps_accuracy_meters, OLD.checkout_accuracy_meters, OLD.work_schedule_id, OLD.regularization_status)
+         OR (pg_catalog.to_jsonb(NEW) - 'observacao_geral' - 'updated_at')
+            IS DISTINCT FROM
+            (pg_catalog.to_jsonb(OLD) - 'observacao_geral' - 'updated_at') THEN
         RAISE EXCEPTION 'Only general observation can be adjusted during completed visit review' USING ERRCODE='42501';
       END IF;
 
@@ -333,6 +418,7 @@ BEGIN
   IF NEW.status='concluida'
      AND (NEW.completed_at IS NULL OR NEW.started_at IS NULL OR NEW.completed_at<NEW.started_at) THEN
     RAISE EXCEPTION 'Invalid checkout sequence';
+  END IF;
   END IF;
   RETURN NEW;
 END;
@@ -429,7 +515,8 @@ BEGIN
   ) INTO v_old_state;
 
   v_new_obs := COALESCE(trim(p_observacao_geral), v_visit.observacao_geral);
-  v_audit_token := gen_random_uuid();
+  -- Edição apenas do checklist não deve emitir token utilizável para UPDATE em visits.
+  v_audit_token := CASE WHEN p_observacao_geral IS NOT NULL THEN gen_random_uuid() ELSE NULL END;
 
   -- 1. Registrar OBRIGATORIAMENTE no log de auditoria o token de uso único com o novo valor exato
   -- Como INSERT em visit_edits_audit_log é revogado de authenticated/anon,
@@ -459,7 +546,7 @@ BEGIN
 
   -- 2. Atualizar campos operacionais em visits (observacao_geral)
   -- Passa o token de autorização estritamente no escopo da transação local
-  IF p_observacao_geral IS NOT NULL THEN
+  IF v_audit_token IS NOT NULL THEN
     PERFORM pg_catalog.set_config('mk9.current_audit_token', v_audit_token::TEXT, true);
 
     UPDATE public.visits

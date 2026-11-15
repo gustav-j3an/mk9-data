@@ -66,4 +66,8 @@ test('migration 20261115_rc1_25_skus_and_stock_audits: validates syntax, integri
   assert.match(sql, /'checklist', COALESCE\(/);
   assert.match(sql, /v_caller_role NOT IN \('admin', 'gestor', 'promotor'\)/);
   assert.match(sql, /RETURNING id INTO v_audit_id/);
+  assert.match(sql, /attendance_private\.visit_lifecycle_authorizations/);
+  assert.match(sql, /attendance_private\.scheduled_recovery_authorizations/);
+  assert.match(sql, /NEW\.motivo_nao_realizada IS DISTINCT FROM/);
+  assert.match(sql, /v_audit_token := CASE WHEN p_observacao_geral IS NOT NULL THEN gen_random_uuid\(\) ELSE NULL END/);
 });
