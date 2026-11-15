@@ -37,13 +37,25 @@ test('migration 20261115_rc1_25_skus_and_stock_audits: validates syntax, integri
 
   // Restrição de promotor inserindo apenas sugestão pendente
   assert.match(sql, /status = 'pendente'\s+AND origem_cadastro = 'promotor_sugestao'/);
+  assert.match(sql, /industria_skus_suggestion_scope_guard[\s\S]*?v\.status = 'em_andamento'/);
 
   // Restrição de promotor gravando estoque apenas para a própria visita
   assert.match(sql, /conferido_por_matricula = public\.get_auth_promotor_matricula\(\)/);
+  assert.match(sql, /visit_sku_stock_insert_current_visit_guard[\s\S]*?AS RESTRICTIVE FOR INSERT TO authenticated/);
+  assert.match(sql, /visit_sku_stock_update_current_visit_guard[\s\S]*?AS RESTRICTIVE FOR UPDATE TO authenticated/);
+  assert.match(sql, /REVOKE DELETE ON public\.visit_sku_stock_checks FROM PUBLIC, anon, authenticated/);
+  assert.match(sql, /CREATE OR REPLACE FUNCTION public\.guard_visit_sku_stock_finalization/);
+  assert.match(sql, /Todos os SKUs ativos precisam ser conferidos ou justificados antes do checkout/);
+  assert.match(sql, /CREATE TRIGGER guard_visit_sku_stock_finalization[\s\S]*?BEFORE UPDATE OF status ON public\.visits/);
 
   // 5. Função RPC atômica de edição de visita com auditoria
   assert.match(sql, /CREATE OR REPLACE FUNCTION public\.save_completed_visit_edit/);
   assert.match(sql, /IF v_visit\.status <> 'concluida' THEN/);
   assert.match(sql, /IF v_caller_role NOT IN \('admin', 'gestor'\) AND/);
   assert.match(sql, /INSERT INTO public\.visit_edits_audit_log/);
+  assert.match(sql, /REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public\.visit_edits_audit_log FROM PUBLIC, anon, authenticated/);
+  assert.match(sql, /jsonb_typeof\(p_checklist_items\) <> 'array'/);
+  assert.match(sql, /'checklist', COALESCE\(/);
+  assert.match(sql, /v_caller_role NOT IN \('admin', 'gestor', 'promotor'\)/);
+  assert.match(sql, /RETURNING id INTO v_audit_id/);
 });

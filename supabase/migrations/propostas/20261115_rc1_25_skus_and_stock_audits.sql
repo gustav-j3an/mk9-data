@@ -91,6 +91,23 @@ CREATE POLICY "industria_skus_promoter_insert_policy" ON public.industria_skus
     )
   );
 
+CREATE POLICY "industria_skus_suggestion_scope_guard" ON public.industria_skus
+  AS RESTRICTIVE FOR INSERT TO authenticated
+  WITH CHECK (
+    public.is_admin_or_gestor()
+    OR (
+      status = 'pendente'
+      AND origem_cadastro = 'promotor_sugestao'
+      AND sugerido_por_matricula = public.get_auth_promotor_matricula()
+      AND EXISTS (
+        SELECT 1 FROM public.visits v
+        WHERE v.promotor_matricula = public.get_auth_promotor_matricula()
+          AND v.industria_codigo = industria_skus.industria_codigo
+          AND v.status = 'em_andamento'
+      )
+    )
+  );
+
 -- Apenas admin e gestor aprovam, alteram ou desativam SKUs
 CREATE POLICY "industria_skus_admin_write_policy" ON public.industria_skus
   FOR UPDATE TO authenticated
@@ -137,6 +154,58 @@ CREATE POLICY "visit_sku_stock_update_policy" ON public.visit_sku_stock_checks
     OR conferido_por_matricula = public.get_auth_promotor_matricula()
   );
 
+-- A política permissiva acima preserva o escopo legado; esta política restritiva
+-- valida o vínculo completo e fecha a janela de escrita após o checkout.
+CREATE POLICY "visit_sku_stock_insert_current_visit_guard" ON public.visit_sku_stock_checks
+  AS RESTRICTIVE FOR INSERT TO authenticated
+  WITH CHECK (
+    public.is_admin_or_gestor()
+    OR (
+      conferido_por_matricula = public.get_auth_promotor_matricula()
+      AND EXISTS (
+        SELECT 1 FROM public.visits v
+        WHERE v.id = visit_id
+          AND v.promotor_matricula = public.get_auth_promotor_matricula()
+          AND v.status = 'em_andamento'
+          AND v.industria_codigo = visit_sku_stock_checks.industria_codigo
+          AND v.loja_codigo = visit_sku_stock_checks.loja_codigo
+      )
+    )
+  );
+
+CREATE POLICY "visit_sku_stock_update_current_visit_guard" ON public.visit_sku_stock_checks
+  AS RESTRICTIVE FOR UPDATE TO authenticated
+  USING (
+    public.is_admin_or_gestor()
+    OR (
+      conferido_por_matricula = public.get_auth_promotor_matricula()
+      AND EXISTS (
+        SELECT 1 FROM public.visits v
+        WHERE v.id = visit_id
+          AND v.promotor_matricula = public.get_auth_promotor_matricula()
+          AND v.status = 'em_andamento'
+          AND v.industria_codigo = visit_sku_stock_checks.industria_codigo
+          AND v.loja_codigo = visit_sku_stock_checks.loja_codigo
+      )
+    )
+  )
+  WITH CHECK (
+    public.is_admin_or_gestor()
+    OR (
+      conferido_por_matricula = public.get_auth_promotor_matricula()
+      AND EXISTS (
+        SELECT 1 FROM public.visits v
+        WHERE v.id = visit_id
+          AND v.promotor_matricula = public.get_auth_promotor_matricula()
+          AND v.status = 'em_andamento'
+          AND v.industria_codigo = visit_sku_stock_checks.industria_codigo
+          AND v.loja_codigo = visit_sku_stock_checks.loja_codigo
+      )
+    )
+  );
+
+REVOKE DELETE ON public.visit_sku_stock_checks FROM PUBLIC, anon, authenticated;
+
 -- 7. POLÍTICAS RLS PARA visit_edits_audit_log (APPEND-ONLY)
 CREATE POLICY "visit_edits_audit_select_policy" ON public.visit_edits_audit_log
   FOR SELECT TO authenticated
@@ -145,11 +214,9 @@ CREATE POLICY "visit_edits_audit_select_policy" ON public.visit_edits_audit_log
     OR altered_by_matricula = public.get_auth_promotor_matricula()
   );
 
-CREATE POLICY "visit_edits_audit_insert_policy" ON public.visit_edits_audit_log
-  FOR INSERT TO authenticated
-  WITH CHECK (
-    altered_by_user_id = auth.uid()
-  );
+-- A escrita do log é exclusiva da RPC SECURITY DEFINER; usuários não podem
+-- fabricar eventos nem preencher valores antigos/novos arbitrariamente.
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public.visit_edits_audit_log FROM PUBLIC, anon, authenticated;
 
 -- 8. FUNÇÃO RPC ATÔMICA E SEGURA PARA SALVAR EDIÇÃO DE VISITA COM AUDITORIA (RC1.25)
 CREATE OR REPLACE FUNCTION public.save_completed_visit_edit(
@@ -170,6 +237,9 @@ DECLARE
   v_caller_role TEXT;
   v_caller_matricula TEXT;
   v_item RECORD;
+  v_old_state JSONB;
+  v_new_state JSONB;
+  v_audit_id UUID;
 BEGIN
   v_caller_uid := auth.uid();
   IF v_caller_uid IS NULL THEN
@@ -184,6 +254,9 @@ BEGIN
 
   IF v_caller_role IS NULL THEN
     RAISE EXCEPTION 'Perfil de usuário não encontrado ou inativo' USING ERRCODE = '42501';
+  END IF;
+  IF v_caller_role NOT IN ('admin', 'gestor', 'promotor') THEN
+    RAISE EXCEPTION 'Perfil sem permissão para revisar visitas' USING ERRCODE = '42501';
   END IF;
 
   -- Obter a visita existente com lock pessimista
@@ -211,6 +284,21 @@ BEGIN
   IF p_reason IS NULL OR length(trim(p_reason)) < 5 THEN
     RAISE EXCEPTION 'Justificativa de ajuste é obrigatória (mínimo de 5 caracteres)' USING ERRCODE = '23514';
   END IF;
+
+  IF p_checklist_items IS NOT NULL AND jsonb_typeof(p_checklist_items) <> 'array' THEN
+    RAISE EXCEPTION 'Itens de checklist devem ser enviados como uma lista' USING ERRCODE = '22023';
+  END IF;
+
+  SELECT jsonb_build_object(
+    'observacao_geral', v_visit.observacao_geral,
+    'checklist', COALESCE((
+      SELECT jsonb_agg(jsonb_build_object(
+        'item_key', ci.item_key, 'item_label', ci.item_label,
+        'valor_texto', ci.valor_texto, 'observacao', ci.observacao
+      ) ORDER BY ci.item_key)
+      FROM public.visit_checklist_items ci WHERE ci.visit_id = p_visit_id
+    ), '[]'::jsonb)
+  ) INTO v_old_state;
 
   -- 1. Atualizar campos operacionais em visits (observacao_geral)
   -- Preserva estritamente: loja_codigo, industria_codigo, promotor_matricula, started_at, completed_at, status
@@ -268,9 +356,25 @@ BEGIN
     COALESCE(v_caller_matricula, 'admin'),
     'completed_visit_edit',
     jsonb_build_object('observacao_geral', v_visit.observacao_geral),
-    COALESCE(p_changes_summary, '{}'::jsonb),
+    '{}'::jsonb,
     trim(p_reason)
-  );
+  ) RETURNING id INTO v_audit_id;
+
+  SELECT jsonb_build_object(
+    'observacao_geral', v.observacao_geral,
+    'checklist', COALESCE((
+      SELECT jsonb_agg(jsonb_build_object(
+        'item_key', ci.item_key, 'item_label', ci.item_label,
+        'valor_texto', ci.valor_texto, 'observacao', ci.observacao
+      ) ORDER BY ci.item_key)
+      FROM public.visit_checklist_items ci WHERE ci.visit_id = p_visit_id
+    ), '[]'::jsonb)
+  ) INTO v_new_state
+  FROM public.visits v WHERE v.id = p_visit_id;
+
+  UPDATE public.visit_edits_audit_log
+  SET old_value = v_old_state, new_value = v_new_state
+  WHERE id = v_audit_id;
 
   RETURN jsonb_build_object(
     'success', true,
@@ -282,3 +386,76 @@ $$;
 
 REVOKE ALL ON FUNCTION public.save_completed_visit_edit(UUID, TEXT, JSONB, TEXT, JSONB) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.save_completed_visit_edit(UUID, TEXT, JSONB, TEXT, JSONB) TO authenticated;
+
+-- Integridade em banco: uma visita com catálogo oficial só pode ser concluída
+-- quando cada SKU ativo tiver sido conferido ou justificado. A linha da visita
+-- já está bloqueada pelo UPDATE de checkout, serializando com a escrita do SKU.
+CREATE OR REPLACE FUNCTION public.guard_visit_sku_stock_check()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_visit public.visits%ROWTYPE;
+BEGIN
+  SELECT * INTO v_visit
+  FROM public.visits
+  WHERE id = NEW.visit_id
+  FOR UPDATE;
+
+  IF NOT FOUND OR v_visit.status <> 'em_andamento'
+     OR NEW.industria_codigo <> v_visit.industria_codigo
+     OR NEW.loja_codigo <> v_visit.loja_codigo
+     OR NEW.conferido_por_matricula <> v_visit.promotor_matricula THEN
+    RAISE EXCEPTION 'Conferência SKU deve pertencer à visita aberta e ao promotor titular' USING ERRCODE = '42501';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM public.industria_skus s
+    WHERE s.industria_codigo = NEW.industria_codigo
+      AND s.codigo_sku = NEW.codigo_sku
+      AND s.status = 'ativo'
+  ) THEN
+    RAISE EXCEPTION 'SKU não está ativo no catálogo desta indústria' USING ERRCODE = '23503';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.guard_visit_sku_stock_check() FROM PUBLIC, anon, authenticated;
+CREATE TRIGGER guard_visit_sku_stock_check
+  BEFORE INSERT OR UPDATE ON public.visit_sku_stock_checks
+  FOR EACH ROW EXECUTE FUNCTION public.guard_visit_sku_stock_check();
+
+CREATE OR REPLACE FUNCTION public.guard_visit_sku_stock_finalization()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+  IF OLD.status = 'em_andamento' AND NEW.status = 'concluida'
+     AND EXISTS (
+       SELECT 1 FROM public.industria_skus s
+       WHERE s.industria_codigo = OLD.industria_codigo
+         AND s.status = 'ativo'
+         AND NOT EXISTS (
+           SELECT 1 FROM public.visit_sku_stock_checks c
+           WHERE c.visit_id = OLD.id
+             AND c.codigo_sku = s.codigo_sku
+             AND c.industria_codigo = OLD.industria_codigo
+             AND c.loja_codigo = OLD.loja_codigo
+             AND c.status_conferencia IN ('conferido', 'justificado')
+         )
+     ) THEN
+    RAISE EXCEPTION 'Todos os SKUs ativos precisam ser conferidos ou justificados antes do checkout' USING ERRCODE = '23514';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.guard_visit_sku_stock_finalization() FROM PUBLIC, anon, authenticated;
+CREATE TRIGGER guard_visit_sku_stock_finalization
+  BEFORE UPDATE OF status ON public.visits
+  FOR EACH ROW EXECUTE FUNCTION public.guard_visit_sku_stock_finalization();
