@@ -13,7 +13,7 @@ const moduleSource = await readFile('src/views/FaltasAtestadosModule.tsx', 'utf8
 assert.doesNotMatch(moduleSource, /method\s*:\s*['"]POST['"]|\.insert\s*\(|\.upsert\s*\(/i);
 assert.match(moduleSource, /externalWriteEnabled/);
 const attachmentFunction = await readFile('supabase/functions/absence-attachments/index.ts', 'utf8');
-const attachmentMigration = await readFile('supabase/migrations/20261021120000_mk9_absence_attachments.sql', 'utf8');
+const attachmentMigration = await readFile('supabase/migrations/20261027194934_m15_20261021120000_mk9_absence_attachments.sql', 'utf8');
 const attachmentService = await readFile('src/lib/absenceAttachmentService.ts', 'utf8');
 assert.match(attachmentFunction, /auth\.getUser/);
 assert.match(attachmentFunction, /detectAbsenceAttachmentType/);

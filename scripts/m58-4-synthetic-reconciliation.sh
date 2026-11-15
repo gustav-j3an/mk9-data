@@ -71,12 +71,12 @@ echo 'Database nonce challenge verified the exact container.'
 
 psql "$DB_URL" -v ON_ERROR_STOP=1 -f scripts/m58-4-synthetic-fixture.sql >/dev/null
 for migration in \
-  supabase/migrations/20261009144200_add_visits_unique_constraint.sql \
-  supabase/migrations/20261010_create_system_settings_and_audit.sql \
-  supabase/migrations/20261011120000_create_promoter_authorizations.sql \
-  supabase/migrations/20261011140000_auto_generate_industry_code.sql \
-  supabase/migrations/20261017120000_create_contratos_lojas_table.sql \
-  supabase/migrations/20261017_create_avatars_storage_policies.sql; do
+  supabase/migrations/20261027194658_m15_20261009144200_add_visits_unique_constraint.sql \
+  supabase/migrations/20261027194708_m15_20261010_create_system_settings_and_audit.sql \
+  supabase/migrations/20261027194711_m15_20261011120000_create_promoter_authorizations.sql \
+  supabase/migrations/20261027194714_m15_20261011140000_auto_generate_industry_code.sql \
+  supabase/migrations/20261027194734_m15_20261017120000_create_contratos_lojas_table.sql \
+  supabase/migrations/20261027194731_m15_20261017_create_avatars_storage_policies.sql; do
   psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$migration" >/dev/null
 done
 psql "$DB_URL" -v ON_ERROR_STOP=1 -f scripts/m58-4-assert-migration-objects.sql >/dev/null

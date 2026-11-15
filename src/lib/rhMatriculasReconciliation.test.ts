@@ -47,7 +47,7 @@ test('divergências são explícitas; semelhança nominal nunca associa identida
 });
 
 test('migration preserva chaves operacionais, exige capability específica e audita decisões', async () => {
-  const sql = await readFile(resolve('supabase/migrations/20261021100000_mk9_rh_reconciliation.sql'), 'utf8');
+  const sql = await readFile(resolve('supabase/migrations/20261027194925_m15_20261021100000_mk9_rh_reconciliation.sql'), 'utf8');
   assert.match(sql, /reconciliation_permissions/);
   assert.match(sql, /p\.role='admin' AND p\.status='ativo'/);
   assert.match(sql, /CREATE UNIQUE INDEX matriculas_rh_recon_approved_promotor_unique/);

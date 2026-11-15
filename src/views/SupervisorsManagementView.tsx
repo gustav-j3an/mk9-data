@@ -340,7 +340,7 @@ export const SupervisorsManagementView: React.FC<SupervisorsManagementViewProps>
               Não foi possível consultar a tabela <code className="font-mono bg-amber-200/50 px-1 py-0.5 rounded">public.supervisores</code> ({error}).
             </p>
             <p className="text-xs text-[#5F5F5F]">
-              Certifique-se de que a migração de estrutura <code className="font-mono text-purple-700">20261016100000_create_supervisores_table.sql</code> foi devidamente aplicada no banco Supabase conectado.
+              Certifique-se de que a migração de estrutura <code className="font-mono text-purple-700">20261027194722_m15_20261016100000_create_supervisores_table.sql</code> foi devidamente aplicada no banco Supabase conectado.
             </p>
           </div>
         </div>

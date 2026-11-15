@@ -26,7 +26,7 @@ try {
   const sources = JSON.parse(readFileSync(new URL('sources.json', directory), 'utf8'));
   check('Canonical migration sources unchanged', () => {
     for (const source of sources) assert.equal(createHash('sha256').update(readFileSync(new URL('../'+source.file, new URL('../', directory)))).digest('hex'), source.sha256);
-    assert.equal(readFileSync(new URL('supabase/migrations/20261019155012_rh_explicit_bindings.sql', directory), 'utf8'), readFileSync(new URL('../supabase/migrations/20261019151754_mk9_rh_explicit_bindings.sql', new URL('../', directory)), 'utf8'));
+    assert.equal(readFileSync(new URL('supabase/migrations/20261019155012_rh_explicit_bindings.sql', directory), 'utf8'), readFileSync(new URL('../supabase/migrations/20261027194904_m15_20261019151754_mk9_rh_explicit_bindings.sql', new URL('../', directory)), 'utf8'));
   });
   const health = await request('/health');
   check('Backend local only; external API disabled', () => { assert.equal(health.data.supabase, url); assert.equal(health.data.externalApiEnabled, false); assert.equal(health.data.blockedRequests, 0); });

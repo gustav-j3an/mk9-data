@@ -52,7 +52,7 @@ test('rejects empty or oversized files and generates opaque record-scoped paths'
 });
 
 test('prepares private Storage policies and authorized metadata RPCs without applying them', async () => {
-  const migration = await readFile(resolve('supabase/migrations/20261021120000_mk9_absence_attachments.sql'), 'utf8');
+  const migration = await readFile(resolve('supabase/migrations/20261027194934_m15_20261021120000_mk9_absence_attachments.sql'), 'utf8');
   assert.match(migration, /absence-documents', 'absence-documents', false/);
   assert.match(migration, /file_size_limit=10485760/);
   assert.match(migration, /mk9_rh_private\.can_read_absence_attachment/);
