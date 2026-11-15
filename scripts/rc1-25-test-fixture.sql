@@ -9,8 +9,8 @@ DO $$ BEGIN CREATE ROLE anon; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE ROLE authenticated; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 -- 2. Schema auth e permissões para postgres
--- No Supabase CLI (PostgreSQL 17), o schema auth e a tabela auth.users já existem nativamente
--- e pertencem a supabase_admin. A role postgres precisa de USAGE no schema auth e ALL na tabela auth.users.
+-- No Supabase CLI (PostgreSQL 17), o schema auth, auth.users e auth.uid() já existem nativamente
+-- e pertencem a supabase_admin / supabase_auth_admin. A role postgres precisa apenas de USAGE e privilégios DML.
 DO $$
 BEGIN
   BEGIN
@@ -21,18 +21,7 @@ BEGIN
   END;
 END $$;
 
--- 4. Funções auxiliares auth (compatibilidade com JWT em testes locais)
-CREATE OR REPLACE FUNCTION auth.uid()
-RETURNS UUID LANGUAGE sql STABLE AS $$
-  SELECT NULLIF(current_setting('request.jwt.claim.sub', true), '')::UUID
-$$;
-
-CREATE OR REPLACE FUNCTION auth.role()
-RETURNS TEXT LANGUAGE sql STABLE AS $$
-  SELECT NULLIF(current_setting('request.jwt.claim.role', true), '')
-$$;
-
--- 5. Tabelas fundamentais da aplicação no schema public
+-- 3. Tabelas fundamentais da aplicação no schema public
 CREATE TABLE IF NOT EXISTS public.profiles (
   id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
   name TEXT,
