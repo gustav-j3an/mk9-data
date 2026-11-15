@@ -59,10 +59,13 @@ CREATE TABLE IF NOT EXISTS public.visit_edits_audit_log (
   old_value JSONB,
   new_value JSONB,
   reason TEXT,
+  authorization_token UUID UNIQUE,
+  token_consumed_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_visit_edits_audit_visit ON public.visit_edits_audit_log(visit_id, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_visit_edits_audit_auth_token ON public.visit_edits_audit_log(authorization_token) WHERE authorization_token IS NOT NULL;
 
 -- 4. ATIVAR ROW LEVEL SECURITY (RLS)
 ALTER TABLE public.industria_skus ENABLE ROW LEVEL SECURITY;
@@ -220,11 +223,15 @@ REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public.visit_edits_audit_log FROM PUB
 
 -- 8. FUNÇÃO RPC ATÔMICA E SEGURA PARA SALVAR EDIÇÃO DE VISITA COM AUDITORIA (RC1.25)
 -- Atualização da função de integridade para permitir edição autorizada de observacao_geral
--- em visitas concluídas EXCLUSIVAMENTE quando existir registro prévio e concomitante de auditoria
--- criado pelo próprio usuário autenticado na mesma transação (handshake de auditoria imutável).
--- Substitui qualquer dependência de variáveis de sessão (current_setting), que poderiam ser manipuladas pelo cliente.
+-- em visitas concluídas EXCLUSIVAMENTE quando existir autorização de uso único (single-use token)
+-- gerada e consumida atômica e estritamente dentro da RPC save_completed_visit_edit.
+-- Não utiliza janela temporal solta nem variáveis de sessão manipuláveis pelo cliente.
 CREATE OR REPLACE FUNCTION public.check_visit_promotor_update_integrity()
 RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
+DECLARE
+  v_auth_token_text TEXT;
+  v_auth_token UUID;
+  v_audit_entry public.visit_edits_audit_log%ROWTYPE;
 BEGIN
   IF auth.uid() IS NULL AND session_user IN ('postgres','supabase_admin') THEN RETURN NEW; END IF;
   IF public.is_admin_or_gestor() THEN RETURN NEW; END IF;
@@ -232,19 +239,22 @@ BEGIN
      OR public.get_auth_promotor_matricula() IS NULL THEN
     RAISE EXCEPTION 'Visit not owned by authenticated promoter' USING ERRCODE='42501';
   END IF;
+
+  -- Obter token efêmero de transação se fornecido
+  v_auth_token_text := NULLIF(pg_catalog.current_setting('mk9.current_audit_token', true), '');
+  IF v_auth_token_text ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
+    v_auth_token := v_auth_token_text::UUID;
+  ELSE
+    v_auth_token := NULL;
+  END IF;
+
   IF OLD.started_at IS NOT NULL AND NOT attendance_private.is_visit_in_current_operational_day(OLD.id) THEN
-    -- Visita antiga: se for uma edição autorizada de observação via RPC de auditoria, permite; caso contrário, bloqueia
-    IF NOT (OLD.status = 'concluida' AND NEW.status = 'concluida'
-            AND EXISTS (
-              SELECT 1 FROM public.visit_edits_audit_log
-              WHERE visit_id = OLD.id
-                AND altered_by_user_id = auth.uid()
-                AND field_name = 'completed_visit_edit'
-                AND created_at >= clock_timestamp() - INTERVAL '5 seconds'
-            )) THEN
+    -- Visita antiga: se for uma edição autorizada via token de uso único na RPC, permite; caso contrário, bloqueia
+    IF NOT (OLD.status = 'concluida' AND NEW.status = 'concluida' AND v_auth_token IS NOT NULL) THEN
       RAISE EXCEPTION 'An old visit requires administrative regularization' USING ERRCODE='42501';
     END IF;
   END IF;
+
   IF (NEW.promotor_matricula,NEW.loja_codigo,NEW.industria_codigo,NEW.rota_id,NEW.data_visita)
      IS DISTINCT FROM (OLD.promotor_matricula,OLD.loja_codigo,OLD.industria_codigo,OLD.rota_id,OLD.data_visita) THEN
     RAISE EXCEPTION 'Visit identity is immutable' USING ERRCODE='42501';
@@ -252,20 +262,37 @@ BEGIN
   IF OLD.started_at IS NOT NULL AND NEW.started_at IS DISTINCT FROM OLD.started_at THEN
     RAISE EXCEPTION 'Check-in is immutable' USING ERRCODE='42501';
   END IF;
+
   IF OLD.status IN ('concluida','nao_realizada') THEN
     -- Permite alteração de observacao_geral e updated_at em visita concluída
-    -- EXCLUSIVAMENTE se houver handshake com registro na tabela visit_edits_audit_log
-    -- inserido na mesma transação atômica pela RPC save_completed_visit_edit (SECURITY DEFINER).
-    -- Como INSERT direto na tabela visit_edits_audit_log é revogado de authenticated/anon,
-    -- um usuário malicioso não consegue forjar esse registro por fora da RPC.
-    IF OLD.status = 'concluida' AND NEW.status = 'concluida'
-       AND EXISTS (
-         SELECT 1 FROM public.visit_edits_audit_log
-         WHERE visit_id = OLD.id
-           AND altered_by_user_id = auth.uid()
-           AND field_name = 'completed_visit_edit'
-           AND created_at >= clock_timestamp() - INTERVAL '5 seconds'
-       ) THEN
+    -- EXCLUSIVAMENTE sob validação e consumo imediato de um token de autorização de uso único
+    -- registrado na tabela visit_edits_audit_log pela RPC save_completed_visit_edit.
+    IF OLD.status = 'concluida' AND NEW.status = 'concluida' AND v_auth_token IS NOT NULL THEN
+      -- Buscar o registro de auditoria detentor deste token ainda não consumido
+      SELECT * INTO v_audit_entry
+      FROM public.visit_edits_audit_log
+      WHERE authorization_token = v_auth_token
+        AND visit_id = OLD.id
+        AND altered_by_user_id = auth.uid()
+        AND field_name = 'completed_visit_edit'
+        AND token_consumed_at IS NULL
+      FOR UPDATE;
+
+      IF NOT FOUND THEN
+        RAISE EXCEPTION 'Token de autorização de edição inválido, expirado ou já reutilizado' USING ERRCODE='42501';
+      END IF;
+
+      -- Consumo atômico e imediato do token de uso único
+      UPDATE public.visit_edits_audit_log
+      SET token_consumed_at = clock_timestamp()
+      WHERE id = v_audit_entry.id;
+
+      -- Validação estrita de valor: o novo valor gravado em visits DEVE corresponder
+      -- exatamente ao novo valor registrado e autorizado no log de auditoria
+      IF (NEW.observacao_geral IS DISTINCT FROM (v_audit_entry.new_value ->> 'observacao_geral')) THEN
+        RAISE EXCEPTION 'O valor de observação não corresponde à alteração autorizada na auditoria' USING ERRCODE='42501';
+      END IF;
+
       -- Valida que estritamente nada além de observacao_geral e updated_at foi alterado
       IF (NEW.completed_at, NEW.latitude, NEW.longitude, NEW.checkout_latitude, NEW.checkout_longitude,
           NEW.gps_accuracy_meters, NEW.checkout_accuracy_meters, NEW.work_schedule_id, NEW.regularization_status)
@@ -274,11 +301,13 @@ BEGIN
           OLD.gps_accuracy_meters, OLD.checkout_accuracy_meters, OLD.work_schedule_id, OLD.regularization_status) THEN
         RAISE EXCEPTION 'Only general observation can be adjusted during completed visit review' USING ERRCODE='42501';
       END IF;
+
       RETURN NEW;
     END IF;
 
     RAISE EXCEPTION 'Closed visits cannot be changed by promoter' USING ERRCODE='42501';
   END IF;
+
   IF NEW.status IS DISTINCT FROM OLD.status
      AND NOT ((OLD.status='pendente' AND NEW.status='em_andamento' AND OLD.started_at IS NULL)
        OR (OLD.status='em_andamento' AND NEW.status='concluida')) THEN
@@ -312,8 +341,9 @@ DECLARE
   v_caller_matricula TEXT;
   v_item RECORD;
   v_old_state JSONB;
-  v_new_state JSONB;
+  v_audit_token UUID;
   v_audit_id UUID;
+  v_new_obs TEXT;
 BEGIN
   v_caller_uid := auth.uid();
   IF v_caller_uid IS NULL THEN
@@ -374,11 +404,12 @@ BEGIN
     ), '[]'::jsonb)
   ) INTO v_old_state;
 
-  -- 1. Registrar OBRIGATORIAMENTE no log de auditoria ANTES de qualquer update
+  v_new_obs := COALESCE(trim(p_observacao_geral), v_visit.observacao_geral);
+  v_audit_token := gen_random_uuid();
+
+  -- 1. Registrar OBRIGATORIAMENTE no log de auditoria o token de uso único com o novo valor exato
   -- Como INSERT em visit_edits_audit_log é revogado de authenticated/anon,
-  -- apenas esta RPC SECURITY DEFINER pode inserir o registro de auditoria.
-  -- O trigger check_visit_promotor_update_integrity valida a existência deste registro
-  -- como prova criptograficamente e relacionalmente segura de autorização.
+  -- apenas esta RPC SECURITY DEFINER pode criar o registro de autorização.
   INSERT INTO public.visit_edits_audit_log (
     visit_id,
     altered_by_user_id,
@@ -386,23 +417,29 @@ BEGIN
     field_name,
     old_value,
     new_value,
-    reason
+    reason,
+    authorization_token,
+    token_consumed_at
   )
   VALUES (
     p_visit_id,
     v_caller_uid,
     COALESCE(v_caller_matricula, 'admin'),
     'completed_visit_edit',
-    jsonb_build_object('observacao_geral', v_visit.observacao_geral),
-    '{}'::jsonb,
-    trim(p_reason)
+    v_old_state,
+    jsonb_build_object('observacao_geral', v_new_obs),
+    trim(p_reason),
+    v_audit_token,
+    NULL
   ) RETURNING id INTO v_audit_id;
 
   -- 2. Atualizar campos operacionais em visits (observacao_geral)
-  -- Preserva estritamente: loja_codigo, industria_codigo, promotor_matricula, started_at, completed_at, status
+  -- Passa o token de autorização estritamente no escopo da transação local
   IF p_observacao_geral IS NOT NULL THEN
+    PERFORM pg_catalog.set_config('mk9.current_audit_token', v_audit_token::TEXT, true);
+
     UPDATE public.visits
-    SET observacao_geral = trim(p_observacao_geral),
+    SET observacao_geral = v_new_obs,
         updated_at = clock_timestamp()
     WHERE id = p_visit_id;
   END IF;
@@ -438,9 +475,10 @@ BEGIN
     END LOOP;
   END IF;
 
-  -- 4. Atualizar o registro de auditoria com o estado final consolidado
-  SELECT jsonb_build_object(
-    'observacao_geral', v.observacao_geral,
+  -- 4. Atualizar o registro de auditoria com o payload final completo (incluindo checklist consolidado)
+  UPDATE public.visit_edits_audit_log
+  SET new_value = jsonb_build_object(
+    'observacao_geral', v_new_obs,
     'checklist', COALESCE((
       SELECT jsonb_agg(jsonb_build_object(
         'item_key', ci.item_key, 'item_label', ci.item_label,
@@ -448,11 +486,7 @@ BEGIN
       ) ORDER BY ci.item_key)
       FROM public.visit_checklist_items ci WHERE ci.visit_id = p_visit_id
     ), '[]'::jsonb)
-  ) INTO v_new_state
-  FROM public.visits v WHERE v.id = p_visit_id;
-
-  UPDATE public.visit_edits_audit_log
-  SET old_value = v_old_state, new_value = v_new_state
+  )
   WHERE id = v_audit_id;
 
   RETURN jsonb_build_object(
