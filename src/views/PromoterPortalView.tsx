@@ -56,6 +56,9 @@ import { filterPromoterAppointments, getMetricDisplayValue, getRegularizationCou
 import { getPromoterPortalViewStateKey, readPromoterPortalViewState, writePromoterPortalViewState } from '../utils/promoterPortalViewState';
 import { getScheduledVisitAction, isScheduledVisitActionRpcReady, type ScheduledVisitAction } from '../utils/scheduledVisitActions';
 import { canReviewOldOpenVisits, createRequestGate, findOwnOpenVisit, formatOpenVisitConflictMessage, getOldOpenVisitCheckInBlockMessage, getOldOpenVisitsLabel, getPromoterOpenVisitAction, isAnotherVisitInProgressError, isOpenVisitFromToday } from '../utils/visitCheckInConflict';
+import { PromoterPhotoUploader } from '../components/PromoterPhotoUploader';
+import { EditCompletedVisitModal } from '../components/EditCompletedVisitModal';
+import type { PhotoSelectionItem } from '../utils/promoterPhotos';
 
 interface PromoterPortalViewProps {
   onNavigate: (screen: ScreenId) => void;
@@ -226,6 +229,9 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
 
   // Estado para Modal de Compartilhamento WhatsApp
   const [sharingVisit, setSharingVisit] = useState<Visit | null>(null);
+
+  // Estado para Modal de Edição de Atendimento Concluído (RC1.25)
+  const [editingCompletedVisit, setEditingCompletedVisit] = useState<Visit | null>(null);
 
   const [generalObs, setGeneralObs] = useState('');
   const [completingVisit, setCompletingVisit] = useState(false);
@@ -1352,104 +1358,78 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
     });
   };
 
-  // Upload de Foto para o Bucket Privado 'visit-photos' com Compressão no Device e Validação
-  const handleUploadPhoto = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || !activeVisit || activeVisit.status !== 'em_andamento' || !supabase || completingVisit) return;
-    if (uploadingPhotoRef.current) {
-      e.target.value = '';
-      return;
-    }
-
-    if (!isSupportedVisitPhoto(file.type)) {
-      onShowToast({
-        title: 'Formato Inválido',
-        message: 'Selecione um arquivo de imagem válido (SVG não é permitido).',
-        type: 'warning'
-      });
-      e.target.value = '';
-      return;
-    }
+  // Upload em Lote de Fotos do PromoterPhotoUploader
+  const handleBatchPhotoUpload = async (items: PhotoSelectionItem[]) => {
+    if (!items.length || !activeVisit || activeVisit.status !== 'em_andamento' || !supabase || completingVisit) return;
+    if (uploadingPhotoRef.current) return;
 
     uploadingPhotoRef.current = true;
     setUploadingPhoto(true);
-    setPhotoStatusMessage('Otimizando foto...');
-    let uploadedPath: string | null = null;
-    const selectedPhotoType = photoType;
-    const caption = photoCaption.trim();
+
+    let successCount = 0;
+    const errors: string[] = [];
 
     try {
-      // 2. Compressão e Redimensionamento no Dispositivo antes do envio (Máx 1920px, Qualidade 82% JPEG)
-      let fileToUpload: Blob = file;
-      let contentType = 'image/jpeg';
-      let fileExtension = 'jpg';
-      try {
-        fileToUpload = await compressImageFile(file, 1920, 0.82);
-        console.log(`Foto otimizada: Original ${(file.size / 1024).toFixed(1)} KB -> Otimizada ${(fileToUpload.size / 1024).toFixed(1)} KB`);
-      } catch (cErr) {
-        console.warn('Falha na otimização nativa, enviando arquivo original:', cErr);
-        fileToUpload = file;
-        contentType = file.type.toLowerCase();
-        fileExtension = contentType.split('/')[1]?.replace('jpeg', 'jpg') || 'img';
-      }
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        setPhotoStatusMessage(`Enviando foto ${i + 1} de ${items.length}...`);
 
-      // 3. Validar limite de tamanho pós-compressão (máximo 5MB)
-      if (!isWithinVisitPhotoLimit(fileToUpload.size)) {
-        onShowToast({
-          title: 'Tamanho Excedido',
-          message: 'Mesmo após a otimização, a foto excedeu o limite seguro de 5MB.',
-          type: 'warning'
-        });
-        return;
-      }
+        let fileToUpload: Blob = item.file;
+        let contentType = 'image/jpeg';
+        let fileExtension = 'jpg';
 
-      setPhotoStatusMessage('Enviando foto...');
-
-      // Estrutura padrão de caminho: visits/{visit_id}/{arquivo}_{tipo}.{extensão}
-      const uploadId = globalThis.crypto?.randomUUID?.() || `${Date.now()}_${Math.random().toString(36).slice(2)}`;
-      const fileName = `${activeVisit.id}/${uploadId}_${selectedPhotoType}.${fileExtension}`;
-      uploadedPath = `visits/${fileName}`;
-
-      // 4. Upload no Supabase Storage
-      const { error: uploadErr } = await supabase.storage
-        .from('visit-photos')
-        .upload(uploadedPath, fileToUpload, { contentType });
-
-      if (uploadErr) throw uploadErr;
-
-      // 5. Gerar Signed URL para exibição temporária privada (3600s)
-      const { data: signedData } = await supabase.storage
-        .from('visit-photos')
-        .createSignedUrl(uploadedPath, 3600);
-
-      const signedUrl = signedData?.signedUrl || '';
-
-      // 6. Gravar referência na tabela visit_photos (storage_path)
-      const { error: dbErr } = await supabase.from('visit_photos').insert([
-        {
-          visit_id: activeVisit.id,
-          tipo_foto: selectedPhotoType,
-          storage_path: uploadedPath,
-          file_url: signedUrl || uploadedPath,
-          legenda: caption || null
+        try {
+          fileToUpload = await compressImageFile(item.file, 1920, 0.82);
+        } catch {
+          fileToUpload = item.file;
+          contentType = item.file.type.toLowerCase();
+          fileExtension = contentType.split('/')[1]?.replace('jpeg', 'jpg') || 'img';
         }
-      ]);
 
-      if (dbErr) {
-        console.error('Erro no INSERT em visit_photos. Limpando arquivo enviado no Storage...', dbErr);
-        await supabase.storage.from('visit-photos').remove([uploadedPath]);
-        throw dbErr;
+        if (!isWithinVisitPhotoLimit(fileToUpload.size)) {
+          errors.push(`${item.file.name}: Excedeu o limite de 5MB.`);
+          continue;
+        }
+
+        const uploadId = globalThis.crypto?.randomUUID?.() || `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+        const fileName = `${activeVisit.id}/${uploadId}_${item.tipo_foto}.${fileExtension}`;
+        const uploadedPath = `visits/${fileName}`;
+
+        const { error: uploadErr } = await supabase.storage
+          .from('visit-photos')
+          .upload(uploadedPath, fileToUpload, { contentType });
+
+        if (uploadErr) {
+          errors.push(`${item.file.name}: ${uploadErr.message}`);
+          continue;
+        }
+
+        const { data: signedData } = await supabase.storage
+          .from('visit-photos')
+          .createSignedUrl(uploadedPath, 3600);
+
+        const signedUrl = signedData?.signedUrl || '';
+
+        const { error: dbErr } = await supabase.from('visit_photos').insert([
+          {
+            visit_id: activeVisit.id,
+            tipo_foto: item.tipo_foto,
+            storage_path: uploadedPath,
+            file_url: signedUrl || uploadedPath,
+            legenda: item.legenda?.trim() || null
+          }
+        ]);
+
+        if (dbErr) {
+          await supabase.storage.from('visit-photos').remove([uploadedPath]);
+          errors.push(`${item.file.name}: Falha ao registrar foto.`);
+          continue;
+        }
+
+        successCount++;
       }
 
-      onShowToast({
-        title: 'Foto Anexada',
-        message: `Foto otimizada e salva com sucesso! (${(fileToUpload.size / 1024).toFixed(0)} KB)`,
-        type: 'success'
-      });
-
-      setPhotoCaption('');
-
-      // Atualizar lista de fotos da visita ativa com signed_url
+      // Atualizar lista de fotos da visita ativa
       const { data: updatedPhotos } = await supabase.from('visit_photos').select('*').eq('visit_id', activeVisit.id);
       if (updatedPhotos) {
         const photosWithSignedUrls = await Promise.all(
@@ -1467,18 +1447,33 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
         );
         setActiveVisit((prev) => prev ? { ...prev, photos: photosWithSignedUrls } : null);
       }
+
+      if (successCount > 0) {
+        onShowToast({
+          title: 'Fotos Enviadas',
+          message: `${successCount} foto(s) anexada(s) com sucesso à visita!`,
+          type: 'success'
+        });
+      }
+
+      if (errors.length > 0) {
+        onShowToast({
+          title: 'Atenção em Algumas Fotos',
+          message: `Alguns arquivos falharam: ${errors.join(', ')}`,
+          type: 'warning'
+        });
+      }
     } catch (err: any) {
-      console.error('Erro ao enviar foto otimizada:', err);
+      console.error('Erro no upload em lote:', err);
       onShowToast({
         title: 'Falha no Upload',
-        message: err.message || 'Erro ao enviar a foto otimizada para o servidor.',
+        message: err.message || 'Erro durante o envio em lote das fotos.',
         type: 'error'
       });
     } finally {
       setUploadingPhoto(false);
       uploadingPhotoRef.current = false;
       setPhotoStatusMessage('');
-      e.target.value = '';
     }
   };
 
@@ -2028,14 +2023,14 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
       </section>
 
       {loading && (
-        <div role="status" className="rounded-xl border border-blue-500/30 bg-blue-500/10 p-4 text-sm text-blue-100">
+        <div role="status" className="rounded-xl border border-blue-300 bg-blue-50 p-4 text-sm font-semibold text-blue-950 shadow-xs">
           Carregando rotas e visitas do portal…
         </div>
       )}
       {loadError && !loading && (
-        <div role="alert" className="rounded-xl border border-rose-500/40 bg-rose-500/10 p-4 text-sm text-rose-100 space-y-2">
+        <div role="alert" className="rounded-xl border border-rose-300 bg-rose-50 p-4 text-sm font-semibold text-rose-950 space-y-2 shadow-xs">
           <p className="font-bold">Não foi possível carregar {loadError}. Os indicadores e listas abaixo podem não refletir os dados atuais; eles não significam que sua agenda esteja vazia.</p>
-          <button type="button" onClick={loadPortalData} className="underline font-semibold">Tentar carregar novamente</button>
+          <button type="button" onClick={loadPortalData} className="underline font-bold text-rose-900 hover:text-rose-950 cursor-pointer">Tentar carregar novamente</button>
         </div>
       )}
 
@@ -2419,21 +2414,32 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                     )}
 
                     {item.status === 'concluida' && (
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs text-emerald-400 font-bold flex items-center gap-1 px-3 py-2 bg-emerald-500/10 rounded-xl border border-emerald-500/30">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-xs text-emerald-800 font-bold flex items-center gap-1 px-3 py-2 bg-emerald-100/80 rounded-xl border border-emerald-300">
                           <span className="material-symbols-outlined text-sm">check_circle</span>
                           Concluída
                         </span>
                         {item.visitObj && (
-                          <button
-                            type="button"
-                            onClick={() => setSharingVisit(item.visitObj!)}
-                            className="px-2.5 py-2 rounded-xl bg-emerald-600/10 hover:bg-emerald-600/20 text-emerald-700 border border-emerald-600/30 font-bold text-xs flex items-center gap-1 cursor-pointer transition-colors"
-                            title="Compartilhar relatório desta visita via WhatsApp"
-                          >
-                            <span className="material-symbols-outlined text-sm">share</span>
-                            <span>WhatsApp</span>
-                          </button>
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => setEditingCompletedVisit(item.visitObj!)}
+                              className="px-2.5 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 font-bold text-xs flex items-center gap-1 cursor-pointer transition-colors shadow-xs"
+                              title="Editar observações e checklist deste atendimento concluído"
+                            >
+                              <span className="material-symbols-outlined text-sm">edit_note</span>
+                              <span>Editar</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setSharingVisit(item.visitObj!)}
+                              className="px-2.5 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border border-emerald-300 font-bold text-xs flex items-center gap-1 cursor-pointer transition-colors shadow-xs"
+                              title="Compartilhar relatório desta visita via WhatsApp"
+                            >
+                              <span className="material-symbols-outlined text-sm">share</span>
+                              <span>WhatsApp</span>
+                            </button>
+                          </>
                         )}
                       </div>
                     )}
@@ -2601,87 +2607,20 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
             </div>
           </div>
 
-          {/* PASSO 2: ANEXAR FOTOS DO PONTO DE VENDA */}
+          {/* PASSO 2: ANEXAR FOTOS DO PONTO DE VENDA (RC1.25) */}
           <div className="space-y-3 pt-3 border-t border-[#CFCDC5]">
             <h3 className="text-xs font-bold text-slate-[#171717] uppercase tracking-wider font-mono flex items-center gap-2">
-              <span className="material-symbols-outlined text-cyan-400 text-sm">photo_camera</span>
-              D. Evidências fotográficas do PDV
+              <span className="material-symbols-outlined text-cyan-600 text-sm">photo_camera</span>
+              D. Evidências fotográficas do PDV (Múltiplas fotos)
             </h3>
 
             <div className="p-4 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] space-y-3 font-mono text-xs">
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div>
-                  <label className="text-[#77766F] block mb-1">TIPO DA FOTO (*)</label>
-                  <select
-                    value={photoType}
-                    onChange={(e) => setPhotoType(e.target.value as any)}
-                    className="w-full h-9 px-2 bg-[#F7F6F2] border border-[#CFCDC5] rounded-lg text-[#171717]"
-                  >
-                    <option value="fachada">FACHADA</option>
-                    <option value="gondola">GÔNDOLA / EXPOSIÇÃO</option>
-                    <option value="preco">PREÇO ETIQUETADO</option>
-                    <option value="ponto_extra">PONTO EXTRA</option>
-                    <option value="ruptura">RUPTURA</option>
-                    <option value="outros">OUTROS</option>
-                  </select>
-                  <span className="mt-1 block text-[10px] text-[#77766F]">
-                    Foto do depósito: use OUTROS e identifique na legenda.
-                  </span>
-                </div>
-
-                <div className="sm:col-span-2">
-                  <label className="text-[#77766F] block mb-1">LEGENDA / OBSERVAÇÃO</label>
-                  <input
-                    type="text"
-                    value={photoCaption}
-                    onChange={(e) => setPhotoCaption(e.target.value)}
-                    placeholder="Ex.: foto do depósito ou ponto extra no corredor 3..."
-                    className="w-full h-9 px-3 bg-[#F7F6F2] border border-[#CFCDC5] rounded-lg text-[#171717]"
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <input
-                  ref={cameraInputRef}
-                  type="file"
-                  accept="image/*"
-                  capture="environment"
-                  onChange={handleUploadPhoto}
-                  disabled={uploadingPhoto || completingVisit}
-                  className="hidden"
-                />
-                <input
-                  ref={galleryInputRef}
-                  type="file"
-                  accept="image/*"
-                  onChange={handleUploadPhoto}
-                  disabled={uploadingPhoto || completingVisit}
-                  className="hidden"
-                />
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => cameraInputRef.current?.click()}
-                    disabled={uploadingPhoto || completingVisit}
-                    className="min-h-11 px-4 py-2.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50"
-                  >
-                    <span className={`material-symbols-outlined text-base ${uploadingPhoto ? 'animate-spin' : ''}`}>
-                      {uploadingPhoto ? 'sync' : 'photo_camera'}
-                    </span>
-                    <span>{uploadingPhoto ? (photoStatusMessage || 'Otimizando e enviando...') : 'Tirar foto'}</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => galleryInputRef.current?.click()}
-                    disabled={uploadingPhoto || completingVisit}
-                    className="min-h-11 px-4 py-2.5 rounded-xl bg-[#F7F6F2] hover:bg-[#E4E2DB] text-[#171717] font-bold text-xs flex items-center justify-center gap-2 border border-[#CFCDC5] transition-all cursor-pointer disabled:opacity-50"
-                  >
-                    <span className="material-symbols-outlined text-base">photo_library</span>
-                    <span>Escolher da galeria</span>
-                  </button>
-                </div>
-              </div>
+              <PromoterPhotoUploader
+                existingPhotos={activeVisit.photos || []}
+                disabled={completingVisit}
+                onUploadPhotos={handleBatchPhotoUpload}
+                onShowToast={onShowToast}
+              />
 
               {/* Lista de Fotos Anexadas com Preview de Miniaturas */}
               {activeVisit.photos && activeVisit.photos.length > 0 ? (
@@ -3450,12 +3389,33 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                         )}
 
                         {item.status === 'concluida' && (
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-xs text-emerald-400 font-bold flex items-center gap-1 px-3 py-1.5 bg-emerald-500/10 rounded-xl border border-emerald-500/30">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="text-xs text-emerald-800 font-bold flex items-center gap-1 px-3 py-1.5 bg-emerald-100/80 rounded-xl border border-emerald-300">
                               <span className="material-symbols-outlined text-sm">check_circle</span>
                               Concluída
                             </span>
-                            {item.visitObj && <button type="button" onClick={() => setSharingVisit(item.visitObj!)} className="px-2.5 py-1.5 rounded-xl bg-emerald-600/10 hover:bg-emerald-600/20 text-emerald-700 border border-emerald-600/30 font-bold text-xs flex items-center gap-1 cursor-pointer transition-colors" title="Compartilhar relatório desta visita via WhatsApp"><span className="material-symbols-outlined text-sm">share</span><span>WhatsApp</span></button>}
+                            {item.visitObj && (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingCompletedVisit(item.visitObj!)}
+                                  className="px-2.5 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 font-bold text-xs flex items-center gap-1 cursor-pointer transition-colors shadow-xs"
+                                  title="Editar observações e checklist deste atendimento concluído"
+                                >
+                                  <span className="material-symbols-outlined text-sm">edit_note</span>
+                                  <span>Editar</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setSharingVisit(item.visitObj!)}
+                                  className="px-2.5 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border border-emerald-300 font-bold text-xs flex items-center gap-1 cursor-pointer transition-colors shadow-xs"
+                                  title="Compartilhar relatório desta visita via WhatsApp"
+                                >
+                                  <span className="material-symbols-outlined text-sm">share</span>
+                                  <span>WhatsApp</span>
+                                </button>
+                              </>
+                            )}
                           </div>
                         )}
 
@@ -4685,6 +4645,65 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
           visit={sharingVisit}
           onClose={() => setSharingVisit(null)}
           onShowToast={onShowToast}
+        />
+      )}
+
+      {editingCompletedVisit && (
+        <EditCompletedVisitModal
+          visit={editingCompletedVisit}
+          userRole={role || 'promotor'}
+          currentPromoterMatricula={promotorMatricula || undefined}
+          isOpen={Boolean(editingCompletedVisit)}
+          onClose={() => setEditingCompletedVisit(null)}
+          onShowToast={onShowToast}
+          onSaveEdit={async ({ visitId, sanitizedPayload, changes, reason }) => {
+            if (!supabase) return;
+
+            // 1. Atualizar campos operacionais em visits (observacao_geral)
+            if (sanitizedPayload.observacao_geral !== undefined) {
+              const { error: visitUpdateErr } = await supabase
+                .from('visits')
+                .update({ observacao_geral: sanitizedPayload.observacao_geral })
+                .eq('id', visitId);
+              if (visitUpdateErr) throw visitUpdateErr;
+            }
+
+            // 2. Atualizar itens de checklist modificados
+            if (sanitizedPayload.checklist_items && Array.isArray(sanitizedPayload.checklist_items)) {
+              for (const item of sanitizedPayload.checklist_items) {
+                const { error: chkErr } = await supabase
+                  .from('visit_checklist_items')
+                  .upsert({
+                    visit_id: visitId,
+                    item_key: item.item_key,
+                    item_label: item.item_label,
+                    valor_texto: item.valor_texto,
+                    observacao: item.observacao
+                  }, { onConflict: 'visit_id,item_key' });
+                if (chkErr) console.warn('Aviso: falha ao atualizar item de checklist:', chkErr);
+              }
+            }
+
+            // 3. Tentar registrar no log de auditoria se a tabela existir
+            try {
+              await supabase.from('visit_edits_audit_log').insert([
+                {
+                  visit_id: visitId,
+                  edited_by_matricula: promotorMatricula || profile?.promotor_matricula || 'N/A',
+                  user_id: profile?.id || null,
+                  user_role: role || 'promotor',
+                  reason: reason,
+                  changes_summary: changes
+                }
+              ]);
+            } catch (auditErr) {
+              console.warn('Auditoria via visit_edits_audit_log opcional/pendente de migration:', auditErr);
+            }
+
+            // 4. Recarregar portal
+            await loadPortalData();
+            setEditingCompletedVisit(null);
+          }}
         />
       )}
     </div>
