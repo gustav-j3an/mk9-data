@@ -58,8 +58,8 @@ if [[ ! "$PG_VERSION" =~ ^17\. ]]; then
 fi
 
 # 5. Aplicar fixture sintética e migrations base pré-requisito
-echo "Aplicando estrutura base e migrations existentes..."
-psql "$DB_URL" -v ON_ERROR_STOP=1 -f scripts/m58-4-synthetic-fixture.sql >/dev/null
+echo "Aplicando estrutura base e fixture de testes..."
+psql "$DB_URL" -v ON_ERROR_STOP=1 -f scripts/rc1-25-test-fixture.sql >/dev/null
 
 # Aplicar a migration de escopo operacional que define attendance_private e as funções base de visitas
 psql "$DB_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/20261022152449_mk9_date_visit_regularization_and_checkin_scope.sql >/dev/null
