@@ -46,33 +46,63 @@ sed -i 's/^major_version = .*/major_version = 17/' "$STACK/supabase/config.toml"
 sed -i "s/^project_id = .*/project_id = \"${PROJECT_ID}\"/" "$STACK/supabase/config.toml"
 (cd "$STACK" && supabase start -x realtime,imgproxy,mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor >/dev/null)
 
+CONTAINER_NAME="supabase_db_${PROJECT_ID}"
+echo "Localizando container PostgreSQL 17: $CONTAINER_NAME"
+CONTAINER_ID="$(docker ps --filter "name=^/${CONTAINER_NAME}$" --format '{{.ID}}')"
+if [[ -z "$CONTAINER_ID" ]]; then
+  echo "FALHA: Container '${CONTAINER_NAME}' não foi encontrado!" >&2
+  docker ps --format 'table {{.ID}}\t{{.Names}}\t{{.Image}}' >&2
+  exit 1
+fi
+
 DB_URL='postgresql://postgres:postgres@127.0.0.1:54322/postgres?sslmode=disable'
 export PGPASSWORD=postgres
 
-# 4. Verificar versão do PostgreSQL no container
-PG_VERSION="$(psql "$DB_URL" -v ON_ERROR_STOP=1 -Atc "SHOW server_version;")"
-echo "Versão real do PostgreSQL em execução: $PG_VERSION"
+# Função inteligente de execução de SQL:
+# Se o psql estiver disponível no host runner, usa-o diretamente.
+# Caso contrário, executa via docker exec diretamente no container oficial postgresql-17.
+run_sql_cmd() {
+  local cmd="$1"
+  if command -v psql >/dev/null 2>&1; then
+    psql "$DB_URL" -v ON_ERROR_STOP=1 -Atc "$cmd"
+  else
+    docker exec -i "$CONTAINER_ID" psql -U postgres -d postgres -v ON_ERROR_STOP=1 -Atc "$cmd"
+  fi
+}
+
+run_sql_file() {
+  local file="$1"
+  if command -v psql >/dev/null 2>&1; then
+    psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$file"
+  else
+    docker exec -i "$CONTAINER_ID" psql -U postgres -d postgres -v ON_ERROR_STOP=1 < "$file"
+  fi
+}
+
+# 4. Verificar versão real do PostgreSQL no servidor
+PG_VERSION="$(run_sql_cmd "SHOW server_version;")"
+echo "Versão real do servidor PostgreSQL em execução: $PG_VERSION"
 if [[ ! "$PG_VERSION" =~ ^17\. ]]; then
-  echo "FALHA: A versão do PostgreSQL não é 17.x!" >&2
+  echo "FALHA: A versão do servidor PostgreSQL não é 17.x!" >&2
   exit 1
 fi
 
 # 5. Aplicar fixture sintética e migrations base pré-requisito
 echo "Aplicando estrutura base e fixture de testes..."
-psql "$DB_URL" -v ON_ERROR_STOP=1 -f scripts/rc1-25-test-fixture.sql >/dev/null
+run_sql_file "scripts/rc1-25-test-fixture.sql" >/dev/null
 
 # Aplicar a migration de escopo operacional que define attendance_private e as funções base de visitas
-psql "$DB_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/20261022152449_mk9_date_visit_regularization_and_checkin_scope.sql >/dev/null
+run_sql_file "supabase/migrations/20261022152449_mk9_date_visit_regularization_and_checkin_scope.sql" >/dev/null
 
 # 6. Aplicar a migration proposta da RC1.25
 echo "Aplicando migration proposta RC1.25 (supabase/migrations/propostas/20261115_rc1_25_skus_and_stock_audits.sql)..."
-psql "$DB_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/propostas/20261115_rc1_25_skus_and_stock_audits.sql
+run_sql_file "supabase/migrations/propostas/20261115_rc1_25_skus_and_stock_audits.sql"
 
 echo "Migration RC1.25 aplicada com sucesso no PostgreSQL 17."
 
 # 7. Executar a suíte de testes funcionais reais
 echo "Executando suíte de testes funcionais reais (scripts/rc1-25-postgres17-validation.sql)..."
-psql "$DB_URL" -v ON_ERROR_STOP=1 -f scripts/rc1-25-postgres17-validation.sql
+run_sql_file "scripts/rc1-25-postgres17-validation.sql"
 
 echo "================================================================================"
 echo "SUCESSO: Todos os testes funcionais da RC1.25 passaram no PostgreSQL 17 isolado!"

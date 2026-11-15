@@ -37,11 +37,17 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          sudo install -d -m 0755 /usr/share/keyrings
-          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /usr/share/keyrings/postgresql.gpg
-          echo 'deb [signed-by=/usr/share/keyrings/postgresql.gpg] https://apt.postgresql.org/pub/repos/apt noble-pgdg main' | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq postgresql-client-17
+          # Tentar instalar postgresql-client-17 oficial via APT caso a rede permita,
+          # com retries e timeout resiliente. Se a rede externa falhar ou se o runner
+          # já possuir psql ou docker, não abortar o step.
+          install_pg17_apt() {
+            sudo install -d -m 0755 /usr/share/keyrings
+            curl -fsSL --retry 3 --connect-timeout 10 https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor --yes -o /usr/share/keyrings/postgresql.gpg
+            echo 'deb [signed-by=/usr/share/keyrings/postgresql.gpg] https://apt.postgresql.org/pub/repos/apt noble-pgdg main' | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq postgresql-client-17
+          }
+          install_pg17_apt || echo "Aviso: Download do repositório APT do PostgreSQL falhou; o runner utilizará o container Docker nativo."
           docker --version
 
       - name: Run isolated PostgreSQL 17 validation
