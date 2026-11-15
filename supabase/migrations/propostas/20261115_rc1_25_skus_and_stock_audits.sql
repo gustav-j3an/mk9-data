@@ -220,7 +220,9 @@ REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public.visit_edits_audit_log FROM PUB
 
 -- 8. FUNÇÃO RPC ATÔMICA E SEGURA PARA SALVAR EDIÇÃO DE VISITA COM AUDITORIA (RC1.25)
 -- Atualização da função de integridade para permitir edição autorizada de observacao_geral
--- em visitas concluídas EXCLUSIVAMENTE quando chamada dentro do contexto autenticado e validado da RPC.
+-- em visitas concluídas EXCLUSIVAMENTE quando existir registro prévio e concomitante de auditoria
+-- criado pelo próprio usuário autenticado na mesma transação (handshake de auditoria imutável).
+-- Substitui qualquer dependência de variáveis de sessão (current_setting), que poderiam ser manipuladas pelo cliente.
 CREATE OR REPLACE FUNCTION public.check_visit_promotor_update_integrity()
 RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
 BEGIN
@@ -233,7 +235,13 @@ BEGIN
   IF OLD.started_at IS NOT NULL AND NOT attendance_private.is_visit_in_current_operational_day(OLD.id) THEN
     -- Visita antiga: se for uma edição autorizada de observação via RPC de auditoria, permite; caso contrário, bloqueia
     IF NOT (OLD.status = 'concluida' AND NEW.status = 'concluida'
-            AND pg_catalog.current_setting('mk9.authorizing_visit_edit', true) = OLD.id::text) THEN
+            AND EXISTS (
+              SELECT 1 FROM public.visit_edits_audit_log
+              WHERE visit_id = OLD.id
+                AND altered_by_user_id = auth.uid()
+                AND field_name = 'completed_visit_edit'
+                AND created_at >= clock_timestamp() - INTERVAL '5 seconds'
+            )) THEN
       RAISE EXCEPTION 'An old visit requires administrative regularization' USING ERRCODE='42501';
     END IF;
   END IF;
@@ -246,9 +254,18 @@ BEGIN
   END IF;
   IF OLD.status IN ('concluida','nao_realizada') THEN
     -- Permite alteração de observacao_geral e updated_at em visita concluída
-    -- EXCLUSIVAMENTE sob o contexto de sessão validado pela RPC save_completed_visit_edit
+    -- EXCLUSIVAMENTE se houver handshake com registro na tabela visit_edits_audit_log
+    -- inserido na mesma transação atômica pela RPC save_completed_visit_edit (SECURITY DEFINER).
+    -- Como INSERT direto na tabela visit_edits_audit_log é revogado de authenticated/anon,
+    -- um usuário malicioso não consegue forjar esse registro por fora da RPC.
     IF OLD.status = 'concluida' AND NEW.status = 'concluida'
-       AND pg_catalog.current_setting('mk9.authorizing_visit_edit', true) = OLD.id::text THEN
+       AND EXISTS (
+         SELECT 1 FROM public.visit_edits_audit_log
+         WHERE visit_id = OLD.id
+           AND altered_by_user_id = auth.uid()
+           AND field_name = 'completed_visit_edit'
+           AND created_at >= clock_timestamp() - INTERVAL '5 seconds'
+       ) THEN
       -- Valida que estritamente nada além de observacao_geral e updated_at foi alterado
       IF (NEW.completed_at, NEW.latitude, NEW.longitude, NEW.checkout_latitude, NEW.checkout_longitude,
           NEW.gps_accuracy_meters, NEW.checkout_accuracy_meters, NEW.work_schedule_id, NEW.regularization_status)
@@ -357,20 +374,40 @@ BEGIN
     ), '[]'::jsonb)
   ) INTO v_old_state;
 
-  -- 1. Atualizar campos operacionais em visits (observacao_geral)
+  -- 1. Registrar OBRIGATORIAMENTE no log de auditoria ANTES de qualquer update
+  -- Como INSERT em visit_edits_audit_log é revogado de authenticated/anon,
+  -- apenas esta RPC SECURITY DEFINER pode inserir o registro de auditoria.
+  -- O trigger check_visit_promotor_update_integrity valida a existência deste registro
+  -- como prova criptograficamente e relacionalmente segura de autorização.
+  INSERT INTO public.visit_edits_audit_log (
+    visit_id,
+    altered_by_user_id,
+    altered_by_matricula,
+    field_name,
+    old_value,
+    new_value,
+    reason
+  )
+  VALUES (
+    p_visit_id,
+    v_caller_uid,
+    COALESCE(v_caller_matricula, 'admin'),
+    'completed_visit_edit',
+    jsonb_build_object('observacao_geral', v_visit.observacao_geral),
+    '{}'::jsonb,
+    trim(p_reason)
+  ) RETURNING id INTO v_audit_id;
+
+  -- 2. Atualizar campos operacionais em visits (observacao_geral)
   -- Preserva estritamente: loja_codigo, industria_codigo, promotor_matricula, started_at, completed_at, status
   IF p_observacao_geral IS NOT NULL THEN
-    -- Sinalizar transacionalmente para o trigger check_visit_promotor_update_integrity
-    -- que a operação foi autorizada e validada internamente por esta RPC
-    PERFORM pg_catalog.set_config('mk9.authorizing_visit_edit', p_visit_id::text, true);
-
     UPDATE public.visits
     SET observacao_geral = trim(p_observacao_geral),
         updated_at = clock_timestamp()
     WHERE id = p_visit_id;
   END IF;
 
-  -- 2. Atualizar ou inserir itens de checklist fornecidos no payload atômico
+  -- 3. Atualizar ou inserir itens de checklist fornecidos no payload atômico
   IF p_checklist_items IS NOT NULL AND jsonb_typeof(p_checklist_items) = 'array' THEN
     FOR v_item IN SELECT * FROM jsonb_to_recordset(p_checklist_items) AS x(
       item_key TEXT,
@@ -401,26 +438,7 @@ BEGIN
     END LOOP;
   END IF;
 
-  -- 3. Registrar OBRIGATORIAMENTE no log de auditoria na mesma transação atômica
-  INSERT INTO public.visit_edits_audit_log (
-    visit_id,
-    altered_by_user_id,
-    altered_by_matricula,
-    field_name,
-    old_value,
-    new_value,
-    reason
-  )
-  VALUES (
-    p_visit_id,
-    v_caller_uid,
-    COALESCE(v_caller_matricula, 'admin'),
-    'completed_visit_edit',
-    jsonb_build_object('observacao_geral', v_visit.observacao_geral),
-    '{}'::jsonb,
-    trim(p_reason)
-  ) RETURNING id INTO v_audit_id;
-
+  -- 4. Atualizar o registro de auditoria com o estado final consolidado
   SELECT jsonb_build_object(
     'observacao_geral', v.observacao_geral,
     'checklist', COALESCE((

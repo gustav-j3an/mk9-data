@@ -50,12 +50,18 @@ test('migration 20261115_rc1_25_skus_and_stock_audits: validates syntax, integri
 
   // 5. Função RPC atômica de edição de visita com auditoria e resolução do trigger de integridade
   assert.match(sql, /CREATE OR REPLACE FUNCTION public\.check_visit_promotor_update_integrity/);
-  assert.match(sql, /mk9\.authorizing_visit_edit/);
+  // Garante que o mecanismo inseguro de variável de sessão foi completamente eliminado
+  assert.doesNotMatch(sql, /mk9\.authorizing_visit_edit/);
+  // Garante que a integridade é validada pelo handshake atômico com a tabela de auditoria
+  assert.match(sql, /EXISTS \(\s*SELECT 1 FROM public\.visit_edits_audit_log/);
+  assert.match(sql, /altered_by_user_id = auth\.uid\(\)/);
+  assert.match(sql, /field_name = 'completed_visit_edit'/);
+  assert.match(sql, /created_at >= clock_timestamp\(\) - INTERVAL '5 seconds'/);
   assert.match(sql, /Only general observation can be adjusted during completed visit review/);
   assert.match(sql, /CREATE OR REPLACE FUNCTION public\.save_completed_visit_edit/);
   assert.match(sql, /IF v_visit\.status <> 'concluida' THEN/);
   assert.match(sql, /IF v_caller_role NOT IN \('admin', 'gestor'\) AND/);
-  assert.match(sql, /PERFORM pg_catalog\.set_config\('mk9\.authorizing_visit_edit', p_visit_id::text, true\)/);
+  assert.doesNotMatch(sql, /set_config\('mk9\.authorizing_visit_edit'/);
   assert.match(sql, /INSERT INTO public\.visit_edits_audit_log/);
   assert.match(sql, /REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public\.visit_edits_audit_log FROM PUBLIC, anon, authenticated/);
   assert.match(sql, /jsonb_typeof\(p_checklist_items\) <> 'array'/);
