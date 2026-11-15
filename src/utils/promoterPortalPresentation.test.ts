@@ -110,6 +110,21 @@ test('future planned visits stay scheduled and are not counted as not done', () 
   assert.deepEqual(getWeeklyPromoterMetricCounts([{ status: 'planejada' }]), { scheduled: 1, completed: 0, inProgress: 0, notDone: 0, automaticallyClosed: 0 });
 });
 
+test('M37 recovered occurrence remains one completed weekly indicator', () => {
+  const recoveredOccurrence = {
+    dataStr: '2026-11-09',
+    status: 'concluida',
+    visitObj: { regularization_status: null }
+  };
+  assert.deepEqual(getWeeklyPromoterMetricCounts([recoveredOccurrence]), {
+    scheduled: 0,
+    completed: 1,
+    inProgress: 0,
+    notDone: 0,
+    automaticallyClosed: 0
+  });
+});
+
 test('scheduled appointments group by date in chronological order without merging stores or industries', () => {
   const appointments = [
     { key: 'friday-x', dataStr: '2026-10-23', lojaNome: 'Loja A', industriaNome: 'Indústria X' },

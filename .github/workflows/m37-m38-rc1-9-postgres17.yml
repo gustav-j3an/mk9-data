@@ -1,0 +1,95 @@
+name: MK9 DATE RC1.9 M37/M38 integration (PostgreSQL 17)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mk9-date-rc1-9-m37-m38-postgres17
+  cancel-in-progress: false
+
+jobs:
+  integration:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout test harness
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Checkout immutable published application
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: f8df53b1ffd77ea255fda1c7a663946a0b25607c
+          path: app-under-test
+          persist-credentials: false
+
+      - name: Verify source identity and absence of remote Supabase credentials
+        shell: bash
+        env:
+          APP_DIR: ${{ github.workspace }}/app-under-test
+          APP_SHA: f8df53b1ffd77ea255fda1c7a663946a0b25607c
+        run: |
+          set -euo pipefail
+          test "$(git -C "$APP_DIR" rev-parse HEAD)" = "$APP_SHA"
+          for name in SUPABASE_ACCESS_TOKEN SUPABASE_DB_PASSWORD SUPABASE_PROJECT_REF SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY SUPABASE_DB_URL SUPABASE_ANON_KEY SUPABASE_TEST_ANON_KEY SUPABASE_TEST_SERVICE_KEY ANON_KEY SERVICE_ROLE_KEY DATABASE_URL DB_URL POSTGRES_URL API_URL; do
+            if [ -n "${!name:-}" ]; then
+              echo "Unexpected Supabase credential/configuration in runner: $name" >&2
+              exit 1
+            fi
+          done
+          echo "Application SHA: $APP_SHA"
+          echo "Harness workflow SHA: $GITHUB_SHA"
+          echo "Remote Supabase credentials/configuration are absent."
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.16.0
+          cache: npm
+          cache-dependency-path: app-under-test/package-lock.json
+
+      - name: Run harness safety checks
+        run: node --test scripts/rc1-9-postgres17-workflow.test.mjs
+
+      - name: Install application dependencies and run local checks
+        working-directory: app-under-test
+        run: |
+          npm ci --no-audit --no-fund
+          npm run typecheck
+          npm test
+          npm run build
+
+      - name: Install pinned Supabase CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL https://github.com/supabase/cli/releases/download/v3.0.0/supabase_3.0.0_linux_amd64.tar.gz -o "$RUNNER_TEMP/supabase-cli.tar.gz"
+          tar -xzf "$RUNNER_TEMP/supabase-cli.tar.gz" -C "$RUNNER_TEMP" supabase
+          sudo install "$RUNNER_TEMP/supabase" /usr/local/bin/supabase
+          test "$(supabase --version)" = "3.0.0"
+
+      - name: Start disposable PostgreSQL 17 and run M37/M38 integration suites
+        shell: bash
+        env:
+          APP_DIR: ${{ github.workspace }}/app-under-test
+          APP_SHA: f8df53b1ffd77ea255fda1c7a663946a0b25607c
+          SUPABASE_TEST_WORKDIR: ${{ runner.temp }}/mk9-date-rc1-9-postgres17
+        run: bash scripts/rc1-9-run-postgres17.sh
+
+      - name: Stop disposable stack and remove temporary database files
+        if: always()
+        shell: bash
+        env:
+          SUPABASE_TEST_WORKDIR: ${{ runner.temp }}/mk9-date-rc1-9-postgres17
+        run: |
+          set +e
+          if [ -f "$SUPABASE_TEST_WORKDIR/supabase/config.toml" ]; then
+            cd "$SUPABASE_TEST_WORKDIR"
+            supabase stop --no-backup >/dev/null 2>&1
+          fi
+          rm -rf "$SUPABASE_TEST_WORKDIR" "$RUNNER_TEMP/supabase" "$RUNNER_TEMP/supabase-cli.tar.gz" "$GITHUB_WORKSPACE/app-under-test/dist"
