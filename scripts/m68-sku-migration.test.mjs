@@ -48,10 +48,14 @@ test('migration 20261115_rc1_25_skus_and_stock_audits: validates syntax, integri
   assert.match(sql, /Todos os SKUs ativos precisam ser conferidos ou justificados antes do checkout/);
   assert.match(sql, /CREATE TRIGGER guard_visit_sku_stock_finalization[\s\S]*?BEFORE UPDATE OF status ON public\.visits/);
 
-  // 5. Função RPC atômica de edição de visita com auditoria
+  // 5. Função RPC atômica de edição de visita com auditoria e resolução do trigger de integridade
+  assert.match(sql, /CREATE OR REPLACE FUNCTION public\.check_visit_promotor_update_integrity/);
+  assert.match(sql, /mk9\.authorizing_visit_edit/);
+  assert.match(sql, /Only general observation can be adjusted during completed visit review/);
   assert.match(sql, /CREATE OR REPLACE FUNCTION public\.save_completed_visit_edit/);
   assert.match(sql, /IF v_visit\.status <> 'concluida' THEN/);
   assert.match(sql, /IF v_caller_role NOT IN \('admin', 'gestor'\) AND/);
+  assert.match(sql, /PERFORM pg_catalog\.set_config\('mk9\.authorizing_visit_edit', p_visit_id::text, true\)/);
   assert.match(sql, /INSERT INTO public\.visit_edits_audit_log/);
   assert.match(sql, /REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public\.visit_edits_audit_log FROM PUBLIC, anon, authenticated/);
   assert.match(sql, /jsonb_typeof\(p_checklist_items\) <> 'array'/);

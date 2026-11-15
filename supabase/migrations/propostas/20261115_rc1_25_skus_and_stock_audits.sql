@@ -219,6 +219,63 @@ CREATE POLICY "visit_edits_audit_select_policy" ON public.visit_edits_audit_log
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public.visit_edits_audit_log FROM PUBLIC, anon, authenticated;
 
 -- 8. FUNÇÃO RPC ATÔMICA E SEGURA PARA SALVAR EDIÇÃO DE VISITA COM AUDITORIA (RC1.25)
+-- Atualização da função de integridade para permitir edição autorizada de observacao_geral
+-- em visitas concluídas EXCLUSIVAMENTE quando chamada dentro do contexto autenticado e validado da RPC.
+CREATE OR REPLACE FUNCTION public.check_visit_promotor_update_integrity()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
+BEGIN
+  IF auth.uid() IS NULL AND session_user IN ('postgres','supabase_admin') THEN RETURN NEW; END IF;
+  IF public.is_admin_or_gestor() THEN RETURN NEW; END IF;
+  IF OLD.promotor_matricula IS DISTINCT FROM public.get_auth_promotor_matricula()
+     OR public.get_auth_promotor_matricula() IS NULL THEN
+    RAISE EXCEPTION 'Visit not owned by authenticated promoter' USING ERRCODE='42501';
+  END IF;
+  IF OLD.started_at IS NOT NULL AND NOT attendance_private.is_visit_in_current_operational_day(OLD.id) THEN
+    -- Visita antiga: se for uma edição autorizada de observação via RPC de auditoria, permite; caso contrário, bloqueia
+    IF NOT (OLD.status = 'concluida' AND NEW.status = 'concluida'
+            AND pg_catalog.current_setting('mk9.authorizing_visit_edit', true) = OLD.id::text) THEN
+      RAISE EXCEPTION 'An old visit requires administrative regularization' USING ERRCODE='42501';
+    END IF;
+  END IF;
+  IF (NEW.promotor_matricula,NEW.loja_codigo,NEW.industria_codigo,NEW.rota_id,NEW.data_visita)
+     IS DISTINCT FROM (OLD.promotor_matricula,OLD.loja_codigo,OLD.industria_codigo,OLD.rota_id,OLD.data_visita) THEN
+    RAISE EXCEPTION 'Visit identity is immutable' USING ERRCODE='42501';
+  END IF;
+  IF OLD.started_at IS NOT NULL AND NEW.started_at IS DISTINCT FROM OLD.started_at THEN
+    RAISE EXCEPTION 'Check-in is immutable' USING ERRCODE='42501';
+  END IF;
+  IF OLD.status IN ('concluida','nao_realizada') THEN
+    -- Permite alteração de observacao_geral e updated_at em visita concluída
+    -- EXCLUSIVAMENTE sob o contexto de sessão validado pela RPC save_completed_visit_edit
+    IF OLD.status = 'concluida' AND NEW.status = 'concluida'
+       AND pg_catalog.current_setting('mk9.authorizing_visit_edit', true) = OLD.id::text THEN
+      -- Valida que estritamente nada além de observacao_geral e updated_at foi alterado
+      IF (NEW.completed_at, NEW.latitude, NEW.longitude, NEW.checkout_latitude, NEW.checkout_longitude,
+          NEW.gps_accuracy_meters, NEW.checkout_accuracy_meters, NEW.work_schedule_id, NEW.regularization_status)
+         IS DISTINCT FROM
+         (OLD.completed_at, OLD.latitude, OLD.longitude, OLD.checkout_latitude, OLD.checkout_longitude,
+          OLD.gps_accuracy_meters, OLD.checkout_accuracy_meters, OLD.work_schedule_id, OLD.regularization_status) THEN
+        RAISE EXCEPTION 'Only general observation can be adjusted during completed visit review' USING ERRCODE='42501';
+      END IF;
+      RETURN NEW;
+    END IF;
+
+    RAISE EXCEPTION 'Closed visits cannot be changed by promoter' USING ERRCODE='42501';
+  END IF;
+  IF NEW.status IS DISTINCT FROM OLD.status
+     AND NOT ((OLD.status='pendente' AND NEW.status='em_andamento' AND OLD.started_at IS NULL)
+       OR (OLD.status='em_andamento' AND NEW.status='concluida')) THEN
+    RAISE EXCEPTION 'Invalid visit transition';
+  END IF;
+  IF NEW.status='concluida'
+     AND (NEW.completed_at IS NULL OR NEW.started_at IS NULL OR NEW.completed_at<NEW.started_at) THEN
+    RAISE EXCEPTION 'Invalid checkout sequence';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.check_visit_promotor_update_integrity() FROM PUBLIC, anon;
+
 CREATE OR REPLACE FUNCTION public.save_completed_visit_edit(
   p_visit_id UUID,
   p_observacao_geral TEXT,
@@ -303,6 +360,10 @@ BEGIN
   -- 1. Atualizar campos operacionais em visits (observacao_geral)
   -- Preserva estritamente: loja_codigo, industria_codigo, promotor_matricula, started_at, completed_at, status
   IF p_observacao_geral IS NOT NULL THEN
+    -- Sinalizar transacionalmente para o trigger check_visit_promotor_update_integrity
+    -- que a operação foi autorizada e validada internamente por esta RPC
+    PERFORM pg_catalog.set_config('mk9.authorizing_visit_edit', p_visit_id::text, true);
+
     UPDATE public.visits
     SET observacao_geral = trim(p_observacao_geral),
         updated_at = clock_timestamp()
