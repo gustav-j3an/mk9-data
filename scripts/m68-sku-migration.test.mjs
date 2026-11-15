@@ -40,4 +40,10 @@ test('migration 20261115_rc1_25_skus_and_stock_audits: validates syntax, integri
 
   // Restrição de promotor gravando estoque apenas para a própria visita
   assert.match(sql, /conferido_por_matricula = public\.get_auth_promotor_matricula\(\)/);
+
+  // 5. Função RPC atômica de edição de visita com auditoria
+  assert.match(sql, /CREATE OR REPLACE FUNCTION public\.save_completed_visit_edit/);
+  assert.match(sql, /IF v_visit\.status <> 'concluida' THEN/);
+  assert.match(sql, /IF v_caller_role NOT IN \('admin', 'gestor'\) AND/);
+  assert.match(sql, /INSERT INTO public\.visit_edits_audit_log/);
 });

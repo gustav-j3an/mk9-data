@@ -150,3 +150,135 @@ CREATE POLICY "visit_edits_audit_insert_policy" ON public.visit_edits_audit_log
   WITH CHECK (
     altered_by_user_id = auth.uid()
   );
+
+-- 8. FUNÇÃO RPC ATÔMICA E SEGURA PARA SALVAR EDIÇÃO DE VISITA COM AUDITORIA (RC1.25)
+CREATE OR REPLACE FUNCTION public.save_completed_visit_edit(
+  p_visit_id UUID,
+  p_observacao_geral TEXT,
+  p_checklist_items JSONB,
+  p_reason TEXT,
+  p_changes_summary JSONB
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_visit public.visits%ROWTYPE;
+  v_caller_uid UUID;
+  v_caller_role TEXT;
+  v_caller_matricula TEXT;
+  v_item RECORD;
+BEGIN
+  v_caller_uid := auth.uid();
+  IF v_caller_uid IS NULL THEN
+    RAISE EXCEPTION 'Acesso não autenticado' USING ERRCODE = '42501';
+  END IF;
+
+  -- Obter role e matrícula do usuário autenticado
+  SELECT role, promotor_matricula
+  INTO v_caller_role, v_caller_matricula
+  FROM public.profiles
+  WHERE id = v_caller_uid AND status = 'ativo';
+
+  IF v_caller_role IS NULL THEN
+    RAISE EXCEPTION 'Perfil de usuário não encontrado ou inativo' USING ERRCODE = '42501';
+  END IF;
+
+  -- Obter a visita existente com lock pessimista
+  SELECT *
+  INTO v_visit
+  FROM public.visits
+  WHERE id = p_visit_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Visita % não encontrada', p_visit_id USING ERRCODE = 'P0002';
+  END IF;
+
+  -- Validação estrita: somente visitas com status concluida podem ser editadas
+  IF v_visit.status <> 'concluida' THEN
+    RAISE EXCEPTION 'Apenas visitas concluídas podem ter seus dados revisados neste fluxo' USING ERRCODE = '42501';
+  END IF;
+
+  -- Validação estrita de posse / permissão: apenas o promotor titular ou admin/gestor
+  IF v_caller_role NOT IN ('admin', 'gestor') AND (v_caller_matricula IS NULL OR v_caller_matricula <> v_visit.promotor_matricula) THEN
+    RAISE EXCEPTION 'Você só pode editar visitas realizadas por você mesmo' USING ERRCODE = '42501';
+  END IF;
+
+  -- Validação de justificativa obrigatória
+  IF p_reason IS NULL OR length(trim(p_reason)) < 5 THEN
+    RAISE EXCEPTION 'Justificativa de ajuste é obrigatória (mínimo de 5 caracteres)' USING ERRCODE = '23514';
+  END IF;
+
+  -- 1. Atualizar campos operacionais em visits (observacao_geral)
+  -- Preserva estritamente: loja_codigo, industria_codigo, promotor_matricula, started_at, completed_at, status
+  IF p_observacao_geral IS NOT NULL THEN
+    UPDATE public.visits
+    SET observacao_geral = trim(p_observacao_geral),
+        updated_at = clock_timestamp()
+    WHERE id = p_visit_id;
+  END IF;
+
+  -- 2. Atualizar ou inserir itens de checklist fornecidos no payload atômico
+  IF p_checklist_items IS NOT NULL AND jsonb_typeof(p_checklist_items) = 'array' THEN
+    FOR v_item IN SELECT * FROM jsonb_to_recordset(p_checklist_items) AS x(
+      item_key TEXT,
+      item_label TEXT,
+      valor_texto TEXT,
+      observacao TEXT
+    )
+    LOOP
+      INSERT INTO public.visit_checklist_items (
+        visit_id,
+        item_key,
+        item_label,
+        valor_texto,
+        observacao
+      )
+      VALUES (
+        p_visit_id,
+        v_item.item_key,
+        COALESCE(v_item.item_label, v_item.item_key),
+        trim(COALESCE(v_item.valor_texto, '')),
+        trim(COALESCE(v_item.observacao, ''))
+      )
+      ON CONFLICT (visit_id, item_key)
+      DO UPDATE SET
+        valor_texto = EXCLUDED.valor_texto,
+        observacao = EXCLUDED.observacao,
+        updated_at = clock_timestamp();
+    END LOOP;
+  END IF;
+
+  -- 3. Registrar OBRIGATORIAMENTE no log de auditoria na mesma transação atômica
+  INSERT INTO public.visit_edits_audit_log (
+    visit_id,
+    altered_by_user_id,
+    altered_by_matricula,
+    field_name,
+    old_value,
+    new_value,
+    reason
+  )
+  VALUES (
+    p_visit_id,
+    v_caller_uid,
+    COALESCE(v_caller_matricula, 'admin'),
+    'completed_visit_edit',
+    jsonb_build_object('observacao_geral', v_visit.observacao_geral),
+    COALESCE(p_changes_summary, '{}'::jsonb),
+    trim(p_reason)
+  );
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'visit_id', p_visit_id,
+    'edited_at', clock_timestamp()
+  );
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.save_completed_visit_edit(UUID, TEXT, JSONB, TEXT, JSONB) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.save_completed_visit_edit(UUID, TEXT, JSONB, TEXT, JSONB) TO authenticated;

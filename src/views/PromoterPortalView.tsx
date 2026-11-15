@@ -58,7 +58,18 @@ import { getScheduledVisitAction, isScheduledVisitActionRpcReady, type Scheduled
 import { canReviewOldOpenVisits, createRequestGate, findOwnOpenVisit, formatOpenVisitConflictMessage, getOldOpenVisitCheckInBlockMessage, getOldOpenVisitsLabel, getPromoterOpenVisitAction, isAnotherVisitInProgressError, isOpenVisitFromToday } from '../utils/visitCheckInConflict';
 import { PromoterPhotoUploader } from '../components/PromoterPhotoUploader';
 import { EditCompletedVisitModal } from '../components/EditCompletedVisitModal';
+import { SkuStockChecklistSection } from '../components/SkuStockChecklistSection';
 import type { PhotoSelectionItem } from '../utils/promoterPhotos';
+import {
+  buildStoreSkuChecklist,
+  calculateChecklistProgress,
+  type StoreSkuChecklistState,
+  type StoreSkuStockRecord
+} from '../utils/skuStockOperations';
+import {
+  createPromoterSkuSuggestion,
+  type SkuCatalogItem
+} from '../utils/skuCatalogService';
 
 interface PromoterPortalViewProps {
   onNavigate: (screen: ScreenId) => void;
@@ -219,6 +230,10 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
   const [validityLote, setValidityLote] = useState('');
   const [validityObservacao, setValidityObservacao] = useState('');
   const [savingValidity, setSavingValidity] = useState(false);
+
+  // Form State para Conferência Obrigatória de SKUs (RC1.25)
+  const [skuChecklist, setSkuChecklist] = useState<Record<string, StoreSkuChecklistState>>({});
+  const [loadingSkus, setLoadingSkus] = useState(false);
 
   // Estado para Modal de Consulta de Detalhes da Visita (Modo Administrativo)
   const [adminInspectionVisit, setAdminInspectionVisit] = useState<OperationalVisitItem | null>(null);
@@ -626,6 +641,131 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
       void client.removeChannel(channel);
     };
   }, [supabase, isAdminUser, loadPortalData]);
+
+  // Carregar Catálogo de SKUs da Indústria e Histórico Prévio da Loja (RC1.25)
+  useEffect(() => {
+    const db = supabase;
+    if (!activeVisit || !db) {
+      setSkuChecklist({});
+      return;
+    }
+
+    let isMounted = true;
+    const fetchSkuData = async () => {
+      setLoadingSkus(true);
+      try {
+        // 1. Buscar SKUs oficiais ativos da indústria
+        const { data: skusData, error: skusErr } = await db
+          .from('industria_skus')
+          .select('*')
+          .eq('industria_codigo', activeVisit.industria_codigo)
+          .eq('status', 'ativo');
+
+        if (skusErr) {
+          // Se tabela não existe ainda (migração pendente), zera silenciosamente
+          if (skusErr.code === '42P01' || skusErr.message?.includes('industria_skus')) {
+            if (isMounted) setSkuChecklist({});
+            return;
+          }
+          throw skusErr;
+        }
+
+        const officialSkus = (skusData as SkuCatalogItem[]) || [];
+        if (officialSkus.length === 0) {
+          if (isMounted) setSkuChecklist({});
+          return;
+        }
+
+        // 2. Buscar último registro de conferência nesta loja para servir de referência
+        const { data: previousData } = await db
+          .from('visit_sku_stock_checks')
+          .select('*')
+          .eq('industria_codigo', activeVisit.industria_codigo)
+          .eq('loja_codigo', activeVisit.loja_codigo)
+          .neq('visit_id', activeVisit.id)
+          .order('data_conferencia', { ascending: false });
+
+        const previousRecords = (previousData as StoreSkuStockRecord[]) || [];
+
+        if (isMounted) {
+          const initialChecklist = buildStoreSkuChecklist(officialSkus, previousRecords);
+          setSkuChecklist(initialChecklist);
+        }
+      } catch (err) {
+        console.warn('Aviso: módulo de SKUs indisponível ou pendente de migração:', err);
+        if (isMounted) setSkuChecklist({});
+      } finally {
+        if (isMounted) setLoadingSkus(false);
+      }
+    };
+
+    fetchSkuData();
+    return () => {
+      isMounted = false;
+    };
+  }, [activeVisit?.id, activeVisit?.industria_codigo, activeVisit?.loja_codigo]);
+
+  // Handler de atualização de item de SKU
+  const handleUpdateSkuState = (skuCode: string, patch: Partial<StoreSkuChecklistState>) => {
+    setSkuChecklist((prev) => {
+      const existing = prev[skuCode];
+      if (!existing) return prev;
+      return {
+        ...prev,
+        [skuCode]: {
+          ...existing,
+          ...patch
+        }
+      };
+    });
+  };
+
+  // Handler para sugestão de novo SKU pelo promotor
+  const handleSuggestSku = async (skuCode: string, nomeProduto: string, ean?: string) => {
+    if (!activeVisit || !supabase || !promotorMatricula) return;
+
+    try {
+      const suggestion = createPromoterSkuSuggestion(
+        activeVisit.industria_codigo,
+        skuCode,
+        nomeProduto,
+        promotorMatricula,
+        ean
+      );
+
+      const { error } = await supabase.from('industria_skus').insert([
+        {
+          industria_codigo: suggestion.industria_codigo,
+          codigo_sku: suggestion.codigo_sku,
+          nome_produto: suggestion.nome_produto,
+          ean: suggestion.ean || null,
+          status: 'pendente',
+          origem_cadastro: 'promotor_sugestao',
+          sugerido_por_matricula: suggestion.sugerido_por_matricula
+        }
+      ]);
+
+      if (error) {
+        if (error.code === '42P01') {
+          throw new Error('A tabela de SKUs ainda não foi criada no banco (migração pendente).');
+        }
+        throw error;
+      }
+
+      onShowToast({
+        title: 'Sugestão Enviada',
+        message: `SKU ${skuCode} sugerido com sucesso! Ele foi encaminhado para aprovação administrativa.`,
+        type: 'success'
+      });
+    } catch (err: any) {
+      console.error('Erro ao sugerir SKU:', err);
+      onShowToast({
+        title: 'Erro na Sugestão',
+        message: err.message || 'Falha ao registrar sugestão de SKU.',
+        type: 'error'
+      });
+    }
+  };
 
   useEffect(() => {
     let isCurrent = true;
@@ -1614,6 +1754,21 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
       return;
     }
 
+    // Validação de SKUs Obrigatórios (RC1.25)
+    // Se a indústria possuir catálogo de SKUs ativos carregados, verifica se todos foram conferidos ou justificados
+    const skuItems = Object.values(skuChecklist);
+    if (skuItems.length > 0) {
+      const skuProgress = calculateChecklistProgress(skuChecklist, activeVisit.photos?.length || 0, 1);
+      if (!skuProgress.isComplete) {
+        onShowToast({
+          title: 'Conferência de SKUs Pendente',
+          message: `Existem ${skuProgress.pendingCount} SKU(s) da indústria sem confirmação de estoque ou justificativa.`,
+          type: 'warning'
+        });
+        return;
+      }
+    }
+
     setCompletingVisit(true);
 
     try {
@@ -1665,6 +1820,38 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
         if (insertChecklistError) throw insertChecklistError;
       }
       setChecklistSaveError(null);
+
+      // 2.5 Persistir registros de conferência de estoque de SKUs (se a tabela existir)
+      if (skuItems.length > 0) {
+        try {
+          const skuRecords = skuItems.map((item) => ({
+            visit_id: activeVisit.id,
+            industria_codigo: activeVisit.industria_codigo,
+            loja_codigo: activeVisit.loja_codigo,
+            codigo_sku: item.sku.codigo_sku,
+            data_conferencia: activeVisit.data_visita,
+            quantidade_venda: item.quantidade_venda,
+            quantidade_deposito: item.quantidade_deposito,
+            quantidade_reposicao: item.quantidade_reposicao,
+            quantidade_anterior_venda: item.quantidade_anterior_venda,
+            quantidade_anterior_deposito: item.quantidade_anterior_deposito,
+            status_conferencia: item.conferido ? 'conferido' : item.justificativa ? 'justificado' : 'pendente',
+            justificativa: item.justificativa || null,
+            observacao: item.observacao?.trim() || null,
+            conferido_por_matricula: activeVisit.promotor_matricula
+          }));
+
+          const { error: skuUpsertErr } = await supabase
+            .from('visit_sku_stock_checks')
+            .upsert(skuRecords, { onConflict: 'visit_id,codigo_sku' });
+
+          if (skuUpsertErr) {
+            console.warn('Aviso ao persistir conferência de SKUs (tabela opcional/pendente de migração):', skuUpsertErr);
+          }
+        } catch (skuErr) {
+          console.warn('Persistência de SKUs ignorada por ausência da tabela:', skuErr);
+        }
+      }
 
       // 3. Atualizar visita com status oficial 'concluida' e completed_at (preservando started_at)
       const nowIso = new Date().toISOString();
@@ -2606,6 +2793,15 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
               ))}
             </div>
           </div>
+
+          {/* PASSO 1.5: CONFERÊNCIA OBRIGATÓRIA DE SKUs (RC1.25) */}
+          <SkuStockChecklistSection
+            checklist={skuChecklist}
+            onUpdateSku={handleUpdateSkuState}
+            onSuggestSku={handleSuggestSku}
+            photosCount={activeVisit.photos?.length || 0}
+            disabled={completingVisit}
+          />
 
           {/* PASSO 2: ANEXAR FOTOS DO PONTO DE VENDA (RC1.25) */}
           <div className="space-y-3 pt-3 border-t border-[#CFCDC5]">
@@ -4659,48 +4855,25 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
           onSaveEdit={async ({ visitId, sanitizedPayload, changes, reason }) => {
             if (!supabase) return;
 
-            // 1. Atualizar campos operacionais em visits (observacao_geral)
-            if (sanitizedPayload.observacao_geral !== undefined) {
-              const { error: visitUpdateErr } = await supabase
-                .from('visits')
-                .update({ observacao_geral: sanitizedPayload.observacao_geral })
-                .eq('id', visitId);
-              if (visitUpdateErr) throw visitUpdateErr;
-            }
+            // Tentativa de execução atômica via RPC segura
+            const { data: rpcRes, error: rpcErr } = await supabase.rpc('save_completed_visit_edit', {
+              p_visit_id: visitId,
+              p_observacao_geral: sanitizedPayload.observacao_geral ?? null,
+              p_checklist_items: sanitizedPayload.checklist_items ?? [],
+              p_reason: reason,
+              p_changes_summary: changes
+            });
 
-            // 2. Atualizar itens de checklist modificados
-            if (sanitizedPayload.checklist_items && Array.isArray(sanitizedPayload.checklist_items)) {
-              for (const item of sanitizedPayload.checklist_items) {
-                const { error: chkErr } = await supabase
-                  .from('visit_checklist_items')
-                  .upsert({
-                    visit_id: visitId,
-                    item_key: item.item_key,
-                    item_label: item.item_label,
-                    valor_texto: item.valor_texto,
-                    observacao: item.observacao
-                  }, { onConflict: 'visit_id,item_key' });
-                if (chkErr) console.warn('Aviso: falha ao atualizar item de checklist:', chkErr);
+            if (rpcErr) {
+              // Se a função RPC ainda não existe no ambiente remoto (migração pendente),
+              // informar com clareza a necessidade de validação em homologação
+              if (rpcErr.code === 'PGRST202' || rpcErr.message?.includes('function save_completed_visit_edit') || rpcErr.code === '42883') {
+                throw new Error('A edição segura com auditoria atômica requer a migração 20261115_rc1_25_skus_and_stock_audits.sql aplicada no banco.');
               }
+              throw rpcErr;
             }
 
-            // 3. Tentar registrar no log de auditoria se a tabela existir
-            try {
-              await supabase.from('visit_edits_audit_log').insert([
-                {
-                  visit_id: visitId,
-                  edited_by_matricula: promotorMatricula || profile?.promotor_matricula || 'N/A',
-                  user_id: profile?.id || null,
-                  user_role: role || 'promotor',
-                  reason: reason,
-                  changes_summary: changes
-                }
-              ]);
-            } catch (auditErr) {
-              console.warn('Auditoria via visit_edits_audit_log opcional/pendente de migration:', auditErr);
-            }
-
-            // 4. Recarregar portal
+            // Recarregar portal após atualização segura
             await loadPortalData();
             setEditingCompletedVisit(null);
           }}
