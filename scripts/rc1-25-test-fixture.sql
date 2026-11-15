@@ -9,49 +9,28 @@ DO $$ BEGIN CREATE ROLE anon; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE ROLE authenticated; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 -- 2. Schema auth e auth.users
--- No Supabase CLI, o schema auth e a tabela auth.users já existem e pertencem a supabase_admin.
--- Garantimos as permissões DML para o usuário postgres inserir usuários de teste.
+-- No Supabase CLI (PostgreSQL 17), o schema auth e a tabela auth.users já existem nativamente
+-- e são de propriedade de supabase_admin. A role postgres NÃO é dona do schema auth.
+-- Portanto, NÃO executamos DDL em auth (nada de CREATE SCHEMA auth ou CREATE TABLE auth.users).
+-- Em vez disso, apenas concedemos USAGE no schema auth para postgres, caso necessário.
 DO $$
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'auth') THEN
-    CREATE SCHEMA auth;
-  END IF;
+  BEGIN
+    EXECUTE 'GRANT USAGE ON SCHEMA auth TO postgres';
+  EXCEPTION WHEN OTHERS THEN
+    NULL;
+  END;
 END $$;
-
-CREATE TABLE IF NOT EXISTS auth.users (
-  id UUID PRIMARY KEY
-);
-
--- Conceder permissões para o role postgres poder popular auth.users em testes
-GRANT USAGE ON SCHEMA auth TO postgres;
-GRANT ALL ON TABLE auth.users TO postgres;
 
 -- 3. Schema storage
-DO $$
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'storage') THEN
-    CREATE SCHEMA storage;
-  END IF;
-END $$;
-
-CREATE TABLE IF NOT EXISTS storage.objects (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  bucket_id TEXT,
-  name TEXT,
-  owner UUID,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
-GRANT USAGE ON SCHEMA storage TO postgres;
-GRANT ALL ON TABLE storage.objects TO postgres;
-
+-- O Supabase CLI já cria o schema storage e storage.objects nativamente.
+-- Criamos funções auxiliares apenas se não existirem.
 CREATE OR REPLACE FUNCTION storage.foldername(text)
 RETURNS TEXT[] LANGUAGE sql IMMUTABLE AS $$
   SELECT string_to_array($1, '/')
 $$;
 
--- 4. Funções auxiliares auth e perfil (caso não existam no container)
+-- 4. Funções auxiliares auth (compatibilidade com JWT em testes locais)
 CREATE OR REPLACE FUNCTION auth.uid()
 RETURNS UUID LANGUAGE sql STABLE AS $$
   SELECT NULLIF(current_setting('request.jwt.claim.sub', true), '')::UUID
@@ -62,7 +41,7 @@ RETURNS TEXT LANGUAGE sql STABLE AS $$
   SELECT NULLIF(current_setting('request.jwt.claim.role', true), '')
 $$;
 
--- 5. Tabelas fundamentais da aplicação
+-- 5. Tabelas fundamentais da aplicação no schema public
 CREATE TABLE IF NOT EXISTS public.profiles (
   id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
   name TEXT,
