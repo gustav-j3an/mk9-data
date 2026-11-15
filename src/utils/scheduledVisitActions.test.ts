@@ -18,6 +18,16 @@ test('recuperação aceita programação não realizada somente dentro da semana
   assert.equal(getScheduledVisitAction({ item: { ...item, dataStr: '2026-10-18' }, ...common }).allowed, false);
 });
 
+test('indústria inativa bloqueia antecipação e recuperação sem alterar a visita', () => {
+  const planned = { ...base, industriaStatus: 'inativo' as const };
+  const recovery = { ...planned, dataStr: '2026-10-21', status: 'nao_realizada' as const };
+  for (const item of [planned, recovery]) {
+    const decision = getScheduledVisitAction({ item, ...common });
+    assert.equal(decision.allowed, false);
+    assert.match(decision.reason || '', /indústria vinculada está inativa/i);
+  }
+});
+
 test('dia futuro não vira não realizado e semana futura não pode ser antecipada', () => {
   const item = { ...base, dataStr: '2026-10-26' } as typeof base;
   assert.equal(getScheduledVisitAction({ item, ...common }).allowed, false);

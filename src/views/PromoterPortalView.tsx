@@ -365,7 +365,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
         const routesBaseQuery = (filterByClosure: boolean) => {
           const query = db.from('rotas').select(`
           *,
-          industria:industrias(codigo, nome),
+          industria:industrias(codigo, nome, status),
           loja:lojas(codigo, nome, cidade, uf, endereco),
           promotor:promotores(matricula, nome)
           `).eq('promotor_matricula', promotorMatricula);
@@ -386,7 +386,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
 
         const visitsBaseQuery = (includeWhatsAppLink: boolean) => db.from('visits').select(`
           *,
-          industria:industrias(codigo, nome${includeWhatsAppLink ? ', whatsapp_group_link' : ''}),
+          industria:industrias(codigo, nome, status${includeWhatsAppLink ? ', whatsapp_group_link' : ''}),
           loja:lojas(codigo, nome, cidade, uf, endereco),
           promotor:promotores(matricula, nome),
           work_schedule:promoter_work_schedules!visits_work_schedule_id_fkey(timezone, hora_inicio, hora_fim),
@@ -405,7 +405,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
         // prior visits from it instead of issuing an identical second SELECT.
         const activeVisitsBaseQuery = (includeWhatsAppLink: boolean) => db.from('visits').select(`
           *,
-          industria:industrias(codigo, nome${includeWhatsAppLink ? ', whatsapp_group_link' : ''}),
+          industria:industrias(codigo, nome, status${includeWhatsAppLink ? ', whatsapp_group_link' : ''}),
           loja:lojas(codigo, nome, cidade, uf, endereco),
           promotor:promotores(matricula, nome),
           work_schedule:promoter_work_schedules!visits_work_schedule_id_fkey(timezone, hora_inicio, hora_fim),
@@ -448,7 +448,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
       if (profile?.role === 'admin' || profile?.role === 'gestor') {
         const { data: oldOpenData, error: oldOpenError } = await db.from('visits').select(`
           *,
-          industria:industrias(codigo, nome),
+          industria:industrias(codigo, nome, status),
           loja:lojas(codigo, nome, cidade, uf, endereco),
           promotor:promotores(matricula, nome),
           checklist_items:visit_checklist_items(*),
@@ -603,6 +603,23 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
   useEffect(() => {
     loadPortalData();
   }, [loadPortalData]);
+
+  useEffect(() => {
+    if (!supabase || isAdminUser) return;
+    const client = supabase;
+    const channel = client
+      .channel('promoter-industry-status')
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'industrias' }, () => {
+        void loadPortalData();
+      })
+      .subscribe();
+    const handleFocus = () => { void loadPortalData(); };
+    window.addEventListener('focus', handleFocus);
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+      void client.removeChannel(channel);
+    };
+  }, [supabase, isAdminUser, loadPortalData]);
 
   useEffect(() => {
     let isCurrent = true;
@@ -971,6 +988,11 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
   const handleStartVisit = async (route: RouteItem) => {
     if (!supabase) return;
 
+    if (route.industria?.status === 'inativo') {
+      onShowToast({ title: 'Indústria inativa', message: 'Esta visita permanece no histórico, mas não pode ser iniciada enquanto a indústria estiver inativa.', type: 'warning' });
+      return;
+    }
+
     if (isAdminUser) {
       onShowToast({
         title: 'Modo Somente Leitura',
@@ -1027,7 +1049,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
         .from('visits')
         .select(`
           *,
-          industria:industrias(codigo, nome),
+          industria:industrias(codigo, nome, status),
           loja:lojas(codigo, nome, cidade, uf, endereco),
           promotor:promotores(matricula, nome),
           checklist_items:visit_checklist_items(*),
@@ -1102,7 +1124,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
               .from('visits')
               .select(`
                 *,
-                industria:industrias(codigo, nome),
+                industria:industrias(codigo, nome, status),
                 loja:lojas(codigo, nome, cidade, uf, endereco),
                 promotor:promotores(matricula, nome),
                 checklist_items:visit_checklist_items(*),
@@ -1151,7 +1173,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
         try {
           const { data } = await supabase
             .from('visits')
-            .select(`*, industria:industrias(codigo, nome), loja:lojas(codigo, nome, cidade, uf, endereco), work_schedule:promoter_work_schedules!visits_work_schedule_id_fkey(timezone, hora_inicio, hora_fim), checklist_items:visit_checklist_items(*), photos:visit_photos(*), occurrences:visit_occurrences(*), validity_items:visit_product_validity(*)`)
+            .select(`*, industria:industrias(codigo, nome, status), loja:lojas(codigo, nome, cidade, uf, endereco), work_schedule:promoter_work_schedules!visits_work_schedule_id_fkey(timezone, hora_inicio, hora_fim), checklist_items:visit_checklist_items(*), photos:visit_photos(*), occurrences:visit_occurrences(*), validity_items:visit_product_validity(*)`)
             .eq('promotor_matricula', promotorMatricula)
             .eq('status', 'em_andamento')
             .order('data_visita', { ascending: false });
@@ -1737,6 +1759,10 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
 
   // 1. Continuar Visita Antiga em Andamento
   const handleResumeStaleVisit = async (visit: Visit) => {
+    if (visit.industria?.status === 'inativo') {
+      onShowToast({ title: 'Indústria inativa', message: 'Esta visita permanece no histórico e não pode ser retomada enquanto a indústria estiver inativa.', type: 'warning' });
+      return;
+    }
     try {
       // Carregar signedUrls para fotos
       if (visit.photos && visit.photos.length > 0 && supabase) {
@@ -2227,7 +2253,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                 industria_codigo: item.industriaCodigo,
                 frequencia: item.frequencia,
                 loja: { codigo: item.lojaCodigo, nome: item.lojaNome, cidade: item.lojaCidade, uf: item.lojaUf },
-                industria: { codigo: item.industriaCodigo, nome: item.industriaNome }
+                industria: { codigo: item.industriaCodigo, nome: item.industriaNome, status: item.industriaStatus }
               } as RouteItem;
 
               const activeScheduledDate = activeVisit?.scheduled_date || activeVisit?.data_visita;
@@ -2286,7 +2312,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                     <p className="text-xs font-semibold text-[#3F3F46]">Hoje · {item.dataStr.split('-').reverse().join('/')}</p>
 
                     <p className="text-xs text-[#5F5F5F]">
-                      {item.lojaCidade || '—'}/{item.lojaUf || '-'} • Indústria: <span className="text-[#7E22CE] font-bold">{item.industriaNome}</span>
+                      {item.lojaCidade || '—'}/{item.lojaUf || '-'} • Indústria: <span className="text-[#7E22CE] font-bold">{item.industriaNome}</span>{item.industriaStatus === 'inativo' && <strong className="ml-1 rounded bg-rose-100 px-1.5 py-0.5 text-rose-800">Inativa</strong>}
                     </p>
 
                     <div className="flex flex-wrap items-center gap-3 text-[10px] text-[#5F5F5F]">
@@ -2316,7 +2342,9 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                       </button>
                     ) : (
                       (item.status === 'pendente' || item.status === 'planejada') && (
-                        isImplantacaoMode && !isAuthorized ? (
+                        item.industriaStatus === 'inativo' ? (
+                          <span role="status" className="rounded-lg border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-800">Indústria inativa — visita preservada; execução indisponível.</span>
+                        ) : isImplantacaoMode && !isAuthorized ? (
                           <div className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#FFF8E6] border border-[#FCE19B] text-[#986000] text-xs font-mono font-bold">
                             <span className="material-symbols-outlined text-sm">lock</span>
                             <span>Aguardando Liberação</span>
@@ -2358,7 +2386,10 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                       )
                     )}
 
-                    {!isAdminUser && item.status === 'em_andamento' && !item.visitObj?.regularization_status && (
+                    {!isAdminUser && item.status === 'em_andamento' && !item.visitObj?.regularization_status && item.industriaStatus === 'inativo' && (
+                      <span role="status" className="text-xs font-bold text-rose-800">Indústria inativa — visita histórica preservada, sem retomada.</span>
+                    )}
+                    {!isAdminUser && item.status === 'em_andamento' && !item.visitObj?.regularization_status && item.industriaStatus !== 'inativo' && (
                       <div className="flex items-center gap-2 w-full md:w-auto">
         {getPromoterOpenVisitAction(item.visitObj || { status: item.status, data_visita: item.dataStr }, new Date()) === 'continue_today' ? <button
                           onClick={() => {
@@ -3266,7 +3297,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                     industria_codigo: item.industriaCodigo,
                     frequencia: item.frequencia,
                     loja: { codigo: item.lojaCodigo, nome: item.lojaNome, cidade: item.lojaCidade, uf: item.lojaUf },
-                    industria: { codigo: item.industriaCodigo, nome: item.industriaNome }
+                    industria: { codigo: item.industriaCodigo, nome: item.industriaNome, status: item.industriaStatus }
                   } as RouteItem;
 
                   return (
@@ -3332,6 +3363,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                         <div className="flex flex-wrap items-center gap-3 text-[10px] text-[#5F5F5F]">
                           <span>Indústria: <strong className="text-[#7E22CE] font-bold">{item.industriaNome}</strong></span>
                           <span>Frequência: <strong className="text-[#0E7490] font-bold">{item.frequencia}</strong></span>
+                          {item.industriaStatus === 'inativo' && <span role="status" className="rounded bg-rose-100 px-1.5 py-0.5 font-bold text-rose-800">Indústria inativa — histórico preservado</span>}
                           {item.completedAt && (
                             <span>Concluído às: <strong className="text-emerald-700 font-bold">{new Date(item.completedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</strong></span>
                           )}
@@ -3358,7 +3390,9 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                                   <span className="material-symbols-outlined text-sm">lock</span>
                                   <span>Aguardando Liberação</span>
                                 </div>
-                              ) : activeVisit ? (
+                        ) : item.industriaStatus === 'inativo' ? (
+                          <div role="status" className="rounded-lg border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-800">Indústria inativa — visita preservada no histórico; execução indisponível.</div>
+                        ) : activeVisit ? (
                                 <button
                                   onClick={() => handleStartVisit(routeObj)}
                                   disabled={staleInProgressVisits.length > 0}
