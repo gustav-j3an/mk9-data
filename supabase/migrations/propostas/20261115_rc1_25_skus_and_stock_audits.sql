@@ -4,6 +4,8 @@
 -- Status: PENDENTE DE APROVAÇÃO (NÃO APLICADA - EM CONFORMIDADE COM REGRA RC1.25)
 -- ==============================================================================
 
+BEGIN;
+
 -- 0. PRÉ-REQUISITOS IDEMPOTENTES DE ESTRUTURA PARA ITENS DE CHECKLIST
 -- Garante que a tabela public.visit_checklist_items possua a coluna updated_at
 -- e a restrição de unicidade necessária para o upsert na RPC save_completed_visit_edit.
@@ -683,3 +685,5 @@ REVOKE ALL ON FUNCTION public.guard_visit_sku_stock_finalization() FROM PUBLIC, 
 CREATE TRIGGER guard_visit_sku_stock_finalization
   BEFORE UPDATE OF status ON public.visits
   FOR EACH ROW EXECUTE FUNCTION public.guard_visit_sku_stock_finalization();
+
+COMMIT;

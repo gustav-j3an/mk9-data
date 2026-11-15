@@ -236,6 +236,32 @@ RETURNS BOOLEAN LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$
   );
 $$;
 
+CREATE OR REPLACE FUNCTION attendance_private.active_user()
+RETURNS BOOLEAN LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM public.profiles p
+    WHERE p.id = auth.uid() AND p.status = 'ativo'
+  );
+$$;
+
+-- Policies represent the authenticated promoter/staff scope from homologation.
+DROP POLICY IF EXISTS rc1_25_visits_select ON public.visits;
+CREATE POLICY rc1_25_visits_select ON public.visits
+  FOR SELECT TO authenticated
+  USING (public.is_admin_or_gestor() OR promotor_matricula = public.get_auth_promotor_matricula());
+
+DROP POLICY IF EXISTS rc1_25_visits_update ON public.visits;
+CREATE POLICY rc1_25_visits_update ON public.visits
+  FOR UPDATE TO authenticated
+  USING (public.is_admin_or_gestor() OR promotor_matricula = public.get_auth_promotor_matricula())
+  WITH CHECK (public.is_admin_or_gestor() OR promotor_matricula = public.get_auth_promotor_matricula());
+
+DROP POLICY IF EXISTS rc1_25_visits_active_profile ON public.visits;
+CREATE POLICY rc1_25_visits_active_profile ON public.visits
+  AS RESTRICTIVE FOR ALL TO authenticated
+  USING (attendance_private.active_user())
+  WITH CHECK (attendance_private.active_user());
+
 -- 8. Configurações do sistema e autorizações operacionais (compatibilidade com attendance_check_in)
 CREATE TABLE IF NOT EXISTS public.system_settings (
   key TEXT PRIMARY KEY,

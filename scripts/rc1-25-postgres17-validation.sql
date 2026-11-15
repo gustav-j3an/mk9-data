@@ -17,10 +17,12 @@ DECLARE
   v_other_promotor_uid UUID := gen_random_uuid();
   v_admin_uid UUID := gen_random_uuid();
   v_ind_code TEXT := 'TEST_IND_RC25';
+  v_ind_other_code TEXT := 'TEST_IND_OTHER_RC25';
   v_store_code TEXT := 'TEST_STORE_RC25';
   v_sku_active TEXT := 'SKU_ACTIVE_001';
   v_sku_active_2 TEXT := 'SKU_ACTIVE_002';
   v_visit_open UUID := gen_random_uuid();
+  v_visit_no_catalog UUID := gen_random_uuid();
   v_visit_completed UUID := gen_random_uuid();
   v_visit_other UUID := gen_random_uuid();
   v_visit_recovery UUID := gen_random_uuid();
@@ -28,6 +30,7 @@ DECLARE
   v_token UUID;
   v_res JSONB;
   v_err_caught BOOLEAN := false;
+  v_affected_rows INTEGER := 0;
 BEGIN
   RAISE NOTICE '=== INICIANDO TESTES FUNCIONAIS REAIS EM POSTGRESQL 17 ===';
 
@@ -40,6 +43,7 @@ BEGIN
     (v_admin_uid, 'admin', 'ativo', NULL);
 
   INSERT INTO public.industrias (codigo) VALUES (v_ind_code);
+  INSERT INTO public.industrias (codigo) VALUES (v_ind_other_code);
   INSERT INTO public.lojas (codigo) VALUES (v_store_code);
 
   -- Inserir SKUs no catálogo da indústria
@@ -50,6 +54,9 @@ BEGIN
   -- Inserir visitas de teste
   INSERT INTO public.visits (id, promotor_matricula, loja_codigo, industria_codigo, data_visita, started_at, status, observacao_geral)
   VALUES (v_visit_open, 'PROM_RC25_1', v_store_code, v_ind_code, CURRENT_DATE, clock_timestamp(), 'em_andamento', 'Visita Aberta');
+
+  INSERT INTO public.visits (id, promotor_matricula, loja_codigo, industria_codigo, data_visita, started_at, status)
+  VALUES (v_visit_no_catalog, 'PROM_RC25_1', v_store_code, v_ind_other_code, CURRENT_DATE, clock_timestamp(), 'em_andamento');
 
   INSERT INTO public.visits (id, promotor_matricula, loja_codigo, industria_codigo, data_visita, started_at, completed_at, status, observacao_geral)
   VALUES (v_visit_completed, 'PROM_RC25_1', v_store_code, v_ind_code, CURRENT_DATE, clock_timestamp() - interval '2 hours', clock_timestamp() - interval '1 hour', 'concluida', 'Visita Concluida Original');
@@ -66,6 +73,7 @@ BEGIN
   -- Simular autenticação como promotor titular (PROM_RC25_1)
   EXECUTE format('SET LOCAL "request.jwt.claim.sub" = %L', v_promotor_uid::text);
   EXECUTE format('SET LOCAL "request.jwt.claim.role" = %L', 'authenticated');
+  SET LOCAL ROLE authenticated;
 
   -- --------------------------------------------------------------------------
   -- TESTE 1: Bloqueio de alteração direta sem RPC
@@ -213,24 +221,36 @@ BEGIN
   END IF;
   RAISE NOTICE 'TESTE 7 OK: Todos os SKUs conferidos e checkout efetuado com sucesso.';
 
+  UPDATE public.visits
+  SET status = 'concluida', completed_at = clock_timestamp()
+  WHERE id = v_visit_no_catalog;
+  IF (SELECT status FROM public.visits WHERE id = v_visit_no_catalog) <> 'concluida' THEN
+    RAISE EXCEPTION 'Checkout without a catalog was blocked';
+  END IF;
+  RAISE NOTICE 'TESTE 8 OK: Checkout sem catalogo continua permitido.';
+
   -- --------------------------------------------------------------------------
-  -- TESTE 8: Tentativa de adulterar conferência de SKU após visita concluída
+  -- TESTE 9: Tentativa de adulterar conferência de SKU após visita concluída
   -- --------------------------------------------------------------------------
   v_err_caught := false;
   BEGIN
     UPDATE public.visit_sku_stock_checks
     SET quantidade_venda = 999
     WHERE visit_id = v_visit_open AND codigo_sku = v_sku_active;
+    GET DIAGNOSTICS v_affected_rows = ROW_COUNT;
+    IF v_affected_rows = 0 THEN v_err_caught := true; END IF;
   EXCEPTION WHEN OTHERS THEN
     v_err_caught := true;
-    RAISE NOTICE 'TESTE 8 OK: Adulteração de estoque pós-checkout bloqueada: %', SQLERRM;
+    RAISE NOTICE 'TESTE 9 OK: Adulteração de estoque pós-checkout bloqueada: %', SQLERRM;
   END;
   IF NOT v_err_caught THEN
-    RAISE EXCEPTION 'FALHA NO TESTE 8: Estoque de visita concluída pôde ser alterado pelo promotor!';
+    RAISE EXCEPTION 'FALHA NO TESTE 9: Estoque de visita concluída pôde ser alterado pelo promotor!';
   END IF;
 
   -- --------------------------------------------------------------------------
-  -- TESTE 9: Falha de auditoria com rollback na RPC
+  RAISE NOTICE 'TESTE 9 OK: RLS/trigger bloqueou estoque apos checkout.';
+
+  -- TESTE 10: Falha de auditoria com rollback na RPC
   -- --------------------------------------------------------------------------
   v_err_caught := false;
   BEGIN
@@ -243,17 +263,41 @@ BEGIN
     );
   EXCEPTION WHEN OTHERS THEN
     v_err_caught := true;
-    RAISE NOTICE 'TESTE 9 OK: Justificativa curta abortou com rollback: %', SQLERRM;
+    RAISE NOTICE 'TESTE 10 OK: Justificativa curta abortou com rollback: %', SQLERRM;
   END;
   IF NOT v_err_caught THEN
-    RAISE EXCEPTION 'FALHA NO TESTE 9: Justificativa inválida não abortou a RPC!';
+    RAISE EXCEPTION 'FALHA NO TESTE 10: Justificativa inválida não abortou a RPC!';
   END IF;
 
   IF (SELECT observacao_geral FROM public.visits WHERE id = v_visit_completed) = 'Nova observacao que deve abortar' THEN
-    RAISE EXCEPTION 'FALHA NO TESTE 9: Rollback não desfez alteração em visits!';
+    RAISE EXCEPTION 'FALHA NO TESTE 10: Rollback não desfez alteração em visits!';
   END IF;
 
-  -- TESTE 10: Recuperação M37 continua exigindo e consumindo autorização.
+  RAISE NOTICE 'TESTE 10 OK: RPC preservou atomicidade no erro.';
+
+  -- TESTE 11: Escritas diretas e sugestões fora da indústria ativa são bloqueadas.
+  v_err_caught := false;
+  BEGIN
+    INSERT INTO public.visit_edits_audit_log (visit_id, altered_by_user_id, field_name)
+    VALUES (v_visit_completed, v_promotor_uid, 'fake_edit');
+  EXCEPTION WHEN insufficient_privilege THEN
+    v_err_caught := true;
+  END;
+  IF NOT v_err_caught THEN RAISE EXCEPTION 'Direct audit insertion was not blocked'; END IF;
+  RAISE NOTICE 'TESTE 11 OK: ACL bloqueou escrita direta na auditoria.';
+
+  v_err_caught := false;
+  BEGIN
+    INSERT INTO public.industria_skus (
+      industria_codigo, codigo_sku, nome_produto, status, origem_cadastro, sugerido_por_matricula
+    ) VALUES (v_ind_other_code, 'SKU_CROSS_INDUSTRY', 'Invalid suggestion', 'pendente', 'promotor_sugestao', 'PROM_RC25_1');
+  EXCEPTION WHEN insufficient_privilege THEN
+    v_err_caught := true;
+  END;
+  IF NOT v_err_caught THEN RAISE EXCEPTION 'Cross-industry SKU suggestion was not blocked by RLS'; END IF;
+  RAISE NOTICE 'TESTE 12 OK: RLS bloqueou sugestao para industria sem visita ativa.';
+
+  SET LOCAL ROLE postgres;
   INSERT INTO attendance_private.scheduled_recovery_authorizations (
     visit_id, promotor_matricula, data_visita, scheduled_date
   ) VALUES (v_visit_recovery, 'PROM_RC25_1', CURRENT_DATE, CURRENT_DATE);
@@ -264,11 +308,12 @@ BEGIN
 
   IF (SELECT status FROM public.visits WHERE id = v_visit_recovery) <> 'em_andamento'
      OR EXISTS (SELECT 1 FROM attendance_private.scheduled_recovery_authorizations WHERE visit_id = v_visit_recovery) THEN
-    RAISE EXCEPTION 'FALHA NO TESTE 10: Recuperação M37 não autorizada ou autorização não consumida';
+    RAISE EXCEPTION 'FALHA NO TESTE 13: Recuperação M37 não autorizada ou autorização não consumida';
   END IF;
-  RAISE NOTICE 'TESTE 10 OK: Recuperação M37 e consumo da autorização preservados.';
+  RAISE NOTICE 'TESTE 13 OK: Recuperação M37 e consumo da autorização preservados.';
 
-  -- TESTE 11: Cancelamento M38 continua exigindo autorização de ciclo de vida.
+  -- TESTE 14: Cancelamento M38 continua exigindo autorização de ciclo de vida.
+  SET LOCAL ROLE postgres;
   INSERT INTO attendance_private.visit_lifecycle_authorizations (
     visit_id, promotor_matricula, action, actor_type, actor_id, reason
   ) VALUES (
@@ -283,11 +328,11 @@ BEGIN
 
   IF (SELECT status FROM public.visits WHERE id = v_visit_cancel) <> 'nao_realizada'
      OR EXISTS (SELECT 1 FROM attendance_private.visit_lifecycle_authorizations WHERE visit_id = v_visit_cancel) THEN
-    RAISE EXCEPTION 'FALHA NO TESTE 11: Cancelamento M38 não autorizado ou autorização não consumida';
+    RAISE EXCEPTION 'FALHA NO TESTE 14: Cancelamento M38 não autorizado ou autorização não consumida';
   END IF;
-  RAISE NOTICE 'TESTE 11 OK: Cancelamento M38 e consumo da autorização preservados.';
+  RAISE NOTICE 'TESTE 14 OK: Cancelamento M38 e consumo da autorização preservados.';
 
-  RAISE NOTICE '=== TODOS OS 11 TESTES FUNCIONAIS REAIS EM POSTGRESQL 17 PASSARAM COM SUCESSO! ===';
+  RAISE NOTICE '=== TODOS OS 14 TESTES FUNCIONAIS REAIS EM POSTGRESQL 17 PASSARAM COM SUCESSO! ===';
 END $$;
 
 ROLLBACK;
