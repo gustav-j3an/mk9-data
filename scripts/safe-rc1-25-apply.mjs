@@ -171,9 +171,24 @@ export async function executeRc125HomologationApply(env = process.env) {
   }
 
   console.log('==> [RC1.25 Safe Apply] Running post-migration verification...');
-  const checkAuditTable = runPsql(dbUrl, "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'visit_completed_review_audits');");
+  const checkAuditTable = runPsql(dbUrl, "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'visit_edits_audit_log');");
   if (checkAuditTable !== 't') {
-    throw new Error('POST_MIGRATION_FAILED: Table visit_completed_review_audits not found.');
+    throw new Error('POST_MIGRATION_FAILED: Table visit_edits_audit_log not found.');
+  }
+
+  const checkSkusTable = runPsql(dbUrl, "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'industria_skus');");
+  if (checkSkusTable !== 't') {
+    throw new Error('POST_MIGRATION_FAILED: Table industria_skus not found.');
+  }
+
+  const checkStockChecksTable = runPsql(dbUrl, "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'visit_sku_stock_checks');");
+  if (checkStockChecksTable !== 't') {
+    throw new Error('POST_MIGRATION_FAILED: Table visit_sku_stock_checks not found.');
+  }
+
+  const checkLedgerRegistration = runPsql(dbUrl, `SELECT EXISTS (SELECT 1 FROM supabase_migrations.schema_migrations WHERE version = '${AUTHORIZED_RC125_MIGRATION.version}');`);
+  if (checkLedgerRegistration !== 't') {
+    throw new Error(`POST_MIGRATION_FAILED: Migration ${AUTHORIZED_RC125_MIGRATION.version} not found in schema_migrations.`);
   }
 
   console.log('==> [RC1.25 Safe Apply] RC1.25 APPLIED AND VERIFIED SUCCESSFULLY!');
