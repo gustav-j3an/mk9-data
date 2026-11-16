@@ -43,6 +43,19 @@ function normalizeInventory(obj) {
       result[key] = value
         .filter(s => !(s && (s.schema === 'graphql' || s.schema === 'graphql_public') && (!s.acl || s.acl.includes('supabase_admin'))))
         .map(normalizeInventory);
+    } else if (key === 'tables_and_row_counts' && Array.isArray(value)) {
+      // O pg_cron executa rotinas autônomas a cada minuto no banco remoto ativo.
+      // O histórico transitório de execuções cron.job_run_details varia a cada execução do cron.
+      // Definições de jobs (cron.job) e demais tabelas de aplicação/sistema continuam estritamente verificadas.
+      result[key] = value
+        .filter(t => !(t && t.schema === 'cron' && t.table === 'job_run_details'))
+        .map(normalizeInventory);
+    } else if (key === 'sequences' && Array.isArray(value)) {
+      // A sequência cron.runid_seq avança a cada disparo automático de job no banco remoto.
+      // As demais sequências da aplicação continuam estritamente verificadas.
+      result[key] = value
+        .filter(s => !(s && s.schema === 'cron' && s.name === 'runid_seq'))
+        .map(normalizeInventory);
     } else if (key === 'acl' && typeof value === 'string') {
       result[key] = normalizeAcl(value, owner);
     } else {
