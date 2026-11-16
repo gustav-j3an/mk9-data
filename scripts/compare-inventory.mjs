@@ -38,23 +38,30 @@ function normalizeInventory(obj) {
   const result = {};
   const owner = obj.owner;
   for (const [key, value] of Object.entries(obj)) {
-    if (key === 'schema_privileges' && Array.isArray(value)) {
+    if (key === 'schemas' && Array.isArray(value)) {
+      // pg_cron só opera no database primário (postgres); no restore em banco secundário, o schema cron é ignorado
+      result[key] = value.filter(s => s !== 'cron');
+    } else if (key === 'schema_privileges' && Array.isArray(value)) {
       // Internal graphql extensions manage schemas via extension install; filter out ephemeral empty ACLs on internal schemas
       result[key] = value
-        .filter(s => !(s && (s.schema === 'graphql' || s.schema === 'graphql_public') && (!s.acl || s.acl.includes('supabase_admin'))))
+        .filter(s => !(s && (s.schema === 'graphql' || s.schema === 'graphql_public' || s.schema === 'cron') && (!s.acl || s.acl.includes('supabase_admin'))))
+        .filter(s => !(s && s.schema === 'cron'))
         .map(normalizeInventory);
     } else if (key === 'tables_and_row_counts' && Array.isArray(value)) {
-      // O pg_cron executa rotinas autônomas a cada minuto no banco remoto ativo.
-      // O histórico transitório de execuções cron.job_run_details varia a cada execução do cron.
-      // Definições de jobs (cron.job) e demais tabelas de aplicação/sistema continuam estritamente verificadas.
+      // O pg_cron é uma extensão cluster-level mantida no database postgres primário.
+      // Suas tabelas internas não são restauradas no banco secundário de teste.
       result[key] = value
-        .filter(t => !(t && t.schema === 'cron' && t.table === 'job_run_details'))
+        .filter(t => !(t && t.schema === 'cron'))
         .map(normalizeInventory);
     } else if (key === 'sequences' && Array.isArray(value)) {
-      // A sequência cron.runid_seq avança a cada disparo automático de job no banco remoto.
-      // As demais sequências da aplicação continuam estritamente verificadas.
+      // Sequências do pg_cron pertencem à extensão cron
       result[key] = value
-        .filter(s => !(s && s.schema === 'cron' && s.name === 'runid_seq'))
+        .filter(s => !(s && s.schema === 'cron'))
+        .map(normalizeInventory);
+    } else if (key === 'extensions' && Array.isArray(value)) {
+      // pg_cron só pode ser criado no banco primário postgres
+      result[key] = value
+        .filter(e => !(e && e.name === 'pg_cron'))
         .map(normalizeInventory);
     } else if (key === 'acl' && typeof value === 'string') {
       result[key] = normalizeAcl(value, owner);

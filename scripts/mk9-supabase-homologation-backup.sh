@@ -86,7 +86,6 @@ STAGE=disposable-restore
 mkdir -p "$ROOT/supabase"
 (cd "$ROOT/supabase" && supabase init --force >/dev/null 2> "$ROOT/logs/supabase-init.log")
 sed -i 's/^major_version = .*/major_version = 17/' "$ROOT/supabase/supabase/config.toml"
-printf '\n[db.settings]\n"cron.database_name" = "mk9_backup_restore"\n' >> "$ROOT/supabase/supabase/config.toml"
 (cd "$ROOT/supabase" && supabase start -x realtime,imgproxy,mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor >/dev/null 2> "$ROOT/logs/supabase-start.log")
 
 # Unset PG* environment variables from remote export so local connections use default/explicit parameters
@@ -124,13 +123,9 @@ node scripts/filter-roles.mjs "$ROOT/export/roles.sql" "$ROOT/restore/roles-filt
 
 PGPASSWORD=postgres psql 'postgresql://postgres:postgres@127.0.0.1:54322/postgres?sslmode=disable' -v ON_ERROR_STOP=1 -f "$ROOT/restore/roles-filtered.sql" > /dev/null 2> "$ROOT/logs/restore-roles.log" || (cat "$ROOT/logs/restore-roles.log" >&2 && exit 1)
 PGPASSWORD=postgres psql 'postgresql://postgres:postgres@127.0.0.1:54322/mk9_backup_restore?sslmode=disable' -v ON_ERROR_STOP=1 -f "$ROOT/restore/roles-filtered.sql" > /dev/null 2> "$ROOT/logs/restore-roles-target.log" || true
-# Pre-create pg_cron extension in the primary database postgres where cron.database_name is hosted,
-# and ensure schema cron exists in mk9_backup_restore so that pg_restore can restore cron tables/data without error.
-docker exec "$CONTAINER_ID" psql -U supabase_admin -d postgres -c 'CREATE EXTENSION IF NOT EXISTS pg_cron WITH SCHEMA pg_catalog;' || true
-docker exec "$CONTAINER_ID" psql -U supabase_admin -d mk9_backup_restore -c 'CREATE SCHEMA IF NOT EXISTS cron AUTHORIZATION postgres; GRANT ALL ON SCHEMA cron TO postgres, supabase_admin;' || true
-# Filter out pg_cron extension creation and comments from disposable restore into secondary database mk9_backup_restore,
+# Filter out pg_cron extension, schema and internal cron objects from disposable restore into secondary database mk9_backup_restore,
 # because in PostgreSQL pg_cron can only be created in the cluster's primary cron.database_name (postgres).
-docker exec "$CONTAINER_ID" pg_restore -l /tmp/database.dump | sed -E '/(EXTENSION - pg_cron|COMMENT.*EXTENSION pg_cron)/s/^/;/' > "$ROOT/restore/restore.list"
+docker exec "$CONTAINER_ID" pg_restore -l /tmp/database.dump | sed -E '/\b(cron|pg_cron)\b/s/^/;/' > "$ROOT/restore/restore.list"
 docker cp "$ROOT/restore/restore.list" "$CONTAINER_ID:/tmp/restore.list"
 docker exec "$CONTAINER_ID" pg_restore --exit-on-error --use-list=/tmp/restore.list --username=supabase_admin --dbname=mk9_backup_restore /tmp/database.dump > /dev/null 2> "$ROOT/logs/restore-database.log" || (cat "$ROOT/logs/restore-database.log" >&2 && exit 1)
 docker exec "$CONTAINER_ID" rm -f /tmp/database.dump /tmp/restore.list || true
