@@ -2,6 +2,9 @@ name: MK9 RC1.25 isolated PostgreSQL 17 validation
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - feat/rc1-25-promoter-skus-photos-edit
 
 permissions:
   contents: read
@@ -33,13 +36,26 @@ jobs:
         with:
           node-version: '22.16.0'
 
+      - name: Install dependencies
+        shell: bash
+        run: |
+          npm ci
+
+      - name: Run safe apply unit tests
+        shell: bash
+        run: |
+          node --test scripts/safe-rc1-25-apply.test.mjs
+
+      - name: Run project test suite and typecheck
+        shell: bash
+        run: |
+          npm test
+          npm run typecheck
+
       - name: Install PostgreSQL 17 client and verify Docker
         shell: bash
         run: |
           set -Eeuo pipefail
-          # Tentar instalar postgresql-client-17 oficial via APT caso a rede permita,
-          # com retries e timeout resiliente. Se a rede externa falhar ou se o runner
-          # já possuir psql ou docker, não abortar o step.
           install_pg17_apt() {
             sudo install -d -m 0755 /usr/share/keyrings
             curl -fsSL --retry 3 --connect-timeout 10 https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor --yes -o /usr/share/keyrings/postgresql.gpg
