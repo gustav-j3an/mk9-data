@@ -4,6 +4,7 @@ import {
   ALLOWED_APPLY_BRANCH,
   REQUIRED_CONFIRMATION,
   AUTHORIZED_RC125_MIGRATION,
+  computeNormalizedSha256,
   validateMigrationIntegrity,
   validateDatabaseUrlStrict,
   executeRc125HomologationApply
@@ -14,6 +15,38 @@ test('validateMigrationIntegrity validates RC1.25 migration hash', () => {
   const result = validateMigrationIntegrity();
   assert.equal(result.ok, true);
   assert.equal(result.sha256, AUTHORIZED_RC125_MIGRATION.expectedSha256);
+});
+
+test('computeNormalizedSha256 produces identical hash for LF and CRLF line endings', () => {
+  const sampleSqlLF = 'SELECT 1;\n-- Test migration\nCREATE TABLE test_tab (id uuid);\n';
+  const sampleSqlCRLF = 'SELECT 1;\r\n-- Test migration\r\nCREATE TABLE test_tab (id uuid);\r\n';
+
+  const hashLF = computeNormalizedSha256(sampleSqlLF);
+  const hashCRLF = computeNormalizedSha256(sampleSqlCRLF);
+
+  assert.equal(hashLF, hashCRLF);
+  assert.equal(typeof hashLF, 'string');
+  assert.equal(hashLF.length, 64);
+});
+
+test('computeNormalizedSha256 detects actual SQL content alterations', () => {
+  const originalSql = 'SELECT 1;\n-- Original statement\n';
+  const alteredSql = 'SELECT 2;\n-- Original statement\n';
+
+  const originalHash = computeNormalizedSha256(originalSql);
+  const alteredHash = computeNormalizedSha256(alteredSql);
+
+  assert.notEqual(originalHash, alteredHash);
+});
+
+test('validateMigrationIntegrity rejects incorrect hash', () => {
+  const invalidMigration = {
+    ...AUTHORIZED_RC125_MIGRATION,
+    expectedSha256: '0000000000000000000000000000000000000000000000000000000000000000'
+  };
+  const result = validateMigrationIntegrity(invalidMigration);
+  assert.equal(result.ok, false);
+  assert.match(result.error, /SHA256 mismatch/);
 });
 
 test('validateDatabaseUrlStrict accepts valid homologation pooler URL', () => {

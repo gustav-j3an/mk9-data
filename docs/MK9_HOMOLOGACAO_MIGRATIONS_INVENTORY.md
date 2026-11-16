@@ -90,7 +90,9 @@ Validadas com hashes exatos de 64 caracteres em `scripts/safe-homolog-executor.m
 ## 4. Migration Proposta RC1.25 (Pendente de Aplicação Remota)
 | # | Versão Alvo | Arquivo da Migration Proposta | SHA-256 Validado (64 caracteres) | Dependência Principal |
 |---|---|---|---|---|
-| 57 | `20261115160000` | `supabase/migrations/propostas/20261115_rc1_25_skus_and_stock_audits.sql` | `41EA78BCC4416D65B5714B648AC076DCA932A945CFBB9A19C71C893AB8FDD01B` | M38 Guards / SKUs |
+| 57 | `20261115160000` | `supabase/migrations/propostas/20261115_rc1_25_skus_and_stock_audits.sql` | `8AAF49416C581EAEAAFC31BDFE7C769CA289C2444577A917FBCC769AECC018F5` | M38 Guards / SKUs |
+
+*Nota de Integridade Criptográfica (RC1.25.20):* O SHA-256 acima representa o conteúdo lógico canônico com finais de linha Unix (LF), normalizado e conferido tanto em ambiente local Windows quanto em esteiras Linux de CI (`scripts/safe-rc1-25-apply.mjs`), preservado integralmente por `.gitattributes` (`eol=lf`).
 
 ---
 **Status da Reconciliação:** Concluída e auditável. As 56 versões remotas possuem correspondência individual rastreável, hashes de 64 dígitos conferidos e dependências registradas.

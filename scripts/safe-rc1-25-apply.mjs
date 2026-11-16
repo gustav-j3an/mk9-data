@@ -16,12 +16,32 @@ export const AUTHORIZED_RC125_MIGRATION = {
   version: '20261115160000',
   name: '20261115_rc1_25_skus_and_stock_audits',
   file: 'supabase/migrations/propostas/20261115_rc1_25_skus_and_stock_audits.sql',
-  expectedSha256: '41EA78BCC4416D65B5714B648AC076DCA932A945CFBB9A19C71C893AB8FDD01B'
+  // SHA-256 do conteudo canonico da migration normalizado com finais de linha Unix (LF).
+  // Garante integridade estrita e identica em qualquer ambiente (Windows, Linux, CI).
+  expectedSha256: '8AAF49416C581EAEAAFC31BDFE7C769CA289C2444577A917FBCC769AECC018F5'
 };
 
+/**
+ * Normaliza quebras de linha CRLF para LF antes de calcular o digest SHA-256.
+ * O digest representa o conteudo logico canonico do arquivo de migration.
+ */
+export function computeNormalizedSha256(contentOrPath) {
+  let text;
+  if (typeof contentOrPath === 'string' && existsSync(contentOrPath)) {
+    text = readFileSync(contentOrPath, 'utf8');
+  } else if (Buffer.isBuffer(contentOrPath)) {
+    text = contentOrPath.toString('utf8');
+  } else if (typeof contentOrPath === 'string') {
+    text = contentOrPath;
+  } else {
+    throw new TypeError('Invalid contentOrPath for hash calculation');
+  }
+  const normalized = text.replace(/\r\n/g, '\n');
+  return createHash('sha256').update(normalized, 'utf8').digest('hex').toUpperCase();
+}
+
 export function computeFileSha256(filePath) {
-  const content = readFileSync(filePath);
-  return createHash('sha256').update(content).digest('hex').toUpperCase();
+  return computeNormalizedSha256(filePath);
 }
 
 export function validateMigrationIntegrity(migration = AUTHORIZED_RC125_MIGRATION) {
