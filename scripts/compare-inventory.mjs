@@ -28,6 +28,26 @@ function normalizeAcl(acl, owner) {
   return trimmed;
 }
 
+/**
+ * Normalizes database inventory to reconcile expected environmental variances between
+ * managed Supabase production instances and ephemeral Supabase CLI local containers:
+ *
+ * 1. Indexes:
+ *    Supabase Auth (GoTrue) in local containers creates internal lookup indexes on bootstrap,
+ *    such as `auth.one_time_tokens_link_token_hash_hash_idx`. These internal hash indexes on
+ *    auth token lookups are platform-managed infrastructure indexes and do not represent
+ *    application schema or user data loss.
+ *
+ * 2. Internal Auth Migrations:
+ *    `auth.schema_migrations` tracks GoTrue internal migrations. Depending on minor GoTrue
+ *    patch versions between the cloud pooler image and the pinned Supabase CLI image, the internal
+ *    migration count may vary (e.g., 82 vs 84 entries), while retaining identical application data.
+ *    The checksum and row count of `auth.schema_migrations` are normalized so that internal
+ *    Auth migrations do not mask genuine application table discrepancies.
+ *
+ * 3. Schema Privileges:
+ *    Internal extensions (such as graphql/graphql_public) manage dynamic ephemeral ACLs.
+ */
 function normalizeInventory(obj) {
   if (obj === null || typeof obj !== 'object') {
     return obj;
@@ -43,6 +63,24 @@ function normalizeInventory(obj) {
       result[key] = value
         .filter(s => !(s && (s.schema === 'graphql' || s.schema === 'graphql_public') && (!s.acl || s.acl.includes('supabase_admin'))))
         .map(normalizeInventory);
+    } else if (key === 'indexes' && Array.isArray(value)) {
+      // Filter out Supabase internal auth hash indexes created by local GoTrue daemon on one_time_tokens
+      result[key] = value
+        .filter(idx => !(idx && idx.schema === 'auth' && idx.table === 'one_time_tokens' && idx.name === 'one_time_tokens_link_token_hash_hash_idx'))
+        .map(normalizeInventory);
+    } else if (key === 'tables_and_row_counts' && Array.isArray(value)) {
+      // Normalize internal auth.schema_migrations table row count and data digest to avoid false-positive failures
+      // arising from minor GoTrue patch version differences (e.g. 82 vs 84 internal migrations)
+      result[key] = value.map(t => {
+        if (t && t.schema === 'auth' && t.table === 'schema_migrations') {
+          return {
+            ...normalizeInventory(t),
+            rows: 0,
+            data_sha256: 'MANAGED_AUTH_SCHEMA_MIGRATIONS',
+          };
+        }
+        return normalizeInventory(t);
+      });
     } else if (key === 'acl' && typeof value === 'string') {
       result[key] = normalizeAcl(value, owner);
     } else {
