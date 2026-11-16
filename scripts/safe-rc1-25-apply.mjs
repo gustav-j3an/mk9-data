@@ -149,25 +149,25 @@ export async function executeRc125HomologationApply(env = process.env) {
 
   const already = remoteLedger.some(r => r.version === AUTHORIZED_RC125_MIGRATION.version);
   if (already) {
-    throw new Error(`MIGRATION_ALREADY_APPLIED: Version ${AUTHORIZED_RC125_MIGRATION.version} is already registered in schema_migrations.`);
-  }
+    console.log(`INFO: Version ${AUTHORIZED_RC125_MIGRATION.version} is already registered in schema_migrations. Skipping SQL re-execution and validating schema state...`);
+  } else {
+    console.log(`==> [RC1.25 Safe Apply] Applying migration ${AUTHORIZED_RC125_MIGRATION.file} in a single atomic transaction...`);
+    const sqlContent = readFileSync(AUTHORIZED_RC125_MIGRATION.file, 'utf8');
+    const migrationSql = `
+      BEGIN;
+      ${sqlContent}
+      INSERT INTO supabase_migrations.schema_migrations (version, name)
+      VALUES ('${AUTHORIZED_RC125_MIGRATION.version}', '${AUTHORIZED_RC125_MIGRATION.name}');
+      COMMIT;
+    `;
 
-  console.log(`==> [RC1.25 Safe Apply] Applying migration ${AUTHORIZED_RC125_MIGRATION.file} in a single atomic transaction...`);
-  const sqlContent = readFileSync(AUTHORIZED_RC125_MIGRATION.file, 'utf8');
-  const migrationSql = `
-    BEGIN;
-    ${sqlContent}
-    INSERT INTO supabase_migrations.schema_migrations (version, name)
-    VALUES ('${AUTHORIZED_RC125_MIGRATION.version}', '${AUTHORIZED_RC125_MIGRATION.name}');
-    COMMIT;
-  `;
-
-  try {
-    runPsql(dbUrl, migrationSql);
-    console.log(`SUCCESS: Migration ${AUTHORIZED_RC125_MIGRATION.version} applied and registered.`);
-  } catch (err) {
-    console.error(`FATAL: Error applying migration: ${err.message}`);
-    throw new Error(`MIGRATION_EXECUTION_FAILED: ${err.message}`);
+    try {
+      runPsql(dbUrl, migrationSql);
+      console.log(`SUCCESS: Migration ${AUTHORIZED_RC125_MIGRATION.version} applied and registered.`);
+    } catch (err) {
+      console.error(`FATAL: Error applying migration: ${err.message}`);
+      throw new Error(`MIGRATION_EXECUTION_FAILED: ${err.message}`);
+    }
   }
 
   console.log('==> [RC1.25 Safe Apply] Running post-migration verification...');
