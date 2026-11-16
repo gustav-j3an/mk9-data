@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - feat/rc1-25-promoter-skus-photos-edit
+      - prep/rc1-25-integration-m31
 
 permissions:
   contents: read
