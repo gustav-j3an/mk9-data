@@ -5,6 +5,7 @@ import {
   REQUIRED_CONFIRMATION,
   AUTHORIZED_RC125_MIGRATION,
   validateMigrationIntegrity,
+  validateDatabaseUrlStrict,
   executeRc125HomologationApply
 } from './safe-rc1-25-apply.mjs';
 import { ALLOWED_HOMOLOG_PROJECT_REF, FORBIDDEN_PRODUCTION_PROJECT_REF } from './guard-homolog-env.mjs';
@@ -13,6 +14,21 @@ test('validateMigrationIntegrity validates RC1.25 migration hash', () => {
   const result = validateMigrationIntegrity();
   assert.equal(result.ok, true);
   assert.equal(result.sha256, AUTHORIZED_RC125_MIGRATION.expectedSha256);
+});
+
+test('validateDatabaseUrlStrict accepts valid homologation pooler URL', () => {
+  const validUrl = `postgresql://postgres.${ALLOWED_HOMOLOG_PROJECT_REF}:secretpassword@aws-1-sa-east-1.pooler.supabase.com:5432/postgres`;
+  const result = validateDatabaseUrlStrict(validUrl, 'aws-1-sa-east-1.pooler.supabase.com');
+  assert.equal(result.ok, true);
+  assert.equal(result.projectRef, ALLOWED_HOMOLOG_PROJECT_REF);
+  assert.equal(result.user, `postgres.${ALLOWED_HOMOLOG_PROJECT_REF}`);
+  assert.equal(result.poolerHost, 'aws-1-sa-east-1.pooler.supabase.com');
+});
+
+test('validateDatabaseUrlStrict rejects production pooler URL', () => {
+  const prodUrl = `postgresql://postgres.${FORBIDDEN_PRODUCTION_PROJECT_REF}:secretpassword@aws-1-sa-east-1.pooler.supabase.com:5432/postgres`;
+  const result = validateDatabaseUrlStrict(prodUrl, 'aws-1-sa-east-1.pooler.supabase.com');
+  assert.equal(result.ok, false);
 });
 
 test('executeRc125HomologationApply rejects invalid branch', async () => {

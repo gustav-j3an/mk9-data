@@ -44,10 +44,17 @@ export function validateDatabaseUrlStrict(dbUrl, poolerHost) {
   }
   try {
     const parsed = parseHomologationPoolerUrl(dbUrl, poolerHost);
-    if (parsed.projectRef !== ALLOWED_HOMOLOG_PROJECT_REF) {
-      return { ok: false, error: `DB URL project mismatch: expected ${ALLOWED_HOMOLOG_PROJECT_REF}, got ${parsed.projectRef}` };
+    // parseHomologationPoolerUrl valida que host === configuredHost, porta === 5432
+    // e user === postgres.<HOMOLOGATION_REF>, lancando erro caso divirja.
+    if (parsed.user !== `postgres.${ALLOWED_HOMOLOG_PROJECT_REF}`) {
+      return { ok: false, error: `DB URL user mismatch: expected postgres.${ALLOWED_HOMOLOG_PROJECT_REF}, got ${parsed.user}` };
     }
-    return { ok: true, projectRef: parsed.projectRef, poolerHost: parsed.poolerHost };
+    return {
+      ok: true,
+      projectRef: ALLOWED_HOMOLOG_PROJECT_REF,
+      poolerHost: parsed.host,
+      user: parsed.user
+    };
   } catch (err) {
     return { ok: false, error: `DB URL validation error: ${err.message}` };
   }
@@ -94,7 +101,7 @@ export async function executeRc125HomologationApply(env = process.env) {
   if (!dbUrlValidation.ok) {
     throw new Error(`DATABASE_URL_VALIDATION_FAILED: ${dbUrlValidation.error}`);
   }
-  console.log(`PASS: Validated pooler host and project ref (${dbUrlValidation.projectRef}) from database URL.`);
+  console.log(`PASS: Validated pooler host (${dbUrlValidation.poolerHost}) and project user (${dbUrlValidation.user}) from database URL.`);
 
   console.log('==> [RC1.25 Safe Apply] Verifying migration file hash (SHA-256)...');
   const integrity = validateMigrationIntegrity();
