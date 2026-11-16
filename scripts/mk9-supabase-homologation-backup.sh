@@ -86,6 +86,7 @@ STAGE=disposable-restore
 mkdir -p "$ROOT/supabase"
 (cd "$ROOT/supabase" && supabase init --force >/dev/null 2> "$ROOT/logs/supabase-init.log")
 sed -i 's/^major_version = .*/major_version = 17/' "$ROOT/supabase/supabase/config.toml"
+printf '\n[db.settings]\n"cron.database_name" = "mk9_backup_restore"\n' >> "$ROOT/supabase/supabase/config.toml"
 (cd "$ROOT/supabase" && supabase start -x realtime,imgproxy,mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor >/dev/null 2> "$ROOT/logs/supabase-start.log")
 
 # Unset PG* environment variables from remote export so local connections use default/explicit parameters
