@@ -15,9 +15,9 @@ test('validateMigrationIntegrity validates RC1.25 migration hash', () => {
   assert.equal(result.sha256, AUTHORIZED_RC125_MIGRATION.expectedSha256);
 });
 
-test('executeRc125HomologationApply rejects invalid branch', () => {
-  assert.throws(() => {
-    executeRc125HomologationApply({
+test('executeRc125HomologationApply rejects invalid branch', async () => {
+  await assert.rejects(async () => {
+    await executeRc125HomologationApply({
       GITHUB_REF: 'refs/heads/main',
       INPUT_PROJECT_REF: ALLOWED_HOMOLOG_PROJECT_REF,
       INPUT_CONFIRMATION: REQUIRED_CONFIRMATION
@@ -25,9 +25,9 @@ test('executeRc125HomologationApply rejects invalid branch', () => {
   }, /BRANCH_NOT_ALLOWED/);
 });
 
-test('executeRc125HomologationApply blocks production project ref immediately', () => {
-  assert.throws(() => {
-    executeRc125HomologationApply({
+test('executeRc125HomologationApply blocks production project ref immediately', async () => {
+  await assert.rejects(async () => {
+    await executeRc125HomologationApply({
       GITHUB_REF: `refs/heads/${ALLOWED_APPLY_BRANCH}`,
       INPUT_PROJECT_REF: FORBIDDEN_PRODUCTION_PROJECT_REF,
       INPUT_CONFIRMATION: REQUIRED_CONFIRMATION
@@ -35,9 +35,9 @@ test('executeRc125HomologationApply blocks production project ref immediately', 
   }, /PRODUCTION project/);
 });
 
-test('executeRc125HomologationApply requires exact confirmation string', () => {
-  assert.throws(() => {
-    executeRc125HomologationApply({
+test('executeRc125HomologationApply requires exact confirmation string', async () => {
+  await assert.rejects(async () => {
+    await executeRc125HomologationApply({
       GITHUB_REF: `refs/heads/${ALLOWED_APPLY_BRANCH}`,
       INPUT_PROJECT_REF: ALLOWED_HOMOLOG_PROJECT_REF,
       INPUT_CONFIRMATION: 'APLICAR'
@@ -45,9 +45,9 @@ test('executeRc125HomologationApply requires exact confirmation string', () => {
   }, /CONFIRMATION_MISMATCH/);
 });
 
-test('executeRc125HomologationApply requires SUPABASE_DB_URL', () => {
-  assert.throws(() => {
-    executeRc125HomologationApply({
+test('executeRc125HomologationApply requires SUPABASE_DB_URL', async () => {
+  await assert.rejects(async () => {
+    await executeRc125HomologationApply({
       GITHUB_REF: `refs/heads/${ALLOWED_APPLY_BRANCH}`,
       INPUT_PROJECT_REF: ALLOWED_HOMOLOG_PROJECT_REF,
       INPUT_CONFIRMATION: REQUIRED_CONFIRMATION,

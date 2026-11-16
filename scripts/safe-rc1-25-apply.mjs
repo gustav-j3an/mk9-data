@@ -7,6 +7,7 @@ import {
   validateTargetProject
 } from './guard-homolog-env.mjs';
 import { normalizeHomologationPoolerUrl, parseHomologationPoolerUrl } from './pooler-connection.mjs';
+import { verifyActiveHomologationBackup } from './verify-active-backup.mjs';
 
 export const ALLOWED_APPLY_BRANCH = 'feat/rc1-25-promoter-skus-photos-edit';
 export const REQUIRED_CONFIRMATION = 'APLICAR RC1.25 HOMOLOGACAO';
@@ -64,7 +65,7 @@ export function runPsql(dbUrl, sql, opts = {}) {
   }).trim();
 }
 
-export function executeRc125HomologationApply(env = process.env) {
+export async function executeRc125HomologationApply(env = process.env) {
   console.log('==> [RC1.25 Safe Apply] Checking environment and branch safety...');
 
   const branch = env.GITHUB_REF;
@@ -82,6 +83,10 @@ export function executeRc125HomologationApply(env = process.env) {
   if (confirmation !== REQUIRED_CONFIRMATION) {
     throw new Error(`CONFIRMATION_MISMATCH: Expected exact confirmation "${REQUIRED_CONFIRMATION}", got "${confirmation}"`);
   }
+
+  console.log('==> [RC1.25 Safe Apply] Verifying active unexpired homologation backup artifact...');
+  const backup = await verifyActiveHomologationBackup(env.GITHUB_TOKEN);
+  console.log(`PASS: Active backup confirmed: ${backup.name} (runId: ${backup.runId}, size: ${backup.sizeBytes} bytes, expires: ${backup.expiresAt})`);
 
   const dbUrl = env.SUPABASE_DB_URL;
   const poolerHost = env.SUPABASE_POOLER_HOST;

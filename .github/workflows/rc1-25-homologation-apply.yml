@@ -15,6 +15,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: mk9-homologation-rc1-25-apply
@@ -28,6 +29,8 @@ jobs:
     environment: homologation-backup
     env:
       GITHUB_REF: ${{ github.ref }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
       INPUT_PROJECT_REF: ${{ inputs.project_ref }}
       INPUT_CONFIRMATION: ${{ inputs.confirmation }}
       SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
@@ -44,6 +47,11 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '22.16.0'
+
+      - name: Verify active homologation backup exists before any execution
+        shell: bash
+        run: |
+          node scripts/verify-active-backup.mjs
 
       - name: Install PostgreSQL 17 client
         shell: bash
@@ -66,5 +74,5 @@ jobs:
         run: |
           node -e '
             import { executeRc125HomologationApply } from "./scripts/safe-rc1-25-apply.mjs";
-            executeRc125HomologationApply(process.env);
+            await executeRc125HomologationApply(process.env);
           '
