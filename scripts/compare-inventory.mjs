@@ -41,27 +41,20 @@ function normalizeInventory(obj) {
     if (key === 'schemas' && Array.isArray(value)) {
       // pg_cron só opera no database primário (postgres); no restore em banco secundário, o schema cron é ignorado
       result[key] = value.filter(s => s !== 'cron');
-    } else if (key === 'schema_privileges' && Array.isArray(value)) {
-      // Internal graphql extensions manage schemas via extension install; filter out ephemeral empty ACLs on internal schemas
+    } else if (Array.isArray(value)) {
+      // Filtrar qualquer objeto do schema cron ou relacionado à extensão pg_cron,
+      // pois pg_cron é uma extensão cluster-level mantida no database postgres primário.
       result[key] = value
-        .filter(s => !(s && (s.schema === 'graphql' || s.schema === 'graphql_public' || s.schema === 'cron') && (!s.acl || s.acl.includes('supabase_admin'))))
-        .filter(s => !(s && s.schema === 'cron'))
-        .map(normalizeInventory);
-    } else if (key === 'tables_and_row_counts' && Array.isArray(value)) {
-      // O pg_cron é uma extensão cluster-level mantida no database postgres primário.
-      // Suas tabelas internas não são restauradas no banco secundário de teste.
-      result[key] = value
-        .filter(t => !(t && t.schema === 'cron'))
-        .map(normalizeInventory);
-    } else if (key === 'sequences' && Array.isArray(value)) {
-      // Sequências do pg_cron pertencem à extensão cron
-      result[key] = value
-        .filter(s => !(s && s.schema === 'cron'))
-        .map(normalizeInventory);
-    } else if (key === 'extensions' && Array.isArray(value)) {
-      // pg_cron só pode ser criado no banco primário postgres
-      result[key] = value
-        .filter(e => !(e && e.name === 'pg_cron'))
+        .filter(item => {
+          if (!item || typeof item !== 'object') return true;
+          if (item.schema === 'cron') return false;
+          if (item.name === 'pg_cron') return false;
+          // Internal graphql extensions manage schemas via extension install; filter out ephemeral empty ACLs on internal schemas
+          if (key === 'schema_privileges' && (item.schema === 'graphql' || item.schema === 'graphql_public') && (!item.acl || item.acl.includes('supabase_admin'))) {
+            return false;
+          }
+          return true;
+        })
         .map(normalizeInventory);
     } else if (key === 'acl' && typeof value === 'string') {
       result[key] = normalizeAcl(value, owner);
