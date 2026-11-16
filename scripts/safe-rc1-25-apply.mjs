@@ -111,10 +111,6 @@ export async function executeRc125HomologationApply(env = process.env) {
     throw new Error(`CONFIRMATION_MISMATCH: Expected exact confirmation "${REQUIRED_CONFIRMATION}", got "${confirmation}"`);
   }
 
-  console.log('==> [RC1.25 Safe Apply] Verifying active unexpired homologation backup artifact...');
-  const backup = await verifyActiveHomologationBackup(env.GITHUB_TOKEN);
-  console.log(`PASS: Active backup confirmed: ${backup.name} (runId: ${backup.runId}, size: ${backup.sizeBytes} bytes, expires: ${backup.expiresAt})`);
-
   const dbUrl = env.SUPABASE_DB_URL;
   const poolerHost = env.SUPABASE_POOLER_HOST;
   const dbUrlValidation = validateDatabaseUrlStrict(dbUrl, poolerHost);
@@ -122,6 +118,10 @@ export async function executeRc125HomologationApply(env = process.env) {
     throw new Error(`DATABASE_URL_VALIDATION_FAILED: ${dbUrlValidation.error}`);
   }
   console.log(`PASS: Validated pooler host (${dbUrlValidation.poolerHost}) and project user (${dbUrlValidation.user}) from database URL.`);
+
+  console.log('==> [RC1.25 Safe Apply] Verifying active unexpired homologation backup artifact...');
+  const backup = await verifyActiveHomologationBackup(env.GITHUB_TOKEN);
+  console.log(`PASS: Active backup confirmed: ${backup.name} (runId: ${backup.runId}, size: ${backup.sizeBytes} bytes, expires: ${backup.expiresAt})`);
 
   console.log('==> [RC1.25 Safe Apply] Verifying migration file hash (SHA-256)...');
   const integrity = validateMigrationIntegrity();

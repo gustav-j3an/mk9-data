@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 export const MAX_BACKUP_AGE_MS = 24 * 60 * 60 * 1000; // 24 horas
 
 export async function verifyActiveHomologationBackup(token = process.env.GITHUB_TOKEN) {
-  const repo = process.env.GITHUB_REPOSITORY || 'gustav-j3an/mk9-data';
+  const repo = 'gustav-j3an/mk9-data';
   const url = `https://api.github.com/repos/${repo}/actions/artifacts?per_page=20`;
   const headers = {
     'Accept': 'application/vnd.github.v3+json',
