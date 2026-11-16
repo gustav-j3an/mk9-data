@@ -124,8 +124,12 @@ node scripts/filter-roles.mjs "$ROOT/export/roles.sql" "$ROOT/restore/roles-filt
 
 PGPASSWORD=postgres psql 'postgresql://postgres:postgres@127.0.0.1:54322/postgres?sslmode=disable' -v ON_ERROR_STOP=1 -f "$ROOT/restore/roles-filtered.sql" > /dev/null 2> "$ROOT/logs/restore-roles.log" || (cat "$ROOT/logs/restore-roles.log" >&2 && exit 1)
 PGPASSWORD=postgres psql 'postgresql://postgres:postgres@127.0.0.1:54322/mk9_backup_restore?sslmode=disable' -v ON_ERROR_STOP=1 -f "$ROOT/restore/roles-filtered.sql" > /dev/null 2> "$ROOT/logs/restore-roles-target.log" || true
-docker exec "$CONTAINER_ID" pg_restore --exit-on-error --username=supabase_admin --dbname=mk9_backup_restore /tmp/database.dump > /dev/null 2> "$ROOT/logs/restore-database.log" || (cat "$ROOT/logs/restore-database.log" >&2 && exit 1)
-docker exec "$CONTAINER_ID" rm -f /tmp/database.dump || true
+# Filter out pg_cron extension creation from disposable restore into secondary database mk9_backup_restore,
+# because in PostgreSQL pg_cron can only be created in the cluster's primary cron.database_name (postgres).
+docker exec "$CONTAINER_ID" pg_restore -l /tmp/database.dump | sed '/EXTENSION - pg_cron/s/^/;/' > "$ROOT/restore/restore.list"
+docker cp "$ROOT/restore/restore.list" "$CONTAINER_ID:/tmp/restore.list"
+docker exec "$CONTAINER_ID" pg_restore --exit-on-error --use-list=/tmp/restore.list --username=supabase_admin --dbname=mk9_backup_restore /tmp/database.dump > /dev/null 2> "$ROOT/logs/restore-database.log" || (cat "$ROOT/logs/restore-database.log" >&2 && exit 1)
+docker exec "$CONTAINER_ID" rm -f /tmp/database.dump /tmp/restore.list || true
 PGPASSWORD=postgres psql 'postgresql://postgres:postgres@127.0.0.1:54322/mk9_backup_restore?sslmode=disable' -v ON_ERROR_STOP=1 --quiet --tuples-only --no-align --file=scripts/backup-inventory.sql > "$ROOT/restore/inventory-after.json" 2> "$ROOT/logs/inventory-restore.log" || (cat "$ROOT/logs/inventory-restore.log" >&2 && exit 1)
 node scripts/compare-inventory.mjs "$ROOT/export/inventory-before.json" "$ROOT/restore/inventory-after.json"
 echo 'Disposable PostgreSQL database restore verified independently in database mk9_backup_restore.'
