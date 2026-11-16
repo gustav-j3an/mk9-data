@@ -6,7 +6,7 @@ import {
   FORBIDDEN_PRODUCTION_PROJECT_REF,
   validateTargetProject
 } from './guard-homolog-env.mjs';
-import { normalizeHomologationPoolerUrl } from './pooler-connection.mjs';
+import { normalizeHomologationPoolerUrl, parseHomologationPoolerUrl } from './pooler-connection.mjs';
 
 export const ALLOWED_APPLY_BRANCH = 'feat/rc1-25-promoter-skus-photos-edit';
 export const REQUIRED_CONFIRMATION = 'APLICAR RC1.25 HOMOLOGACAO';
@@ -35,6 +35,21 @@ export function validateMigrationIntegrity(migration = AUTHORIZED_RC125_MIGRATIO
     };
   }
   return { ok: true, file: migration.file, sha256: actualSha256 };
+}
+
+export function validateDatabaseUrlStrict(dbUrl, poolerHost) {
+  if (!dbUrl) {
+    return { ok: false, error: 'SUPABASE_DB_URL is missing.' };
+  }
+  try {
+    const parsed = parseHomologationPoolerUrl(dbUrl, poolerHost);
+    if (parsed.projectRef !== ALLOWED_HOMOLOG_PROJECT_REF) {
+      return { ok: false, error: `DB URL project mismatch: expected ${ALLOWED_HOMOLOG_PROJECT_REF}, got ${parsed.projectRef}` };
+    }
+    return { ok: true, projectRef: parsed.projectRef, poolerHost: parsed.poolerHost };
+  } catch (err) {
+    return { ok: false, error: `DB URL validation error: ${err.message}` };
+  }
 }
 
 export function runPsql(dbUrl, sql, opts = {}) {
@@ -69,9 +84,12 @@ export function executeRc125HomologationApply(env = process.env) {
   }
 
   const dbUrl = env.SUPABASE_DB_URL;
-  if (!dbUrl) {
-    throw new Error('SUPABASE_DB_URL is missing.');
+  const poolerHost = env.SUPABASE_POOLER_HOST;
+  const dbUrlValidation = validateDatabaseUrlStrict(dbUrl, poolerHost);
+  if (!dbUrlValidation.ok) {
+    throw new Error(`DATABASE_URL_VALIDATION_FAILED: ${dbUrlValidation.error}`);
   }
+  console.log(`PASS: Validated pooler host and project ref (${dbUrlValidation.projectRef}) from database URL.`);
 
   console.log('==> [RC1.25 Safe Apply] Verifying migration file hash (SHA-256)...');
   const integrity = validateMigrationIntegrity();
