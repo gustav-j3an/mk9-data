@@ -151,8 +151,65 @@ jobs:
           install -d -m 700 "$root"
           meta="$root/artifact.json"
           zip_path="$root/artifact.zip"
-          if ! gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID" > "$meta"; then
-            echo "ERROR: artifact metadata could not be retrieved; artifact may be expired, deleted, or inaccessible." >&2
+          request_github_api_with_retry() {
+            local endpoint="$1"
+            local destination="$2"
+            local label="$3"
+            local attempt=1
+            local max_attempts=3
+            local delay
+            local error_file="${destination}.stderr"
+            local part_file="${destination}.part"
+            local error_text
+            local http_status
+
+            while (( attempt <= max_attempts )); do
+              if timeout 180s gh api "$endpoint" > "$part_file" 2> "$error_file"; then
+                mv -f -- "$part_file" "$destination"
+                rm -f -- "$error_file"
+                echo "$label succeeded on attempt $attempt/$max_attempts."
+                return 0
+              fi
+
+              error_text="$(cat "$error_file" 2>/dev/null || true)"
+              rm -f -- "$part_file" "$error_file"
+              if [[ "$error_text" =~ HTTP[[:space:]]+([0-9]{3}) ]]; then
+                http_status="${BASH_REMATCH[1]}"
+              else
+                echo "ERROR: $label failed without a recognized HTTP status; not retrying." >&2
+                return 1
+              fi
+              unset error_text
+
+              case "$http_status" in
+                502|503|504)
+                  if (( attempt == max_attempts )); then
+                    echo "ERROR: $label failed with transient HTTP $http_status after $max_attempts attempts." >&2
+                    return 1
+                  fi
+                  delay=$((5 * (2 ** (attempt - 1))))
+                  echo "WARNING: $label returned transient HTTP $http_status on attempt $attempt/$max_attempts; retrying in ${delay}s." >&2
+                  sleep "$delay"
+                  ;;
+                401|403)
+                  echo "ERROR: $label returned HTTP $http_status (authentication/authorization); not retrying." >&2
+                  return 1
+                  ;;
+                404)
+                  echo "ERROR: $label returned HTTP 404; the artifact or endpoint is unavailable; not retrying." >&2
+                  return 1
+                  ;;
+                *)
+                  echo "ERROR: $label returned non-retryable HTTP $http_status; not retrying." >&2
+                  return 1
+                  ;;
+              esac
+              attempt=$((attempt + 1))
+            done
+            return 1
+          }
+
+          if ! request_github_api_with_retry "/repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID" "$meta" "Artifact metadata request"; then
             exit 1
           fi
           if ! jq -e --arg id "$ARTIFACT_ID" --arg digest "sha256:$EXPECTED_SHA256" --arg run "$EXPECTED_RUN_ID" --argjson size "$EXPECTED_SIZE" '
@@ -166,8 +223,7 @@ jobs:
             exit 1
           fi
           artifact_zip_url="https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip"
-          if ! gh api "$artifact_zip_url" > "$zip_path"; then
-            echo "ERROR: binary artifact download failed; verify artifact availability, retention, and GitHub Actions permissions." >&2
+          if ! request_github_api_with_retry "$artifact_zip_url" "$zip_path" "Artifact ZIP download"; then
             exit 1
           fi
           actual_size="$(stat -c %s "$zip_path")"
