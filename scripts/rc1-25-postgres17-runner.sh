@@ -162,7 +162,7 @@ for mig in "${PENDING_MIGRATIONS[@]}"; do
   VERSION="$(echo "$BASE_NAME" | grep -oE '^[0-9]+')"
   echo "[$COUNT/$TOTAL_PENDING] Aplicando: $BASE_NAME (versão $VERSION) com ledger em bloco atômico único ..."
   START_TS="$(date +%s%N)"
-  TEMP_COMPOSED="$RUNNER_TEMP/composed_${VERSION}.sql"
+  TEMP_COMPOSED="$ROOT/composed_${VERSION}.sql"
   {
     echo "BEGIN;"
     echo "SET LOCAL lock_timeout = '3s';"
@@ -193,7 +193,7 @@ echo "==========================================================================
 # 7. Aplicar a migration proposta da RC1.25 com registro atômico no ledger
 echo "Aplicando migration proposta RC1.25 (supabase/migrations/propostas/20261115_rc1_25_skus_and_stock_audits.sql)..."
 START_RC25="$(date +%s%N)"
-TEMP_RC25="$RUNNER_TEMP/composed_rc25.sql"
+TEMP_RC25="$ROOT/composed_rc25.sql"
 {
   echo "BEGIN;"
   echo "SET LOCAL lock_timeout = '3s';"
