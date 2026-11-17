@@ -20,7 +20,7 @@ COPY supabase_migrations.schema_migrations (version, statements, name) FROM stdi
 `;
     await writeFile(sqlPath, sqlContent, 'utf8');
 
-    // Simula bundle no repositório com 4 arquivos para 20260930 (colisão) e 2 arquivos para 20261020160000 (colisão pendente)
+    // Simula bundle no repositório com 4 arquivos para 20260930 (colisão) e 2 arquivos para pendentes distintos
     const manifestContent = {
       schema_version: '1.0',
       total_executable_files: 7,
@@ -31,7 +31,7 @@ COPY supabase_migrations.schema_migrations (version, statements, name) FROM stdi
         { version: '20260930', filename: '20260930_update_rotas_structure.sql' },
         { version: '20261001', filename: '20261001_single_file.sql' },
         { version: '20261020160000', filename: '20261020160000_add_whatsapp_group_link_to_industrias.sql' },
-        { version: '20261020160000', filename: '20261020160000_mk9_faltas_atestados_prepare_permission.sql' }
+        { version: '20261020163000', filename: '20261020163000_mk9_faltas_atestados_prepare_permission.sql' }
       ]
     };
     await writeFile(manifestPath, JSON.stringify(manifestContent), 'utf8');
@@ -43,13 +43,13 @@ COPY supabase_migrations.schema_migrations (version, statements, name) FROM stdi
     assert.equal(report.registeredWithoutFile.length, 0);
     assert.equal(report.isFullyTracked, true);
 
-    // Deve relatar exatamente os 2 arquivos pendentes físicos sem ocultar colisão
+    // Deve relatar exatamente os 2 arquivos pendentes físicos
     assert.equal(report.filesNotAppliedInDb.length, 2);
     assert.deepEqual(
       report.filesNotAppliedInDb.map(f => f.filename),
       [
         '20261020160000_add_whatsapp_group_link_to_industrias.sql',
-        '20261020160000_mk9_faltas_atestados_prepare_permission.sql'
+        '20261020163000_mk9_faltas_atestados_prepare_permission.sql'
       ]
     );
   } finally {

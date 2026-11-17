@@ -87,20 +87,75 @@ if [[ ! "$PG_VERSION" =~ ^17\. ]]; then
   exit 1
 fi
 
-# 5. Aplicar fixture sintética e migrations base pré-requisito
+# 5. Aplicar fixture sintética e estruturas base
 echo "Aplicando estrutura base e fixture de testes..."
 run_sql_file "scripts/rc1-25-test-fixture.sql" >/dev/null
 
-# Aplicar a migration de escopo operacional que define attendance_private e as funções base de visitas
-run_sql_file "supabase/migrations/20261022152449_mk9_date_visit_regularization_and_checkin_scope.sql" >/dev/null
+# Habilitar extensão pg_cron para garantir suporte às migrações de ciclo de vida (M38)
+echo "Habilitando pg_cron se disponível..."
+run_sql_cmd "DO \$\$ BEGIN CREATE EXTENSION IF NOT EXISTS pg_cron WITH SCHEMA pg_catalog; EXCEPTION WHEN OTHERS THEN NULL; END \$\$;" || true
 
-# 6. Aplicar a migration proposta da RC1.25
+# 6. Executar o ensaio de todas as 26 migrações pendentes em ordem cronológica estrita
+echo "================================================================================"
+echo "INICIANDO ENSAIO SEQUENCIAL DAS 26 MIGRATIONS PENDENTES NO POSTGRESQL 17"
+echo "================================================================================"
+
+PENDING_MIGRATIONS=(
+  "supabase/migrations/20261009144200_add_visits_unique_constraint.sql"
+  "supabase/migrations/20261010_create_system_settings_and_audit.sql"
+  "supabase/migrations/20261011120000_create_promoter_authorizations.sql"
+  "supabase/migrations/20261011140000_auto_generate_industry_code.sql"
+  "supabase/migrations/20261017120000_create_contratos_lojas_table.sql"
+  "supabase/migrations/20261017_create_avatars_storage_policies.sql"
+  "supabase/migrations/20261018150000_add_data_inicio_operacao_to_industrias.sql"
+  "supabase/migrations/20261019151754_mk9_rh_explicit_bindings.sql"
+  "supabase/migrations/20261019175853_mk9_rh_admin_binding_preparation.sql"
+  "supabase/migrations/20261020160000_add_whatsapp_group_link_to_industrias.sql"
+  "supabase/migrations/20261020163000_mk9_faltas_atestados_prepare_permission.sql"
+  "supabase/migrations/20261020170000_mk9_absence_records_outbox.sql"
+  "supabase/migrations/20261021100000_mk9_rh_reconciliation.sql"
+  "supabase/migrations/20261021120000_mk9_absence_attachments.sql"
+  "supabase/migrations/20261022152449_mk9_date_visit_regularization_and_checkin_scope.sql"
+  "supabase/migrations/20261023142837_promoter_scheduled_visit_actions.sql"
+  "supabase/migrations/20261030160000_minimal_visit_regularization.sql"
+  "supabase/migrations/20261105165500_m30_harden_industry_active_checkin.sql"
+  "supabase/migrations/20261106131614_m30_serialize_industry_checkin.sql"
+  "supabase/migrations/20261106140000_m37_pending_visit_active_route_guard.sql"
+  "supabase/migrations/20261106150000_m37_checkin_route_and_conflict_guard.sql"
+  "supabase/migrations/20261107140000_m37_reconcile_materialized_pending_recovery.sql"
+  "supabase/migrations/20261108160835_m37_integral_weekly_recovery.sql"
+  "supabase/migrations/20261110150000_m38_visit_cancellation_and_day_end_close.sql"
+  "supabase/migrations/20261110160000_m38_retry_attempt_history.sql"
+  "supabase/migrations/20261110170000_m38_checkin_reuses_active_scheduled_attempt.sql"
+)
+
+TOTAL_PENDING=${#PENDING_MIGRATIONS[@]}
+COUNT=0
+
+for mig in "${PENDING_MIGRATIONS[@]}"; do
+  COUNT=$((COUNT + 1))
+  BASE_NAME="$(basename "$mig")"
+  echo "[$COUNT/$TOTAL_PENDING] Aplicando: $BASE_NAME ..."
+  START_TS="$(date +%s%N)"
+  run_sql_file "$mig"
+  END_TS="$(date +%s%N)"
+  DURATION_MS=$(( (END_TS - START_TS) / 1000000 ))
+  echo "  ✓ Sucesso ($DURATION_MS ms)"
+done
+
+echo "================================================================================"
+echo "SUCESSO: Todas as 26 migrations pendentes aplicadas sem erros no PostgreSQL 17!"
+echo "================================================================================"
+
+# 7. Aplicar a migration proposta da RC1.25
 echo "Aplicando migration proposta RC1.25 (supabase/migrations/propostas/20261115_rc1_25_skus_and_stock_audits.sql)..."
+START_RC25="$(date +%s%N)"
 run_sql_file "supabase/migrations/propostas/20261115_rc1_25_skus_and_stock_audits.sql"
+END_RC25="$(date +%s%N)"
+DURATION_RC25_MS=$(( (END_RC25 - START_RC25) / 1000000 ))
+echo "✓ Migration RC1.25 aplicada com sucesso ($DURATION_RC25_MS ms)."
 
-echo "Migration RC1.25 aplicada com sucesso no PostgreSQL 17."
-
-# 7. Executar a suíte de testes funcionais reais
+# 8. Executar a suíte de testes funcionais reais
 echo "Executando suíte de testes funcionais reais (scripts/rc1-25-postgres17-validation.sql)..."
 run_sql_file "scripts/rc1-25-postgres17-validation.sql"
 
