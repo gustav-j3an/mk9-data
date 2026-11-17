@@ -140,27 +140,60 @@ for mig in "${PENDING_MIGRATIONS[@]}"; do
   COUNT=$((COUNT + 1))
   BASE_NAME="$(basename "$mig")"
   VERSION="$(echo "$BASE_NAME" | grep -oE '^[0-9]+')"
-  echo "[$COUNT/$TOTAL_PENDING] Aplicando: $BASE_NAME (versão $VERSION) ..."
+  echo "[$COUNT/$TOTAL_PENDING] Aplicando: $BASE_NAME (versão $VERSION) com ledger em bloco atômico único ..."
   START_TS="$(date +%s%N)"
-  run_sql_file "$mig"
-  run_sql_cmd "INSERT INTO supabase_migrations.schema_migrations (version) VALUES ('$VERSION') ON CONFLICT (version) DO NOTHING;"
+  TEMP_COMPOSED="$RUNNER_TEMP/composed_${VERSION}.sql"
+  {
+    echo "BEGIN;"
+    echo "SET LOCAL lock_timeout = '3s';"
+    echo "SET LOCAL statement_timeout = '60s';"
+    # Remove BEGIN/COMMIT internos se existirem para encapsulamento perfeito
+    sed -e 's/^[[:space:]]*BEGIN[[:space:]]*;[[:space:]]*$//I' \
+        -e 's/^[[:space:]]*COMMIT[[:space:]]*;[[:space:]]*$//I' "$mig"
+    echo ""
+    echo "INSERT INTO supabase_migrations.schema_migrations (version) VALUES ('$VERSION') ON CONFLICT (version) DO NOTHING;"
+    echo "COMMIT;"
+  } > "$TEMP_COMPOSED"
+  
+  if command -v psql >/dev/null 2>&1; then
+    psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$TEMP_COMPOSED"
+  else
+    docker exec -i "$CONTAINER_ID" psql -U postgres -d postgres -v ON_ERROR_STOP=1 < "$TEMP_COMPOSED"
+  fi
+  rm -f "$TEMP_COMPOSED"
   END_TS="$(date +%s%N)"
   DURATION_MS=$(( (END_TS - START_TS) / 1000000 ))
-  echo "  ✓ Sucesso ($DURATION_MS ms - ledger atualizado com versão $VERSION)"
+  echo "  ✓ Sucesso ($DURATION_MS ms - migration + ledger comitados atomicamente)"
 done
 
 echo "================================================================================"
 echo "SUCESSO: Todas as 26 migrations pendentes aplicadas sem erros no PostgreSQL 17!"
 echo "================================================================================"
 
-# 7. Aplicar a migration proposta da RC1.25
+# 7. Aplicar a migration proposta da RC1.25 com registro atômico no ledger
 echo "Aplicando migration proposta RC1.25 (supabase/migrations/propostas/20261115_rc1_25_skus_and_stock_audits.sql)..."
 START_RC25="$(date +%s%N)"
-run_sql_file "supabase/migrations/propostas/20261115_rc1_25_skus_and_stock_audits.sql"
-run_sql_cmd "INSERT INTO supabase_migrations.schema_migrations (version) VALUES ('20261115160000') ON CONFLICT (version) DO NOTHING;"
+TEMP_RC25="$RUNNER_TEMP/composed_rc25.sql"
+{
+  echo "BEGIN;"
+  echo "SET LOCAL lock_timeout = '3s';"
+  echo "SET LOCAL statement_timeout = '60s';"
+  sed -e 's/^[[:space:]]*BEGIN[[:space:]]*;[[:space:]]*$//I' \
+      -e 's/^[[:space:]]*COMMIT[[:space:]]*;[[:space:]]*$//I' "supabase/migrations/propostas/20261115_rc1_25_skus_and_stock_audits.sql"
+  echo ""
+  echo "INSERT INTO supabase_migrations.schema_migrations (version) VALUES ('20261115160000') ON CONFLICT (version) DO NOTHING;"
+  echo "COMMIT;"
+} > "$TEMP_RC25"
+
+if command -v psql >/dev/null 2>&1; then
+  psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$TEMP_RC25"
+else
+  docker exec -i "$CONTAINER_ID" psql -U postgres -d postgres -v ON_ERROR_STOP=1 < "$TEMP_RC25"
+fi
+rm -f "$TEMP_RC25"
 END_RC25="$(date +%s%N)"
 DURATION_RC25_MS=$(( (END_RC25 - START_RC25) / 1000000 ))
-echo "✓ Migration RC1.25 aplicada com sucesso ($DURATION_RC25_MS ms - ledger atualizado com versão 20261115160000)."
+echo "✓ Migration RC1.25 aplicada com sucesso ($DURATION_RC25_MS ms - comitada atomicamente com ledger)."
 
 # 8. Executar a suíte de testes funcionais reais
 echo "Executando suíte de testes funcionais reais (scripts/rc1-25-postgres17-validation.sql)..."
