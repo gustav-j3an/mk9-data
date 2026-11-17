@@ -27,7 +27,7 @@ jobs:
       - name: Check out the exact reviewed dispatch commit
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: \${{ github.sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Verify run context and install PostgreSQL 17, GPG and archive tools
@@ -57,7 +57,7 @@ jobs:
       - name: Verify and download the immutable Run 21 artifact
         shell: bash
         env:
-          GH_TOKEN: \${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
           ARTIFACT_ID: "14263585524"
           EXPECTED_RUN_ID: "43941383469"
           EXPECTED_SHA256: "031906468ad2ef117afb0b806004173a23dbba4e6d95b2c9bd4187d86662c77c"
@@ -82,7 +82,7 @@ jobs:
       - name: Decrypt and verify archive without logging the passphrase
         shell: bash
         env:
-          BACKUP_GPG_PASSPHRASE: \${{ secrets.BACKUP_GPG_PASSPHRASE }}
+          BACKUP_GPG_PASSPHRASE: ${{ secrets.BACKUP_GPG_PASSPHRASE }}
         run: |
           set -Eeuo pipefail
           set +x
@@ -120,7 +120,7 @@ jobs:
       - name: Restore and rehearse migrations in the disposable database
         shell: bash
         env:
-          BACKUP_DIR: \${{ runner.temp }}/mk9-real-backup-extracted
+          BACKUP_DIR: ${{ runner.temp }}/mk9-real-backup-extracted
         run: |
           set -Eeuo pipefail
           chmod 700 scripts/rc1-25-real-backup-rehearsal.sh
