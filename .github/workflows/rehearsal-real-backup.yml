@@ -65,10 +65,12 @@ jobs:
 
       - name: Verify run context and install PostgreSQL 17, GPG and archive tools
         shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_commit }}
         run: |
           set -Eeuo pipefail
           test "$GITHUB_REF" = "refs/heads/main"
-          test "${{ inputs.source_commit }}" = "$(git -C source rev-parse HEAD)"
+          test "$SOURCE_SHA" = "$(git -C source rev-parse HEAD)"
           sudo install -d -m 0755 /usr/share/keyrings
           curl -fsSL --retry 3 --connect-timeout 10 https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor --yes -o /usr/share/keyrings/postgresql.gpg
           echo 'deb [signed-by=/usr/share/keyrings/postgresql.gpg] https://apt.postgresql.org/pub/repos/apt noble-pgdg main' | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null

@@ -16,6 +16,11 @@ case "$ACTION" in
     fi
     read -r NETWORK_NAME CONTAINER_IP <<< "${NETWORKS[0]}"
     NETWORK_SUBNET="$(docker network inspect --format '{{(index .IPAM.Config 0).Subnet}}' "$NETWORK_NAME")"
+    NETWORK_IPV6="$(docker network inspect --format '{{.EnableIPv6}}' "$NETWORK_NAME")"
+    if [[ "$NETWORK_IPV6" != "false" ]]; then
+      echo "FALHA: IPv6-enabled Docker networks are unsupported; refusing without equivalent IPv6 egress controls." >&2
+      exit 1
+    fi
     [[ "$CONTAINER_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]
     [[ "$NETWORK_SUBNET" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$ ]]
     iptables -S DOCKER-USER >/dev/null 2>&1 || {
