@@ -78,28 +78,18 @@ Para evitar o erro crítico de executar `supabase db push` ou `supabase migratio
 
 ---
 
-## 5. Roteiro Passo a Passo de Execução Supervisionada
+## 5. Roteiro Passo a Passo de Execucao Supervisionada
 
-### Passo 1: Execução Sequencial das Migrações no Supabase Cloud
-No **SQL Editor** do projeto `xzmbesqhxcnuokjwrbnw`, executar os 9 scripts na ordem exata de 1 a 9.
-- Cada script possui bloco atômico `BEGIN; ... COMMIT;` com `lock_timeout = '3s'` e `statement_timeout = '60s'`.
-- Critério de Parada Imediata: Se qualquer script retornar erro, **NÃO prosseguir** para o script seguinte. O script com erro sofrerá rollback automático.
+### Passo 1: Execucao Sequencial e Granular das Migracoes no Supabase Cloud
+No **SQL Editor** do projeto `xzmbesqhxcnuokjwrbnw` (ou via runner controlado), executar as migrations estritamente uma a uma em ordem deterministica.
+- Cada migration deve ser executada dentro de sua propria transacao atomica (`BEGIN; ... COMMIT;`) quando compativel com DDL transacional, acompanhada de `lock_timeout = '3s'` e `statement_timeout = '60s'`.
+- O registro correspondente no ledger (`supabase_migrations.schema_migrations`) deve ser efetuado atomicamente dentro do mesmo bloco da migration.
+- **Criterio de Parada Imediata:** Diante de qualquer erro retornado pelo banco, **a execucao e interrompida imediatamente** no ponto exato da falha. Nao avancar para os scripts seguintes.
 
-### Passo 2: Registro Consistente no Ledger Remoto
-Após a execução bem-sucedida de cada script, registrar as versões na tabela de histórico de migrações (`supabase_migrations.schema_migrations`) executando no SQL Editor:
-```sql
-INSERT INTO supabase_migrations.schema_migrations (version) VALUES
-  ('20261018220000'),
-  ('20261018230000'),
-  ('20261018232256'),
-  ('20261018234153'),
-  ('20261019001109'),
-  ('20261019001848'),
-  ('20261019004947'),
-  ('20261019011832'),
-  ('20261019013007')
-ON CONFLICT (version) DO NOTHING;
-```
+### Passo 2: Diagnostico e Compensacao Pontual (Sem Rollback Automatico de Shell)
+- O encerramento do script ou do shell (`set -e`) apenas interrompe o processo cliente; **nao desfaz retroativamente alteracoes ja comitadas em transacoes anteriores**.
+- Como cada migration aprovada comitou atomicamente, o banco permanece no estado estavel da ultima migracao bem-sucedida.
+- O operador deve diagnosticar o erro na migration que falhou e aplicar uma **compensacao direcionada** (ajuste pontual de dados ou constraint bloqueante) para possibilitar a retomada segura, sem acionar restauracao destrutiva do banco inteiro.
 
 ### Passo 3: Recarga do Cache da API do PostgREST
 Executar no SQL Editor:
@@ -109,9 +99,9 @@ NOTIFY pgrst, 'reload schema';
 
 ---
 
-## 6. Procedimento de Validação Pós-Implantação
+## 6. Procedimento de Validacao Pos-Implantacao
 
-Após a conclusão da implantação, executar as seguintes verificações de integridade:
+Apos a conclusao da implantacao, executar as seguintes verificacoes de integridade:
 
 1. **Checagem de Tabelas e Schema Privado:**
    ```sql
@@ -119,33 +109,35 @@ Após a conclusão da implantação, executar as seguintes verificações de int
    WHERE table_schema IN ('public', 'attendance_private') AND table_name LIKE '%attendance%'
    ORDER BY table_schema, table_name;
    ```
-2. **Confirmação do Bloqueio de Faltas Automáticas:**
+2. **Confirmacao do Bloqueio de Faltas Automaticas:**
    ```sql
    SELECT key, value FROM public.system_settings WHERE key = 'attendance_rules';
    ```
-   *Critério de Sucesso:* `automatic_absence_approved` deve ser `false` (ou nulo) e não pode haver fechamento automático de ponto.
-3. **Validação da Quantidade de Promotores e Equipes:**
+   *Criterio de Sucesso:* `automatic_absence_approved` deve ser `false` (ou nulo) e nao pode haver fechamento automatico de ponto.
+3. **Validacao da Quantidade de Promotores e Equipes:**
    ```sql
    SELECT count(*) FROM public.promotores; -- Deve permanecer exatamente 44
-   SELECT count(*) FROM public.equipes;    -- Deve permanecer exatamente 1 (Brasília)
+   SELECT count(*) FROM public.equipes;    -- Deve permanecer exatamente 1 (Brasilia)
    SELECT count(*) FROM public.supervisores; -- Deve permanecer exatamente 1 (Paulo Gustavo)
    ```
-4. **Homologação na Interface MK9 Date:**
-   - Acessar a tela **Controle de Presença** no navegador.
-   - Confirmar que o aviso de "Estruturas indisponíveis" desapareceu e que o painel exibe a versão operacional 9 sem falhas de conexão.
+4. **Homologacao na Interface MK9 Date:**
+   - Acessar a tela **Controle de Presenca** no navegador.
+   - Confirmar que o aviso de "Estruturas indisponiveis" desapareceu e que o painel exibe a versao operacional 9 sem falhas de conexao.
 
 ---
 
-## 7. Procedimento de Contingência e Disaster Recovery
+## 7. Procedimento de Contingencia e Disaster Recovery
 
-Caso ocorra um bloqueio intransponível ou impacto imprevisto em produção:
+Caso ocorra um bloqueio intransponivel ou impacto imprevisto em producao:
 
-1. **Falha Durante a Janela de Execução:**  
-   O script que falhou já estará desfeito pelo `ROLLBACK` atômico. Interromper a implantação; a aplicação continua operando com o fallback tolerante do frontend.
-2. **Reversão Total para o Ponto de Partida:**  
-   Recarregar o snapshot de dados prévio gerado na Fase 2:
-   ```powershell
-   # Restauração dos dados salvaguardados
-   psql -h aws-0-sa-east-1.pooler.supabase.com -p 5432 -d postgres -U postgres.xzmbesqhxcnuokjwrbnw -f "supabase/backups/prod_backup_data_pre_attendance.sql"
-   ```
-
+1. **Falha Durante a Janela de Execucao:**  
+   O script que falhou sofrera `ROLLBACK` atomico dentro de sua propria transacao, mantendo as migracoes anteriores ja comitadas intactas. A implantacao e interrompida imediatamente. Nao presumir que `set -e` reverta o banco automaticamente.
+2. **Avaliacao de Compensacao Pontual:**  
+   Antes de considerar qualquer restauracao, deve-se avaliar se uma intervencao direcionada (script de reversao ou ajuste cirurgico da migracao afetada) resolve a inconsistencia, preservando integralmente os dados operacionais do banco.
+3. **Procedimento Excepcional de Disaster Recovery (Restauracao de Snapshot):**  
+   - **Alerta Critico de Perda de Dados:** A restauracao de um snapshot de dados do momento T0 sobrescreve a base e **descarta irrevogavelmente todas as alteracoes operacionais ocorridas apos T0** (check-ins, check-outs, fotos, registros de presenca e atualizacoes de rotas).
+   - A restauracao de snapshot **e estritamente proibida como resposta automatica padrao**.
+   - Ela so podera ser acionada em caso de **corrupcao estrutural irrecuperavel do catalogo do banco**, mediante:
+     a) Congelamento total e previo do trafego da aplicacao;
+     b) Comunicacao formal previa ao administrador informando a perda potencial dos dados operacionais gerados apos T0;
+     c) **Autorizacao explicita e documentada do administrador** para a restauracao destrutiva.
