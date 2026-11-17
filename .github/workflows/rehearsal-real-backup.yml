@@ -26,20 +26,16 @@ jobs:
     if: github.ref == 'refs/heads/main' && inputs.confirm_real_backup_restore == true
     runs-on: ubuntu-24.04
     steps:
-      - name: Require the exact current integration SHA selected for independent review
+      - name: Require the exact independently audited source SHA
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_SHA: ${{ inputs.source_commit }}
-          AUDITED_SOURCE_COMMIT: "PENDING_COPILOT_REVIEW"
+          AUDITED_SOURCE_COMMIT: "19a3ed1cd6d7bee000e12f045ae6e7cbbae7106d"
         run: |
           set -Eeuo pipefail
           set +x
           [[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
-          if [[ "$AUDITED_SOURCE_COMMIT" == "PENDING_COPILOT_REVIEW" ]]; then
-            echo "FALHA: no source SHA has been approved by the independent audit yet." >&2
-            exit 1
-          fi
           test "$SOURCE_SHA" = "$AUDITED_SOURCE_COMMIT"
           gh api "/repos/$GITHUB_REPOSITORY/commits/$SOURCE_SHA" >/dev/null
           echo "Audited source commit pinned for the protected rehearsal: $SOURCE_SHA" >> "$GITHUB_STEP_SUMMARY"
@@ -59,11 +55,11 @@ jobs:
           persist-credentials: false
 
       - name: Set up pinned Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        uses: actions/setup-node@49933ea5288caeca8642d1e1d84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22.16.0'
 
-      - name: Verify run context and install PostgreSQL 17, GPG and archive tools
+      - name: Verify run context, required audited scripts and install PostgreSQL 17, GPG and archive tools
         shell: bash
         env:
           SOURCE_SHA: ${{ inputs.source_commit }}
@@ -71,6 +67,14 @@ jobs:
           set -Eeuo pipefail
           test "$GITHUB_REF" = "refs/heads/main"
           test "$SOURCE_SHA" = "$(git -C source rev-parse HEAD)"
+          for required in \
+            scripts/rc1-25-real-backup-rehearsal.sh \
+            scripts/rc1-25-egress-guard.sh \
+            scripts/rc1-25-postgres17-runner.sh \
+            scripts/rc1-25-historical-data-snapshot.sql \
+            scripts/filter-roles.mjs; do
+            test -s "source/$required" || { echo "Missing required audited script: $required" >&2; exit 1; }
+          done
           sudo install -d -m 0755 /usr/share/keyrings
           curl -fsSL --retry 3 --connect-timeout 10 https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor --yes -o /usr/share/keyrings/postgresql.gpg
           echo 'deb [signed-by=/usr/share/keyrings/postgresql.gpg] https://apt.postgresql.org/pub/repos/apt noble-pgdg main' | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
