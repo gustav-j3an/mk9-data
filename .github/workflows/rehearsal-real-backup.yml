@@ -1,0 +1,177 @@
+name: MK9 RC1.25.33 real-backup rehearsal
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_commit:
+        description: Full SHA of the RC1.25.33 integration commit independently audited for this rehearsal
+        required: true
+        type: string
+      confirm_real_backup_restore:
+        description: Confirm restoration of the encrypted production backup into a disposable local PostgreSQL 17 database only
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: mk9-rc1-25-real-backup-rehearsal
+  cancel-in-progress: false
+
+jobs:
+  validate-source:
+    if: github.ref == 'refs/heads/main' && inputs.confirm_real_backup_restore == true
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require the exact current integration SHA selected for independent review
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ inputs.source_commit }}
+          AUDITED_SOURCE_COMMIT: "PENDING_COPILOT_REVIEW"
+        run: |
+          set -Eeuo pipefail
+          set +x
+          [[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          if [[ "$AUDITED_SOURCE_COMMIT" == "PENDING_COPILOT_REVIEW" ]]; then
+            echo "FALHA: no source SHA has been approved by the independent audit yet." >&2
+            exit 1
+          fi
+          test "$SOURCE_SHA" = "$AUDITED_SOURCE_COMMIT"
+          gh api "/repos/$GITHUB_REPOSITORY/commits/$SOURCE_SHA" >/dev/null
+          echo "Audited source commit pinned for the protected rehearsal: $SOURCE_SHA" >> "$GITHUB_STEP_SUMMARY"
+
+  rehearse:
+    needs: validate-source
+    if: github.ref == 'refs/heads/main' && inputs.confirm_real_backup_restore == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    environment: production-backup
+    steps:
+      - name: Check out the exact integration commit selected above
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.source_commit }}
+          path: source
+          persist-credentials: false
+
+      - name: Set up pinned Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22.16.0'
+
+      - name: Verify run context and install PostgreSQL 17, GPG and archive tools
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_commit }}
+        run: |
+          set -Eeuo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$SOURCE_SHA" = "$(git -C source rev-parse HEAD)"
+          sudo install -d -m 0755 /usr/share/keyrings
+          curl -fsSL --retry 3 --connect-timeout 10 https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor --yes -o /usr/share/keyrings/postgresql.gpg
+          echo 'deb [signed-by=/usr/share/keyrings/postgresql.gpg] https://apt.postgresql.org/pub/repos/apt noble-pgdg main' | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-17 gpg unzip jq
+          pg_restore --version | grep -q '^pg_restore (PostgreSQL) 17\.'
+          docker --version
+
+      - name: Install pinned Supabase CLI
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          curl -fsSL --retry 3 --connect-timeout 10 https://github.com/supabase/cli/releases/download/v3.0.0/supabase_3.0.0_linux_amd64.tar.gz -o "$RUNNER_TEMP/supabase-cli.tar.gz"
+          tar -xzf "$RUNNER_TEMP/supabase-cli.tar.gz" -C "$RUNNER_TEMP" supabase
+          sudo install "$RUNNER_TEMP/supabase" /usr/local/bin/supabase
+          rm -f "$RUNNER_TEMP/supabase-cli.tar.gz" "$RUNNER_TEMP/supabase"
+          test "$(supabase --version)" = "3.0.0"
+
+      - name: Verify and download the immutable Run 21 artifact
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: "14263585524"
+          EXPECTED_RUN_ID: "43941383469"
+          EXPECTED_SHA256: "031906468ad2ef117afb0b806004173a23dbba4e6d95b2c9bd4187d86662c77c"
+          EXPECTED_SIZE: "21343699"
+        run: |
+          set -Eeuo pipefail
+          set +x
+          root="$RUNNER_TEMP/mk9-real-backup-input"
+          install -d -m 700 "$root"
+          meta="$root/artifact.json"
+          zip_path="$root/artifact.zip"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID" > "$meta"
+          jq -e --arg id "$ARTIFACT_ID" --arg digest "sha256:$EXPECTED_SHA256" --arg run "$EXPECTED_RUN_ID" --argjson size "$EXPECTED_SIZE" '
+            (.id|tostring)==$id and .expired==false and .digest==$digest and .size_in_bytes==$size and (.workflow_run.id|tostring)==$run and .workflow_run.head_branch=="codex/m57.2-production-backup-workflow" and .workflow_run.head_sha=="4f14257dc30a782b63d9572b06f510dd566c08a6"
+          ' "$meta" >/dev/null
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip" --output "$zip_path"
+          actual="$(sha256sum "$zip_path" | cut -d' ' -f1)"
+          test "$actual" = "$EXPECTED_SHA256"
+          test "$(stat -c %s "$zip_path")" = "$EXPECTED_SIZE"
+          echo "Run 21 artifact metadata, archive size and SHA-256 verified."
+
+      - name: Decrypt and verify archive without logging the passphrase
+        shell: bash
+        env:
+          BACKUP_GPG_PASSPHRASE: ${{ secrets.BACKUP_GPG_PASSPHRASE }}
+        run: |
+          set -Eeuo pipefail
+          set +x
+          test -n "$BACKUP_GPG_PASSPHRASE"
+          input="$RUNNER_TEMP/mk9-real-backup-input"
+          encrypted="$input/mk9-production-backup-43941383469-1.tar.gz.gpg"
+          archive="$input/backup.tar.gz"
+          extracted="$RUNNER_TEMP/mk9-real-backup-extracted"
+          passfile="$input/passphrase"
+          members="$(unzip -Z1 "$input/artifact.zip")"
+          test "$members" = "mk9-production-backup-43941383469-1.tar.gz.gpg"
+          unzip -p "$input/artifact.zip" "$members" > "$encrypted"
+          chmod 600 "$encrypted"
+          printf '%s' "$BACKUP_GPG_PASSPHRASE" > "$passfile"
+          chmod 600 "$passfile"
+          unset BACKUP_GPG_PASSPHRASE
+          if ! gpg --batch --quiet --yes --pinentry-mode loopback --passphrase-file "$passfile" --decrypt --output "$archive" "$encrypted" 2>"$input/gpg.log"; then
+            echo "FALHA: encrypted backup could not be decrypted; sensitive diagnostics withheld." >&2
+            exit 1
+          fi
+          shred -n 1 -z -u -- "$passfile" 2>/dev/null || rm -f -- "$passfile"
+          chmod 600 "$archive"
+          install -d -m 700 "$extracted"
+          if ! tar -tzf "$archive" | awk 'BEGIN{bad=0} /^\// || /(^|\/)\.\.(\/|$)/ {bad=1} END{exit bad}'; then
+            echo "FALHA: decrypted archive contains an unsafe path." >&2
+            exit 1
+          fi
+          tar --no-same-owner --no-same-permissions -xzf "$archive" -C "$extracted" 2>"$input/extract.log"
+          (cd "$extracted" && sha256sum --check SHA256SUMS >/dev/null 2>"$input/checksums.log")
+          pg_restore --list "$extracted/database.dump" >/dev/null 2>"$input/pg-archive.log"
+          test -s "$extracted/roles.sql"
+          test -s "$extracted/inventory-before.json"
+          echo "GPG decryption, internal SHA256SUMS and PostgreSQL archive readability verified."
+
+      - name: Restore and rehearse migrations in the disposable database
+        shell: bash
+        env:
+          BACKUP_DIR: ${{ runner.temp }}/mk9-real-backup-extracted
+        run: |
+          set -Eeuo pipefail
+          chmod 700 scripts/rc1-25-real-backup-rehearsal.sh
+          bash scripts/rc1-25-real-backup-rehearsal.sh
+        working-directory: source
+
+      - name: Remove encrypted and plaintext backup files from runner workspace
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for target in "$RUNNER_TEMP/mk9-real-backup-input" "$RUNNER_TEMP/mk9-real-backup-extracted"; do
+            if [[ -d "$target" ]]; then
+              find "$target" -type f -exec shred -n 1 -z -u -- {} + 2>/dev/null || true
+              rm -rf -- "$target"
+            elif [[ -f "$target" ]]; then
+              shred -n 1 -z -u -- "$target" 2>/dev/null || rm -f -- "$target"
+            fi
+          done
