@@ -235,29 +235,7 @@ $$;
 -- 7. Schema attendance_private
 CREATE SCHEMA IF NOT EXISTS attendance_private;
 
-CREATE TABLE IF NOT EXISTS attendance_private.scheduled_recovery_authorizations (
-  visit_id UUID PRIMARY KEY REFERENCES public.visits(id) ON DELETE CASCADE,
-  promotor_matricula TEXT NOT NULL,
-  data_visita DATE NOT NULL,
-  scheduled_date DATE NOT NULL,
-  authorized_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
-);
-ALTER TABLE attendance_private.scheduled_recovery_authorizations ENABLE ROW LEVEL SECURITY;
-REVOKE ALL ON attendance_private.scheduled_recovery_authorizations FROM PUBLIC, anon, authenticated;
 
-CREATE TABLE IF NOT EXISTS attendance_private.visit_lifecycle_authorizations (
-  visit_id UUID PRIMARY KEY REFERENCES public.visits(id) ON DELETE CASCADE,
-  promotor_matricula TEXT NOT NULL,
-  action TEXT NOT NULL CHECK (action IN ('promoter_cancelled', 'auto_closed_at_day_end')),
-  actor_type TEXT NOT NULL CHECK (actor_type IN ('promoter', 'system')),
-  actor_id UUID,
-  reason TEXT NOT NULL,
-  authorized_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
-  CHECK ((actor_type = 'promoter' AND actor_id IS NOT NULL AND action = 'promoter_cancelled')
-      OR (actor_type = 'system' AND actor_id IS NULL AND action = 'auto_closed_at_day_end'))
-);
-ALTER TABLE attendance_private.visit_lifecycle_authorizations ENABLE ROW LEVEL SECURITY;
-REVOKE ALL ON attendance_private.visit_lifecycle_authorizations FROM PUBLIC, anon, authenticated;
 
 CREATE OR REPLACE FUNCTION attendance_private.is_visit_in_current_operational_day(p_visit_id UUID)
 RETURNS BOOLEAN LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$
