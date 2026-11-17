@@ -19,6 +19,9 @@ DECLARE
   v_ind_code TEXT := 'TEST_IND_RC25';
   v_ind_other_code TEXT := 'TEST_IND_OTHER_RC25';
   v_store_code TEXT := 'TEST_STORE_RC25';
+  v_store_code_2 TEXT := 'TEST_STORE_RC25_2';
+  v_store_code_3 TEXT := 'TEST_STORE_RC25_3';
+  v_store_code_4 TEXT := 'TEST_STORE_RC25_4';
   v_sku_active TEXT := 'SKU_ACTIVE_001';
   v_sku_active_2 TEXT := 'SKU_ACTIVE_002';
   v_visit_open UUID := gen_random_uuid();
@@ -44,14 +47,14 @@ BEGIN
 
   INSERT INTO public.industrias (codigo) VALUES (v_ind_code);
   INSERT INTO public.industrias (codigo) VALUES (v_ind_other_code);
-  INSERT INTO public.lojas (codigo) VALUES (v_store_code);
+  INSERT INTO public.lojas (codigo) VALUES (v_store_code), (v_store_code_2), (v_store_code_3), (v_store_code_4);
 
   -- Inserir SKUs no catálogo da indústria
   INSERT INTO public.industria_skus (industria_codigo, codigo_sku, nome_produto, status, origem_cadastro)
   VALUES (v_ind_code, v_sku_active, 'Produto Teste Ativo 1', 'ativo', 'admin_manual'),
          (v_ind_code, v_sku_active_2, 'Produto Teste Ativo 2', 'ativo', 'admin_manual');
 
-  -- Inserir visitas de teste
+  -- Inserir visitas de teste (cada visita do promotor em loja/indústria distinta para unicidade operacional)
   INSERT INTO public.visits (id, promotor_matricula, loja_codigo, industria_codigo, data_visita, started_at, status, observacao_geral)
   VALUES (v_visit_open, 'PROM_RC25_1', v_store_code, v_ind_code, CURRENT_DATE, clock_timestamp(), 'em_andamento', 'Visita Aberta');
 
@@ -59,16 +62,16 @@ BEGIN
   VALUES (v_visit_no_catalog, 'PROM_RC25_1', v_store_code, v_ind_other_code, CURRENT_DATE, clock_timestamp(), 'em_andamento');
 
   INSERT INTO public.visits (id, promotor_matricula, loja_codigo, industria_codigo, data_visita, started_at, completed_at, status, observacao_geral)
-  VALUES (v_visit_completed, 'PROM_RC25_1', v_store_code, v_ind_code, CURRENT_DATE, clock_timestamp() - interval '2 hours', clock_timestamp() - interval '1 hour', 'concluida', 'Visita Concluida Original');
+  VALUES (v_visit_completed, 'PROM_RC25_1', v_store_code_2, v_ind_code, CURRENT_DATE, clock_timestamp() - interval '2 hours', clock_timestamp() - interval '1 hour', 'concluida', 'Visita Concluida Original');
 
   INSERT INTO public.visits (id, promotor_matricula, loja_codigo, industria_codigo, data_visita, started_at, completed_at, status, observacao_geral)
   VALUES (v_visit_other, 'PROM_RC25_2', v_store_code, v_ind_code, CURRENT_DATE, clock_timestamp() - interval '2 hours', clock_timestamp() - interval '1 hour', 'concluida', 'Visita Outro Promotor');
 
   INSERT INTO public.visits (id, promotor_matricula, loja_codigo, industria_codigo, data_visita, scheduled_date, status)
-  VALUES (v_visit_recovery, 'PROM_RC25_1', v_store_code, v_ind_code, CURRENT_DATE, CURRENT_DATE, 'pendente');
+  VALUES (v_visit_recovery, 'PROM_RC25_1', v_store_code_3, v_ind_code, CURRENT_DATE, CURRENT_DATE, 'pendente');
 
   INSERT INTO public.visits (id, promotor_matricula, loja_codigo, industria_codigo, data_visita, started_at, status)
-  VALUES (v_visit_cancel, 'PROM_RC25_1', v_store_code, v_ind_code, CURRENT_DATE, clock_timestamp(), 'em_andamento');
+  VALUES (v_visit_cancel, 'PROM_RC25_1', v_store_code_4, v_ind_code, CURRENT_DATE, clock_timestamp(), 'em_andamento');
 
   -- Simular autenticação como promotor titular (PROM_RC25_1)
   EXECUTE format('SET LOCAL "request.jwt.claim.sub" = %L', v_promotor_uid::text);
