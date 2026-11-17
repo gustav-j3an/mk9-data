@@ -173,9 +173,14 @@ jobs:
 
               error_text="$(cat "$error_file" 2>/dev/null || true)"
               rm -f -- "$part_file" "$error_file"
-              # Accept only gh's final canonical status suffix; never infer HTTP status
-              # from arbitrary message text that could itself mention "HTTP 502".
-              if [[ "$error_text" =~ (^|
+              status_line="${error_text##*$'\n'}"
+              status_pattern='^gh: .+ \(HTTP ([0-9]{3})\)$'
+              if [[ "$status_line" =~ $status_pattern ]]; then
+                http_status="${BASH_REMATCH[1]}"
+              else
+                echo "ERROR: $label failed without a canonical gh HTTP status suffix; not retrying." >&2
+                return 1
+              fi
               unset error_text
 
               case "$http_status" in
