@@ -274,7 +274,7 @@ INSERT INTO public.system_settings (key, value)
 VALUES ('operation_mode', '"OPERACAO_OFICIAL"'::jsonb)
 ON CONFLICT (key) DO NOTHING;
 
-CREATE OR REPLACE FUNCTION public.is_promotor_authorized(p_promotor_matricula TEXT)
+CREATE OR REPLACE FUNCTION public.is_promotor_authorized(p_matricula TEXT)
 RETURNS BOOLEAN LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$
   SELECT true;
 $$;
