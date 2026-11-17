@@ -31,32 +31,40 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# 2. Instalar Supabase CLI 3.0.0 fixada
-echo "Instalando Supabase CLI 3.0.0..."
-curl -fsSL https://github.com/supabase/cli/releases/download/v3.0.0/supabase_3.0.0_linux_amd64.tar.gz -o "$RUNNER_TEMP/supabase-cli.tar.gz"
-tar -xzf "$RUNNER_TEMP/supabase-cli.tar.gz" -C "$RUNNER_TEMP" supabase
-sudo install "$RUNNER_TEMP/supabase" /usr/local/bin/supabase
-rm -f "$RUNNER_TEMP/supabase-cli.tar.gz" "$RUNNER_TEMP/supabase"
-test "$(supabase --version)" = 3.0.0
+REHEARSAL_MODE="\${MK9_USE_RESTORED_DB:-false}"
+if [[ "$REHEARSAL_MODE" == "true" ]]; then
+  # This mode is only for the manually approved real-backup rehearsal workflow.
+  # It accepts no caller-provided URL: writes are pinned to loopback and one disposable DB.
+  DB_URL='postgresql://postgres:postgres@127.0.0.1:54322/mk9_backup_restore?sslmode=disable'
+  export PGPASSWORD=postgres
+  echo "Using the loopback-only restored backup database (mk9_backup_restore)."
+else
+  # 2. Instalar Supabase CLI 3.0.0 fixada
+  echo "Instalando Supabase CLI 3.0.0..."
+  curl -fsSL https://github.com/supabase/cli/releases/download/v3.0.0/supabase_3.0.0_linux_amd64.tar.gz -o "$RUNNER_TEMP/supabase-cli.tar.gz"
+  tar -xzf "$RUNNER_TEMP/supabase-cli.tar.gz" -C "$RUNNER_TEMP" supabase
+  sudo install "$RUNNER_TEMP/supabase" /usr/local/bin/supabase
+  rm -f "$RUNNER_TEMP/supabase-cli.tar.gz" "$RUNNER_TEMP/supabase"
+  test "$(supabase --version)" = 3.0.0
 
-# 3. Inicializar e subir stack Supabase PostgreSQL 17 isolada
-echo "Iniciando PostgreSQL 17 efêmero e isolado..."
-(cd "$STACK" && supabase init --force >/dev/null)
-sed -i 's/^major_version = .*/major_version = 17/' "$STACK/supabase/config.toml"
-sed -i "s/^project_id = .*/project_id = \"${PROJECT_ID}\"/" "$STACK/supabase/config.toml"
-(cd "$STACK" && supabase start -x realtime,imgproxy,mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor >/dev/null)
+  # 3. Inicializar e subir stack Supabase PostgreSQL 17 isolada
+  echo "Iniciando PostgreSQL 17 efêmero e isolado..."
+  (cd "$STACK" && supabase init --force >/dev/null)
+  sed -i 's/^major_version = .*/major_version = 17/' "$STACK/supabase/config.toml"
+  sed -i "s/^project_id = .*/project_id = \"\${PROJECT_ID}\"/" "$STACK/supabase/config.toml"
+  (cd "$STACK" && supabase start -x realtime,imgproxy,mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor >/dev/null)
 
-CONTAINER_NAME="supabase_db_${PROJECT_ID}"
-echo "Localizando container PostgreSQL 17: $CONTAINER_NAME"
-CONTAINER_ID="$(docker ps --filter "name=^/${CONTAINER_NAME}$" --format '{{.ID}}')"
-if [[ -z "$CONTAINER_ID" ]]; then
-  echo "FALHA: Container '${CONTAINER_NAME}' não foi encontrado!" >&2
-  docker ps --format 'table {{.ID}}\t{{.Names}}\t{{.Image}}' >&2
-  exit 1
+  CONTAINER_NAME="supabase_db_\${PROJECT_ID}"
+  echo "Localizando container PostgreSQL 17: $CONTAINER_NAME"
+  CONTAINER_ID="$(docker ps --filter "name=^/\${CONTAINER_NAME}$" --format '{{.ID}}')"
+  if [[ -z "$CONTAINER_ID" ]]; then
+    echo "FALHA: Container '\${CONTAINER_NAME}' não foi encontrado!" >&2
+    docker ps --format 'table {{.ID}}\t{{.Names}}\t{{.Image}}' >&2
+    exit 1
+  fi
+  DB_URL='postgresql://postgres:postgres@127.0.0.1:54322/postgres?sslmode=disable'
+  export PGPASSWORD=postgres
 fi
-
-DB_URL='postgresql://postgres:postgres@127.0.0.1:54322/postgres?sslmode=disable'
-export PGPASSWORD=postgres
 
 # Função inteligente de execução de SQL:
 # Se o psql estiver disponível no host runner, usa-o diretamente.
@@ -91,13 +99,25 @@ if [[ ! "$PG_VERSION" =~ ^17\. ]]; then
   exit 1
 fi
 
-# 5. Aplicar fixture sintética e estruturas base
-echo "Aplicando estrutura base e fixture de testes..."
-run_sql_file "scripts/rc1-25-test-fixture.sql" >/dev/null
-
-# Habilitar extensão pg_cron para garantir suporte às migrações de ciclo de vida (M38)
-echo "Habilitando pg_cron se disponível..."
-run_sql_cmd "DO \$\$ BEGIN CREATE EXTENSION IF NOT EXISTS pg_cron WITH SCHEMA pg_catalog; EXCEPTION WHEN OTHERS THEN NULL; END \$\$;" || true
+# 5. Use the synthetic fixture only in synthetic CI mode. Real-backup rehearsal retains restored rows.
+if [[ "$REHEARSAL_MODE" == "true" ]]; then
+  LEDGER_COUNT="$(run_sql_cmd "SELECT count(*) FROM supabase_migrations.schema_migrations WHERE version ~ '^[0-9]{8,14}$';")"
+  if [[ "$LEDGER_COUNT" != "17" ]]; then
+    echo "FALHA: restored historical ledger precondition expected 17 versions; found $LEDGER_COUNT." >&2
+    exit 1
+  fi
+  CRON_VERSION="$(run_sql_cmd "SELECT extversion FROM pg_extension WHERE extname = 'pg_cron';")"
+  if [[ "$CRON_VERSION" != "1.6.4" ]]; then
+    echo "FALHA: restored pg_cron version does not match the approved 1.6.4 precondition." >&2
+    exit 1
+  fi
+  echo "Restored ledger and pg_cron preconditions verified."
+else
+  echo "Applying synthetic fixture and base structures..."
+  run_sql_file "scripts/rc1-25-test-fixture.sql" >/dev/null
+  echo "Enabling pg_cron when available for synthetic M38 validation..."
+  run_sql_cmd "DO \$\$ BEGIN CREATE EXTENSION IF NOT EXISTS pg_cron WITH SCHEMA pg_catalog; EXCEPTION WHEN OTHERS THEN NULL; END \$\$;" || true
+fi
 
 # 6. Executar o ensaio de todas as 26 migrações pendentes em ordem cronológica estrita
 echo "================================================================================"
