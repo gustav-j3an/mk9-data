@@ -28,9 +28,28 @@ shopt -u nocasematch
 
 cleanup() {
   status=$?
-  sudo bash scripts/rc1-25-egress-guard.sh disable >/dev/null 2>&1 || true
   if [[ -f "$STACK/supabase/config.toml" ]]; then
     (cd "$STACK" && supabase stop --no-backup >/dev/null 2>&1) || true
+  fi
+  container_name="supabase_db_${PROJECT_ID}"
+  if ! docker info >/dev/null 2>&1; then
+    echo "FALHA: Docker state could not be verified; network guard will remain active." >&2
+    status=1
+  else
+    running="$(docker ps --filter "status=running" --filter "name=^/${container_name}$" --format '{{.ID}}')"
+    if [[ -n "$running" ]]; then
+      docker stop --time 15 "$container_name" >/dev/null 2>&1 || true
+      running="$(docker ps --filter "status=running" --filter "name=^/${container_name}$" --format '{{.ID}}')"
+    fi
+    if [[ -n "$running" ]]; then
+      echo "FALHA: PostgreSQL container is still running; network guard will remain active." >&2
+      status=1
+    else
+      sudo bash scripts/rc1-25-egress-guard.sh disable >/dev/null 2>&1 || {
+        echo "FALHA: could not remove the egress guard after container shutdown." >&2
+        status=1
+      }
+    fi
   fi
   bash scripts/rc1-25-secure-remove.sh "$ROOT" "$BACKUP_DIR" >/dev/null 2>&1 || rm -rf -- "$ROOT" "$BACKUP_DIR"
   exit "$status"
