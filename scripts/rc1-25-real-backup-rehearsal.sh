@@ -4,14 +4,14 @@
 set -Eeuo pipefail
 umask 077
 
-BACKUP_DIR="\${BACKUP_DIR:?}"
-RUNNER_TEMP="\${RUNNER_TEMP:?}"
+BACKUP_DIR="${BACKUP_DIR:?}"
+RUNNER_TEMP="${RUNNER_TEMP:?}"
 ROOT="$RUNNER_TEMP/mk9-real-backup-rehearsal"
 STACK="$ROOT/stack"
 mkdir -m 700 -p "$ROOT" "$STACK"
 
 for name in SUPABASE_ACCESS_TOKEN SUPABASE_DB_PASSWORD SUPABASE_PROJECT_REF SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY SUPABASE_DB_URL SUPABASE_ANON_KEY SUPABASE_TEST_ANON_KEY SUPABASE_TEST_SERVICE_KEY ANON_KEY SERVICE_ROLE_KEY DATABASE_URL; do
-  if [[ -n "\${!name:-}" ]]; then
+  if [[ -n "${!name:-}" ]]; then
     echo "FALHA DE SEGURANÇA: remote database credential/configuration detected ($name)." >&2
     exit 1
   fi
@@ -34,7 +34,7 @@ fi
 (cd "$BACKUP_DIR" && sha256sum --check SHA256SUMS >/dev/null)
 
 NONCE="$(node -e 'import("node:crypto").then(c => console.log(c.randomBytes(14).toString("hex")))')"
-PROJECT_ID="mk9_rehearsal_\${NONCE}"
+PROJECT_ID="mk9_rehearsal_${NONCE}"
 (cd "$STACK" && supabase init --force >/dev/null 2>&1)
 sed -i 's/^major_version = .*/major_version = 17/' "$STACK/supabase/config.toml"
 sed -i "s/^project_id = .*/project_id = \\"$PROJECT_ID\\"/" "$STACK/supabase/config.toml"
