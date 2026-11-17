@@ -88,18 +88,38 @@ jobs:
             echo "ERROR: apt-get install failed for postgresql-client-17, gpg, unzip, or jq." >&2
             exit 1
           fi
-          if ! pg_restore_output="$(pg_restore --version 2>&1)"; then
-            echo "ERROR: pg_restore --version failed: $pg_restore_output" >&2
+          pg_bin_dir="/usr/lib/postgresql/17/bin"
+          if [[ ! -d "$pg_bin_dir" ]]; then
+            echo "ERROR: PostgreSQL 17 binary directory not found: $pg_bin_dir" >&2
             exit 1
           fi
-          echo "pg_restore version: $pg_restore_output"
-          case "$pg_restore_output" in
-            *"PostgreSQL) 17."*) ;;
-            *)
-              echo "ERROR: expected PostgreSQL 17 pg_restore; got: $pg_restore_output" >&2
+          for tool in pg_restore psql pg_dump; do
+            if [[ ! -x "$pg_bin_dir/$tool" ]]; then
+              echo "ERROR: required PostgreSQL 17 executable missing or not executable: $pg_bin_dir/$tool" >&2
               exit 1
-              ;;
-          esac
+            fi
+          done
+          echo "$pg_bin_dir" >> "$GITHUB_PATH"
+          export PATH="$pg_bin_dir:$PATH"
+          for tool in pg_restore psql pg_dump; do
+            if ! tool_version="$("$pg_bin_dir/$tool" --version 2>&1)"; then
+              echo "ERROR: $pg_bin_dir/$tool --version failed: $tool_version" >&2
+              exit 1
+            fi
+            echo "$tool version: $tool_version"
+            case "$tool_version" in
+              *"(PostgreSQL) 17."*) ;;
+              *)
+                echo "ERROR: expected PostgreSQL 17 $tool from $pg_bin_dir; got: $tool_version" >&2
+                exit 1
+                ;;
+            esac
+            resolved_tool="$(command -v "$tool")"
+            if [[ "$resolved_tool" != "$pg_bin_dir/$tool" ]]; then
+              echo "ERROR: PATH resolved $tool to $resolved_tool instead of $pg_bin_dir/$tool" >&2
+              exit 1
+            fi
+          done
           if ! docker_output="$(docker --version 2>&1)"; then
             echo "ERROR: docker --version failed: $docker_output" >&2
             exit 1
