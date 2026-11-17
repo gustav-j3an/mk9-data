@@ -148,15 +148,10 @@ CREATE TABLE IF NOT EXISTS public.visits (
   checkout_accuracy_meters NUMERIC,
   work_schedule_id UUID,
   regularization_status TEXT,
+  motivo_nao_realizada TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
-
--- Campos presentes no schema de homologação após M37/M38 e usados pelos guards.
-ALTER TABLE public.visits ADD COLUMN IF NOT EXISTS scheduled_date DATE;
-ALTER TABLE public.visits ADD COLUMN IF NOT EXISTS motivo_nao_realizada TEXT;
-ALTER TABLE public.visits ADD COLUMN IF NOT EXISTS attempt_number SMALLINT NOT NULL DEFAULT 1;
-ALTER TABLE public.visits ADD COLUMN IF NOT EXISTS occurrence_root_visit_id UUID;
 
 CREATE TABLE IF NOT EXISTS public.visit_checklist_items (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
