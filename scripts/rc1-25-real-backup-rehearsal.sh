@@ -53,6 +53,10 @@ if [[ -z "$CONTAINER_ID" ]]; then
 fi
 PGPASSWORD=postgres psql 'postgresql://postgres:postgres@127.0.0.1:54322/postgres?sslmode=disable' -v ON_ERROR_STOP=1 -c 'CREATE DATABASE mk9_backup_restore' >/dev/null
 
+# Match the validated Run #21 restore bootstrap so ownership and Supabase roles resolve locally.
+docker exec "$CONTAINER_ID" psql -U supabase_admin -d postgres -c 'ALTER ROLE postgres WITH SUPERUSER; CREATE ROLE pgbouncer; GRANT supabase_admin, supabase_auth_admin, supabase_storage_admin, supabase_functions_admin, pgbouncer TO postgres WITH ADMIN OPTION;' >/dev/null 2>"$ROOT/restore-bootstrap.log" || true
+docker exec "$CONTAINER_ID" psql -U supabase_admin -d mk9_backup_restore -c 'GRANT USAGE ON SCHEMA public TO postgres; GRANT ALL ON DATABASE mk9_backup_restore TO postgres; GRANT supabase_admin, supabase_auth_admin, supabase_storage_admin, supabase_functions_admin, pgbouncer TO postgres WITH ADMIN OPTION;' >/dev/null 2>"$ROOT/restore-target-bootstrap.log" || true
+
 node scripts/filter-roles.mjs "$BACKUP_DIR/roles.sql" "$ROOT/roles-filtered.sql" >/dev/null 2>&1
 PGPASSWORD=postgres psql 'postgresql://postgres:postgres@127.0.0.1:54322/postgres?sslmode=disable' -v ON_ERROR_STOP=1 -f "$ROOT/roles-filtered.sql" >/dev/null 2>"$ROOT/restore-roles.log" || {
   echo "FALHA: backup roles could not be restored into the disposable server; details withheld from logs." >&2
