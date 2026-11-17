@@ -34,7 +34,7 @@ fi
 (cd "$BACKUP_DIR" && sha256sum --check SHA256SUMS >/dev/null)
 
 NONCE="$(node -e 'import("node:crypto").then(c => console.log(c.randomBytes(14).toString("hex")))')"
-PROJECT_ID="mk9_rehearsal_${NONCE}"
+PROJECT_ID="mk9_restore_${NONCE}"
 (cd "$STACK" && supabase init --force >/dev/null 2>&1)
 sed -i 's/^major_version = .*/major_version = 17/' "$STACK/supabase/config.toml"
 sed -i "s/^project_id = .*/project_id = \\"$PROJECT_ID\\"/" "$STACK/supabase/config.toml"
