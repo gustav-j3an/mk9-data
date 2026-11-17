@@ -216,9 +216,6 @@ jobs:
           if ! request_github_api_with_retry "/repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID" "$meta" "Artifact metadata request"; then
             exit 1
           fi
-            echo "ERROR: artifact metadata could not be retrieved; artifact may be expired, deleted, or inaccessible." >&2
-            exit 1
-          fi
           if ! jq -e --arg id "$ARTIFACT_ID" --arg digest "sha256:$EXPECTED_SHA256" --arg run "$EXPECTED_RUN_ID" --argjson size "$EXPECTED_SIZE" '
             (.id|tostring)==$id and .expired==false and .digest==$digest and .size_in_bytes==$size and (.workflow_run.id|tostring)==$run and .workflow_run.head_branch=="codex/m57.2-production-backup-workflow" and .workflow_run.head_sha=="4f14257dc30a782b63d9572b06f510dd566c08a6"
           ' "$meta" >/dev/null; then
