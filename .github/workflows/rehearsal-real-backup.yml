@@ -31,13 +31,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_SHA: ${{ inputs.source_commit }}
+          AUDITED_SOURCE_COMMIT: "PENDING_COPILOT_REVIEW"
         run: |
           set -Eeuo pipefail
           set +x
           [[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
-          branch_sha="$(gh api "/repos/$GITHUB_REPOSITORY/branches/prep/rc1-25-integration-m31" --jq '.commit.sha')"
-          test "$SOURCE_SHA" = "$branch_sha"
-          echo "Source SHA selected for the protected rehearsal: $SOURCE_SHA" >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$AUDITED_SOURCE_COMMIT" == "PENDING_COPILOT_REVIEW" ]]; then
+            echo "FALHA: no source SHA has been approved by the independent audit yet." >&2
+            exit 1
+          fi
+          test "$SOURCE_SHA" = "$AUDITED_SOURCE_COMMIT"
+          gh api "/repos/$GITHUB_REPOSITORY/commits/$SOURCE_SHA" >/dev/null
+          echo "Audited source commit pinned for the protected rehearsal: $SOURCE_SHA" >> "$GITHUB_STEP_SUMMARY"
 
   rehearse:
     needs: validate-source
@@ -131,7 +136,7 @@ jobs:
             echo "FALHA: encrypted backup could not be decrypted; sensitive diagnostics withheld." >&2
             exit 1
           fi
-          rm -f "$passfile"
+          shred -n 1 -z -u -- "$passfile" 2>/dev/null || rm -f -- "$passfile"
           chmod 600 "$archive"
           install -d -m 700 "$extracted"
           if ! tar -tzf "$archive" | awk 'BEGIN{bad=0} /^\// || /(^|\/)\.\.(\/|$)/ {bad=1} END{exit bad}'; then
@@ -160,13 +165,11 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          rm -f "$RUNNER_TEMP/mk9-real-backup-input/artifact.json" \
-                "$RUNNER_TEMP/mk9-real-backup-input/artifact.zip" \
-                "$RUNNER_TEMP/mk9-real-backup-input/mk9-production-backup-43941383469-1.tar.gz.gpg" \
-                "$RUNNER_TEMP/mk9-real-backup-input/backup.tar.gz" \
-                "$RUNNER_TEMP/mk9-real-backup-input/passphrase" \
-                "$RUNNER_TEMP/mk9-real-backup-input/gpg.log" \
-                "$RUNNER_TEMP/mk9-real-backup-input/extract.log" \
-                "$RUNNER_TEMP/mk9-real-backup-input/checksums.log" \
-                "$RUNNER_TEMP/mk9-real-backup-input/pg-archive.log"
-          rm -rf "$RUNNER_TEMP/mk9-real-backup-input" "$RUNNER_TEMP/mk9-real-backup-extracted"
+          for target in "$RUNNER_TEMP/mk9-real-backup-input" "$RUNNER_TEMP/mk9-real-backup-extracted"; do
+            if [[ -d "$target" ]]; then
+              find "$target" -type f -exec shred -n 1 -z -u -- {} + 2>/dev/null || true
+              rm -rf -- "$target"
+            elif [[ -f "$target" ]]; then
+              shred -n 1 -z -u -- "$target" 2>/dev/null || rm -f -- "$target"
+            fi
+          done

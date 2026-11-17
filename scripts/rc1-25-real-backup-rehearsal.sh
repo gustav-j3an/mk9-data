@@ -10,19 +10,29 @@ ROOT="$RUNNER_TEMP/mk9-real-backup-rehearsal"
 STACK="$ROOT/stack"
 mkdir -m 700 -p "$ROOT" "$STACK"
 
-for name in SUPABASE_ACCESS_TOKEN SUPABASE_DB_PASSWORD SUPABASE_PROJECT_REF SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY SUPABASE_DB_URL SUPABASE_ANON_KEY SUPABASE_TEST_ANON_KEY SUPABASE_TEST_SERVICE_KEY ANON_KEY SERVICE_ROLE_KEY DATABASE_URL; do
+for name in SUPABASE_ACCESS_TOKEN SUPABASE_DB_PASSWORD SUPABASE_PROJECT_REF SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY SUPABASE_DB_URL SUPABASE_ANON_KEY SUPABASE_TEST_ANON_KEY SUPABASE_TEST_SERVICE_KEY ANON_KEY SERVICE_ROLE_KEY DATABASE_URL DB_URL PGHOST PGPORT PGDATABASE PGUSER PGSERVICE PGSERVICEFILE; do
   if [[ -n "${!name:-}" ]]; then
-    echo "FALHA DE SEGURANÇA: remote database credential/configuration detected ($name)." >&2
+    echo "FALHA DE SEGURANÇA: remote database configuration detected ($name)." >&2
     exit 1
   fi
 done
+shopt -s nocasematch
+for name in $(compgen -e); do
+  value="${!name:-}"
+  if [[ "$value" =~ supabase\.co|pooler\.supabase\.com|xzmbesqhxcnuokjwrbnw|tafjceemuetqjyngresg ]]; then
+    echo "FALHA DE SEGURANÇA: external Supabase host/reference found in environment variable $name." >&2
+    exit 1
+  fi
+done
+shopt -u nocasematch
 
 cleanup() {
   status=$?
+  sudo bash scripts/rc1-25-egress-guard.sh disable >/dev/null 2>&1 || true
   if [[ -f "$STACK/supabase/config.toml" ]]; then
     (cd "$STACK" && supabase stop --no-backup >/dev/null 2>&1) || true
   fi
-  rm -rf "$ROOT" "$BACKUP_DIR"
+  bash scripts/rc1-25-secure-remove.sh "$ROOT" "$BACKUP_DIR" >/dev/null 2>&1 || rm -rf -- "$ROOT" "$BACKUP_DIR"
   exit "$status"
 }
 trap cleanup EXIT
@@ -51,6 +61,7 @@ if [[ -z "$CONTAINER_ID" ]]; then
   echo "FALHA: isolated PostgreSQL container was not found." >&2
   exit 1
 fi
+sudo bash scripts/rc1-25-egress-guard.sh enable "$CONTAINER_ID"
 PGPASSWORD=postgres psql 'postgresql://postgres:postgres@127.0.0.1:54322/postgres?sslmode=disable' -v ON_ERROR_STOP=1 -c 'CREATE DATABASE mk9_backup_restore' >/dev/null
 
 # Match the validated Run #21 restore bootstrap so ownership and Supabase roles resolve locally.
@@ -71,6 +82,7 @@ docker exec "$CONTAINER_ID" pg_restore --exit-on-error --username=supabase_admin
 docker exec "$CONTAINER_ID" rm -f /tmp/mk9-real-database.dump >/dev/null
 
 LOCAL_DB_URL='postgresql://postgres:postgres@127.0.0.1:54322/mk9_backup_restore?sslmode=disable'
+test "$LOCAL_DB_URL" = 'postgresql://postgres:postgres@127.0.0.1:54322/mk9_backup_restore?sslmode=disable'
 INVENTORY_BEFORE="$ROOT/inventory-before-migrations.json"
 PGPASSWORD=postgres psql "$LOCAL_DB_URL" -v ON_ERROR_STOP=1 --quiet --tuples-only --no-align --file=scripts/backup-inventory.sql > "$INVENTORY_BEFORE" 2>"$ROOT/inventory-restore.log" || {
   echo "FALHA: inventory capture after restore failed; details withheld from logs." >&2

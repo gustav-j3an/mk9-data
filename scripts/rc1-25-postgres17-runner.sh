@@ -1,17 +1,18 @@
-#!/usr/bin/env bash
-# ==============================================================================
-# SCRIPT DE VALIDAÇÃO REAL EM POSTGRESQL 17 ISOLADO (GITHUB ACTIONS)
-# Arquivo: scripts/rc1-25-postgres17-runner.sh
-# ==============================================================================
-set -Eeuo pipefail
-
-# 1. Checagem rigorosa de ausência de variáveis ou credenciais de produção/homologação
-for name in SUPABASE_ACCESS_TOKEN SUPABASE_DB_PASSWORD SUPABASE_PROJECT_REF SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY SUPABASE_DB_URL SUPABASE_ANON_KEY SUPABASE_TEST_ANON_KEY SUPABASE_TEST_SERVICE_KEY ANON_KEY SERVICE_ROLE_KEY; do
+for name in SUPABASE_ACCESS_TOKEN SUPABASE_DB_PASSWORD SUPABASE_PROJECT_REF SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY SUPABASE_DB_URL SUPABASE_ANON_KEY SUPABASE_TEST_ANON_KEY SUPABASE_TEST_SERVICE_KEY ANON_KEY SERVICE_ROLE_KEY DATABASE_URL DB_URL PGHOST PGPORT PGDATABASE PGUSER PGSERVICE PGSERVICEFILE; do
   if [[ -n "${!name:-}" ]]; then
-    echo "FALHA DE SEGURANÇA: Configuração ou credencial remota detectada ($name)!" >&2
+    echo "FALHA DE SEGURANÇA: remote database configuration detected ($name)." >&2
     exit 1
   fi
 done
+shopt -s nocasematch
+for name in $(compgen -e); do
+  value="${!name:-}"
+  if [[ "$value" =~ supabase\.co|pooler\.supabase\.com|xzmbesqhxcnuokjwrbnw|tafjceemuetqjyngresg ]]; then
+    echo "FALHA DE SEGURANÇA: external Supabase host/reference found in environment variable $name." >&2
+    exit 1
+  fi
+done
+shopt -u nocasematch
 
 ROOT="$RUNNER_TEMP/rc1-25-test"
 mkdir -m 700 -p "$ROOT"
@@ -22,11 +23,14 @@ mkdir -m 700 -p "$STACK"
 
 cleanup() {
   status=$?
+  if [[ "${REHEARSAL_MODE:-false}" != "true" ]]; then
+    sudo bash scripts/rc1-25-egress-guard.sh disable >/dev/null 2>&1 || true
+  fi
   if [[ -f "$STACK/supabase/config.toml" ]]; then
     echo "Desligando stack efêmero do Supabase..."
     (cd "$STACK" && supabase stop --no-backup >/dev/null 2>&1) || true
   fi
-  rm -rf "$ROOT"
+  bash scripts/rc1-25-secure-remove.sh "$ROOT" >/dev/null 2>&1 || rm -rf -- "$ROOT"
   exit "$status"
 }
 trap cleanup EXIT
@@ -37,6 +41,7 @@ if [[ "$REHEARSAL_MODE" == "true" ]]; then
   # It accepts no caller-provided URL: writes are pinned to loopback and one disposable DB.
   DB_URL='postgresql://postgres:postgres@127.0.0.1:54322/mk9_backup_restore?sslmode=disable'
   export PGPASSWORD=postgres
+  test "$DB_URL" = 'postgresql://postgres:postgres@127.0.0.1:54322/mk9_backup_restore?sslmode=disable'
   echo "Using the loopback-only restored backup database (mk9_backup_restore)."
 else
   # 2. Instalar Supabase CLI 3.0.0 fixada
@@ -62,6 +67,7 @@ else
     docker ps --format 'table {{.ID}}\t{{.Names}}\t{{.Image}}' >&2
     exit 1
   fi
+  sudo bash scripts/rc1-25-egress-guard.sh enable "$CONTAINER_ID"
   DB_URL='postgresql://postgres:postgres@127.0.0.1:54322/postgres?sslmode=disable'
   export PGPASSWORD=postgres
 fi

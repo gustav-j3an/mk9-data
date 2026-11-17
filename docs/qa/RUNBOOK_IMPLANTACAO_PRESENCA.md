@@ -141,3 +141,8 @@ Caso ocorra um bloqueio intransponivel ou impacto imprevisto em producao:
      a) Congelamento total e previo do trafego da aplicacao;
      b) Comunicacao formal previa ao administrador informando a perda potencial dos dados operacionais gerados apos T0;
      c) **Autorizacao explicita e documentada do administrador** para a restauracao destrutiva.
+
+
+## 8. Disponibilização do workflow protegido de ensaio
+
+A inclusão do workflow no branch de integração não o disponibiliza para workflow_dispatch; ele deve ser publicado no default branch por PR específico e aprovado conforme as proteções existentes. Consulte docs/qa/REAL_BACKUP_REHEARSAL_RELEASE.md para o procedimento restrito: diff limitado ao workflow, SHA integral aprovado pelo Copilot fixado explicitamente, sem merge de código do produto. O workflow candidato permanece fail-closed enquanto PENDING_COPILOT_REVIEW não for substituído após auditoria. A configuração do Environment production-backup, incluindo aprovador independente e bloqueio de autoaprovação, deve ser verificada pelo administrador antes do dispatch; este runbook não altera segredos nem regras do Environment.
