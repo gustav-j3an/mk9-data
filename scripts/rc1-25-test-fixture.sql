@@ -76,6 +76,31 @@ CREATE TABLE IF NOT EXISTS public.lojas (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS public.supervisores (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  codigo TEXT UNIQUE NOT NULL,
+  nome TEXT NOT NULL DEFAULT 'Supervisor Teste',
+  email TEXT UNIQUE,
+  telefone TEXT,
+  regional TEXT DEFAULT 'SP',
+  status TEXT NOT NULL DEFAULT 'ativo' CHECK (status IN ('ativo', 'inativo', 'ferias', 'afastado')),
+  user_id UUID,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS public.equipes (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  codigo TEXT UNIQUE NOT NULL,
+  nome TEXT UNIQUE NOT NULL DEFAULT 'Equipe Teste',
+  regional TEXT DEFAULT 'SP',
+  supervisor_nome TEXT,
+  supervisor_id UUID REFERENCES public.supervisores(id) ON DELETE SET NULL,
+  status TEXT NOT NULL DEFAULT 'ativa' CHECK (status IN ('ativa', 'reestruturacao', 'arquivada')),
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS public.promoter_work_schedules (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   promotor_matricula TEXT REFERENCES public.promotores(matricula),
