@@ -34,10 +34,13 @@ CREATE TABLE IF NOT EXISTS public.profiles (
 );
 
 CREATE TABLE IF NOT EXISTS public.promotores (
-  matricula TEXT PRIMARY KEY,
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  matricula TEXT UNIQUE NOT NULL,
   nome TEXT,
   cpf TEXT,
   telefone TEXT,
+  cidade TEXT DEFAULT 'São Paulo',
+  uf TEXT DEFAULT 'SP',
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
