@@ -104,23 +104,28 @@ export async function reconcileMigrationsLedger(migrationSqlPath, bundleManifest
   const repoFilesByVersion = new Map();
   for (const item of manifest.migrations) {
     if (item.version) {
-      repoFilesByVersion.set(item.version, item.filename);
+      if (!repoFilesByVersion.has(item.version)) {
+        repoFilesByVersion.set(item.version, []);
+      }
+      repoFilesByVersion.get(item.version).push(item.filename);
     }
   }
 
   // Migrations applied in remote DB that DO NOT exist as executable files in repo
   const registeredWithoutFile = [];
   for (const dbVer of dbVersions) {
-    if (!repoFilesByVersion.has(dbVer)) {
+    if (!repoFilesByVersion.has(dbVer) || repoFilesByVersion.get(dbVer).length === 0) {
       registeredWithoutFile.push(dbVer);
     }
   }
 
   // Files present in repo that have NOT been applied in remote DB
   const filesNotAppliedInDb = [];
-  for (const [repoVer, filename] of repoFilesByVersion.entries()) {
+  for (const [repoVer, filenames] of repoFilesByVersion.entries()) {
     if (!dbVersions.includes(repoVer)) {
-      filesNotAppliedInDb.push({ version: repoVer, filename });
+      for (const filename of filenames) {
+        filesNotAppliedInDb.push({ version: repoVer, filename });
+      }
     }
   }
 
