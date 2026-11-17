@@ -31,7 +31,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-REHEARSAL_MODE="\${MK9_USE_RESTORED_DB:-false}"
+REHEARSAL_MODE="${MK9_USE_RESTORED_DB:-false}"
 if [[ "$REHEARSAL_MODE" == "true" ]]; then
   # This mode is only for the manually approved real-backup rehearsal workflow.
   # It accepts no caller-provided URL: writes are pinned to loopback and one disposable DB.
@@ -51,14 +51,14 @@ else
   echo "Iniciando PostgreSQL 17 efêmero e isolado..."
   (cd "$STACK" && supabase init --force >/dev/null)
   sed -i 's/^major_version = .*/major_version = 17/' "$STACK/supabase/config.toml"
-  sed -i "s/^project_id = .*/project_id = \"\${PROJECT_ID}\"/" "$STACK/supabase/config.toml"
+  sed -i "s/^project_id = .*/project_id = \"${PROJECT_ID}\"/" "$STACK/supabase/config.toml"
   (cd "$STACK" && supabase start -x realtime,imgproxy,mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor >/dev/null)
 
-  CONTAINER_NAME="supabase_db_\${PROJECT_ID}"
+  CONTAINER_NAME="supabase_db_${PROJECT_ID}"
   echo "Localizando container PostgreSQL 17: $CONTAINER_NAME"
-  CONTAINER_ID="$(docker ps --filter "name=^/\${CONTAINER_NAME}$" --format '{{.ID}}')"
+  CONTAINER_ID="$(docker ps --filter "name=^/${CONTAINER_NAME}$" --format '{{.ID}}')"
   if [[ -z "$CONTAINER_ID" ]]; then
-    echo "FALHA: Container '\${CONTAINER_NAME}' não foi encontrado!" >&2
+    echo "FALHA: Container '${CONTAINER_NAME}' não foi encontrado!" >&2
     docker ps --format 'table {{.ID}}\t{{.Names}}\t{{.Image}}' >&2
     exit 1
   fi
