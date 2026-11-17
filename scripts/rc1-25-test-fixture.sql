@@ -36,26 +36,44 @@ CREATE TABLE IF NOT EXISTS public.profiles (
 CREATE TABLE IF NOT EXISTS public.promotores (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   matricula TEXT UNIQUE NOT NULL,
-  nome TEXT,
+  nome TEXT NOT NULL DEFAULT 'Promotor Teste',
   cpf TEXT,
   telefone TEXT,
+  email TEXT,
   cidade TEXT DEFAULT 'São Paulo',
   uf TEXT DEFAULT 'SP',
-  created_at TIMESTAMPTZ DEFAULT NOW()
+  supervisor TEXT,
+  equipe TEXT,
+  status TEXT DEFAULT 'ativo' CHECK (status IN ('ativo', 'inativo', 'ferias', 'afastado')),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS public.industrias (
-  codigo TEXT PRIMARY KEY,
-  nome TEXT,
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  codigo TEXT UNIQUE NOT NULL,
+  nome TEXT NOT NULL DEFAULT 'Indústria Teste',
+  cnpj TEXT,
   ativo BOOLEAN DEFAULT true,
-  created_at TIMESTAMPTZ DEFAULT NOW()
+  status TEXT DEFAULT 'ativo' CHECK (status IN ('ativo', 'inativo')),
+  observacao TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS public.lojas (
-  codigo TEXT PRIMARY KEY,
-  nome TEXT,
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  codigo TEXT UNIQUE NOT NULL,
+  nome TEXT NOT NULL DEFAULT 'Loja Teste',
+  cnpj TEXT,
+  cidade TEXT DEFAULT 'São Paulo',
+  uf TEXT DEFAULT 'SP',
+  endereco TEXT,
+  rede TEXT,
   ativo BOOLEAN DEFAULT true,
-  created_at TIMESTAMPTZ DEFAULT NOW()
+  status TEXT DEFAULT 'ativo' CHECK (status IN ('ativo', 'inativo')),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS public.promoter_work_schedules (
