@@ -78,10 +78,33 @@ jobs:
           sudo install -d -m 0755 /usr/share/keyrings
           curl -fsSL --retry 3 --connect-timeout 10 https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor --yes -o /usr/share/keyrings/postgresql.gpg
           echo 'deb [signed-by=/usr/share/keyrings/postgresql.gpg] https://apt.postgresql.org/pub/repos/apt noble-pgdg main' | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq postgresql-client-17 gpg unzip jq
-          pg_restore --version | grep -Fq 'pg_restore (PostgreSQL) 17.'
-          docker --version
+          echo "APT_UPDATE_START"
+          if ! sudo apt-get update; then
+            echo "ERROR: apt-get update failed while refreshing the PostgreSQL 17 package index." >&2
+            exit 1
+          fi
+          echo "APT_INSTALL_START"
+          if ! sudo apt-get install -y postgresql-client-17 gpg unzip jq; then
+            echo "ERROR: apt-get install failed for postgresql-client-17, gpg, unzip, or jq." >&2
+            exit 1
+          fi
+          if ! pg_restore_output="$(pg_restore --version 2>&1)"; then
+            echo "ERROR: pg_restore --version failed: $pg_restore_output" >&2
+            exit 1
+          fi
+          echo "pg_restore version: $pg_restore_output"
+          case "$pg_restore_output" in
+            *"PostgreSQL) 17."*) ;;
+            *)
+              echo "ERROR: expected PostgreSQL 17 pg_restore; got: $pg_restore_output" >&2
+              exit 1
+              ;;
+          esac
+          if ! docker_output="$(docker --version 2>&1)"; then
+            echo "ERROR: docker --version failed: $docker_output" >&2
+            exit 1
+          fi
+          echo "Docker version: $docker_output"
 
       - name: Install pinned Supabase CLI
         shell: bash
