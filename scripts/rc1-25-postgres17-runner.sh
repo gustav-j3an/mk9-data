@@ -72,10 +72,14 @@ run_sql_cmd() {
 
 run_sql_file() {
   local file="$1"
+  local tx_opt=""
+  if ! grep -qiE '^\s*BEGIN\s*;' "$file"; then
+    tx_opt="--single-transaction"
+  fi
   if command -v psql >/dev/null 2>&1; then
-    psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$file"
+    psql "$DB_URL" -v ON_ERROR_STOP=1 $tx_opt -f "$file"
   else
-    docker exec -i "$CONTAINER_ID" psql -U postgres -d postgres -v ON_ERROR_STOP=1 < "$file"
+    docker exec -i "$CONTAINER_ID" psql -U postgres -d postgres -v ON_ERROR_STOP=1 $tx_opt < "$file"
   fi
 }
 
@@ -135,12 +139,14 @@ COUNT=0
 for mig in "${PENDING_MIGRATIONS[@]}"; do
   COUNT=$((COUNT + 1))
   BASE_NAME="$(basename "$mig")"
-  echo "[$COUNT/$TOTAL_PENDING] Aplicando: $BASE_NAME ..."
+  VERSION="$(echo "$BASE_NAME" | grep -oE '^[0-9]+')"
+  echo "[$COUNT/$TOTAL_PENDING] Aplicando: $BASE_NAME (versão $VERSION) ..."
   START_TS="$(date +%s%N)"
   run_sql_file "$mig"
+  run_sql_cmd "INSERT INTO supabase_migrations.schema_migrations (version) VALUES ('$VERSION') ON CONFLICT (version) DO NOTHING;"
   END_TS="$(date +%s%N)"
   DURATION_MS=$(( (END_TS - START_TS) / 1000000 ))
-  echo "  ✓ Sucesso ($DURATION_MS ms)"
+  echo "  ✓ Sucesso ($DURATION_MS ms - ledger atualizado com versão $VERSION)"
 done
 
 echo "================================================================================"
@@ -151,9 +157,10 @@ echo "==========================================================================
 echo "Aplicando migration proposta RC1.25 (supabase/migrations/propostas/20261115_rc1_25_skus_and_stock_audits.sql)..."
 START_RC25="$(date +%s%N)"
 run_sql_file "supabase/migrations/propostas/20261115_rc1_25_skus_and_stock_audits.sql"
+run_sql_cmd "INSERT INTO supabase_migrations.schema_migrations (version) VALUES ('20261115160000') ON CONFLICT (version) DO NOTHING;"
 END_RC25="$(date +%s%N)"
 DURATION_RC25_MS=$(( (END_RC25 - START_RC25) / 1000000 ))
-echo "✓ Migration RC1.25 aplicada com sucesso ($DURATION_RC25_MS ms)."
+echo "✓ Migration RC1.25 aplicada com sucesso ($DURATION_RC25_MS ms - ledger atualizado com versão 20261115160000)."
 
 # 8. Executar a suíte de testes funcionais reais
 echo "Executando suíte de testes funcionais reais (scripts/rc1-25-postgres17-validation.sql)..."

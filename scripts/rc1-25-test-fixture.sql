@@ -303,3 +303,32 @@ GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
 GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated, service_role;
 GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated, service_role;
 GRANT ALL ON ALL ROUTINES IN SCHEMA public TO anon, authenticated, service_role;
+
+-- 10. Ledger oficial de migrações inicializado com o estado canônico de produção (17 versões históricas)
+CREATE SCHEMA IF NOT EXISTS supabase_migrations;
+CREATE TABLE IF NOT EXISTS supabase_migrations.schema_migrations (
+  version TEXT PRIMARY KEY,
+  inserted_at TIMESTAMPTZ DEFAULT NOW()
+);
+GRANT USAGE ON SCHEMA supabase_migrations TO postgres, service_role;
+GRANT ALL ON ALL TABLES IN SCHEMA supabase_migrations TO postgres, service_role;
+
+INSERT INTO supabase_migrations.schema_migrations (version) VALUES
+  ('20260930'),
+  ('20261001'),
+  ('20261006'),
+  ('20261007'),
+  ('20261008'),
+  ('20261015100000'),
+  ('20261016100000'),
+  ('20261018220000'),
+  ('20261018230000'),
+  ('20261018232256'),
+  ('20261018234153'),
+  ('20261018235500'),
+  ('20261019001109'),
+  ('20261019001848'),
+  ('20261019004947'),
+  ('20261019011832'),
+  ('20261019013007')
+ON CONFLICT (version) DO NOTHING;
