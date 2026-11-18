@@ -3,14 +3,14 @@
 ## Escopo e estado
 Projeto alvo de teste: `tafjceemuetqjyngresg` (homologação), PostgreSQL 17.11. Produção `xzmbesqhxcnuokjwrbnw` não foi consultada por escrita nem modificada.
 
-Antes desta correção, o staging tinha 57 migrations e os objetos M37/M38/RC1.25 já registrados. Foi aplicada pelo Supabase MCP a migration `20261118172125_rc1_25_42_server_derived_completed_visit_edit_diff`; o ledger passou a 58. O arquivo SQL reproduz o delta efetivamente aplicado, não recria M37/M38 nem reaplica RC1.25.
+Antes desta correção, o staging tinha 57 migrations e os objetos M37/M38/RC1.25 já registrados. Foi aplicada pelo Supabase MCP a migration `20261118172125_rc1_25_42_server_derived_completed_visit_edit_diff`; o ledger passou a 58. A linha de migration existe no ledger e a função em runtime foi lida via pg_get_functiondef. A consulta MCP não fornece os bytes exatos enviados originalmente; este arquivo é uma fonte SQL reconciliada, sem alegação de identidade byte a byte com aquela solicitação. O commit inicial do artefato foi reprovado pelo Copilot por falta do terminador da função; esta revisão corrige o arquivo. Não recria M37/M38 nem reaplica RC1.25.
 
 ## Mudança
 - Acrescenta `visit_edits_audit_log.changes_summary jsonb` com default `[]` e CHECK de array.
 - Substitui `save_completed_visit_edit(uuid,text,jsonb,text,jsonb)` mantendo a assinatura compatível.
-- Ignora `p_changes_summary` do cliente e calcula no servidor o diff real de `observacao_geral`, `checked`, `valor_texto` e `observacao`, sob lock da visita.
+- Ignora p_changes_summary do cliente, rejeita item_key duplicada após trim() e calcula no servidor o diff real de observacao_geral, checked, valor_texto e observacao, sob lock da visita.
 - A transação grava a auditoria e as alterações de checklist juntas; falha reverte ambas.
-- Preserva RLS e os triggers existentes; não altera `visits`, `visit_photos`, arquivos de Storage nem dados existentes.
+- Revoga EXECUTE de PUBLIC e anon e confirma a negação a anon no pós-check; preserva RLS e os triggers existentes; não altera `visits`, `visit_photos`, arquivos de Storage nem dados existentes.
 
 ## Evidências de testes controlados (transações revertidas)
 - RPC de edição: PASSOU. Um fixture sintético temporário produziu quatro mudanças reais; um resumo falso de cliente foi ignorado; repetir os mesmos valores retornou diff vazio. A transação terminou em ROLLBACK; nenhum fixture permaneceu.
@@ -33,3 +33,11 @@ A migration foi aplicada no staging por `apply_migration`; Supabase registrou a 
 
 ## Verificações / limites
 A versão da migration list confirma 58 registros em staging e a função ativa contém o caminho de diff servidor. Contagens observadas após o teste: `visit_photos=4`, `visit_edits_audit_log=0`, `industria_skus=0`, `visit_sku_stock_checks=0`; testes rollback não deixaram linhas. Um teste de estoque foi interrompido por guard de domínio; não se presume sucesso funcional geral.
+
+
+
+## Correções após auditoria estática
+- Duplicidade de checklist verificada após normalização com trim().
+- EXECUTE explicitamente revogado de anon e incluído no pós-check.
+- O SQL não foi reexecutado no banco após essas correções; não se deve alegar validação de parser/PG17 deste arquivo revisado.
+

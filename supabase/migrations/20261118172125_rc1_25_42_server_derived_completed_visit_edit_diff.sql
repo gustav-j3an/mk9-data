@@ -123,7 +123,7 @@ BEGIN
 
     IF EXISTS (
       SELECT 1 FROM jsonb_array_elements(p_checklist_items) e(value)
-      GROUP BY e.value->>'item_key'
+      GROUP BY trim(e.value->>'item_key')
       HAVING count(*) > 1
     ) THEN
       RAISE EXCEPTION 'Checklist contém item_key duplicado' USING ERRCODE='22023';
@@ -253,13 +253,12 @@ BEGIN
     'changes_summary',v_changes
   );
 END;
-$function$
-
-REVOKE ALL ON FUNCTION public.save_completed_visit_edit(uuid,text,jsonb,text,jsonb) FROM PUBLIC;
+$function$;
+REVOKE ALL ON FUNCTION public.save_completed_visit_edit(uuid,text,jsonb,text,jsonb) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.save_completed_visit_edit(uuid,text,jsonb,text,jsonb) TO authenticated;
 
 DO $postflight$
-DECLARE v_prosecdef boolean; v_search_path text; v_def text; v_type text;
+DECLARE v_prosecdef boolean; v_search_path text; v_def text; v_type text; v_anon_exec boolean;
 BEGIN
   SELECT c.data_type INTO v_type
   FROM information_schema.columns c
@@ -273,6 +272,10 @@ BEGIN
     INTO v_prosecdef, v_search_path, v_def
   FROM pg_catalog.pg_proc p
   WHERE p.oid='public.save_completed_visit_edit(uuid,text,jsonb,text,jsonb)'::regprocedure;
+  SELECT has_function_privilege('anon', 'public.save_completed_visit_edit(uuid,text,jsonb,text,jsonb)'::regprocedure, 'EXECUTE') INTO v_anon_exec;
+  IF v_anon_exec THEN
+    RAISE EXCEPTION 'anon must not execute the completed-visit edit RPC';
+  END IF;
   IF v_prosecdef IS DISTINCT FROM true OR v_search_path NOT LIKE '%search_path=""%' THEN
     RAISE EXCEPTION 'RPC must remain SECURITY DEFINER with empty/fixed search_path';
   END IF;
@@ -284,3 +287,5 @@ END
 $postflight$;
 
 COMMIT;
+
+
