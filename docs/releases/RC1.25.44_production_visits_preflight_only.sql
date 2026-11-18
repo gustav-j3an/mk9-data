@@ -14,7 +14,7 @@ BEGIN
  IF actual_versions IS DISTINCT FROM expected_versions THEN RAISE EXCEPTION 'FAIL-CLOSED: ledger does not equal expected 17-version baseline'; END IF;
  IF to_regclass('public.visit_occurrences') IS NULL OR to_regclass('public.visit_product_validity') IS NULL THEN RAISE EXCEPTION 'FAIL-CLOSED: expected baseline visit relations missing'; END IF;
  IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname='pg_cron' AND extversion='1.6.4') THEN RAISE EXCEPTION 'FAIL-CLOSED: pg_cron 1.6.4 not installed'; END IF;
-END
+END;
 $preflight$;
 SELECT promotor_matricula, loja_codigo, industria_codigo, data_visita, count(*) AS row_count
 FROM public.visits GROUP BY promotor_matricula, loja_codigo, industria_codigo, data_visita HAVING count(*)>1;

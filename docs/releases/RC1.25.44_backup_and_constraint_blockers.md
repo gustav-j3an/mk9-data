@@ -19,6 +19,7 @@ Não foi confirmada alternativa gratuita compatível com PG17 para restaurar e e
 
 ## Decisão e gates
 Não gerei DDL consolidado: sem backup recuperável comprovado e ensaio PG17 em cópia real, atomicidade não remove o risco pós-commit nem prova compatibilidade das constraints/triggers. O SQL anexo é somente leitura, verifica o conjunto exato das 17 versões e termina em `ROLLBACK`; não altera o banco.
+A revisão estática do Copilot encontrou o terminador `END;` ausente no bloco PL/pgSQL; foi corrigido nesta revisão. O SQL corrigido não foi executado nem validado por parser PostgreSQL.
 Para desbloquear: recuperar backup e passphrase por fluxo autorizado, validar checksum e restore em ambiente isolado sem custo proibido, revisar colisões históricas nos índices candidatos e então produzir/auditar a migration consolidada. Não editar ledger manualmente para recuperação; usar snapshot comprovado ou compensação previamente ensaiada e autorizada.
 
 Nenhuma alteração em produção/homologação; nenhum segredo lido; nenhum workflow, restore, merge ou deploy executado.
