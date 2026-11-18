@@ -2,9 +2,9 @@
 -- Status: BLOCKED as a release migration. This file checks the known target and
 -- prints drift/data counts. It does NOT install M30/M37/M38/RC1.25 or register
 -- a migration. Do not treat a successful preflight as authorization to deploy.
--- Target must be confirmed manually in Supabase SQL Editor:
---   production xzmbesqhxcnuokjwrbnw (PG 17.11, ledger baseline 17 versions)
--- Staging is tafjceemuetqjyngresg and MUST NOT be substituted.
+-- OPERATOR GATE: verify the SQL Editor header/project ref is exactly xzmbesqhxcnuokjwrbnw (production).
+-- If the UI does not visibly confirm this ref, STOP. Never run against staging tafjceemuetqjyngresg.
+-- PostgreSQL cannot inspect the Supabase dashboard project ref.
 
 BEGIN;
 SET LOCAL lock_timeout = '3s';
@@ -49,6 +49,13 @@ BEGIN
      OR to_regclass('public.visit_photos') IS NULL
      OR to_regclass('public.visit_regularization_audit') IS NULL THEN
     RAISE EXCEPTION 'Known production baseline differs from the inspected snapshot';
+  END IF;
+
+
+
+  IF to_regclass('public.visit_occurrences') IS NULL
+     OR to_regclass('public.visit_product_validity') IS NULL THEN
+    RAISE EXCEPTION 'Expected production count-snapshot tables are missing';
   END IF;
 
   RAISE NOTICE 'Preflight gates matched. This is not a release migration and performs no DDL.';

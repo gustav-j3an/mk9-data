@@ -6,6 +6,10 @@
 
 Nenhuma escrita foi feita em produção ou homologação; não houve Actions, merge ou deploy.
 
+## Auditoria independente do pacote inicial
+
+O Copilot aprovou o pacote como documentação/preflight read-only, não como DDL para aplicação. Apontou dois ajustes: reforçar a confirmação manual do project ref e validar previamente as duas tabelas consultadas nos SELECTs de contagem. Ambos foram incorporados nesta revisão. O parecer não valida backup, banco, parser, restore nem deployment.
+
 ## Estado observado via Supabase MCP
 
 | Item | Produção | Homologação |
@@ -63,7 +67,7 @@ Recuperação:
 
 ## SQL do pacote
 
-RC1.25.43_production_preflight_BLOCKED.sql verifica somente versão PG, pg_cron, o conjunto exato das 17 versões e o baseline, e mostra contagens/objetos. Inclui SET TRANSACTION READ ONLY e ROLLBACK. **Não contém DDL, não insere ledger e não é a migration incremental solicitada.** O DDL consolidado fica bloqueado até a matriz object-level ser completada e um ensaio isolado em dados reais/cópia recuperável comprovar a ordem, backfill/defaults, constraints, funções, triggers, ACLs e policies sem perda.
+RC1.25.43_production_preflight_BLOCKED.sql verifica somente versão PG, pg_cron, o conjunto exato das 17 versões e o baseline, e mostra contagens/objetos. Inclui SET TRANSACTION READ ONLY e ROLLBACK. Antes de executar, o operador deve confirmar visualmente o project ref `xzmbesqhxcnuokjwrbnw`; o SQL não consegue atestar o ref do painel. O bloco de preflight também verifica a presença das tabelas `visit_occurrences` e `visit_product_validity` antes das consultas de contagem. Antes de executar, o operador deve confirmar visualmente o project ref `xzmbesqhxcnuokjwrbnw`; o SQL não consegue atestar o ref do painel. O bloco de preflight também verifica a presença das tabelas `visit_occurrences` e `visit_product_validity` antes das consultas de contagem. **Não contém DDL, não insere ledger e não é a migration incremental solicitada.** O DDL consolidado fica bloqueado até a matriz object-level ser completada e um ensaio isolado em dados reais/cópia recuperável comprovar a ordem, backfill/defaults, constraints, funções, triggers, ACLs e policies sem perda.
 
 Não se executou parser PostgreSQL, restore, testes de migração em produção ou homologação nesta missão.
 
@@ -84,5 +88,5 @@ Não se executou parser PostgreSQL, restore, testes de migração em produção 
 
 ## Auditoria e status
 
-Pacote preparado para auditoria independente. Parecer final do Copilot pendente. O pacote não é liberado para aplicação; produção, homologação, Actions, main e Vercel permaneceram intactos.
+Auditoria independente inicial: APROVADO como documentação/preflight read-only; REPROVADO para aplicação DDL. Os ajustes solicitados foram incorporados e aguardam reauditoria estática. O pacote permanece bloqueado para aplicação; produção, homologação, Actions, main e Vercel permaneceram intactos.
 
