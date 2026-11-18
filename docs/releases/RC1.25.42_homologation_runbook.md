@@ -32,7 +32,7 @@ A migration foi aplicada no staging por `apply_migration`; Supabase registrou a 
 6. Em falha dentro da transação, corrigir e reaplicar somente após verificar ledger e estado real. Depois de commit, usar migration compensatória revisada; não apagar logs nem editar o ledger para “desfazer” histórico.
 
 ## Verificações / limites
-A versão da migration list confirma 58 registros em staging e a função ativa contém o caminho de diff servidor. Contagens observadas após o teste: `visit_photos=4`, `visit_edits_audit_log=0`, `industria_skus=0`, `visit_sku_stock_checks=0`; testes rollback não deixaram linhas. O teste de estoque passou nas regras de visita aberta e titular; o retry consecutivo no mesmo dia permanece bloqueado conforme acima. Testes de concorrência real e permissões por papel ainda não foram executados.
+A versão da migration list confirma 58 registros em staging e a função ativa contém o caminho de diff servidor. Contagens observadas após o teste: `visit_photos=4`, `visit_edits_audit_log=0`, `industria_skus=0`, `visit_sku_stock_checks=0`, `synthetic_visit_fixture_rows=0` e `recovery_audit_rows=0`; testes rollback não deixaram linhas de visita ou auditoria de recuperação. O teste de estoque passou nas regras de visita aberta e titular; o retry consecutivo no mesmo dia permanece bloqueado conforme acima. Testes de concorrência real e permissões por papel ainda não foram executados.
 
 
 
@@ -46,4 +46,3 @@ A versão da migration list confirma 58 registros em staging e a função ativa 
 - Guard de SKU: inserção válida durante visita aberta, checkout concluído e escrita tardia bloqueada; fixture revertido, contadores finais zero.
 - M37/M38: retry inicial attempt 1 → attempt 2 com raiz preservada, cancelamento auditado; tudo revertido.
 - M38 repetido na mesma data retornou 23505 devido à proteção de duplicidade diária; sem dados persistidos. Confirmar se este limite corresponde à regra de produto antes de publicação.
-
