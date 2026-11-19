@@ -404,7 +404,25 @@ BEGIN
   END IF;
   RAISE NOTICE 'TESTE 14 OK: Cancelamento M38 e consumo da autorização preservados.';
 
-  RAISE NOTICE '=== TODOS OS 14 TESTES FUNCIONAIS REAIS EM POSTGRESQL 17 PASSARAM COM SUCESSO! ===';
+  -- Test canonical RPC normalization: keys equal after trim must be rejected.
+  v_err_caught := false;
+  BEGIN
+    PERFORM public.save_completed_visit_edit(
+      v_visit_completed,
+      NULL,
+      '[{"item_key":"trim_key","item_label":"A"},{"item_key":" trim_key ","item_label":"B"}]'::jsonb,
+      'Justificativa sintética para teste de normalização',
+      '{}'::jsonb
+    );
+  EXCEPTION WHEN invalid_parameter_value THEN
+    v_err_caught := true;
+  END;
+  IF NOT v_err_caught THEN
+    RAISE EXCEPTION 'RPC did not reject duplicate item_key values after trim normalization';
+  END IF;
+  RAISE NOTICE 'TESTE 15 OK: RPC rejeita item_key duplicado após trim.';
+
+  RAISE NOTICE '=== TODOS OS 15 TESTES FUNCIONAIS REAIS EM POSTGRESQL 17 PASSARAM COM SUCESSO! ===';
 END $$;
 
 ROLLBACK;
