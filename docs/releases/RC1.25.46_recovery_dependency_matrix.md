@@ -4,7 +4,7 @@ Data da verificação: 2026-11-19. Escopo: inspeção estática do repositório 
 
 ## Ambiente recuperado
 
-- Repositório `gustav-j3an/mk9-data`, branch `prep/rc1-25-integration-m31`, HEAD `9082b6c51cfe06f49da0361608edc91e24fc4711`; referência remota consultada coincide.
+- Repositório `gustav-j3an/mk9-data`, branch `prep/rc1-25-integration-m31`, HEAD no momento da coleta: `9082b6c51cfe06f49da0361608edc91e24fc4711`; a branch foi posteriormente avançada com este relatório no commit `18daef8c2b009da45c3be691ce1161fc5f700fa6`.
 - A árvore de trabalho já tinha quatro arquivos modificados de trabalho anterior; foram preservados sem edição.
 - Host: Node v24.20.0, Git 2.56.0.windows.2, GitHub CLI 2.103.3 autenticado como `gustav-j3an`, Supabase CLI 2.121.0. Docker, `psql`, `pg_restore` e `pg_dump` não estão instalados.
 - Supabase MCP: produção `xzmbesqhxcnuokjwrbnw`, `ACTIVE_HEALTHY`, PostgreSQL 17.11.0.002, 17 migrations; homologação `tafjceemuetqjyngresg`, `ACTIVE_HEALTHY`, PostgreSQL 17.11.0.003, 58 migrations.
@@ -24,7 +24,7 @@ A migration SKU inclui `updated_at` e `uq_visit_checklist_item`, tabelas de SKUs
 | `20261106140000` M37 | Guarda rota pendente e início de ocorrência agendada | Requer campos e ações de agenda anteriores (`scheduled_date`, `visit_schedule_actions`) e protege conflito diário no fluxo de rota. |
 | `20261106150000` M37 | Guarda de conflito no check-in | Usa a semântica de rota/agenda. Casos de ocorrência já regularizada/encerrada especificam `23505`; a condição “Another visit is in progress” não define ERRCODE e portanto usa o padrão PostgreSQL `P0001`; validações de autorização usam `42501`. |
 | `20261107140000` M37 | Reconciliação de recuperação pendente; autorização de recuperação | Depende do fluxo M37 e registra autorização privada usada pelo start programado. |
-| `20261108160835` M37 | Recuperação semanal e transição da unicidade | Remove `visits_promotor_loja_industria_data_unique`; cria índices únicos parciais para visita regular e agendada/rota. Essa troca exige classificar todas as visitas e preservar guardas de conflito durante a transição. |
+| `20261108160835` M37 | Recuperação semanal e transição da unicidade | Remove `visits_promotor_loja_industria_data_unique`; cria índices únicos parciais para visita regular sem agenda, agenda com rota e agenda sem rota. Essa troca exige classificar todas as visitas e preservar guardas de conflito durante a transição. |
 | `20261110150000` M38 | Cancelamento, fechamento diário e auditoria de ciclo | Depende de recovery/autorizações M37; cria auditoria e autorização de ciclo de vida, triggers e cancelamento. |
 | `20261110160000` M38 | Tentativas e vínculo à raiz | Depende de agendamento e cancelamento M38; adiciona `attempt_number`, `occurrence_root_visit_id`, autorização de tentativa e índice único de tentativa de rota. |
 | `20261110170000` M38 | Reuso de tentativa agendada ativa no check-in | Depende dos campos e índice de tentativas da migration anterior. |
