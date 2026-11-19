@@ -81,15 +81,41 @@ export function validateDatabaseUrlStrict(dbUrl, poolerHost) {
 }
 
 export function runPsql(dbUrl, sql, opts = {}) {
+  const { singleTransaction = false, ...execOpts } = opts;
   const normalized = normalizeHomologationPoolerUrl(dbUrl);
-  return execFileSync('psql', ['-X', '-v', 'ON_ERROR_STOP=1', '-Atqc', sql, normalized], {
+  const args = ['-X', '-v', 'ON_ERROR_STOP=1', '-Atqc', sql];
+  if (singleTransaction) args.splice(3, 0, '--single-transaction');
+  args.push(normalized);
+  return execFileSync('psql', args, {
     encoding: 'utf8',
     env: {
       ...process.env,
       PGCONNECT_TIMEOUT: '10'
     },
-    ...opts
+    ...execOpts
   }).trim();
+}
+
+/**
+ * The approved source SQL has its own outer BEGIN/COMMIT for manual use.
+ * Remove only those exact boundary lines so the executor can submit the DDL
+ * plus ledger INSERT under psql's single transaction (psql -1).
+ */
+export function composeAtomicMigrationSql(sqlContent, migration = AUTHORIZED_RC125_MIGRATION) {
+  const normalized = sqlContent.replace(/\r\n/g, '\n').trim();
+  const lines = normalized.split('\n');
+  const beginIndex = lines.findIndex(line => /^BEGIN;\s*$/i.test(line));
+  const commitIndex = lines.findLastIndex(line => /^COMMIT;\s*$/i.test(line));
+  const headerIsCommentsOnly = lines.slice(0, beginIndex).every(line => /^\s*(--.*)?$/.test(line));
+  if (beginIndex < 0 || commitIndex <= beginIndex || !headerIsCommentsOnly
+      || lines.slice(commitIndex + 1).some(line => line.trim() !== '')) {
+    throw new Error('MIGRATION_TRANSACTION_BOUNDARIES_INVALID: expected one outer BEGIN; and COMMIT;');
+  }
+  const body = [...lines.slice(0, beginIndex), ...lines.slice(beginIndex + 1, commitIndex)].join('\n').trim();
+  if (/^\s*(BEGIN|COMMIT|ROLLBACK)\s*;/im.test(body)) {
+    throw new Error('MIGRATION_NESTED_TRANSACTION_BOUNDARY: inner transaction control is not allowed');
+  }
+  return `${body}\n\nINSERT INTO supabase_migrations.schema_migrations (version, name)\nVALUES ('${migration.version}', '${migration.name}');`;
 }
 
 export async function executeRc125HomologationApply(env = process.env) {
@@ -149,24 +175,49 @@ export async function executeRc125HomologationApply(env = process.env) {
 
   const already = remoteLedger.some(r => r.version === AUTHORIZED_RC125_MIGRATION.version);
   if (already) {
+    const registered = remoteLedger.find(r => r.version === AUTHORIZED_RC125_MIGRATION.version);
+    if (registered.name !== AUTHORIZED_RC125_MIGRATION.name) {
+      throw new Error(`LEDGER_NAME_MISMATCH: version ${AUTHORIZED_RC125_MIGRATION.version} is registered with an unexpected name.`);
+    }
     console.log(`INFO: Version ${AUTHORIZED_RC125_MIGRATION.version} is already registered in schema_migrations. Skipping SQL re-execution and validating schema state...`);
   } else {
+    const untrackedObjects = runPsql(dbUrl, `
+      SELECT (
+        EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public'
+          AND table_name IN ('industria_skus', 'visit_sku_stock_checks', 'visit_edits_audit_log'))
+        OR EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public'
+          AND policyname IN ('industria_skus_select_policy', 'industria_skus_promoter_insert_policy',
+            'industria_skus_suggestion_scope_guard', 'industria_skus_admin_write_policy',
+            'visit_sku_stock_select_policy', 'visit_sku_stock_write_policy',
+            'visit_sku_stock_update_policy', 'visit_sku_stock_insert_current_visit_guard',
+            'visit_sku_stock_update_current_visit_guard', 'visit_edits_audit_select_policy'))
+        OR EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+          WHERE n.nspname = 'public' AND p.proname IN (
+            'check_visit_promotor_update_integrity', 'save_completed_visit_edit',
+            'guard_visit_sku_stock_check', 'guard_visit_sku_stock_finalization'))
+        OR EXISTS (SELECT 1 FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
+          JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public'
+          AND NOT t.tgisinternal AND t.tgname IN (
+            'trg_visit_promotor_update_integrity', 'guard_visit_sku_stock_check',
+            'guard_visit_sku_stock_finalization'))
+        OR EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = to_regclass('public.visit_checklist_items')
+          AND conname = 'uq_visit_checklist_item')
+      )::text;
+    `);
+    if (untrackedObjects === 't') {
+      throw new Error('UNTRACKED_PARTIAL_MIGRATION_STATE: RC1.25 objects exist without the ledger version; refusing automatic re-execution.');
+    }
     console.log(`==> [RC1.25 Safe Apply] Applying migration ${AUTHORIZED_RC125_MIGRATION.file} in a single atomic transaction...`);
     const sqlContent = readFileSync(AUTHORIZED_RC125_MIGRATION.file, 'utf8');
-    const migrationSql = `
-      BEGIN;
-      ${sqlContent}
-      INSERT INTO supabase_migrations.schema_migrations (version, name)
-      VALUES ('${AUTHORIZED_RC125_MIGRATION.version}', '${AUTHORIZED_RC125_MIGRATION.name}');
-      COMMIT;
-    `;
+    const migrationSql = composeAtomicMigrationSql(sqlContent);
 
     try {
-      runPsql(dbUrl, migrationSql);
+      runPsql(dbUrl, migrationSql, { singleTransaction: true });
       console.log(`SUCCESS: Migration ${AUTHORIZED_RC125_MIGRATION.version} applied and registered.`);
-    } catch (err) {
-      console.error(`FATAL: Error applying migration: ${err.message}`);
-      throw new Error(`MIGRATION_EXECUTION_FAILED: ${err.message}`);
+    } catch {
+      // Do not print the child-process error: it can embed the DB URL or SQL.
+      console.error('FATAL: psql migration command failed; single-transaction mode was requested. Connection and SQL details were suppressed.');
+      throw new Error('MIGRATION_EXECUTION_FAILED: psql command failed; diagnostic details suppressed.');
     }
   }
 

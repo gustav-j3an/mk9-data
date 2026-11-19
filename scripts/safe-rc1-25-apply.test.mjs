@@ -1,10 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   ALLOWED_APPLY_BRANCH,
   REQUIRED_CONFIRMATION,
   AUTHORIZED_RC125_MIGRATION,
   computeNormalizedSha256,
+  composeAtomicMigrationSql,
   validateMigrationIntegrity,
   validateDatabaseUrlStrict,
   executeRc125HomologationApply
@@ -47,6 +49,27 @@ test('validateMigrationIntegrity rejects incorrect hash', () => {
   const result = validateMigrationIntegrity(invalidMigration);
   assert.equal(result.ok, false);
   assert.match(result.error, /SHA256 mismatch/);
+});
+
+test('composeAtomicMigrationSql moves source DDL inside the executor transaction and appends ledger write', () => {
+  const source = '-- source\nBEGIN;\nDO $$\nBEGIN\n  PERFORM 1;\nEND;\n$$;\nCOMMIT;';
+  const result = composeAtomicMigrationSql(source);
+  assert.doesNotMatch(result, /^BEGIN;|^COMMIT;|^ROLLBACK;/m);
+  assert.match(result, /DO \$\$[\s\S]*END;[\s\S]*\$\$;/);
+  assert.match(result, /INSERT INTO supabase_migrations\.schema_migrations[\s\S]*'20261115160000'[\s\S]*'20261115_rc1_25_skus_and_stock_audits'/);
+});
+
+test('composeAtomicMigrationSql rejects missing outer transaction boundaries and nested transaction controls', () => {
+  assert.throws(() => composeAtomicMigrationSql('SELECT 1;'), /MIGRATION_TRANSACTION_BOUNDARIES_INVALID/);
+  assert.throws(() => composeAtomicMigrationSql('BEGIN;\nSELECT 1;\nBEGIN;\nCOMMIT;'), /MIGRATION_NESTED_TRANSACTION_BOUNDARY/);
+});
+
+test('composeAtomicMigrationSql accepts the hash-pinned RC1.25 source without its transaction wrappers', () => {
+  const source = readFileSync(AUTHORIZED_RC125_MIGRATION.file, 'utf8');
+  const result = composeAtomicMigrationSql(source);
+  assert.doesNotMatch(result, /^BEGIN;|^COMMIT;|^ROLLBACK;/im);
+  assert.match(result, /CREATE TABLE IF NOT EXISTS public\.industria_skus/);
+  assert.match(result, /INSERT INTO supabase_migrations\.schema_migrations/);
 });
 
 test('validateDatabaseUrlStrict accepts valid homologation pooler URL', () => {
