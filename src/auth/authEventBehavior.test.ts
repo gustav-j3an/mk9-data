@@ -13,10 +13,12 @@ test('a refresh without the same valid user does not preserve the authenticated 
   assert.equal(shouldKeepAuthenticatedViewMountedOnAuthEvent('TOKEN_REFRESHED', 'user-a', 'user-b'), false);
 });
 
-test('sign-in, sign-out, and profile events keep the normal auth transition behavior', () => {
-  assert.equal(shouldKeepAuthenticatedViewMountedOnAuthEvent('SIGNED_IN', 'user-a', 'user-a'), false);
+test('same-user sign-in and profile updates keep the active route, while identity transitions do not', () => {
+  assert.equal(shouldKeepAuthenticatedViewMountedOnAuthEvent('SIGNED_IN', 'user-a', 'user-a'), true);
+  assert.equal(shouldKeepAuthenticatedViewMountedOnAuthEvent('USER_UPDATED', 'user-a', 'user-a'), true);
+  assert.equal(shouldKeepAuthenticatedViewMountedOnAuthEvent('SIGNED_IN', null, 'user-a'), false);
+  assert.equal(shouldKeepAuthenticatedViewMountedOnAuthEvent('SIGNED_IN', 'user-a', 'user-b'), false);
   assert.equal(shouldKeepAuthenticatedViewMountedOnAuthEvent('SIGNED_OUT', 'user-a', null), false);
-  assert.equal(shouldKeepAuthenticatedViewMountedOnAuthEvent('USER_UPDATED', 'user-a', 'user-a'), false);
 });
 
 test('the provider keeps route content mounted during a same-user refresh and retains the last profile on refresh failure', async () => {
@@ -28,4 +30,22 @@ test('the provider keeps route content mounted during a same-user refresh and re
   assert.match(provider, /if \(active && !keepAuthenticatedViewMounted\) setLoading\(false\)/);
   assert.match(provider, /if \(!options\.preserveExistingOnError\) setProfile\(defaultProfile\)/);
   assert.match(protectedRoute, /if \(loading\)[\s\S]*?if \(!session\)/);
+});
+
+test('authorization refetch uses the user identity and keeps prior access while refreshed credentials are checked', async () => {
+  const files = await Promise.all([
+    readFile(new URL('../lib/rhAccess.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('../lib/faltasAtestadosAccess.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('../lib/rhMatriculasAccess.tsx', import.meta.url), 'utf8'),
+  ]);
+  for (const source of files) {
+    assert.match(source, /state\?\.userId === userId/);
+    assert.match(source, /previous\?\.userId === userId \? previous\.access/);
+  }
+});
+
+test('route authorization refresh does not replace the current screen with a blocking placeholder', async () => {
+  const app = await readFile(new URL('../App.tsx', import.meta.url), 'utf8');
+  assert.match(app, /accessCheckPending \? lastAllowedScreen : homeScreen/);
+  assert.doesNotMatch(app, /Verificando permissões\.\.\./);
 });

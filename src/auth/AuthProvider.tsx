@@ -254,6 +254,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       );
       currentSessionUserIdRef.current = nextUserId;
       setSession(nextSession);
+      // Do not replace the active route with the session splash while the same
+      // user's auth/profile refresh completes in the background.
       if (!keepAuthenticatedViewMounted) setLoading(true);
       void Promise.resolve()
         .then(() => restoreProfile(nextSession, keepAuthenticatedViewMounted))

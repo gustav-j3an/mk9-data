@@ -3,8 +3,10 @@ export function shouldKeepAuthenticatedViewMountedOnAuthEvent(
   previousUserId: string | null,
   nextUserId: string | null
 ): boolean {
-  // A same-user token refresh changes credentials, not the user's identity or authorization boundary.
-  return event === 'TOKEN_REFRESHED'
-    && previousUserId !== null
+  // Same-user session updates do not change the authorization boundary. Keep the
+  // mounted view while refreshed credentials and profile data are synchronized.
+  const sameAuthenticatedUser = previousUserId !== null
     && previousUserId === nextUserId;
+  return sameAuthenticatedUser
+    && (event === 'TOKEN_REFRESHED' || event === 'SIGNED_IN' || event === 'USER_UPDATED');
 }

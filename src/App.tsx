@@ -52,6 +52,7 @@ function Dashboard() {
   const requestedScreen = screenFromPath(location.pathname);
   const homeScreen = defaultScreenForRole(role);
   const currentScreen = requestedScreen || homeScreen;
+  const [lastAllowedScreen, setLastAllowedScreen] = useState<ScreenId>(homeScreen);
   const accessCheckPending = currentScreen === 'rh-ausencias' && rh.loading
     || currentScreen === 'faltas-atestados' && faltasAtestados.loading
     || currentScreen === 'rh-matriculas' && rhMatriculas.loading;
@@ -100,7 +101,11 @@ function Dashboard() {
   const currentScreenAllowed = isScreenAllowedForRole(currentScreen, role, rhAllowed, faltasAtestados.allowed, rhMatriculas.allowed);
   const activeScreen = currentScreenAllowed
     ? currentScreen
-    : homeScreen;
+    : accessCheckPending ? lastAllowedScreen : homeScreen;
+
+  useEffect(() => {
+    if (!accessCheckPending && currentScreenAllowed) setLastAllowedScreen(currentScreen);
+  }, [accessCheckPending, currentScreenAllowed, currentScreen]);
 
   useEffect(() => {
     if (accessCheckPending) return;
@@ -110,7 +115,7 @@ function Dashboard() {
   }, [accessCheckPending, requestedScreen, currentScreenAllowed, activeScreen, navigate]);
 
   if (accessCheckPending) {
-    return <div className="min-h-screen bg-[#E4E2DB] flex items-center justify-center text-[#171717] font-mono text-xs">Verificando permissões...</div>;
+    // Access refresh is silent: keep the current route and its local UI state mounted.
   }
 
   return (
