@@ -7,6 +7,7 @@ import { omitWhatsAppGroupLink, writeWithOptionalWhatsAppGroupLink } from '../ut
 import { isValidWhatsAppGroupLink, sanitizeWhatsAppGroupLink, openIndustryWhatsAppGroup } from '../utils/whatsappShare';
 import { analyzeRotasForContracts, contratosService, parseISODate, classificarParContratual } from '../lib/contratosService';
 import { StatCard, StatusBadge, DataTable, Column } from '../components/ui';
+import { SkuCatalogManager } from '../components/SkuCatalogManager';
 
 interface IndustriesViewProps {
   onShowToast: (toast: Omit<ToastMessage, 'id'>) => void;
@@ -69,11 +70,11 @@ export function formatAderencia(realizadas: number, planejadas: number): string 
 }
 
 export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) => {
-  const { hasPermission } = useAuth();
+  const { hasPermission, role, profile } = useAuth();
   const canEdit = hasPermission(['admin', 'gestor']);
 
-  // Aba selecionada ('frequencia' | 'cadastro' | 'contratos')
-  const [activeTab, setActiveTab] = useState<'frequencia' | 'cadastro' | 'contratos'>('frequencia');
+  // Aba selecionada ('frequencia' | 'cadastro' | 'contratos' | 'skus')
+  const [activeTab, setActiveTab] = useState<'frequencia' | 'cadastro' | 'contratos' | 'skus'>('frequencia');
   const [contratosRefDate, setContratosRefDate] = useState(() => {
     const d = new Date();
     const y = d.getFullYear();
@@ -1481,6 +1482,18 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
               <span className="material-symbols-outlined text-[16px]">contract</span>
               <span>Prévia de Contratos</span>
             </button>
+
+            <button
+              onClick={() => setActiveTab('skus')}
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                activeTab === 'skus'
+                  ? 'bg-[#111114] text-white shadow-sm'
+                  : 'text-[#5F5F5F] hover:text-[#171717] hover:bg-[#D5D3CB]'
+              }`}
+            >
+              <span className="material-symbols-outlined text-[16px]">inventory_2</span>
+              <span>Catálogo de SKUs</span>
+            </button>
           </div>
         </div>
       </section>
@@ -2729,6 +2742,18 @@ export const IndustriesView: React.FC<IndustriesViewProps> = ({ onShowToast }) =
             </section>
           )}
         </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* ABA 4: CATÁLOGO DE SKUs E IMPORTAÇÃO EXCEL (RC1.25)                      */}
+      {/* ========================================================================= */}
+      {activeTab === 'skus' && (
+        <SkuCatalogManager
+          industries={industries}
+          userRole={role}
+          currentUserId={profile?.id}
+          onShowToast={onShowToast}
+        />
       )}
 
       {/* MODAL CRIAR / EDITAR */}
