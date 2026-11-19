@@ -13,7 +13,7 @@ export function isScheduledVisitActionRpcReady(error: { code?: unknown; message?
 }
 
 export function getScheduledVisitAction(input: {
-  item: Pick<OperationalVisitItem, 'routeId' | 'dataStr' | 'status' | 'frequencia' | 'visitObj'>;
+  item: Pick<OperationalVisitItem, 'routeId' | 'dataStr' | 'status' | 'frequencia' | 'visitObj' | 'industriaStatus'>;
   today: string;
   weekStart: string;
   weekEnd: string;
@@ -23,6 +23,7 @@ export function getScheduledVisitAction(input: {
   const { item } = input;
   if (!input.authorized) return { allowed: false, reason: 'A operação ainda não está autorizada.' };
   if (input.hasActiveVisit) return { allowed: false, reason: 'Finalize o atendimento atual antes de iniciar outra visita.' };
+  if (item.industriaStatus === 'inativo') return { allowed: false, reason: 'A indústria vinculada está inativa. A visita permanece no histórico, mas não pode ser executada.' };
   if (!item.routeId) return { allowed: false, reason: 'A programação não está vinculada a uma rota fixa.' };
   if ((item.frequencia || '').toUpperCase() !== 'SEMANAL') {
     return { allowed: false, reason: 'Esta frequência ainda não pode ser validada pelo servidor para antecipação ou recuperação.' };

@@ -56,6 +56,20 @@ import { filterPromoterAppointments, getMetricDisplayValue, getRegularizationCou
 import { getPromoterPortalViewStateKey, readPromoterPortalViewState, writePromoterPortalViewState } from '../utils/promoterPortalViewState';
 import { getScheduledVisitAction, isScheduledVisitActionRpcReady, type ScheduledVisitAction } from '../utils/scheduledVisitActions';
 import { canReviewOldOpenVisits, createRequestGate, findOwnOpenVisit, formatOpenVisitConflictMessage, getOldOpenVisitCheckInBlockMessage, getOldOpenVisitsLabel, getPromoterOpenVisitAction, isAnotherVisitInProgressError, isOpenVisitFromToday } from '../utils/visitCheckInConflict';
+import { PromoterPhotoUploader } from '../components/PromoterPhotoUploader';
+import { EditCompletedVisitModal } from '../components/EditCompletedVisitModal';
+import { SkuStockChecklistSection } from '../components/SkuStockChecklistSection';
+import type { PhotoSelectionItem } from '../utils/promoterPhotos';
+import {
+  buildStoreSkuChecklist,
+  calculateChecklistProgress,
+  type StoreSkuChecklistState,
+  type StoreSkuStockRecord
+} from '../utils/skuStockOperations';
+import {
+  createPromoterSkuSuggestion,
+  type SkuCatalogItem
+} from '../utils/skuCatalogService';
 
 interface PromoterPortalViewProps {
   onNavigate: (screen: ScreenId) => void;
@@ -217,6 +231,10 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
   const [validityObservacao, setValidityObservacao] = useState('');
   const [savingValidity, setSavingValidity] = useState(false);
 
+  // Form State para Conferência Obrigatória de SKUs (RC1.25)
+  const [skuChecklist, setSkuChecklist] = useState<Record<string, StoreSkuChecklistState>>({});
+  const [loadingSkus, setLoadingSkus] = useState(false);
+
   // Estado para Modal de Consulta de Detalhes da Visita (Modo Administrativo)
   const [adminInspectionVisit, setAdminInspectionVisit] = useState<OperationalVisitItem | null>(null);
   const [selectedOperationalDetails, setSelectedOperationalDetails] = useState<OperationalVisitItem | null>(null);
@@ -226,6 +244,9 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
 
   // Estado para Modal de Compartilhamento WhatsApp
   const [sharingVisit, setSharingVisit] = useState<Visit | null>(null);
+
+  // Estado para Modal de Edição de Atendimento Concluído (RC1.25)
+  const [editingCompletedVisit, setEditingCompletedVisit] = useState<Visit | null>(null);
 
   const [generalObs, setGeneralObs] = useState('');
   const [completingVisit, setCompletingVisit] = useState(false);
@@ -365,7 +386,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
         const routesBaseQuery = (filterByClosure: boolean) => {
           const query = db.from('rotas').select(`
           *,
-          industria:industrias(codigo, nome),
+          industria:industrias(codigo, nome, status),
           loja:lojas(codigo, nome, cidade, uf, endereco),
           promotor:promotores(matricula, nome)
           `).eq('promotor_matricula', promotorMatricula);
@@ -386,7 +407,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
 
         const visitsBaseQuery = (includeWhatsAppLink: boolean) => db.from('visits').select(`
           *,
-          industria:industrias(codigo, nome${includeWhatsAppLink ? ', whatsapp_group_link' : ''}),
+          industria:industrias(codigo, nome, status${includeWhatsAppLink ? ', whatsapp_group_link' : ''}),
           loja:lojas(codigo, nome, cidade, uf, endereco),
           promotor:promotores(matricula, nome),
           work_schedule:promoter_work_schedules!visits_work_schedule_id_fkey(timezone, hora_inicio, hora_fim),
@@ -405,7 +426,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
         // prior visits from it instead of issuing an identical second SELECT.
         const activeVisitsBaseQuery = (includeWhatsAppLink: boolean) => db.from('visits').select(`
           *,
-          industria:industrias(codigo, nome${includeWhatsAppLink ? ', whatsapp_group_link' : ''}),
+          industria:industrias(codigo, nome, status${includeWhatsAppLink ? ', whatsapp_group_link' : ''}),
           loja:lojas(codigo, nome, cidade, uf, endereco),
           promotor:promotores(matricula, nome),
           work_schedule:promoter_work_schedules!visits_work_schedule_id_fkey(timezone, hora_inicio, hora_fim),
@@ -448,7 +469,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
       if (profile?.role === 'admin' || profile?.role === 'gestor') {
         const { data: oldOpenData, error: oldOpenError } = await db.from('visits').select(`
           *,
-          industria:industrias(codigo, nome),
+          industria:industrias(codigo, nome, status),
           loja:lojas(codigo, nome, cidade, uf, endereco),
           promotor:promotores(matricula, nome),
           checklist_items:visit_checklist_items(*),
@@ -603,6 +624,148 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
   useEffect(() => {
     loadPortalData();
   }, [loadPortalData]);
+
+  useEffect(() => {
+    if (!supabase || isAdminUser) return;
+    const client = supabase;
+    const channel = client
+      .channel('promoter-industry-status')
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'industrias' }, () => {
+        void loadPortalData();
+      })
+      .subscribe();
+    const handleFocus = () => { void loadPortalData(); };
+    window.addEventListener('focus', handleFocus);
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+      void client.removeChannel(channel);
+    };
+  }, [supabase, isAdminUser, loadPortalData]);
+
+  // Carregar Catálogo de SKUs da Indústria e Histórico Prévio da Loja (RC1.25)
+  useEffect(() => {
+    const db = supabase;
+    if (!activeVisit || !db) {
+      setSkuChecklist({});
+      return;
+    }
+
+    let isMounted = true;
+    const fetchSkuData = async () => {
+      setLoadingSkus(true);
+      try {
+        // 1. Buscar SKUs oficiais ativos da indústria
+        const { data: skusData, error: skusErr } = await db
+          .from('industria_skus')
+          .select('*')
+          .eq('industria_codigo', activeVisit.industria_codigo)
+          .eq('status', 'ativo');
+
+        if (skusErr) {
+          // Se tabela não existe ainda (migração pendente), zera silenciosamente
+          if (skusErr.code === '42P01' || skusErr.message?.includes('industria_skus')) {
+            if (isMounted) setSkuChecklist({});
+            return;
+          }
+          throw skusErr;
+        }
+
+        const officialSkus = (skusData as SkuCatalogItem[]) || [];
+        if (officialSkus.length === 0) {
+          if (isMounted) setSkuChecklist({});
+          return;
+        }
+
+        // 2. Buscar último registro de conferência nesta loja para servir de referência
+        const { data: previousData } = await db
+          .from('visit_sku_stock_checks')
+          .select('*')
+          .eq('industria_codigo', activeVisit.industria_codigo)
+          .eq('loja_codigo', activeVisit.loja_codigo)
+          .neq('visit_id', activeVisit.id)
+          .order('data_conferencia', { ascending: false });
+
+        const previousRecords = (previousData as StoreSkuStockRecord[]) || [];
+
+        if (isMounted) {
+          const initialChecklist = buildStoreSkuChecklist(officialSkus, previousRecords);
+          setSkuChecklist(initialChecklist);
+        }
+      } catch (err) {
+        console.warn('Aviso: módulo de SKUs indisponível ou pendente de migração:', err);
+        if (isMounted) setSkuChecklist({});
+      } finally {
+        if (isMounted) setLoadingSkus(false);
+      }
+    };
+
+    fetchSkuData();
+    return () => {
+      isMounted = false;
+    };
+  }, [activeVisit?.id, activeVisit?.industria_codigo, activeVisit?.loja_codigo]);
+
+  // Handler de atualização de item de SKU
+  const handleUpdateSkuState = (skuCode: string, patch: Partial<StoreSkuChecklistState>) => {
+    setSkuChecklist((prev) => {
+      const existing = prev[skuCode];
+      if (!existing) return prev;
+      return {
+        ...prev,
+        [skuCode]: {
+          ...existing,
+          ...patch
+        }
+      };
+    });
+  };
+
+  // Handler para sugestão de novo SKU pelo promotor
+  const handleSuggestSku = async (skuCode: string, nomeProduto: string, ean?: string) => {
+    if (!activeVisit || !supabase || !promotorMatricula) return;
+
+    try {
+      const suggestion = createPromoterSkuSuggestion(
+        activeVisit.industria_codigo,
+        skuCode,
+        nomeProduto,
+        promotorMatricula,
+        ean
+      );
+
+      const { error } = await supabase.from('industria_skus').insert([
+        {
+          industria_codigo: suggestion.industria_codigo,
+          codigo_sku: suggestion.codigo_sku,
+          nome_produto: suggestion.nome_produto,
+          ean: suggestion.ean || null,
+          status: 'pendente',
+          origem_cadastro: 'promotor_sugestao',
+          sugerido_por_matricula: suggestion.sugerido_por_matricula
+        }
+      ]);
+
+      if (error) {
+        if (error.code === '42P01') {
+          throw new Error('A tabela de SKUs ainda não foi criada no banco (migração pendente).');
+        }
+        throw error;
+      }
+
+      onShowToast({
+        title: 'Sugestão Enviada',
+        message: `SKU ${skuCode} sugerido com sucesso! Ele foi encaminhado para aprovação administrativa.`,
+        type: 'success'
+      });
+    } catch (err: any) {
+      console.error('Erro ao sugerir SKU:', err);
+      onShowToast({
+        title: 'Erro na Sugestão',
+        message: err.message || 'Falha ao registrar sugestão de SKU.',
+        type: 'error'
+      });
+    }
+  };
 
   useEffect(() => {
     let isCurrent = true;
@@ -971,6 +1134,11 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
   const handleStartVisit = async (route: RouteItem) => {
     if (!supabase) return;
 
+    if (route.industria?.status === 'inativo') {
+      onShowToast({ title: 'Indústria inativa', message: 'Esta visita permanece no histórico, mas não pode ser iniciada enquanto a indústria estiver inativa.', type: 'warning' });
+      return;
+    }
+
     if (isAdminUser) {
       onShowToast({
         title: 'Modo Somente Leitura',
@@ -1027,7 +1195,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
         .from('visits')
         .select(`
           *,
-          industria:industrias(codigo, nome),
+          industria:industrias(codigo, nome, status),
           loja:lojas(codigo, nome, cidade, uf, endereco),
           promotor:promotores(matricula, nome),
           checklist_items:visit_checklist_items(*),
@@ -1102,7 +1270,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
               .from('visits')
               .select(`
                 *,
-                industria:industrias(codigo, nome),
+                industria:industrias(codigo, nome, status),
                 loja:lojas(codigo, nome, cidade, uf, endereco),
                 promotor:promotores(matricula, nome),
                 checklist_items:visit_checklist_items(*),
@@ -1151,7 +1319,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
         try {
           const { data } = await supabase
             .from('visits')
-            .select(`*, industria:industrias(codigo, nome), loja:lojas(codigo, nome, cidade, uf, endereco), work_schedule:promoter_work_schedules!visits_work_schedule_id_fkey(timezone, hora_inicio, hora_fim), checklist_items:visit_checklist_items(*), photos:visit_photos(*), occurrences:visit_occurrences(*), validity_items:visit_product_validity(*)`)
+            .select(`*, industria:industrias(codigo, nome, status), loja:lojas(codigo, nome, cidade, uf, endereco), work_schedule:promoter_work_schedules!visits_work_schedule_id_fkey(timezone, hora_inicio, hora_fim), checklist_items:visit_checklist_items(*), photos:visit_photos(*), occurrences:visit_occurrences(*), validity_items:visit_product_validity(*)`)
             .eq('promotor_matricula', promotorMatricula)
             .eq('status', 'em_andamento')
             .order('data_visita', { ascending: false });
@@ -1330,104 +1498,78 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
     });
   };
 
-  // Upload de Foto para o Bucket Privado 'visit-photos' com Compressão no Device e Validação
-  const handleUploadPhoto = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || !activeVisit || activeVisit.status !== 'em_andamento' || !supabase || completingVisit) return;
-    if (uploadingPhotoRef.current) {
-      e.target.value = '';
-      return;
-    }
-
-    if (!isSupportedVisitPhoto(file.type)) {
-      onShowToast({
-        title: 'Formato Inválido',
-        message: 'Selecione um arquivo de imagem válido (SVG não é permitido).',
-        type: 'warning'
-      });
-      e.target.value = '';
-      return;
-    }
+  // Upload em Lote de Fotos do PromoterPhotoUploader
+  const handleBatchPhotoUpload = async (items: PhotoSelectionItem[]) => {
+    if (!items.length || !activeVisit || activeVisit.status !== 'em_andamento' || !supabase || completingVisit) return;
+    if (uploadingPhotoRef.current) return;
 
     uploadingPhotoRef.current = true;
     setUploadingPhoto(true);
-    setPhotoStatusMessage('Otimizando foto...');
-    let uploadedPath: string | null = null;
-    const selectedPhotoType = photoType;
-    const caption = photoCaption.trim();
+
+    let successCount = 0;
+    const errors: string[] = [];
 
     try {
-      // 2. Compressão e Redimensionamento no Dispositivo antes do envio (Máx 1920px, Qualidade 82% JPEG)
-      let fileToUpload: Blob = file;
-      let contentType = 'image/jpeg';
-      let fileExtension = 'jpg';
-      try {
-        fileToUpload = await compressImageFile(file, 1920, 0.82);
-        console.log(`Foto otimizada: Original ${(file.size / 1024).toFixed(1)} KB -> Otimizada ${(fileToUpload.size / 1024).toFixed(1)} KB`);
-      } catch (cErr) {
-        console.warn('Falha na otimização nativa, enviando arquivo original:', cErr);
-        fileToUpload = file;
-        contentType = file.type.toLowerCase();
-        fileExtension = contentType.split('/')[1]?.replace('jpeg', 'jpg') || 'img';
-      }
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        setPhotoStatusMessage(`Enviando foto ${i + 1} de ${items.length}...`);
 
-      // 3. Validar limite de tamanho pós-compressão (máximo 5MB)
-      if (!isWithinVisitPhotoLimit(fileToUpload.size)) {
-        onShowToast({
-          title: 'Tamanho Excedido',
-          message: 'Mesmo após a otimização, a foto excedeu o limite seguro de 5MB.',
-          type: 'warning'
-        });
-        return;
-      }
+        let fileToUpload: Blob = item.file;
+        let contentType = 'image/jpeg';
+        let fileExtension = 'jpg';
 
-      setPhotoStatusMessage('Enviando foto...');
-
-      // Estrutura padrão de caminho: visits/{visit_id}/{arquivo}_{tipo}.{extensão}
-      const uploadId = globalThis.crypto?.randomUUID?.() || `${Date.now()}_${Math.random().toString(36).slice(2)}`;
-      const fileName = `${activeVisit.id}/${uploadId}_${selectedPhotoType}.${fileExtension}`;
-      uploadedPath = `visits/${fileName}`;
-
-      // 4. Upload no Supabase Storage
-      const { error: uploadErr } = await supabase.storage
-        .from('visit-photos')
-        .upload(uploadedPath, fileToUpload, { contentType });
-
-      if (uploadErr) throw uploadErr;
-
-      // 5. Gerar Signed URL para exibição temporária privada (3600s)
-      const { data: signedData } = await supabase.storage
-        .from('visit-photos')
-        .createSignedUrl(uploadedPath, 3600);
-
-      const signedUrl = signedData?.signedUrl || '';
-
-      // 6. Gravar referência na tabela visit_photos (storage_path)
-      const { error: dbErr } = await supabase.from('visit_photos').insert([
-        {
-          visit_id: activeVisit.id,
-          tipo_foto: selectedPhotoType,
-          storage_path: uploadedPath,
-          file_url: signedUrl || uploadedPath,
-          legenda: caption || null
+        try {
+          fileToUpload = await compressImageFile(item.file, 1920, 0.82);
+        } catch {
+          fileToUpload = item.file;
+          contentType = item.file.type.toLowerCase();
+          fileExtension = contentType.split('/')[1]?.replace('jpeg', 'jpg') || 'img';
         }
-      ]);
 
-      if (dbErr) {
-        console.error('Erro no INSERT em visit_photos. Limpando arquivo enviado no Storage...', dbErr);
-        await supabase.storage.from('visit-photos').remove([uploadedPath]);
-        throw dbErr;
+        if (!isWithinVisitPhotoLimit(fileToUpload.size)) {
+          errors.push(`${item.file.name}: Excedeu o limite de 5MB.`);
+          continue;
+        }
+
+        const uploadId = globalThis.crypto?.randomUUID?.() || `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+        const fileName = `${activeVisit.id}/${uploadId}_${item.tipo_foto}.${fileExtension}`;
+        const uploadedPath = `visits/${fileName}`;
+
+        const { error: uploadErr } = await supabase.storage
+          .from('visit-photos')
+          .upload(uploadedPath, fileToUpload, { contentType });
+
+        if (uploadErr) {
+          errors.push(`${item.file.name}: ${uploadErr.message}`);
+          continue;
+        }
+
+        const { data: signedData } = await supabase.storage
+          .from('visit-photos')
+          .createSignedUrl(uploadedPath, 3600);
+
+        const signedUrl = signedData?.signedUrl || '';
+
+        const { error: dbErr } = await supabase.from('visit_photos').insert([
+          {
+            visit_id: activeVisit.id,
+            tipo_foto: item.tipo_foto,
+            storage_path: uploadedPath,
+            file_url: signedUrl || uploadedPath,
+            legenda: item.legenda?.trim() || null
+          }
+        ]);
+
+        if (dbErr) {
+          await supabase.storage.from('visit-photos').remove([uploadedPath]);
+          errors.push(`${item.file.name}: Falha ao registrar foto.`);
+          continue;
+        }
+
+        successCount++;
       }
 
-      onShowToast({
-        title: 'Foto Anexada',
-        message: `Foto otimizada e salva com sucesso! (${(fileToUpload.size / 1024).toFixed(0)} KB)`,
-        type: 'success'
-      });
-
-      setPhotoCaption('');
-
-      // Atualizar lista de fotos da visita ativa com signed_url
+      // Atualizar lista de fotos da visita ativa
       const { data: updatedPhotos } = await supabase.from('visit_photos').select('*').eq('visit_id', activeVisit.id);
       if (updatedPhotos) {
         const photosWithSignedUrls = await Promise.all(
@@ -1445,18 +1587,33 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
         );
         setActiveVisit((prev) => prev ? { ...prev, photos: photosWithSignedUrls } : null);
       }
+
+      if (successCount > 0) {
+        onShowToast({
+          title: 'Fotos Enviadas',
+          message: `${successCount} foto(s) anexada(s) com sucesso à visita!`,
+          type: 'success'
+        });
+      }
+
+      if (errors.length > 0) {
+        onShowToast({
+          title: 'Atenção em Algumas Fotos',
+          message: `Alguns arquivos falharam: ${errors.join(', ')}`,
+          type: 'warning'
+        });
+      }
     } catch (err: any) {
-      console.error('Erro ao enviar foto otimizada:', err);
+      console.error('Erro no upload em lote:', err);
       onShowToast({
         title: 'Falha no Upload',
-        message: err.message || 'Erro ao enviar a foto otimizada para o servidor.',
+        message: err.message || 'Erro durante o envio em lote das fotos.',
         type: 'error'
       });
     } finally {
       setUploadingPhoto(false);
       uploadingPhotoRef.current = false;
       setPhotoStatusMessage('');
-      e.target.value = '';
     }
   };
 
@@ -1597,6 +1754,21 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
       return;
     }
 
+    // Validação de SKUs Obrigatórios (RC1.25)
+    // Se a indústria possuir catálogo de SKUs ativos carregados, verifica se todos foram conferidos ou justificados
+    const skuItems = Object.values(skuChecklist);
+    if (skuItems.length > 0) {
+      const skuProgress = calculateChecklistProgress(skuChecklist, activeVisit.photos?.length || 0, 1);
+      if (!skuProgress.isComplete) {
+        onShowToast({
+          title: 'Conferência de SKUs Pendente',
+          message: `Existem ${skuProgress.pendingCount} SKU(s) da indústria sem confirmação de estoque ou justificativa.`,
+          type: 'warning'
+        });
+        return;
+      }
+    }
+
     setCompletingVisit(true);
 
     try {
@@ -1648,6 +1820,38 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
         if (insertChecklistError) throw insertChecklistError;
       }
       setChecklistSaveError(null);
+
+      // 2.5 Persistir registros de conferência de estoque de SKUs (se a tabela existir)
+      if (skuItems.length > 0) {
+        try {
+          const skuRecords = skuItems.map((item) => ({
+            visit_id: activeVisit.id,
+            industria_codigo: activeVisit.industria_codigo,
+            loja_codigo: activeVisit.loja_codigo,
+            codigo_sku: item.sku.codigo_sku,
+            data_conferencia: activeVisit.data_visita,
+            quantidade_venda: item.quantidade_venda,
+            quantidade_deposito: item.quantidade_deposito,
+            quantidade_reposicao: item.quantidade_reposicao,
+            quantidade_anterior_venda: item.quantidade_anterior_venda,
+            quantidade_anterior_deposito: item.quantidade_anterior_deposito,
+            status_conferencia: item.conferido ? 'conferido' : item.justificativa ? 'justificado' : 'pendente',
+            justificativa: item.justificativa || null,
+            observacao: item.observacao?.trim() || null,
+            conferido_por_matricula: activeVisit.promotor_matricula
+          }));
+
+          const { error: skuUpsertErr } = await supabase
+            .from('visit_sku_stock_checks')
+            .upsert(skuRecords, { onConflict: 'visit_id,codigo_sku' });
+
+          if (skuUpsertErr) {
+            console.warn('Aviso ao persistir conferência de SKUs (tabela opcional/pendente de migração):', skuUpsertErr);
+          }
+        } catch (skuErr) {
+          console.warn('Persistência de SKUs ignorada por ausência da tabela:', skuErr);
+        }
+      }
 
       // 3. Atualizar visita com status oficial 'concluida' e completed_at (preservando started_at)
       const nowIso = new Date().toISOString();
@@ -1737,6 +1941,10 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
 
   // 1. Continuar Visita Antiga em Andamento
   const handleResumeStaleVisit = async (visit: Visit) => {
+    if (visit.industria?.status === 'inativo') {
+      onShowToast({ title: 'Indústria inativa', message: 'Esta visita permanece no histórico e não pode ser retomada enquanto a indústria estiver inativa.', type: 'warning' });
+      return;
+    }
     try {
       // Carregar signedUrls para fotos
       if (visit.photos && visit.photos.length > 0 && supabase) {
@@ -2002,14 +2210,14 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
       </section>
 
       {loading && (
-        <div role="status" className="rounded-xl border border-blue-500/30 bg-blue-500/10 p-4 text-sm text-blue-100">
+        <div role="status" className="rounded-xl border border-blue-300 bg-blue-50 p-4 text-sm font-semibold text-blue-950 shadow-xs">
           Carregando rotas e visitas do portal…
         </div>
       )}
       {loadError && !loading && (
-        <div role="alert" className="rounded-xl border border-rose-500/40 bg-rose-500/10 p-4 text-sm text-rose-100 space-y-2">
+        <div role="alert" className="rounded-xl border border-rose-300 bg-rose-50 p-4 text-sm font-semibold text-rose-950 space-y-2 shadow-xs">
           <p className="font-bold">Não foi possível carregar {loadError}. Os indicadores e listas abaixo podem não refletir os dados atuais; eles não significam que sua agenda esteja vazia.</p>
-          <button type="button" onClick={loadPortalData} className="underline font-semibold">Tentar carregar novamente</button>
+          <button type="button" onClick={loadPortalData} className="underline font-bold text-rose-900 hover:text-rose-950 cursor-pointer">Tentar carregar novamente</button>
         </div>
       )}
 
@@ -2227,7 +2435,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                 industria_codigo: item.industriaCodigo,
                 frequencia: item.frequencia,
                 loja: { codigo: item.lojaCodigo, nome: item.lojaNome, cidade: item.lojaCidade, uf: item.lojaUf },
-                industria: { codigo: item.industriaCodigo, nome: item.industriaNome }
+                industria: { codigo: item.industriaCodigo, nome: item.industriaNome, status: item.industriaStatus }
               } as RouteItem;
 
               const activeScheduledDate = activeVisit?.scheduled_date || activeVisit?.data_visita;
@@ -2286,7 +2494,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                     <p className="text-xs font-semibold text-[#3F3F46]">Hoje · {item.dataStr.split('-').reverse().join('/')}</p>
 
                     <p className="text-xs text-[#5F5F5F]">
-                      {item.lojaCidade || '—'}/{item.lojaUf || '-'} • Indústria: <span className="text-[#7E22CE] font-bold">{item.industriaNome}</span>
+                      {item.lojaCidade || '—'}/{item.lojaUf || '-'} • Indústria: <span className="text-[#7E22CE] font-bold">{item.industriaNome}</span>{item.industriaStatus === 'inativo' && <strong className="ml-1 rounded bg-rose-100 px-1.5 py-0.5 text-rose-800">Inativa</strong>}
                     </p>
 
                     <div className="flex flex-wrap items-center gap-3 text-[10px] text-[#5F5F5F]">
@@ -2316,7 +2524,9 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                       </button>
                     ) : (
                       (item.status === 'pendente' || item.status === 'planejada') && (
-                        isImplantacaoMode && !isAuthorized ? (
+                        item.industriaStatus === 'inativo' ? (
+                          <span role="status" className="rounded-lg border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-800">Indústria inativa — visita preservada; execução indisponível.</span>
+                        ) : isImplantacaoMode && !isAuthorized ? (
                           <div className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#FFF8E6] border border-[#FCE19B] text-[#986000] text-xs font-mono font-bold">
                             <span className="material-symbols-outlined text-sm">lock</span>
                             <span>Aguardando Liberação</span>
@@ -2358,7 +2568,10 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                       )
                     )}
 
-                    {!isAdminUser && item.status === 'em_andamento' && !item.visitObj?.regularization_status && (
+                    {!isAdminUser && item.status === 'em_andamento' && !item.visitObj?.regularization_status && item.industriaStatus === 'inativo' && (
+                      <span role="status" className="text-xs font-bold text-rose-800">Indústria inativa — visita histórica preservada, sem retomada.</span>
+                    )}
+                    {!isAdminUser && item.status === 'em_andamento' && !item.visitObj?.regularization_status && item.industriaStatus !== 'inativo' && (
                       <div className="flex items-center gap-2 w-full md:w-auto">
         {getPromoterOpenVisitAction(item.visitObj || { status: item.status, data_visita: item.dataStr }, new Date()) === 'continue_today' ? <button
                           onClick={() => {
@@ -2388,21 +2601,32 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                     )}
 
                     {item.status === 'concluida' && (
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs text-emerald-400 font-bold flex items-center gap-1 px-3 py-2 bg-emerald-500/10 rounded-xl border border-emerald-500/30">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-xs text-emerald-800 font-bold flex items-center gap-1 px-3 py-2 bg-emerald-100/80 rounded-xl border border-emerald-300">
                           <span className="material-symbols-outlined text-sm">check_circle</span>
                           Concluída
                         </span>
                         {item.visitObj && (
-                          <button
-                            type="button"
-                            onClick={() => setSharingVisit(item.visitObj!)}
-                            className="px-2.5 py-2 rounded-xl bg-emerald-600/10 hover:bg-emerald-600/20 text-emerald-700 border border-emerald-600/30 font-bold text-xs flex items-center gap-1 cursor-pointer transition-colors"
-                            title="Compartilhar relatório desta visita via WhatsApp"
-                          >
-                            <span className="material-symbols-outlined text-sm">share</span>
-                            <span>WhatsApp</span>
-                          </button>
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => setEditingCompletedVisit(item.visitObj!)}
+                              className="px-2.5 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 font-bold text-xs flex items-center gap-1 cursor-pointer transition-colors shadow-xs"
+                              title="Editar observações e checklist deste atendimento concluído"
+                            >
+                              <span className="material-symbols-outlined text-sm">edit_note</span>
+                              <span>Editar</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setSharingVisit(item.visitObj!)}
+                              className="px-2.5 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border border-emerald-300 font-bold text-xs flex items-center gap-1 cursor-pointer transition-colors shadow-xs"
+                              title="Compartilhar relatório desta visita via WhatsApp"
+                            >
+                              <span className="material-symbols-outlined text-sm">share</span>
+                              <span>WhatsApp</span>
+                            </button>
+                          </>
                         )}
                       </div>
                     )}
@@ -2570,87 +2794,29 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
             </div>
           </div>
 
-          {/* PASSO 2: ANEXAR FOTOS DO PONTO DE VENDA */}
+          {/* PASSO 1.5: CONFERÊNCIA OBRIGATÓRIA DE SKUs (RC1.25) */}
+          <SkuStockChecklistSection
+            checklist={skuChecklist}
+            onUpdateSku={handleUpdateSkuState}
+            onSuggestSku={handleSuggestSku}
+            photosCount={activeVisit.photos?.length || 0}
+            disabled={completingVisit}
+          />
+
+          {/* PASSO 2: ANEXAR FOTOS DO PONTO DE VENDA (RC1.25) */}
           <div className="space-y-3 pt-3 border-t border-[#CFCDC5]">
             <h3 className="text-xs font-bold text-slate-[#171717] uppercase tracking-wider font-mono flex items-center gap-2">
-              <span className="material-symbols-outlined text-cyan-400 text-sm">photo_camera</span>
-              D. Evidências fotográficas do PDV
+              <span className="material-symbols-outlined text-cyan-600 text-sm">photo_camera</span>
+              D. Evidências fotográficas do PDV (Múltiplas fotos)
             </h3>
 
             <div className="p-4 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] space-y-3 font-mono text-xs">
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div>
-                  <label className="text-[#77766F] block mb-1">TIPO DA FOTO (*)</label>
-                  <select
-                    value={photoType}
-                    onChange={(e) => setPhotoType(e.target.value as any)}
-                    className="w-full h-9 px-2 bg-[#F7F6F2] border border-[#CFCDC5] rounded-lg text-[#171717]"
-                  >
-                    <option value="fachada">FACHADA</option>
-                    <option value="gondola">GÔNDOLA / EXPOSIÇÃO</option>
-                    <option value="preco">PREÇO ETIQUETADO</option>
-                    <option value="ponto_extra">PONTO EXTRA</option>
-                    <option value="ruptura">RUPTURA</option>
-                    <option value="outros">OUTROS</option>
-                  </select>
-                  <span className="mt-1 block text-[10px] text-[#77766F]">
-                    Foto do depósito: use OUTROS e identifique na legenda.
-                  </span>
-                </div>
-
-                <div className="sm:col-span-2">
-                  <label className="text-[#77766F] block mb-1">LEGENDA / OBSERVAÇÃO</label>
-                  <input
-                    type="text"
-                    value={photoCaption}
-                    onChange={(e) => setPhotoCaption(e.target.value)}
-                    placeholder="Ex.: foto do depósito ou ponto extra no corredor 3..."
-                    className="w-full h-9 px-3 bg-[#F7F6F2] border border-[#CFCDC5] rounded-lg text-[#171717]"
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <input
-                  ref={cameraInputRef}
-                  type="file"
-                  accept="image/*"
-                  capture="environment"
-                  onChange={handleUploadPhoto}
-                  disabled={uploadingPhoto || completingVisit}
-                  className="hidden"
-                />
-                <input
-                  ref={galleryInputRef}
-                  type="file"
-                  accept="image/*"
-                  onChange={handleUploadPhoto}
-                  disabled={uploadingPhoto || completingVisit}
-                  className="hidden"
-                />
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => cameraInputRef.current?.click()}
-                    disabled={uploadingPhoto || completingVisit}
-                    className="min-h-11 px-4 py-2.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50"
-                  >
-                    <span className={`material-symbols-outlined text-base ${uploadingPhoto ? 'animate-spin' : ''}`}>
-                      {uploadingPhoto ? 'sync' : 'photo_camera'}
-                    </span>
-                    <span>{uploadingPhoto ? (photoStatusMessage || 'Otimizando e enviando...') : 'Tirar foto'}</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => galleryInputRef.current?.click()}
-                    disabled={uploadingPhoto || completingVisit}
-                    className="min-h-11 px-4 py-2.5 rounded-xl bg-[#F7F6F2] hover:bg-[#E4E2DB] text-[#171717] font-bold text-xs flex items-center justify-center gap-2 border border-[#CFCDC5] transition-all cursor-pointer disabled:opacity-50"
-                  >
-                    <span className="material-symbols-outlined text-base">photo_library</span>
-                    <span>Escolher da galeria</span>
-                  </button>
-                </div>
-              </div>
+              <PromoterPhotoUploader
+                existingPhotos={activeVisit.photos || []}
+                disabled={completingVisit}
+                onUploadPhotos={handleBatchPhotoUpload}
+                onShowToast={onShowToast}
+              />
 
               {/* Lista de Fotos Anexadas com Preview de Miniaturas */}
               {activeVisit.photos && activeVisit.photos.length > 0 ? (
@@ -3266,7 +3432,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                     industria_codigo: item.industriaCodigo,
                     frequencia: item.frequencia,
                     loja: { codigo: item.lojaCodigo, nome: item.lojaNome, cidade: item.lojaCidade, uf: item.lojaUf },
-                    industria: { codigo: item.industriaCodigo, nome: item.industriaNome }
+                    industria: { codigo: item.industriaCodigo, nome: item.industriaNome, status: item.industriaStatus }
                   } as RouteItem;
 
                   return (
@@ -3332,6 +3498,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                         <div className="flex flex-wrap items-center gap-3 text-[10px] text-[#5F5F5F]">
                           <span>Indústria: <strong className="text-[#7E22CE] font-bold">{item.industriaNome}</strong></span>
                           <span>Frequência: <strong className="text-[#0E7490] font-bold">{item.frequencia}</strong></span>
+                          {item.industriaStatus === 'inativo' && <span role="status" className="rounded bg-rose-100 px-1.5 py-0.5 font-bold text-rose-800">Indústria inativa — histórico preservado</span>}
                           {item.completedAt && (
                             <span>Concluído às: <strong className="text-emerald-700 font-bold">{new Date(item.completedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</strong></span>
                           )}
@@ -3358,7 +3525,9 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                                   <span className="material-symbols-outlined text-sm">lock</span>
                                   <span>Aguardando Liberação</span>
                                 </div>
-                              ) : activeVisit ? (
+                        ) : item.industriaStatus === 'inativo' ? (
+                          <div role="status" className="rounded-lg border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-800">Indústria inativa — visita preservada no histórico; execução indisponível.</div>
+                        ) : activeVisit ? (
                                 <button
                                   onClick={() => handleStartVisit(routeObj)}
                                   disabled={staleInProgressVisits.length > 0}
@@ -3416,12 +3585,33 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                         )}
 
                         {item.status === 'concluida' && (
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-xs text-emerald-400 font-bold flex items-center gap-1 px-3 py-1.5 bg-emerald-500/10 rounded-xl border border-emerald-500/30">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="text-xs text-emerald-800 font-bold flex items-center gap-1 px-3 py-1.5 bg-emerald-100/80 rounded-xl border border-emerald-300">
                               <span className="material-symbols-outlined text-sm">check_circle</span>
                               Concluída
                             </span>
-                            {item.visitObj && <button type="button" onClick={() => setSharingVisit(item.visitObj!)} className="px-2.5 py-1.5 rounded-xl bg-emerald-600/10 hover:bg-emerald-600/20 text-emerald-700 border border-emerald-600/30 font-bold text-xs flex items-center gap-1 cursor-pointer transition-colors" title="Compartilhar relatório desta visita via WhatsApp"><span className="material-symbols-outlined text-sm">share</span><span>WhatsApp</span></button>}
+                            {item.visitObj && (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingCompletedVisit(item.visitObj!)}
+                                  className="px-2.5 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 font-bold text-xs flex items-center gap-1 cursor-pointer transition-colors shadow-xs"
+                                  title="Editar observações e checklist deste atendimento concluído"
+                                >
+                                  <span className="material-symbols-outlined text-sm">edit_note</span>
+                                  <span>Editar</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setSharingVisit(item.visitObj!)}
+                                  className="px-2.5 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border border-emerald-300 font-bold text-xs flex items-center gap-1 cursor-pointer transition-colors shadow-xs"
+                                  title="Compartilhar relatório desta visita via WhatsApp"
+                                >
+                                  <span className="material-symbols-outlined text-sm">share</span>
+                                  <span>WhatsApp</span>
+                                </button>
+                              </>
+                            )}
                           </div>
                         )}
 
@@ -4651,6 +4841,42 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
           visit={sharingVisit}
           onClose={() => setSharingVisit(null)}
           onShowToast={onShowToast}
+        />
+      )}
+
+      {editingCompletedVisit && (
+        <EditCompletedVisitModal
+          visit={editingCompletedVisit}
+          userRole={role || 'promotor'}
+          currentPromoterMatricula={promotorMatricula || undefined}
+          isOpen={Boolean(editingCompletedVisit)}
+          onClose={() => setEditingCompletedVisit(null)}
+          onShowToast={onShowToast}
+          onSaveEdit={async ({ visitId, sanitizedPayload, changes, reason }) => {
+            if (!supabase) return;
+
+            // Tentativa de execução atômica via RPC segura
+            const { data: rpcRes, error: rpcErr } = await supabase.rpc('save_completed_visit_edit', {
+              p_visit_id: visitId,
+              p_observacao_geral: sanitizedPayload.observacao_geral ?? null,
+              p_checklist_items: sanitizedPayload.checklist_items ?? [],
+              p_reason: reason,
+              p_changes_summary: changes
+            });
+
+            if (rpcErr) {
+              // Se a função RPC ainda não existe no ambiente remoto (migração pendente),
+              // informar com clareza a necessidade de validação em homologação
+              if (rpcErr.code === 'PGRST202' || rpcErr.message?.includes('function save_completed_visit_edit') || rpcErr.code === '42883') {
+                throw new Error('A edição segura com auditoria atômica requer a migração 20261115_rc1_25_skus_and_stock_audits.sql aplicada no banco.');
+              }
+              throw rpcErr;
+            }
+
+            // Recarregar portal após atualização segura
+            await loadPortalData();
+            setEditingCompletedVisit(null);
+          }}
         />
       )}
     </div>

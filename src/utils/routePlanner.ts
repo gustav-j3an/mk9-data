@@ -15,6 +15,7 @@ export interface OperationalVisitItem {
   lojaUf?: string;
   industriaCodigo: string;
   industriaNome: string;
+  industriaStatus?: 'ativo' | 'inativo' | null;
   frequencia: string;
   status: OperationalVisitStatus;
   motivoNaoRealizada?: string | null;
@@ -560,6 +561,9 @@ export const calculateOperationalVisits = ({
           lojaUf: r.loja?.uf,
           industriaCodigo: r.industria_codigo,
           industriaNome: industriaObj?.nome || r.industria_codigo,
+          industriaStatus: r.industria?.status === 'inativo' || v?.industria?.status === 'inativo'
+            ? 'inativo'
+            : r.industria?.status ?? v?.industria?.status ?? null,
           frequencia: r.frequencia || 'SEMANAL',
           status,
           motivoNaoRealizada,
@@ -624,6 +628,7 @@ export const calculateOperationalVisits = ({
       lojaUf: lojaObj?.uf,
       industriaCodigo: v.industria_codigo,
       industriaNome: industriaObj?.nome || v.industria_codigo,
+      industriaStatus: v.industria?.status ?? null,
       frequencia: 'AVULSA',
       status: v.status as OperationalVisitStatus,
       motivoNaoRealizada: v.motivo_nao_realizada || null,
