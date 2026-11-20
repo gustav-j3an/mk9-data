@@ -249,6 +249,12 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
   const [editingCompletedVisit, setEditingCompletedVisit] = useState<Visit | null>(null);
 
   const [generalObs, setGeneralObs] = useState('');
+  const [zoomedVisitPhoto, setZoomedVisitPhoto] = useState<string | null>(null);
+  const [expandedVisitSections, setExpandedVisitSections] = useState<Record<string, boolean>>({});
+  const [draftRestored, setDraftRestored] = useState(false);
+  const draftStorageKey = activeVisit && profile?.id
+    ? `mk9_promoter_draft_${encodeURIComponent(profile.id)}_${encodeURIComponent(activeVisit.id)}`
+    : null;
   const [completingVisit, setCompletingVisit] = useState(false);
   const [notDoneReason, setNotDoneReason] = useState('');
   const [showNotDoneModal, setShowNotDoneModal] = useState<RouteItem | null>(null);
@@ -261,6 +267,35 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
     supervisor?: string;
     equipe?: string;
   } | null>(null);
+
+  useEffect(() => {
+    if (!activeVisit || !draftStorageKey) {
+      setDraftRestored(false);
+      return;
+    }
+    setDraftRestored(false);
+    try {
+      const raw = window.localStorage.getItem(draftStorageKey);
+      if (raw) {
+        const draft = JSON.parse(raw) as { checklist?: typeof checklist; generalObs?: string };
+        if (draft.checklist && typeof draft.checklist === 'object') setChecklist(draft.checklist);
+        if (typeof draft.generalObs === 'string') setGeneralObs(draft.generalObs);
+      }
+    } catch (error) {
+      console.warn('[Portal do Promotor] Não foi possível recuperar o rascunho local.', error);
+    } finally {
+      setDraftRestored(true);
+    }
+  }, [activeVisit?.id, draftStorageKey]);
+
+  useEffect(() => {
+    if (!activeVisit || !draftStorageKey || !draftRestored) return;
+    try {
+      window.localStorage.setItem(draftStorageKey, JSON.stringify({ checklist, generalObs, savedAt: new Date().toISOString() }));
+    } catch (error) {
+      console.warn('[Portal do Promotor] Não foi possível salvar o rascunho local.', error);
+    }
+  }, [activeVisit?.id, draftStorageKey, draftRestored, checklist, generalObs]);
 
   // Recarregar dados do portal do promotor
   const loadPortalData = useCallback(async (options: { background?: boolean } = {}) => {
@@ -2213,7 +2248,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
         </button>
       </section>
 
-      {loading && (
+      {loading && routes.length === 0 && todayVisits.length === 0 && !activeVisit && (
         <div role="status" className="rounded-xl border border-blue-300 bg-blue-50 p-4 text-sm font-semibold text-blue-950 shadow-xs">
           Carregando rotas e visitas do portal…
         </div>
@@ -2674,7 +2709,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
 
       {/* TELA DE FLUXO DA VISITA EM ANDAMENTO (Apenas para promotores em campo) */}
       {!isAdminUser && activeVisit ? (
-        <section id="active-visit-section" className="bg-[#F7F6F2] border-2 border-amber-500/50 rounded-2xl p-6 shadow-2xl space-y-6">
+        <section id="active-visit-section" className="bg-[#F7F6F2] border-2 border-amber-500/50 rounded-2xl p-4 sm:p-6 pb-28 sm:pb-6 shadow-2xl space-y-6">
           <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-4">
             <div className="flex items-center gap-2">
               <span className="w-3 h-3 rounded-full bg-amber-400 animate-ping"></span>
@@ -2695,20 +2730,33 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
             </div>
           </div>
 
-          {/* Dados Gerais da Visita */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs font-mono">
-            <div className="p-3 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5]">
-              <span className="text-[#5F5F5F] block">LOJA / ENDEREÇO:</span>
-              <span className="text-white font-bold block">{activeVisit.loja?.nome}</span>
-              <span className="text-[#77766F] block">{activeVisit.loja?.endereco} • {activeVisit.loja?.cidade}/{activeVisit.loja?.uf}</span>
-            </div>
-
-            <div className="p-3 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5]">
-              <span className="text-[#5F5F5F] block">INDÚSTRIA PARCEIRA:</span>
-              <span className="text-[#7E22CE] font-bold block">{activeVisit.industria?.nome || activeVisit.industria_codigo}</span>
-              <span className="text-[#77766F] block">Horário Check-in: {activeVisit.started_at ? new Date(activeVisit.started_at).toLocaleTimeString('pt-BR') : '—'}</span>
-            </div>
+          <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs font-mono text-[#5F5F5F]">
+            <span>{activeVisit.loja?.endereco} · {activeVisit.loja?.cidade}/{activeVisit.loja?.uf}</span>
+            <span className="text-[#7E22CE]">{activeVisit.industria?.nome || activeVisit.industria_codigo}</span>
+            <span>Check-in {activeVisit.started_at ? new Date(activeVisit.started_at).toLocaleTimeString('pt-BR') : '—'}</span>
           </div>
+
+          {(() => {
+            const answeredChecklist = Object.values(checklist).filter((item) => item.answered).length;
+            const totalChecklist = DEFAULT_CHECKLIST_ITEMS.length;
+            const skuCount = Object.keys(skuChecklist).length;
+            const skuPending = Object.values(skuChecklist).filter((item) => !item.conferido && !item.justificativa).length;
+            const progressStages = [
+              { label: 'Checklist', done: answeredChecklist === totalChecklist, optional: false },
+              { label: 'SKUs', done: skuCount === 0 || skuPending === 0, optional: skuCount === 0 },
+              { label: 'Fotos', done: (activeVisit.photos?.length || 0) > 0, optional: true },
+              { label: 'Ocorrências', done: true, optional: true },
+              { label: 'Validade', done: true, optional: true },
+              { label: 'Observações', done: true, optional: true }
+            ];
+            const applicableStages = progressStages.filter((stage) => !stage.optional);
+            const completedStages = applicableStages.filter((stage) => stage.done).length;
+            return <div className="rounded-xl border border-[#CFCDC5] bg-[#EAE8E2] p-3 space-y-2" aria-label={`Progresso do atendimento: ${completedStages} de ${progressStages.length} etapas`}>
+              <div className="flex justify-between text-xs font-bold text-[#171717]"><span>Progresso do atendimento</span><span>{completedStages} de {applicableStages.length} obrigatórias</span></div>
+              <div className="h-2 overflow-hidden rounded-full bg-[#CFCDC5]"><div className="h-full rounded-full bg-emerald-700 transition-all" style={{ width: `${completedStages / Math.max(1, applicableStages.length) * 100}%` }} /></div>
+              <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-[#5F5F5F]">{progressStages.map((stage) => <span key={stage.label} className={stage.optional ? 'text-[#77766F]' : stage.done ? 'text-emerald-800' : 'text-amber-900'}>{stage.optional ? 'Dispensada' : stage.done ? 'Concluída' : 'Pendente'}: {stage.label}</span>)}</div>
+            </div>;
+          })()}
 
           {/* PASSO 1: CHECKLIST OPERACIONAL */}
           <div className="space-y-3 pt-2 border-t border-[#CFCDC5]">
@@ -2820,49 +2868,17 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                 disabled={completingVisit}
                 onUploadPhotos={handleBatchPhotoUpload}
                 onShowToast={onShowToast}
+                onPreviewPhoto={setZoomedVisitPhoto}
               />
-
-              {/* Lista de Fotos Anexadas com Preview de Miniaturas */}
-              {activeVisit.photos && activeVisit.photos.length > 0 ? (
-                <div className="space-y-2 pt-2 border-t border-[#CFCDC5]">
-                  <span className="text-[11px] text-[#77766F] font-bold block">FOTOS REGISTRADAS NESTA VISITA ({activeVisit.photos.length}):</span>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                    {activeVisit.photos.map((p, idx) => (
-                      <div key={idx} className="p-2 rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] space-y-1.5 flex flex-col justify-between">
-                        <div className="relative aspect-video rounded-lg bg-[#E4E2DB] overflow-hidden border border-[#CFCDC5] flex items-center justify-center">
-                          {(p.signed_url || p.file_url) ? (
-                            <img
-                              src={p.signed_url || p.file_url}
-                              alt={p.legenda || p.tipo_foto}
-                              className="w-full h-full object-cover"
-                              onError={(err) => {
-                                (err.target as HTMLElement).style.display = 'none';
-                              }}
-                            />
-                          ) : (
-                            <span className="material-symbols-outlined text-slate-600 text-2xl">image</span>
-                          )}
-                          <span className="absolute top-1 left-1 px-1.5 py-0.5 rounded bg-black/70 backdrop-blur-sm text-cyan-300 text-[9px] font-bold uppercase border border-cyan-500/30">
-                            {p.tipo_foto}
-                          </span>
-                        </div>
-                        {p.legenda && <p className="text-[10px] text-[#171717] truncate" title={p.legenda}>{p.legenda}</p>}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ) : (
-                <p className="text-[11px] text-[#5F5F5F] italic pt-1 text-center">Nenhuma foto enviada para esta visita ainda.</p>
-              )}
             </div>
           </div>
 
-          {/* PASSO 3: OCORRÊNCIAS E RUPTURAS */}
+          {/* PASSO 4: OCORRÊNCIAS E RUPTURAS */}
           <div className="space-y-3 pt-3 border-t border-[#CFCDC5]">
-            <h3 className="text-xs font-bold text-slate-[#171717] uppercase tracking-wider font-mono flex items-center gap-2">
-              <span className="material-symbols-outlined text-rose-400 text-sm">report_problem</span>
-              3. Ocorrências &amp; Rupturas Registradas
-            </h3>
+            <button type="button" aria-expanded={expandedVisitSections.occurrences ?? true} onClick={() => setExpandedVisitSections((state) => ({ ...state, occurrences: !(state.occurrences ?? true) }))} className="flex min-h-11 w-full items-center justify-between text-left text-xs font-bold uppercase tracking-wider font-mono text-[#171717]">
+              <span className="flex items-center gap-2"><span className="material-symbols-outlined text-rose-700 text-sm">report_problem</span>4. Ocorrências e rupturas (opcional)</span><span className="material-symbols-outlined">{(expandedVisitSections.occurrences ?? true) ? 'expand_less' : 'expand_more'}</span>
+            </button>
+            {(expandedVisitSections.occurrences ?? true) && <>
 
             <div className="p-4 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] space-y-3 font-mono text-xs">
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -2935,16 +2951,16 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                 <p className="text-[11px] text-[#5F5F5F] italic pt-1 text-center">Nenhuma ocorrência registrada para esta visita.</p>
               )}
             </div>
+            </>}
           </div>
 
           {/* PASSO 4: CONTROLE DE VALIDADE E VENCIMENTO DE PRODUTOS */}
           <div className="space-y-3 pt-3 border-t border-[#CFCDC5]">
-            <h3 className="text-xs font-bold text-slate-[#171717] uppercase tracking-wider font-mono flex items-center gap-2">
-              <span className="material-symbols-outlined text-amber-400 text-sm">inventory_2</span>
-              4. 📦 Controle de Validade dos Produtos
-            </h3>
+            <button type="button" aria-expanded={expandedVisitSections.validity ?? true} onClick={() => setExpandedVisitSections((state) => ({ ...state, validity: !(state.validity ?? true) }))} className="flex min-h-11 w-full items-center justify-between text-left text-xs font-bold uppercase tracking-wider font-mono text-[#171717]">
+              <span className="flex items-center gap-2"><span className="material-symbols-outlined text-amber-700 text-sm">inventory_2</span>5. Controle de validade (opcional)</span><span className="material-symbols-outlined">{(expandedVisitSections.validity ?? true) ? 'expand_less' : 'expand_more'}</span>
+            </button>
 
-            <div className="p-4 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] space-y-3 font-mono text-xs">
+            {(expandedVisitSections.validity ?? true) && <div className="p-4 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] space-y-3 font-mono text-xs">
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
                 <div className="lg:col-span-2">
                   <label className="text-[#77766F] block mb-1">PRODUTO (*)</label>
@@ -3076,21 +3092,22 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                   Nenhum produto cadastrado para controle de validade nesta visita.
                 </p>
               )}
-            </div>
+            </div>}
           </div>
 
           {/* PASSO 5: OBSERVAÇÕES GERAIS E FINALIZAÇÃO */}
           <div className="space-y-4 pt-3 border-t border-[#CFCDC5]">
             <div>
-              <label className="text-xs font-bold text-slate-200 uppercase tracking-wider font-mono block mb-1.5">
-                5. Observações Gerais do Atendimento
-              </label>
-              <textarea
+              <button type="button" aria-expanded={expandedVisitSections.observations ?? true} onClick={() => setExpandedVisitSections((state) => ({ ...state, observations: !(state.observations ?? true) }))} className="flex min-h-11 w-full items-center justify-between text-left text-xs font-bold text-[#171717] uppercase tracking-wider font-mono">
+                <span>6. Observações gerais (opcional)</span><span className="material-symbols-outlined">{(expandedVisitSections.observations ?? true) ? 'expand_less' : 'expand_more'}</span>
+              </button>
+              {(expandedVisitSections.observations ?? true) && <textarea
+                aria-label="Observações gerais do atendimento"
                 value={generalObs}
                 onChange={(e) => setGeneralObs(e.target.value)}
                 placeholder="Digite impressões gerais, conversas com o gerente da loja..."
                 className="w-full p-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-500 font-mono text-xs h-20 resize-none"
-              />
+              />}
             </div>
 
             {/* PAINEL DE RESUMO DA VISITA PARA FINALIZAÇÃO */}
@@ -4810,6 +4827,16 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
       )}
 
       {/* RODAPÉ DO PORTAL DO PROMOTOR */}
+      {!isAdminUser && activeVisit && <div className="fixed inset-x-0 bottom-0 z-40 border-t border-[#CFCDC5] bg-[#F7F6F2]/95 p-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] shadow-[0_-8px_20px_rgba(0,0,0,0.12)] sm:hidden">
+        <button type="button" onClick={handleCompleteVisit} disabled={completingVisit} className="flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-emerald-700 px-4 py-3 text-sm font-bold text-white shadow-sm disabled:opacity-50">
+          <span className="material-symbols-outlined">{completingVisit ? 'sync' : 'check_circle'}</span>
+          {completingVisit ? 'Finalizando…' : 'Finalizar visita'}
+        </button>
+      </div>}
+      {zoomedVisitPhoto && <div role="dialog" aria-modal="true" aria-label="Foto ampliada" className="fixed inset-0 z-[70] flex items-center justify-center bg-black/85 p-4" onClick={() => setZoomedVisitPhoto(null)}>
+        <img src={zoomedVisitPhoto} alt="Evidência fotográfica ampliada" className="max-h-[85vh] max-w-full rounded-xl object-contain" />
+        <button type="button" onClick={() => setZoomedVisitPhoto(null)} className="absolute right-4 top-4 rounded-lg bg-white px-4 py-2 text-sm font-bold text-[#171717]">Fechar</button>
+      </div>}
       <footer className="pt-6 pb-2 border-t border-[#CFCDC5]/60 flex flex-col sm:flex-row items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <span className="flex h-2 w-2 rounded-full bg-[#16845B]" />

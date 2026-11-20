@@ -13,13 +13,15 @@ interface PromoterPhotoUploaderProps {
   onUploadPhotos: (items: PhotoSelectionItem[]) => Promise<void>;
   disabled?: boolean;
   onShowToast: (toast: { title: string; message: string; type: 'success' | 'warning' | 'error' | 'info' }) => void;
+  onPreviewPhoto?: (url: string) => void;
 }
 
 export const PromoterPhotoUploader: React.FC<PromoterPhotoUploaderProps> = ({
   existingPhotos,
   onUploadPhotos,
   disabled = false,
-  onShowToast
+  onShowToast,
+  onPreviewPhoto
 }) => {
   const [pendingItems, setPendingItems] = useState<PhotoSelectionItem[]>([]);
   const [selectedType, setSelectedType] = useState<PhotoSelectionItem['tipo_foto']>('gondola');
@@ -100,11 +102,11 @@ export const PromoterPhotoUploader: React.FC<PromoterPhotoUploaderProps> = ({
         message: 'Todas as fotos selecionadas foram enviadas com sucesso!',
         type: 'success'
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Falha no upload do lote:', err);
       onShowToast({
         title: 'Erro no Upload',
-        message: err.message || 'Falha ao processar fotos do lote.',
+        message: err instanceof Error ? err.message : 'Falha ao processar fotos do lote.',
         type: 'error'
       });
     } finally {
@@ -277,9 +279,10 @@ export const PromoterPhotoUploader: React.FC<PromoterPhotoUploaderProps> = ({
 
       {/* Lista de Fotos Já Salvas no Banco */}
       <div className="space-y-2 pt-2 border-t border-[#CFCDC5]">
-        <span className="text-[11px] text-[#5F5F5F] font-bold block">
+        <span className="text-[11px] text-[#5F5F5F] font-bold block" aria-live="polite">
           FOTOS REGISTRADAS NESTA VISITA ({existingPhotos.length}):
         </span>
+        {uploading && <p role="status" className="text-[11px] font-semibold text-cyan-800">Enviando fotos…</p>}
         {existingPhotos.length > 0 ? (
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             {existingPhotos.map((p, idx) => (
@@ -289,6 +292,7 @@ export const PromoterPhotoUploader: React.FC<PromoterPhotoUploaderProps> = ({
               >
                 <div className="relative aspect-video rounded-lg bg-[#EAE8E2] overflow-hidden border border-[#CFCDC5] flex items-center justify-center">
                   {p.signed_url || p.file_url ? (
+                    <button type="button" onClick={() => onPreviewPhoto?.(p.signed_url || p.file_url || '')} aria-label={`Ampliar foto ${p.tipo_foto}`} className="h-full w-full cursor-zoom-in">
                     <img
                       src={p.signed_url || p.file_url}
                       alt={p.legenda || p.tipo_foto}
@@ -297,6 +301,7 @@ export const PromoterPhotoUploader: React.FC<PromoterPhotoUploaderProps> = ({
                         (err.target as HTMLElement).style.display = 'none';
                       }}
                     />
+                    </button>
                   ) : (
                     <span className="material-symbols-outlined text-[#77766F] text-2xl">image</span>
                   )}
