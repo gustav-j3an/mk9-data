@@ -12,6 +12,7 @@ import {
 } from '../utils/routePlanner';
 import { getCurrentWeekBounds, getDaysLate, getOperationalDateRange, getPromoterHistoryVisitDateRange, selectPastVisitsFromAgenda } from '../utils/promoterPendingVisits';
 import { fetchWithOptionalWhatsAppGroupLink } from '../utils/promoterPortalQueryCompatibility';
+import { getScheduledVisitRpcErrorMessage } from '../utils/scheduledVisitRpcError';
 
 async function fetchAllQueryPages<T>(queryPage: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: unknown }>, pageSize = 500): Promise<{ data: T[]; error: unknown | null }> {
   const rows: T[] = [];
@@ -135,6 +136,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
   // Estado para Recuperação de Visita Não Realizada / Pendente ("Realizar hoje" - Etapa 2)
   const [scheduledAction, setScheduledAction] = useState<{ item: OperationalVisitItem; action: ScheduledVisitAction } | null>(null);
   const [savingScheduledAction, setSavingScheduledAction] = useState(false);
+  const scheduledActionInFlightRef = useRef(false);
   const [scheduledActionRpcStatus, setScheduledActionRpcStatus] = useState<'checking' | 'ready' | 'unavailable'>('checking');
 
   // Controle de colapso do Histórico da Semana (Fechado por padrão no mobile)
@@ -2148,7 +2150,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
 
   // Server validates the schedule, permissions, duplicate execution, and writes an audit record atomically.
   const handleConfirmScheduledAction = async () => {
-    if (!scheduledAction || !supabase || savingScheduledAction) return;
+    if (!scheduledAction || !supabase || savingScheduledAction || scheduledActionInFlightRef.current) return;
     if (isAdminUser || !promotorMatricula) {
       onShowToast({ title: 'Ação não permitida', message: 'Somente o promotor vinculado pode iniciar uma programação.', type: 'error' });
       return;
@@ -2170,6 +2172,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
       return;
     }
 
+    scheduledActionInFlightRef.current = true;
     setSavingScheduledAction(true);
     try {
       const { data, error } = await supabase.rpc('attendance_start_scheduled_occurrence', {
@@ -2208,8 +2211,9 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
       setTimeout(() => document.getElementById('active-visit-section')?.scrollIntoView({ behavior: 'smooth' }), 250);
     } catch (err: any) {
       console.error('Erro ao iniciar ocorrência programada:', err);
-      onShowToast({ title: 'Falha ao iniciar visita', message: err.message || 'Não foi possível confirmar a programação no servidor.', type: 'error' });
+      onShowToast({ title: 'Falha ao iniciar visita', message: getScheduledVisitRpcErrorMessage(err), type: 'error' });
     } finally {
+      scheduledActionInFlightRef.current = false;
       setSavingScheduledAction(false);
     }
   };
