@@ -250,7 +250,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
 
   const [generalObs, setGeneralObs] = useState('');
   const [zoomedVisitPhoto, setZoomedVisitPhoto] = useState<string | null>(null);
-  const [expandedVisitSections, setExpandedVisitSections] = useState<Record<string, boolean>>({});
+  const [expandedVisitSections, setExpandedVisitSections] = useState<Record<string, boolean>>({ occurrences: false, validity: false, observations: false });
   const [draftRestored, setDraftRestored] = useState(false);
   const draftStorageKey = activeVisit && profile?.id
     ? `mk9_promoter_draft_${encodeURIComponent(profile.id)}_${encodeURIComponent(activeVisit.id)}`
@@ -2433,22 +2433,10 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                     el.scrollIntoView({ behavior: 'smooth' });
                   }
                 }}
-                className="px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-xs flex items-center gap-1.5 cursor-pointer shadow-md transition-colors"
+                className="min-h-11 px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-sm flex items-center gap-1.5 cursor-pointer shadow-md transition-colors"
               >
                 <span className="material-symbols-outlined text-sm">edit_note</span>
-                <span>Continuar Visita</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setInterruptModalVisit(activeVisit);
-                  setInterruptReason('');
-                }}
-                className="px-3 py-2 rounded-xl bg-white hover:bg-rose-50 text-rose-800 border border-rose-300 font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-colors"
-                title="Interromper atendimento com justificativa obrigatória"
-              >
-                <span className="material-symbols-outlined text-sm">close</span>
-                <span>Interromper com justificativa</span>
+                <span>Continuar atendimento</span>
               </button>
             </div>
           </div>
@@ -2612,7 +2600,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                     )}
                     {!isAdminUser && item.status === 'em_andamento' && !item.visitObj?.regularization_status && item.industriaStatus !== 'inativo' && (
                       <div className="flex items-center gap-2 w-full md:w-auto">
-        {getPromoterOpenVisitAction(item.visitObj || { status: item.status, data_visita: item.dataStr }, new Date()) === 'continue_today' ? <button
+                        {getPromoterOpenVisitAction(item.visitObj || { status: item.status, data_visita: item.dataStr }, new Date()) === 'continue_today' && !isCurrentActive ? <button
                           onClick={() => {
                             if (item.visitObj) {
                               handleResumeStaleVisit(item.visitObj);
@@ -2621,7 +2609,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                           className="flex-1 md:flex-none px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-md transition-colors"
                         >
                           <span className="material-symbols-outlined text-sm">edit_note</span>
-                          <span>{isCurrentActive ? 'Preenchendo Abaixo' : 'Continuar Visita'}</span>
+                          <span>Continuar atendimento</span>
                         </button> : <span className="text-xs text-amber-900">Visita antiga: solicite análise e regularização ao administrador ou supervisor.</span>}
                         {getPromoterOpenVisitAction(item.visitObj || { status: item.status, data_visita: item.dataStr }, new Date()) === 'continue_today' && <button
                           onClick={() => {
@@ -2710,7 +2698,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
       {/* TELA DE FLUXO DA VISITA EM ANDAMENTO (Apenas para promotores em campo) */}
       {!isAdminUser && activeVisit ? (
         <section id="active-visit-section" className="bg-[#F7F6F2] border-2 border-amber-500/50 rounded-2xl p-4 sm:p-6 pb-28 sm:pb-6 shadow-2xl space-y-6">
-          <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-4">
+          <div id="active-visit-heading" className="flex items-center justify-between border-b border-[#CFCDC5] pb-4">
             <div className="flex items-center gap-2">
               <span className="w-3 h-3 rounded-full bg-amber-400 animate-ping"></span>
               <h2 className="text-base font-bold text-[#171717] font-mono">
@@ -2719,12 +2707,12 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
             </div>
             <div className="flex items-center gap-2">
               {activeVisit.data_visita < todayStr && (
-                <span className="px-2.5 py-1 rounded-full bg-purple-500/20 border border-purple-500/40 text-purple-300 text-[10px] font-bold font-mono uppercase flex items-center gap-1">
+                <span className="px-2.5 py-1 rounded-full bg-purple-100 border border-purple-300 text-purple-950 text-xs font-bold uppercase flex items-center gap-1">
                   <span className="material-symbols-outlined text-xs">schedule</span>
                   Recuperada com Atraso (Orig: {activeVisit.data_visita.split('-').reverse().join('/')})
                 </span>
               )}
-              <span className="px-2.5 py-1 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-bold font-mono uppercase">
+              <span className="px-2.5 py-1 rounded-full border border-amber-300 bg-amber-100 text-amber-950 text-xs font-bold uppercase">
                 EM ANDAMENTO
               </span>
             </div>
@@ -2737,24 +2725,22 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
           </div>
 
           {(() => {
-            const answeredChecklist = Object.values(checklist).filter((item) => item.answered).length;
-            const totalChecklist = DEFAULT_CHECKLIST_ITEMS.length;
             const skuCount = Object.keys(skuChecklist).length;
             const skuPending = Object.values(skuChecklist).filter((item) => !item.conferido && !item.justificativa).length;
-            const progressStages = [
-              { label: 'Checklist', done: answeredChecklist === totalChecklist, optional: false },
-              { label: 'SKUs', done: skuCount === 0 || skuPending === 0, optional: skuCount === 0 },
-              { label: 'Fotos', done: (activeVisit.photos?.length || 0) > 0, optional: true },
-              { label: 'Ocorrências', done: true, optional: true },
-              { label: 'Validade', done: true, optional: true },
-              { label: 'Observações', done: true, optional: true }
+            const requiredStages = [
+              { label: 'Checklist operacional', done: findInvalidChecklistQuantity(checklist) === null },
+              ...(skuCount > 0 ? [{ label: 'Conferência de SKUs', done: skuPending === 0 }] : [])
             ];
-            const applicableStages = progressStages.filter((stage) => !stage.optional);
-            const completedStages = applicableStages.filter((stage) => stage.done).length;
-            return <div className="rounded-xl border border-[#CFCDC5] bg-[#EAE8E2] p-3 space-y-2" aria-label={`Progresso do atendimento: ${completedStages} de ${progressStages.length} etapas`}>
-              <div className="flex justify-between text-xs font-bold text-[#171717]"><span>Progresso do atendimento</span><span>{completedStages} de {applicableStages.length} obrigatórias</span></div>
-              <div className="h-2 overflow-hidden rounded-full bg-[#CFCDC5]"><div className="h-full rounded-full bg-emerald-700 transition-all" style={{ width: `${completedStages / Math.max(1, applicableStages.length) * 100}%` }} /></div>
-              <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-[#5F5F5F]">{progressStages.map((stage) => <span key={stage.label} className={stage.optional ? 'text-[#77766F]' : stage.done ? 'text-emerald-800' : 'text-amber-900'}>{stage.optional ? 'Dispensada' : stage.done ? 'Concluída' : 'Pendente'}: {stage.label}</span>)}</div>
+            const pendingStages = requiredStages.filter((stage) => !stage.done).map((stage) => stage.label);
+            if (pendingChecklistWrites > 0) pendingStages.push('Salvamento do checklist');
+            if (uploadingPhotoRef.current) pendingStages.push('Envio das fotos');
+            const completedStages = requiredStages.filter((stage) => stage.done).length;
+            const progressPercent = Math.round(completedStages / Math.max(1, requiredStages.length) * 100);
+            return <div className="rounded-xl border border-[#CFCDC5] bg-[#EAE8E2] p-4 sm:p-5 space-y-3" aria-label={`Progresso do atendimento: ${progressPercent}%`}>
+              <div className="flex items-end justify-between text-sm font-bold text-[#171717]"><span>Progresso para finalizar</span><span className="text-xl text-emerald-800">{progressPercent}%</span></div>
+              <div className="h-3 overflow-hidden rounded-full bg-[#CFCDC5]"><div className="h-full rounded-full bg-emerald-700 transition-all" style={{ width: `${progressPercent}%` }} /></div>
+              <div className="flex flex-wrap gap-2 text-xs text-[#171717]">{requiredStages.map((stage) => <span key={stage.label} className={`rounded-full border px-2.5 py-1 font-semibold ${stage.done ? 'border-emerald-300 bg-emerald-50 text-emerald-900' : 'border-amber-300 bg-amber-50 text-amber-950'}`}>{stage.done ? '✓' : '•'} {stage.label}: {stage.done ? 'concluído' : 'pendente'}</span>)}<span className="rounded-full border border-[#CFCDC5] bg-[#F7F6F2] px-2.5 py-1 text-[#5F5F5F]">Fotos, ocorrências, validade e observações são opcionais</span></div>
+              {pendingStages.length > 0 && <p className="text-sm font-semibold text-amber-950">Para finalizar: {pendingStages.join(', ')}.</p>}
             </div>;
           })()}
 
@@ -2855,11 +2841,11 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
             disabled={completingVisit}
           />
 
-          {/* PASSO 2: ANEXAR FOTOS DO PONTO DE VENDA (RC1.25) */}
+          {/* PASSO 3: EVIDÊNCIAS FOTOGRÁFICAS (RC1.25) */}
           <div className="space-y-3 pt-3 border-t border-[#CFCDC5]">
             <h3 className="text-xs font-bold text-slate-[#171717] uppercase tracking-wider font-mono flex items-center gap-2">
               <span className="material-symbols-outlined text-cyan-600 text-sm">photo_camera</span>
-              D. Evidências fotográficas do PDV (Múltiplas fotos)
+              3. Evidências fotográficas do PDV
             </h3>
 
             <div className="p-4 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] space-y-3 font-mono text-xs">
@@ -2875,10 +2861,10 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
 
           {/* PASSO 4: OCORRÊNCIAS E RUPTURAS */}
           <div className="space-y-3 pt-3 border-t border-[#CFCDC5]">
-            <button type="button" aria-expanded={expandedVisitSections.occurrences ?? true} onClick={() => setExpandedVisitSections((state) => ({ ...state, occurrences: !(state.occurrences ?? true) }))} className="flex min-h-11 w-full items-center justify-between text-left text-xs font-bold uppercase tracking-wider font-mono text-[#171717]">
-              <span className="flex items-center gap-2"><span className="material-symbols-outlined text-rose-700 text-sm">report_problem</span>4. Ocorrências e rupturas (opcional)</span><span className="material-symbols-outlined">{(expandedVisitSections.occurrences ?? true) ? 'expand_less' : 'expand_more'}</span>
+            <button type="button" aria-expanded={expandedVisitSections.occurrences ?? false} onClick={() => setExpandedVisitSections((state) => ({ ...state, occurrences: !(state.occurrences ?? false) }))} className="flex min-h-11 w-full items-center justify-between text-left text-sm font-bold tracking-wide text-[#171717]">
+              <span className="flex flex-wrap items-center gap-2"><span className="material-symbols-outlined text-rose-700">report_problem</span>4. Ocorrências e rupturas <span className="text-xs font-medium text-[#5F5F5F]">({activeVisit.occurrences?.length || 0} registros · opcional)</span>{occurrenceDesc.trim() && <span className="text-xs font-semibold text-amber-900">Rascunho não registrado</span>}</span><span className="material-symbols-outlined">{(expandedVisitSections.occurrences ?? false) ? 'expand_less' : 'expand_more'}</span>
             </button>
-            {(expandedVisitSections.occurrences ?? true) && <>
+            {(expandedVisitSections.occurrences ?? false) && <>
 
             <div className="p-4 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] space-y-3 font-mono text-xs">
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -2954,13 +2940,13 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
             </>}
           </div>
 
-          {/* PASSO 4: CONTROLE DE VALIDADE E VENCIMENTO DE PRODUTOS */}
+          {/* PASSO 5: CONTROLE DE VALIDADE E VENCIMENTO DE PRODUTOS */}
           <div className="space-y-3 pt-3 border-t border-[#CFCDC5]">
-            <button type="button" aria-expanded={expandedVisitSections.validity ?? true} onClick={() => setExpandedVisitSections((state) => ({ ...state, validity: !(state.validity ?? true) }))} className="flex min-h-11 w-full items-center justify-between text-left text-xs font-bold uppercase tracking-wider font-mono text-[#171717]">
-              <span className="flex items-center gap-2"><span className="material-symbols-outlined text-amber-700 text-sm">inventory_2</span>5. Controle de validade (opcional)</span><span className="material-symbols-outlined">{(expandedVisitSections.validity ?? true) ? 'expand_less' : 'expand_more'}</span>
+            <button type="button" aria-expanded={expandedVisitSections.validity ?? false} onClick={() => setExpandedVisitSections((state) => ({ ...state, validity: !(state.validity ?? false) }))} className="flex min-h-11 w-full items-center justify-between text-left text-sm font-bold tracking-wide text-[#171717]">
+              <span className="flex flex-wrap items-center gap-2"><span className="material-symbols-outlined text-amber-700">inventory_2</span>5. Controle de validade <span className="text-xs font-medium text-[#5F5F5F]">({activeVisit.validity_items?.length || 0} registros · opcional)</span>{(validityProdutoNome || validityDataVencimento) && (!validityProdutoNome.trim() || !validityDataVencimento) && <span className="text-xs font-semibold text-amber-900">Preenchimento pendente</span>}</span><span className="material-symbols-outlined">{(expandedVisitSections.validity ?? false) ? 'expand_less' : 'expand_more'}</span>
             </button>
 
-            {(expandedVisitSections.validity ?? true) && <div className="p-4 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] space-y-3 font-mono text-xs">
+            {(expandedVisitSections.validity ?? false) && <div className="p-4 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] space-y-3 font-sans text-sm">
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
                 <div className="lg:col-span-2">
                   <label className="text-[#77766F] block mb-1">PRODUTO (*)</label>
@@ -3095,13 +3081,13 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
             </div>}
           </div>
 
-          {/* PASSO 5: OBSERVAÇÕES GERAIS E FINALIZAÇÃO */}
+          {/* PASSO 6: OBSERVAÇÕES GERAIS E FINALIZAÇÃO */}
           <div className="space-y-4 pt-3 border-t border-[#CFCDC5]">
             <div>
-              <button type="button" aria-expanded={expandedVisitSections.observations ?? true} onClick={() => setExpandedVisitSections((state) => ({ ...state, observations: !(state.observations ?? true) }))} className="flex min-h-11 w-full items-center justify-between text-left text-xs font-bold text-[#171717] uppercase tracking-wider font-mono">
-                <span>6. Observações gerais (opcional)</span><span className="material-symbols-outlined">{(expandedVisitSections.observations ?? true) ? 'expand_less' : 'expand_more'}</span>
+              <button type="button" aria-expanded={expandedVisitSections.observations ?? false} onClick={() => setExpandedVisitSections((state) => ({ ...state, observations: !(state.observations ?? false) }))} className="flex min-h-11 w-full items-center justify-between text-left text-sm font-bold text-[#171717] uppercase tracking-wider">
+                <span>6. Observações gerais <span className="text-xs font-medium normal-case text-[#5F5F5F]">({generalObs.trim() ? 'preenchidas · opcional' : 'opcional'})</span></span><span className="material-symbols-outlined">{(expandedVisitSections.observations ?? false) ? 'expand_less' : 'expand_more'}</span>
               </button>
-              {(expandedVisitSections.observations ?? true) && <textarea
+              {(expandedVisitSections.observations ?? false) && <textarea
                 aria-label="Observações gerais do atendimento"
                 value={generalObs}
                 onChange={(e) => setGeneralObs(e.target.value)}
