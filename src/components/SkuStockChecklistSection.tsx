@@ -51,7 +51,7 @@ export const SkuStockChecklistSection: React.FC<SkuStockChecklistSectionProps> =
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
         <h3 className="text-xs font-bold text-[#171717] uppercase tracking-wider font-mono flex items-center gap-2">
           <span className="material-symbols-outlined text-purple-700 text-sm">inventory</span>
-          Conferência Obrigatória de SKUs da Indústria
+          2. Conferência Obrigatória de SKUs da Indústria
         </h3>
 
         <div className="flex items-center gap-2 font-mono text-xs">

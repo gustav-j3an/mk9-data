@@ -28,8 +28,9 @@ export function RhAbsencesView() {
   useEffect(() => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 35_000);
-    setLoading(true); setError(''); setResult(null);
-    setProject(''); setSupervisor(''); setPromoter('');
+    // Keep prior data and filter selections visible while a refresh runs.
+    setLoading(result === null);
+    setError('');
     const endpoint = mine ? 'minhas-ausencias' : view === 'management' ? 'gestao/ausencias' : 'equipe/ausencias';
     let disposed = false;
     (async () => {

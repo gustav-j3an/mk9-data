@@ -70,8 +70,9 @@ export function FaltasAtestadosModule() {
   const selectedHistoryView = availableRhViews.includes(historyView) ? historyView : availableRhViews[0];
 
   const loadBindings = useCallback(async () => {
-    if (!supabase || !permission.allowed) { setBindings([]); setLoading(false); return; }
-    setLoading(true); setError('');
+    if (!supabase || !permission.allowed) { setLoading(false); return; }
+    // Permission/token refreshes must not replace an already loaded module with a full-screen loader.
+    setLoading(bindings.length === 0); setError('');
     try {
       const { data, error: rpcError } = await supabase.rpc('mk9_faltas_atestados_bindings').abortSignal(AbortSignal.timeout(10000));
       if (rpcError) throw rpcError;
@@ -86,7 +87,7 @@ export function FaltasAtestadosModule() {
     } catch {
       setError('Não foi possível consultar os vínculos CRM autorizados. Tente novamente.');
     } finally { setLoading(false); }
-  }, [permission.allowed]);
+  }, [permission.allowed, bindings.length]);
 
   useEffect(() => { void loadBindings(); }, [loadBindings]);
 
@@ -107,7 +108,7 @@ export function FaltasAtestadosModule() {
 
   useEffect(() => {
     if (loading) { setHistoryLoading(false); return; }
-    if (error) { setHistory(null); setHistoryLoading(false); setHistoryError(error); return; }
+    if (error) { setHistoryLoading(false); setHistoryError(error); return; }
     if (!permission.allowed || !session?.access_token || !selectedHistoryView) {
       setHistory(null);
       setHistoryError('');
@@ -139,7 +140,6 @@ export function FaltasAtestadosModule() {
         if (!disposed) setHistory(parsed);
       } catch (error) {
         if (!disposed) {
-          setHistory(null);
           setHistoryError(controller.signal.aborted ? 'A consulta excedeu o tempo limite. Tente novamente.' : error instanceof Error ? error.message : 'A consulta ao CRM está temporariamente indisponível. Tente novamente.');
         }
       } finally {

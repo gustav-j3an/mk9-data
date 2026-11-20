@@ -12,6 +12,7 @@ import {
 } from '../utils/routePlanner';
 import { getCurrentWeekBounds, getDaysLate, getOperationalDateRange, getPromoterHistoryVisitDateRange, selectPastVisitsFromAgenda } from '../utils/promoterPendingVisits';
 import { fetchWithOptionalWhatsAppGroupLink } from '../utils/promoterPortalQueryCompatibility';
+import { getScheduledVisitRpcErrorMessage } from '../utils/scheduledVisitRpcError';
 
 async function fetchAllQueryPages<T>(queryPage: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: unknown }>, pageSize = 500): Promise<{ data: T[]; error: unknown | null }> {
   const rows: T[] = [];
@@ -55,7 +56,7 @@ import { loadRoutesWithClosureFallback } from '../utils/routeClosureCompatibilit
 import { filterPromoterAppointments, getMetricDisplayValue, getRegularizationCounts, getRegularizationPresentation, getWeeklyPromoterMetricCounts, isUnresolvedVisitInProgress, PROMOTER_APPOINTMENT_TABS, type PromoterAppointmentsTab } from '../utils/promoterPortalPresentation';
 import { getPromoterPortalViewStateKey, readPromoterPortalViewState, writePromoterPortalViewState } from '../utils/promoterPortalViewState';
 import { getScheduledVisitAction, isScheduledVisitActionRpcReady, type ScheduledVisitAction } from '../utils/scheduledVisitActions';
-import { canReviewOldOpenVisits, createRequestGate, findOwnOpenVisit, formatOpenVisitConflictMessage, getOldOpenVisitCheckInBlockMessage, getOldOpenVisitsLabel, getPromoterOpenVisitAction, isAnotherVisitInProgressError, isOpenVisitFromToday } from '../utils/visitCheckInConflict';
+import { canReviewOldOpenVisits, createRequestGate, findOwnOpenVisit, formatOpenVisitConflictMessage, getOldOpenVisitCheckInBlockMessage, getOldOpenVisitsLabel, getPromoterOpenVisitAction, isAnotherVisitInProgressError, isOldOpenVisit, isOpenVisitFromToday } from '../utils/visitCheckInConflict';
 import { PromoterPhotoUploader } from '../components/PromoterPhotoUploader';
 import { EditCompletedVisitModal } from '../components/EditCompletedVisitModal';
 import { SkuStockChecklistSection } from '../components/SkuStockChecklistSection';
@@ -135,6 +136,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
   // Estado para Recuperação de Visita Não Realizada / Pendente ("Realizar hoje" - Etapa 2)
   const [scheduledAction, setScheduledAction] = useState<{ item: OperationalVisitItem; action: ScheduledVisitAction } | null>(null);
   const [savingScheduledAction, setSavingScheduledAction] = useState(false);
+  const scheduledActionInFlightRef = useRef(false);
   const [scheduledActionRpcStatus, setScheduledActionRpcStatus] = useState<'checking' | 'ready' | 'unavailable'>('checking');
 
   // Controle de colapso do Histórico da Semana (Fechado por padrão no mobile)
@@ -249,6 +251,16 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
   const [editingCompletedVisit, setEditingCompletedVisit] = useState<Visit | null>(null);
 
   const [generalObs, setGeneralObs] = useState('');
+  const [zoomedVisitPhoto, setZoomedVisitPhoto] = useState<string | null>(null);
+  const [expandedVisitSections, setExpandedVisitSections] = useState<Record<string, boolean>>({ occurrences: false, validity: false, observations: false });
+  const [draftRestored, setDraftRestored] = useState(false);
+  const draftStorageKey = activeVisit && profile?.id
+    ? `mk9_promoter_draft_${encodeURIComponent(profile.id)}_${encodeURIComponent(activeVisit.id)}`
+    : null;
+
+  useEffect(() => {
+    setExpandedVisitSections({ occurrences: false, validity: false, observations: false });
+  }, [activeVisit?.id]);
   const [completingVisit, setCompletingVisit] = useState(false);
   const [notDoneReason, setNotDoneReason] = useState('');
   const [showNotDoneModal, setShowNotDoneModal] = useState<RouteItem | null>(null);
@@ -262,13 +274,45 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
     equipe?: string;
   } | null>(null);
 
+  useEffect(() => {
+    if (!activeVisit || !draftStorageKey) {
+      setDraftRestored(false);
+      return;
+    }
+    setDraftRestored(false);
+    try {
+      const raw = window.localStorage.getItem(draftStorageKey);
+      if (raw) {
+        const draft = JSON.parse(raw) as { checklist?: typeof checklist; generalObs?: string };
+        if (draft.checklist && typeof draft.checklist === 'object') setChecklist(draft.checklist);
+        if (typeof draft.generalObs === 'string') setGeneralObs(draft.generalObs);
+      }
+    } catch (error) {
+      console.warn('[Portal do Promotor] Não foi possível recuperar o rascunho local.', error);
+    } finally {
+      setDraftRestored(true);
+    }
+  }, [activeVisit?.id, draftStorageKey]);
+
+  useEffect(() => {
+    if (!activeVisit || !draftStorageKey || !draftRestored) return;
+    try {
+      window.localStorage.setItem(draftStorageKey, JSON.stringify({ checklist, generalObs, savedAt: new Date().toISOString() }));
+    } catch (error) {
+      console.warn('[Portal do Promotor] Não foi possível salvar o rascunho local.', error);
+    }
+  }, [activeVisit?.id, draftStorageKey, draftRestored, checklist, generalObs]);
+
   // Recarregar dados do portal do promotor
-  const loadPortalData = useCallback(async () => {
-    setLoading(true);
-    setLoadError(null);
+  const loadPortalData = useCallback(async (options: { background?: boolean } = {}) => {
+    const background = options.background === true;
+    if (!background) {
+      setLoading(true);
+      setLoadError(null);
+    }
     const db = supabase;
     if (!db) {
-      setLoading(false);
+      if (!background) setLoading(false);
       return;
     }
 
@@ -334,8 +378,6 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
         } catch (err) {
           console.error('Erro na consulta do promotor:', err);
         }
-      } else {
-        setPromoterDetails(null);
       }
 
       const weekDays = getWeekDaysRange(new Date(), weekOffset);
@@ -536,9 +578,9 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
       // Identificar visitas anteriores à data atual que não foram concluídas (Requisito 2)
       // 1. Em andamento de dias anteriores (data < hoje e status = 'em_andamento')
       const stalesInProgress = allConsolidatedVisits.filter(
-        (v) => isUnresolvedVisitInProgress(v) && !isOpenVisitFromToday(v, now)
+        (v) => isUnresolvedVisitInProgress(v) && isOldOpenVisit(v, now)
       );
-      setStaleInProgressVisits(stalesInProgress);
+      if (!background) setStaleInProgressVisits(stalesInProgress);
 
       // 2. Não realizadas de dias anteriores (data < hoje e status = 'nao_realizada')
       // Visita em andamento de HOJE
@@ -569,20 +611,26 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
 
         // Se a visita for do dia de hoje, abre no formulário de atendimento ativo
         if (isOpenVisitFromToday(candidateActive, now)) {
-          setActiveVisit(candidateActive);
-          setGeneralObs(candidateActive.observacao_geral || '');
-
-          setChecklist(createChecklistState(candidateActive.checklist_items));
+          setActiveVisit((current) => {
+            if (current?.id !== candidateActive.id) {
+              if (background) return current;
+              setGeneralObs(candidateActive.observacao_geral || '');
+              setChecklist(createChecklistState(candidateActive.checklist_items));
+              return candidateActive;
+            }
+            // Refresh server fields while retaining the operator's in-progress form state.
+            return { ...candidateActive, ...current, photos: candidateActive.photos ?? current.photos };
+          });
         } else {
           // Se for uma visita de dia anterior, NÃO sequestra o topo como visita ativa do dia
           // O banner dedicado de aviso exibirá os botões: "Continuar Visita" ou "Registrar como Não Realizada"
-          setActiveVisit(null);
+          if (!background) setActiveVisit(null);
         }
-      } else {
+      } else if (!background) {
         setActiveVisit(null);
       }
       lastLoadErrorRef.current = null;
-      setLoadError(null);
+      if (!background) setLoadError(null);
     } catch (err: unknown) {
       const details = err && typeof err === 'object'
         ? err as { code?: unknown; message?: unknown; details?: unknown; hint?: unknown; portalQuery?: unknown }
@@ -591,7 +639,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
       const errorMessage = typeof details.message === 'string' ? details.message : 'Falha desconhecida ao carregar dados do portal.';
       const query = typeof details.portalQuery === 'string' ? details.portalQuery : 'dados do portal';
       const errorKey = `${errorCode}:${errorMessage}`;
-      setLoadError(query);
+      if (!background) setLoadError(query);
       if (lastLoadErrorRef.current !== errorKey) {
         if (import.meta.env.DEV) {
           console.error('[Portal do Promotor] Falha de carregamento:', {
@@ -617,7 +665,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
         lastLoadErrorRef.current = errorKey;
       }
     } finally {
-      setLoading(false);
+      if (!background) setLoading(false);
     }
   }, [promotorMatricula, isAdminUser, weekOffset]);
 
@@ -631,13 +679,10 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
     const channel = client
       .channel('promoter-industry-status')
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'industrias' }, () => {
-        void loadPortalData();
+        void loadPortalData({ background: true });
       })
       .subscribe();
-    const handleFocus = () => { void loadPortalData(); };
-    window.addEventListener('focus', handleFocus);
     return () => {
-      window.removeEventListener('focus', handleFocus);
       void client.removeChannel(channel);
     };
   }, [supabase, isAdminUser, loadPortalData]);
@@ -2105,7 +2150,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
 
   // Server validates the schedule, permissions, duplicate execution, and writes an audit record atomically.
   const handleConfirmScheduledAction = async () => {
-    if (!scheduledAction || !supabase || savingScheduledAction) return;
+    if (!scheduledAction || !supabase || savingScheduledAction || scheduledActionInFlightRef.current) return;
     if (isAdminUser || !promotorMatricula) {
       onShowToast({ title: 'Ação não permitida', message: 'Somente o promotor vinculado pode iniciar uma programação.', type: 'error' });
       return;
@@ -2127,6 +2172,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
       return;
     }
 
+    scheduledActionInFlightRef.current = true;
     setSavingScheduledAction(true);
     try {
       const { data, error } = await supabase.rpc('attendance_start_scheduled_occurrence', {
@@ -2165,8 +2211,9 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
       setTimeout(() => document.getElementById('active-visit-section')?.scrollIntoView({ behavior: 'smooth' }), 250);
     } catch (err: any) {
       console.error('Erro ao iniciar ocorrência programada:', err);
-      onShowToast({ title: 'Falha ao iniciar visita', message: err.message || 'Não foi possível confirmar a programação no servidor.', type: 'error' });
+      onShowToast({ title: 'Falha ao iniciar visita', message: getScheduledVisitRpcErrorMessage(err), type: 'error' });
     } finally {
+      scheduledActionInFlightRef.current = false;
       setSavingScheduledAction(false);
     }
   };
@@ -2198,7 +2245,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
         </div>
 
         <button
-          onClick={loadPortalData}
+          onClick={() => { void loadPortalData(); }}
           disabled={loading}
           className="shrink-0 px-3 py-2 rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] text-xs font-semibold text-[#171717] hover:bg-[#EAE8E2] flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
         >
@@ -2209,7 +2256,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
         </button>
       </section>
 
-      {loading && (
+      {loading && routes.length === 0 && todayVisits.length === 0 && !activeVisit && (
         <div role="status" className="rounded-xl border border-blue-300 bg-blue-50 p-4 text-sm font-semibold text-blue-950 shadow-xs">
           Carregando rotas e visitas do portal…
         </div>
@@ -2217,7 +2264,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
       {loadError && !loading && (
         <div role="alert" className="rounded-xl border border-rose-300 bg-rose-50 p-4 text-sm font-semibold text-rose-950 space-y-2 shadow-xs">
           <p className="font-bold">Não foi possível carregar {loadError}. Os indicadores e listas abaixo podem não refletir os dados atuais; eles não significam que sua agenda esteja vazia.</p>
-          <button type="button" onClick={loadPortalData} className="underline font-bold text-rose-900 hover:text-rose-950 cursor-pointer">Tentar carregar novamente</button>
+          <button type="button" onClick={() => { void loadPortalData(); }} className="underline font-bold text-rose-900 hover:text-rose-950 cursor-pointer">Tentar carregar novamente</button>
         </div>
       )}
 
@@ -2334,6 +2381,25 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
         </section>
       )}
 
+      {!isAdminUser && activeVisit && appointmentsTab === 'history' && (
+        <section role="status" aria-label="Atendimento em andamento" className="flex flex-col gap-3 rounded-xl border border-amber-300 bg-amber-50 px-3 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <p className="min-w-0 text-sm leading-relaxed text-amber-950">
+            Atendimento em andamento: <strong>{activeVisit.loja?.nome || activeVisit.loja_codigo}</strong>
+            {' · '}{activeVisit.data_visita.split('-').reverse().join('/')}
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              setAppointmentsTab('today');
+              setTimeout(() => document.getElementById('active-visit-section')?.scrollIntoView({ behavior: 'smooth' }), 250);
+            }}
+            className="min-h-11 shrink-0 rounded-xl bg-amber-500 px-4 py-2 text-sm font-extrabold text-slate-950 shadow-sm hover:bg-amber-400"
+          >
+            Continuar atendimento
+          </button>
+        </section>
+      )}
+
       {/* 2. AGENDA DE HOJE / PROGRAMAÇÃO DE VISITAS */}
       {(!isAdminUser || selectedPromoterMatricula) && (
        appointmentsTab === 'today' && (
@@ -2363,16 +2429,16 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
 
         {/* ALERTA CONTEXTUAL DE ATENDIMENTO ATIVO (Etapa 1) */}
         {!isAdminUser && staleInProgressVisits.length > 0 && (
-          <div role="status" className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950">
+          <div role="status" className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm leading-relaxed text-amber-950">
             <strong>{getOldOpenVisitsLabel(staleInProgressVisits.length)}</strong>{' '}
             <span>O servidor bloqueia novos check-ins até a regularização administrativa.</span>
           </div>
         )}
 
         {activeVisit && (
-          <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/40 font-mono text-xs flex flex-col md:flex-row md:items-center justify-between gap-3 shadow-md animate-fadeIn">
-            <div className="space-y-1">
-              <div className="flex items-center gap-2">
+          <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/40 font-mono text-xs flex flex-col xl:flex-row xl:items-center justify-between gap-3 shadow-md animate-fadeIn min-w-0">
+            <div className="space-y-1 min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
                 <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-ping shrink-0" />
                 <span className="text-amber-900 font-extrabold uppercase tracking-wide">
                   Atendimento em Andamento
@@ -2381,7 +2447,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                   {activeVisit.data_visita.split('-').reverse().join('/')}
                 </span>
               </div>
-              <p className="text-[#171717] text-[11px] leading-relaxed">
+              <p className="text-[#171717] text-[11px] leading-relaxed break-words">
                 Você possui uma visita aberta na loja <strong className="text-[#171717]">{activeVisit.loja?.nome || activeVisit.loja_codigo}</strong> ({activeVisit.industria?.nome || activeVisit.industria_codigo}). Conclua o preenchimento ou interrompa com justificativa para iniciar outra rota.
               </p>
             </div>
@@ -2394,22 +2460,10 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                     el.scrollIntoView({ behavior: 'smooth' });
                   }
                 }}
-                className="px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-xs flex items-center gap-1.5 cursor-pointer shadow-md transition-colors"
+                className="min-h-11 px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-sm flex items-center gap-1.5 cursor-pointer shadow-md transition-colors"
               >
                 <span className="material-symbols-outlined text-sm">edit_note</span>
-                <span>Continuar Visita</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setInterruptModalVisit(activeVisit);
-                  setInterruptReason('');
-                }}
-                className="px-3 py-2 rounded-xl bg-white hover:bg-rose-50 text-rose-800 border border-rose-300 font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-colors"
-                title="Interromper atendimento com justificativa obrigatória"
-              >
-                <span className="material-symbols-outlined text-sm">close</span>
-                <span>Interromper com justificativa</span>
+                <span>Continuar atendimento</span>
               </button>
             </div>
           </div>
@@ -2441,11 +2495,14 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
               const activeScheduledDate = activeVisit?.scheduled_date || activeVisit?.data_visita;
               const isCurrentActive = !item.visitObj?.regularization_status && activeVisit && (activeVisit.id === item.visitObj?.id || (activeVisit.loja_codigo === item.lojaCodigo && activeScheduledDate === item.dataStr));
               const regularizationLabel = getRegularizationPresentation(item.visitObj?.regularization_status);
+              const visitNow = new Date();
+              const visitAction = getPromoterOpenVisitAction(item.visitObj || { status: item.status, data_visita: item.dataStr }, visitNow);
+              const isOldOpenVisitCard = Boolean(item.visitObj && isOldOpenVisit(item.visitObj, visitNow));
 
               return (
                 <div
                   key={`today_${item.key}_${item.dataStr}`}
-                  className={`p-3 rounded-xl border transition-all flex flex-col md:flex-row md:items-center justify-between gap-3 font-mono ${
+                  className={`p-3 rounded-xl border transition-all flex flex-col xl:flex-row xl:items-start justify-between gap-3 font-mono ${
                     regularizationLabel
                       ? 'bg-purple-50 border-purple-300'
                       : isCurrentActive
@@ -2459,7 +2516,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                       : 'bg-[#EAE8E2] border-[#CFCDC5]'
                   }`}
                 >
-                  <div className="space-y-1 flex-1 min-w-0">
+                  <div className="w-full min-w-0 flex-1 space-y-2 break-words">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="w-5 h-5 rounded-full bg-[#F7F6F2] border border-[#CFCDC5] text-[#7E22CE] font-bold text-[10px] flex items-center justify-center shrink-0">
                         {idx + 1}
@@ -2487,19 +2544,21 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                       </span>
                     </div>
 
-                    <h4 className="text-sm font-bold text-[#171717] truncate">
+                    <p className="text-xs font-semibold text-[#3F3F46]">
+                      {item.dataStr.split('-').reverse().join('/')}
+                    </p>
+
+                    <h4 className="text-sm font-bold text-[#171717] whitespace-normal break-words">
                       {item.lojaNome}
                     </h4>
 
-                    <p className="text-xs font-semibold text-[#3F3F46]">Hoje · {item.dataStr.split('-').reverse().join('/')}</p>
-
-                    <p className="text-xs text-[#5F5F5F]">
-                      {item.lojaCidade || '—'}/{item.lojaUf || '-'} • Indústria: <span className="text-[#7E22CE] font-bold">{item.industriaNome}</span>{item.industriaStatus === 'inativo' && <strong className="ml-1 rounded bg-rose-100 px-1.5 py-0.5 text-rose-800">Inativa</strong>}
+                    <p className="text-xs text-[#5F5F5F] break-words">
+                      {item.lojaCidade || '—'}/{item.lojaUf || '-'} · <span className="text-[#7E22CE] font-bold">{item.industriaNome}</span>{item.industriaStatus === 'inativo' && <strong className="ml-1 rounded bg-rose-100 px-1.5 py-0.5 text-rose-800">Inativa</strong>}
                     </p>
 
-                    <div className="flex flex-wrap items-center gap-3 text-[10px] text-[#5F5F5F]">
+                    <div className="flex flex-col items-start gap-1 text-[10px] text-[#5F5F5F] sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
                       {item.startedAt && (
-                        <span>Check-in: <strong className="text-amber-900">{new Date(item.startedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</strong></span>
+                        <span>Check-in: <strong className="text-amber-900">{new Date(item.startedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' })}</strong></span>
                       )}
                       {item.completedAt && (
                         <span>Concluído: <strong className="text-emerald-900">{new Date(item.completedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</strong></span>
@@ -2511,7 +2570,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                   </div>
 
                   {/* Ação Única e Clara por Cartão */}
-                  <div className="flex items-center gap-2 shrink-0 pt-2 md:pt-0 border-t md:border-t-0 border-[#CFCDC5]">
+                  <div className="flex w-full flex-col items-stretch gap-2 border-t border-[#CFCDC5] pt-2 xl:w-auto xl:shrink-0 xl:items-end xl:border-t-0 xl:pt-0">
                     {isAdminUser ? (
                       <button
                         type="button"
@@ -2572,8 +2631,8 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                       <span role="status" className="text-xs font-bold text-rose-800">Indústria inativa — visita histórica preservada, sem retomada.</span>
                     )}
                     {!isAdminUser && item.status === 'em_andamento' && !item.visitObj?.regularization_status && item.industriaStatus !== 'inativo' && (
-                      <div className="flex items-center gap-2 w-full md:w-auto">
-        {getPromoterOpenVisitAction(item.visitObj || { status: item.status, data_visita: item.dataStr }, new Date()) === 'continue_today' ? <button
+                      <div className="flex flex-wrap items-center justify-start gap-2 w-full xl:w-auto">
+                        {visitAction === 'continue_today' && !isCurrentActive ? <button
                           onClick={() => {
                             if (item.visitObj) {
                               handleResumeStaleVisit(item.visitObj);
@@ -2582,20 +2641,20 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                           className="flex-1 md:flex-none px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-md transition-colors"
                         >
                           <span className="material-symbols-outlined text-sm">edit_note</span>
-                          <span>{isCurrentActive ? 'Preenchendo Abaixo' : 'Continuar Visita'}</span>
-                        </button> : <span className="text-xs text-amber-900">Visita antiga: solicite análise e regularização ao administrador ou supervisor.</span>}
-                        {getPromoterOpenVisitAction(item.visitObj || { status: item.status, data_visita: item.dataStr }, new Date()) === 'continue_today' && <button
+                          <span>Continuar atendimento</span>
+                        </button> : isOldOpenVisitCard ? <span className="block w-full basis-full text-xs leading-relaxed text-amber-900">Visita antiga: solicite análise e regularização ao administrador ou supervisor.</span> : null}
+                        {visitAction === 'continue_today' && <button
                           onClick={() => {
                             if (item.visitObj) {
                               setInterruptModalVisit(item.visitObj);
                               setInterruptReason('');
                             }
                           }}
-                          className="px-3 py-2.5 rounded-xl bg-[#F7F6F2] hover:bg-rose-500/20 text-[#171717] hover:text-rose-300 border border-[#CFCDC5] text-xs font-bold cursor-pointer transition-colors"
+                          className="min-h-11 w-full px-3 py-2.5 rounded-xl bg-[#F7F6F2] hover:bg-rose-500/20 text-[#171717] border border-[#CFCDC5] text-xs font-bold cursor-pointer transition-colors xl:w-auto"
                           title="Interromper atendimento desta loja"
                         >
                           <span className="material-symbols-outlined text-sm text-rose-400">close</span>
-                          <span className="hidden sm:inline">Interromper</span>
+                          <span>Interromper</span>
                         </button>}
                       </div>
                     )}
@@ -2670,52 +2729,63 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
 
       {/* TELA DE FLUXO DA VISITA EM ANDAMENTO (Apenas para promotores em campo) */}
       {!isAdminUser && activeVisit ? (
-        <section id="active-visit-section" className="bg-[#F7F6F2] border-2 border-amber-500/50 rounded-2xl p-6 shadow-2xl space-y-6">
-          <div className="flex items-center justify-between border-b border-[#CFCDC5] pb-4">
-            <div className="flex items-center gap-2">
+        <section id="active-visit-section" hidden={appointmentsTab !== 'today'} className="bg-[#F7F6F2] border-2 border-amber-500/50 rounded-2xl p-4 sm:p-6 pb-28 sm:pb-6 shadow-2xl space-y-6">
+          <div id="active-visit-heading" className="flex flex-col gap-3 border-b border-[#CFCDC5] pb-4 sm:flex-row sm:items-start sm:justify-between">
+            <div className="flex min-w-0 items-start gap-2">
               <span className="w-3 h-3 rounded-full bg-amber-400 animate-ping"></span>
-              <h2 className="text-base font-bold text-[#171717] font-mono">
+              <h2 className="min-w-0 break-words text-base font-bold text-[#171717] font-mono">
                 Visita em Andamento — Loja: {activeVisit.loja?.nome || activeVisit.loja_codigo}
               </h2>
             </div>
-            <div className="flex items-center gap-2">
-              {activeVisit.data_visita < todayStr && (
-                <span className="px-2.5 py-1 rounded-full bg-purple-500/20 border border-purple-500/40 text-purple-300 text-[10px] font-bold font-mono uppercase flex items-center gap-1">
+            <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+              {isOldOpenVisit(activeVisit, new Date()) && (
+                <span className="px-2.5 py-1 rounded-full bg-purple-100 border border-purple-300 text-purple-950 text-xs font-bold uppercase flex items-center gap-1">
                   <span className="material-symbols-outlined text-xs">schedule</span>
                   Recuperada com Atraso (Orig: {activeVisit.data_visita.split('-').reverse().join('/')})
                 </span>
               )}
-              <span className="px-2.5 py-1 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-bold font-mono uppercase">
+              <span className="px-2.5 py-1 rounded-full border border-amber-300 bg-amber-100 text-amber-950 text-xs font-bold uppercase">
                 EM ANDAMENTO
               </span>
             </div>
           </div>
 
-          {/* Dados Gerais da Visita */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs font-mono">
-            <div className="p-3 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5]">
-              <span className="text-[#5F5F5F] block">LOJA / ENDEREÇO:</span>
-              <span className="text-white font-bold block">{activeVisit.loja?.nome}</span>
-              <span className="text-[#77766F] block">{activeVisit.loja?.endereco} • {activeVisit.loja?.cidade}/{activeVisit.loja?.uf}</span>
-            </div>
-
-            <div className="p-3 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5]">
-              <span className="text-[#5F5F5F] block">INDÚSTRIA PARCEIRA:</span>
-              <span className="text-[#7E22CE] font-bold block">{activeVisit.industria?.nome || activeVisit.industria_codigo}</span>
-              <span className="text-[#77766F] block">Horário Check-in: {activeVisit.started_at ? new Date(activeVisit.started_at).toLocaleTimeString('pt-BR') : '—'}</span>
-            </div>
+          <div className="flex flex-col gap-1 text-xs font-mono text-[#5F5F5F] sm:flex-row sm:flex-wrap sm:gap-x-4">
+            <span>{activeVisit.loja?.endereco} · {activeVisit.loja?.cidade}/{activeVisit.loja?.uf}</span>
+            <span className="text-[#7E22CE]">{activeVisit.industria?.nome || activeVisit.industria_codigo}</span>
+            <span>Check-in {activeVisit.started_at ? new Date(activeVisit.started_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' }) : '—'}</span>
           </div>
+
+          {(() => {
+            const skuCount = Object.keys(skuChecklist).length;
+            const skuPending = Object.values(skuChecklist).filter((item) => !item.conferido && !item.justificativa).length;
+            const requiredStages = [
+              { label: 'Checklist operacional', done: DEFAULT_CHECKLIST_ITEMS.every((item) => Boolean(checklist[item.item_key]?.valTxt.trim())) && findInvalidChecklistQuantity(checklist) === null },
+              ...(skuCount > 0 ? [{ label: 'Conferência de SKUs', done: skuPending === 0 }] : [])
+            ];
+            const pendingStages = requiredStages.filter((stage) => !stage.done).map((stage) => stage.label);
+            if (pendingChecklistWrites > 0) pendingStages.push('Salvamento do checklist');
+            if (uploadingPhotoRef.current) pendingStages.push('Envio das fotos');
+            const completedStages = requiredStages.filter((stage) => stage.done).length;
+            const progressPercent = Math.round(completedStages / Math.max(1, requiredStages.length) * 100);
+            return <div className="rounded-xl border border-[#CFCDC5] bg-[#EAE8E2] p-4 sm:p-5 space-y-3" aria-label={`Progresso do atendimento: ${progressPercent}%`}>
+              <div className="flex items-end justify-between text-sm font-bold text-[#171717]"><span>Progresso para finalizar</span><span className="text-xl text-emerald-800">{progressPercent}%</span></div>
+              <div className="h-3 overflow-hidden rounded-full bg-[#CFCDC5]"><div className="h-full rounded-full bg-emerald-700 transition-all" style={{ width: `${progressPercent}%` }} /></div>
+              <div className="flex flex-wrap gap-2 text-xs text-[#171717]">{requiredStages.map((stage) => <span key={stage.label} className={`rounded-full border px-2.5 py-1 font-semibold ${stage.done ? 'border-emerald-300 bg-emerald-50 text-emerald-900' : 'border-amber-300 bg-amber-50 text-amber-950'}`}>{stage.done ? '✓' : '•'} {stage.label}: {stage.done ? 'concluído' : 'pendente'}</span>)}<span className="rounded-full border border-[#CFCDC5] bg-[#F7F6F2] px-2.5 py-1 text-[#5F5F5F]">Fotos, ocorrências, validade e observações são opcionais</span></div>
+              {pendingStages.length > 0 && <p className="text-sm font-semibold text-amber-950">Para finalizar: {pendingStages.join(', ')}.</p>}
+            </div>;
+          })()}
 
           {/* PASSO 1: CHECKLIST OPERACIONAL */}
           <div className="space-y-3 pt-2 border-t border-[#CFCDC5]">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <h3 className="text-xs font-bold text-slate-[#171717] uppercase tracking-wider font-mono flex items-center gap-2">
                 <span className="material-symbols-outlined text-amber-400 text-sm">fact_check</span>
-                Checklist operacional
+                1. Checklist operacional
               </h3>
               <div className="flex items-center gap-2 font-mono text-xs">
                 <span className="px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 font-bold border border-amber-500/30">
-                  {Object.values(checklist).filter((item) => item.answered).length} de {DEFAULT_CHECKLIST_ITEMS.length} respondidos
+                  {DEFAULT_CHECKLIST_ITEMS.filter((item) => Boolean(checklist[item.item_key]?.valTxt.trim())).length} de {DEFAULT_CHECKLIST_ITEMS.length} respondidos
                 </span>
                 {pendingChecklistWrites > 0 && (
                   <span className="text-[10px] text-cyan-400 font-bold flex items-center gap-1 animate-pulse">
@@ -2803,11 +2873,11 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
             disabled={completingVisit}
           />
 
-          {/* PASSO 2: ANEXAR FOTOS DO PONTO DE VENDA (RC1.25) */}
+          {/* PASSO 3: EVIDÊNCIAS FOTOGRÁFICAS (RC1.25) */}
           <div className="space-y-3 pt-3 border-t border-[#CFCDC5]">
             <h3 className="text-xs font-bold text-slate-[#171717] uppercase tracking-wider font-mono flex items-center gap-2">
               <span className="material-symbols-outlined text-cyan-600 text-sm">photo_camera</span>
-              D. Evidências fotográficas do PDV (Múltiplas fotos)
+              3. Evidências fotográficas do PDV
             </h3>
 
             <div className="p-4 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] space-y-3 font-mono text-xs">
@@ -2816,49 +2886,17 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                 disabled={completingVisit}
                 onUploadPhotos={handleBatchPhotoUpload}
                 onShowToast={onShowToast}
+                onPreviewPhoto={setZoomedVisitPhoto}
               />
-
-              {/* Lista de Fotos Anexadas com Preview de Miniaturas */}
-              {activeVisit.photos && activeVisit.photos.length > 0 ? (
-                <div className="space-y-2 pt-2 border-t border-[#CFCDC5]">
-                  <span className="text-[11px] text-[#77766F] font-bold block">FOTOS REGISTRADAS NESTA VISITA ({activeVisit.photos.length}):</span>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                    {activeVisit.photos.map((p, idx) => (
-                      <div key={idx} className="p-2 rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] space-y-1.5 flex flex-col justify-between">
-                        <div className="relative aspect-video rounded-lg bg-[#E4E2DB] overflow-hidden border border-[#CFCDC5] flex items-center justify-center">
-                          {(p.signed_url || p.file_url) ? (
-                            <img
-                              src={p.signed_url || p.file_url}
-                              alt={p.legenda || p.tipo_foto}
-                              className="w-full h-full object-cover"
-                              onError={(err) => {
-                                (err.target as HTMLElement).style.display = 'none';
-                              }}
-                            />
-                          ) : (
-                            <span className="material-symbols-outlined text-slate-600 text-2xl">image</span>
-                          )}
-                          <span className="absolute top-1 left-1 px-1.5 py-0.5 rounded bg-black/70 backdrop-blur-sm text-cyan-300 text-[9px] font-bold uppercase border border-cyan-500/30">
-                            {p.tipo_foto}
-                          </span>
-                        </div>
-                        {p.legenda && <p className="text-[10px] text-[#171717] truncate" title={p.legenda}>{p.legenda}</p>}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ) : (
-                <p className="text-[11px] text-[#5F5F5F] italic pt-1 text-center">Nenhuma foto enviada para esta visita ainda.</p>
-              )}
             </div>
           </div>
 
-          {/* PASSO 3: OCORRÊNCIAS E RUPTURAS */}
+          {/* PASSO 4: OCORRÊNCIAS E RUPTURAS */}
           <div className="space-y-3 pt-3 border-t border-[#CFCDC5]">
-            <h3 className="text-xs font-bold text-slate-[#171717] uppercase tracking-wider font-mono flex items-center gap-2">
-              <span className="material-symbols-outlined text-rose-400 text-sm">report_problem</span>
-              3. Ocorrências &amp; Rupturas Registradas
-            </h3>
+            <button type="button" aria-expanded={expandedVisitSections.occurrences ?? false} onClick={() => setExpandedVisitSections((state) => ({ ...state, occurrences: !(state.occurrences ?? false) }))} className="flex min-h-11 w-full items-center justify-between text-left text-sm font-bold tracking-wide text-[#171717]">
+              <span className="flex flex-wrap items-center gap-2"><span className="material-symbols-outlined text-rose-700">report_problem</span>4. Ocorrências e rupturas <span className="text-xs font-medium text-[#5F5F5F]">({activeVisit.occurrences?.length || 0} registros · opcional)</span>{occurrenceDesc.trim() && <span className="text-xs font-semibold text-amber-900">Rascunho não registrado</span>}</span><span className="material-symbols-outlined">{(expandedVisitSections.occurrences ?? false) ? 'expand_less' : 'expand_more'}</span>
+            </button>
+            {(expandedVisitSections.occurrences ?? false) && <>
 
             <div className="p-4 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] space-y-3 font-mono text-xs">
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -2931,16 +2969,16 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                 <p className="text-[11px] text-[#5F5F5F] italic pt-1 text-center">Nenhuma ocorrência registrada para esta visita.</p>
               )}
             </div>
+            </>}
           </div>
 
-          {/* PASSO 4: CONTROLE DE VALIDADE E VENCIMENTO DE PRODUTOS */}
+          {/* PASSO 5: CONTROLE DE VALIDADE E VENCIMENTO DE PRODUTOS */}
           <div className="space-y-3 pt-3 border-t border-[#CFCDC5]">
-            <h3 className="text-xs font-bold text-slate-[#171717] uppercase tracking-wider font-mono flex items-center gap-2">
-              <span className="material-symbols-outlined text-amber-400 text-sm">inventory_2</span>
-              4. 📦 Controle de Validade dos Produtos
-            </h3>
+            <button type="button" aria-expanded={expandedVisitSections.validity ?? false} onClick={() => setExpandedVisitSections((state) => ({ ...state, validity: !(state.validity ?? false) }))} className="flex min-h-11 w-full items-center justify-between text-left text-sm font-bold tracking-wide text-[#171717]">
+              <span className="flex flex-wrap items-center gap-2"><span className="material-symbols-outlined text-amber-700">inventory_2</span>5. Controle de validade <span className="text-xs font-medium text-[#5F5F5F]">({activeVisit.validity_items?.length || 0} registros · opcional)</span>{(validityProdutoNome || validityDataVencimento) && (!validityProdutoNome.trim() || !validityDataVencimento) && <span className="text-xs font-semibold text-amber-900">Preenchimento pendente</span>}</span><span className="material-symbols-outlined">{(expandedVisitSections.validity ?? false) ? 'expand_less' : 'expand_more'}</span>
+            </button>
 
-            <div className="p-4 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] space-y-3 font-mono text-xs">
+            {(expandedVisitSections.validity ?? false) && <div className="p-4 rounded-xl bg-[#EAE8E2] border border-[#CFCDC5] space-y-3 font-sans text-sm">
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
                 <div className="lg:col-span-2">
                   <label className="text-[#77766F] block mb-1">PRODUTO (*)</label>
@@ -3072,21 +3110,22 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                   Nenhum produto cadastrado para controle de validade nesta visita.
                 </p>
               )}
-            </div>
+            </div>}
           </div>
 
-          {/* PASSO 5: OBSERVAÇÕES GERAIS E FINALIZAÇÃO */}
+          {/* PASSO 6: OBSERVAÇÕES GERAIS E FINALIZAÇÃO */}
           <div className="space-y-4 pt-3 border-t border-[#CFCDC5]">
             <div>
-              <label className="text-xs font-bold text-slate-200 uppercase tracking-wider font-mono block mb-1.5">
-                5. Observações Gerais do Atendimento
-              </label>
-              <textarea
+              <button type="button" aria-expanded={expandedVisitSections.observations ?? false} onClick={() => setExpandedVisitSections((state) => ({ ...state, observations: !(state.observations ?? false) }))} className="flex min-h-11 w-full items-center justify-between text-left text-sm font-bold text-[#171717] uppercase tracking-wider">
+                <span>6. Observações gerais <span className="text-xs font-medium normal-case text-[#5F5F5F]">({generalObs.trim() ? 'preenchidas · opcional' : 'opcional'})</span></span><span className="material-symbols-outlined">{(expandedVisitSections.observations ?? false) ? 'expand_less' : 'expand_more'}</span>
+              </button>
+              {(expandedVisitSections.observations ?? false) && <textarea
+                aria-label="Observações gerais do atendimento"
                 value={generalObs}
                 onChange={(e) => setGeneralObs(e.target.value)}
                 placeholder="Digite impressões gerais, conversas com o gerente da loja..."
                 className="w-full p-3 bg-[#EAE8E2] border border-[#CFCDC5] rounded-xl text-[#171717] focus:outline-none focus:border-amber-500 font-mono text-xs h-20 resize-none"
-              />
+              />}
             </div>
 
             {/* PAINEL DE RESUMO DA VISITA PARA FINALIZAÇÃO */}
@@ -4806,6 +4845,16 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
       )}
 
       {/* RODAPÉ DO PORTAL DO PROMOTOR */}
+      {!isAdminUser && activeVisit && <div className="fixed inset-x-0 bottom-0 z-40 border-t border-[#CFCDC5] bg-[#F7F6F2]/95 p-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] shadow-[0_-8px_20px_rgba(0,0,0,0.12)] sm:hidden">
+        <button type="button" onClick={handleCompleteVisit} disabled={completingVisit} className="flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-emerald-700 px-4 py-3 text-sm font-bold text-white shadow-sm disabled:opacity-50">
+          <span className="material-symbols-outlined">{completingVisit ? 'sync' : 'check_circle'}</span>
+          {completingVisit ? 'Finalizando…' : 'Finalizar visita'}
+        </button>
+      </div>}
+      {zoomedVisitPhoto && <div role="dialog" aria-modal="true" aria-label="Foto ampliada" className="fixed inset-0 z-[70] flex items-center justify-center bg-black/85 p-4" onClick={() => setZoomedVisitPhoto(null)}>
+        <img src={zoomedVisitPhoto} alt="Evidência fotográfica ampliada" className="max-h-[85vh] max-w-full rounded-xl object-contain" />
+        <button type="button" onClick={() => setZoomedVisitPhoto(null)} className="absolute right-4 top-4 rounded-lg bg-white px-4 py-2 text-sm font-bold text-[#171717]">Fechar</button>
+      </div>}
       <footer className="pt-6 pb-2 border-t border-[#CFCDC5]/60 flex flex-col sm:flex-row items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <span className="flex h-2 w-2 rounded-full bg-[#16845B]" />

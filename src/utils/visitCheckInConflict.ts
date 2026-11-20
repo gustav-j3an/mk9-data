@@ -84,6 +84,12 @@ export function isOpenVisitFromToday(visit: OperationalVisit, now: Date | string
     && visit.data_visita === getVisitOperationalDate(visit, now);
 }
 
+export function isOldOpenVisit(visit: OperationalVisit, now: Date | string = new Date()): boolean {
+  return visit.status === 'em_andamento'
+    && !visit.regularization_status
+    && visit.data_visita < getVisitOperationalDate(visit, now);
+}
+
 export function formatOpenVisitConflictMessage(
   visit: OpenVisitConflict | undefined,
   now: Date | string = new Date()

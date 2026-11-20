@@ -31,7 +31,11 @@ export function getScheduledVisitAction(input: {
   if (item.visitObj?.regularization_status) {
     return { allowed: false, reason: 'Esta ocorrência já foi regularizada administrativamente.' };
   }
-  if (item.visitObj?.status === 'concluida' || item.visitObj?.status === 'em_andamento' || item.visitObj?.started_at) {
+  const retryableClosedVisit = item.visitObj?.status === 'nao_realizada' &&
+    item.visitObj.started_at &&
+    (item.visitObj.motivo_nao_realizada === 'Não finalizada até o encerramento do dia operacional' ||
+      item.visitObj.motivo_nao_realizada?.startsWith('Cancelada pelo promotor: '));
+  if (item.visitObj?.status === 'concluida' || item.visitObj?.status === 'em_andamento' || (item.visitObj?.started_at && !retryableClosedVisit)) {
     return { allowed: false, reason: 'Esta ocorrência já possui atendimento iniciado ou concluído.' };
   }
   if (item.dataStr > input.today && item.dataStr <= input.weekEnd && item.status === 'planejada') {

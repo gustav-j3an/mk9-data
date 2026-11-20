@@ -28,6 +28,40 @@ test('indústria inativa bloqueia antecipação e recuperação sem alterar a vi
   }
 });
 
+test('tentativa encerrada automaticamente ou cancelada pelo promotor pode ser recuperada', () => {
+  for (const motivo_nao_realizada of [
+    'Não finalizada até o encerramento do dia operacional',
+    'Cancelada pelo promotor: teste'
+  ]) {
+    const item = {
+      ...base,
+      dataStr: '2026-10-21',
+      status: 'nao_realizada',
+      visitObj: { status: 'nao_realizada', started_at: '2026-10-20T23:50:00Z', motivo_nao_realizada }
+    } as typeof base;
+    assert.equal(getScheduledVisitAction({ item, ...common }).action, 'recover');
+  }
+});
+
+test('visita não realizada com início e motivo não elegível continua bloqueada', () => {
+  const item = {
+    ...base,
+    dataStr: '2026-10-21',
+    status: 'nao_realizada',
+    visitObj: { status: 'nao_realizada', started_at: '2026-10-20T23:50:00Z', motivo_nao_realizada: 'Loja fechada' }
+  } as typeof base;
+  assert.equal(getScheduledVisitAction({ item, ...common }).allowed, false);
+});
+
+test('tentativa elegível com regularização administrativa permanece bloqueada', () => {
+  const item = {
+    ...base,
+    dataStr: '2026-10-21',
+    status: 'nao_realizada',
+    visitObj: { status: 'nao_realizada', started_at: '2026-10-20T23:50:00Z', motivo_nao_realizada: 'Cancelada pelo promotor: teste', regularization_status: 'regularized' }
+  } as unknown as typeof base;
+  assert.equal(getScheduledVisitAction({ item, ...common }).allowed, false);
+});
 test('dia futuro não vira não realizado e semana futura não pode ser antecipada', () => {
   const item = { ...base, dataStr: '2026-10-26' } as typeof base;
   assert.equal(getScheduledVisitAction({ item, ...common }).allowed, false);

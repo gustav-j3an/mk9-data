@@ -8,6 +8,7 @@ import {
   getOldOpenVisitCheckInBlockMessage,
   getOldOpenVisitsLabel,
   getPromoterOpenVisitAction,
+  isOldOpenVisit,
   isAnotherVisitInProgressError,
   isOpenVisitFromToday
 } from './visitCheckInConflict';
@@ -19,6 +20,13 @@ const openVisit = {
   industria_codigo: 'I-1', industria: { nome: 'Indústria A' }, data_visita: today,
   started_at: '2026-10-22T12:30:00.000Z', status: 'em_andamento'
 };
+
+test('old-visit warning uses Sao Paulo calendar date and excludes today or future dates', () => {
+  const atSaoPauloMidnight = '2026-10-23T03:15:00.000Z'; // 00:15 in America/Sao_Paulo
+  assert.equal(isOldOpenVisit({ ...openVisit, data_visita: '2026-10-23' }, atSaoPauloMidnight), false);
+  assert.equal(isOldOpenVisit({ ...openVisit, data_visita: '2026-10-22' }, atSaoPauloMidnight), true);
+  assert.equal(isOldOpenVisit({ ...openVisit, data_visita: '2026-10-24' }, atSaoPauloMidnight), false);
+});
 
 test('check-in sem visita aberta não gera conflito', () => {
   assert.equal(findOwnOpenVisit([], 'P-1'), undefined);
