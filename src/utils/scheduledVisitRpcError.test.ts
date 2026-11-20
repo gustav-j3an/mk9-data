@@ -11,6 +11,13 @@ test('traduz bloqueios de retry e atendimento em andamento', () => {
   assert.match(getScheduledVisitRpcErrorMessage({ message: 'Another visit is in progress' }), /Finalize o atendimento atual/i);
 });
 
+test('traduz o conflito operacional para português', () => {
+  assert.equal(
+    getScheduledVisitRpcErrorMessage({ code: '23505', message: 'A visit for this store and industry already exists today' }),
+    'Já existe um atendimento para esta loja e indústria na data operacional atual.',
+  );
+});
+
 test('usa mensagem neutra para erro RPC desconhecido', () => {
   assert.equal(getScheduledVisitRpcErrorMessage({ code: 'XX000', message: 'private database detail' }), 'Não foi possível confirmar a programação no servidor. Atualize a agenda e tente novamente.');
 });

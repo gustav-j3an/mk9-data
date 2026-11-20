@@ -9,6 +9,12 @@ export function getScheduledVisitRpcErrorMessage(error: { code?: unknown; messag
   if (message.includes('A completed occurrence cannot be recovered again')) {
     return 'Uma ocorrência concluída não pode ser recuperada novamente.';
   }
+  if (message.includes('A visit for this store and industry already exists today')) {
+    return 'Já existe um atendimento para esta loja e indústria na data operacional atual.';
+  }
+  if (message.includes('Já existe um atendimento para esta loja e indústria na data operacional atual.')) {
+    return message;
+  }
   if (message.includes('Another visit is in progress')) {
     return 'Finalize o atendimento atual antes de iniciar outra visita.';
   }
