@@ -55,7 +55,7 @@ import { loadRoutesWithClosureFallback } from '../utils/routeClosureCompatibilit
 import { filterPromoterAppointments, getMetricDisplayValue, getRegularizationCounts, getRegularizationPresentation, getWeeklyPromoterMetricCounts, isUnresolvedVisitInProgress, PROMOTER_APPOINTMENT_TABS, type PromoterAppointmentsTab } from '../utils/promoterPortalPresentation';
 import { getPromoterPortalViewStateKey, readPromoterPortalViewState, writePromoterPortalViewState } from '../utils/promoterPortalViewState';
 import { getScheduledVisitAction, isScheduledVisitActionRpcReady, type ScheduledVisitAction } from '../utils/scheduledVisitActions';
-import { canReviewOldOpenVisits, createRequestGate, findOwnOpenVisit, formatOpenVisitConflictMessage, getOldOpenVisitCheckInBlockMessage, getOldOpenVisitsLabel, getPromoterOpenVisitAction, isAnotherVisitInProgressError, isOpenVisitFromToday } from '../utils/visitCheckInConflict';
+import { canReviewOldOpenVisits, createRequestGate, findOwnOpenVisit, formatOpenVisitConflictMessage, getOldOpenVisitCheckInBlockMessage, getOldOpenVisitsLabel, getPromoterOpenVisitAction, isAnotherVisitInProgressError, isOldOpenVisit, isOpenVisitFromToday } from '../utils/visitCheckInConflict';
 import { PromoterPhotoUploader } from '../components/PromoterPhotoUploader';
 import { EditCompletedVisitModal } from '../components/EditCompletedVisitModal';
 import { SkuStockChecklistSection } from '../components/SkuStockChecklistSection';
@@ -255,6 +255,10 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
   const draftStorageKey = activeVisit && profile?.id
     ? `mk9_promoter_draft_${encodeURIComponent(profile.id)}_${encodeURIComponent(activeVisit.id)}`
     : null;
+
+  useEffect(() => {
+    setExpandedVisitSections({ occurrences: false, validity: false, observations: false });
+  }, [activeVisit?.id]);
   const [completingVisit, setCompletingVisit] = useState(false);
   const [notDoneReason, setNotDoneReason] = useState('');
   const [showNotDoneModal, setShowNotDoneModal] = useState<RouteItem | null>(null);
@@ -572,7 +576,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
       // Identificar visitas anteriores à data atual que não foram concluídas (Requisito 2)
       // 1. Em andamento de dias anteriores (data < hoje e status = 'em_andamento')
       const stalesInProgress = allConsolidatedVisits.filter(
-        (v) => isUnresolvedVisitInProgress(v) && !isOpenVisitFromToday(v, now)
+        (v) => isUnresolvedVisitInProgress(v) && isOldOpenVisit(v, now)
       );
       if (!background) setStaleInProgressVisits(stalesInProgress);
 
@@ -2409,7 +2413,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
         )}
 
         {activeVisit && (
-          <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/40 font-mono text-xs flex flex-col lg:flex-row lg:items-center justify-between gap-3 shadow-md animate-fadeIn min-w-0">
+          <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/40 font-mono text-xs flex flex-col xl:flex-row xl:items-center justify-between gap-3 shadow-md animate-fadeIn min-w-0">
             <div className="space-y-1 min-w-0">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-ping shrink-0" />
@@ -2468,11 +2472,14 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
               const activeScheduledDate = activeVisit?.scheduled_date || activeVisit?.data_visita;
               const isCurrentActive = !item.visitObj?.regularization_status && activeVisit && (activeVisit.id === item.visitObj?.id || (activeVisit.loja_codigo === item.lojaCodigo && activeScheduledDate === item.dataStr));
               const regularizationLabel = getRegularizationPresentation(item.visitObj?.regularization_status);
+              const visitNow = new Date();
+              const visitAction = getPromoterOpenVisitAction(item.visitObj || { status: item.status, data_visita: item.dataStr }, visitNow);
+              const isOldOpenVisitCard = Boolean(item.visitObj && isOldOpenVisit(item.visitObj, visitNow));
 
               return (
                 <div
                   key={`today_${item.key}_${item.dataStr}`}
-                  className={`p-3 rounded-xl border transition-all flex flex-col md:flex-row md:items-center justify-between gap-3 font-mono ${
+                  className={`p-3 rounded-xl border transition-all flex flex-col xl:flex-row xl:items-start justify-between gap-3 font-mono ${
                     regularizationLabel
                       ? 'bg-purple-50 border-purple-300'
                       : isCurrentActive
@@ -2486,7 +2493,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                       : 'bg-[#EAE8E2] border-[#CFCDC5]'
                   }`}
                 >
-                  <div className="space-y-1 flex-1 min-w-0">
+                  <div className="w-full min-w-0 flex-1 space-y-2 break-words">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="w-5 h-5 rounded-full bg-[#F7F6F2] border border-[#CFCDC5] text-[#7E22CE] font-bold text-[10px] flex items-center justify-center shrink-0">
                         {idx + 1}
@@ -2514,19 +2521,21 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                       </span>
                     </div>
 
-                    <h4 className="text-sm font-bold text-[#171717] truncate">
+                    <p className="text-xs font-semibold text-[#3F3F46]">
+                      {item.dataStr.split('-').reverse().join('/')}
+                    </p>
+
+                    <h4 className="text-sm font-bold text-[#171717] whitespace-normal break-words">
                       {item.lojaNome}
                     </h4>
 
-                    <p className="text-xs font-semibold text-[#3F3F46]">Hoje · {item.dataStr.split('-').reverse().join('/')}</p>
-
-                    <p className="text-xs text-[#5F5F5F]">
-                      {item.lojaCidade || '—'}/{item.lojaUf || '-'} • Indústria: <span className="text-[#7E22CE] font-bold">{item.industriaNome}</span>{item.industriaStatus === 'inativo' && <strong className="ml-1 rounded bg-rose-100 px-1.5 py-0.5 text-rose-800">Inativa</strong>}
+                    <p className="text-xs text-[#5F5F5F] break-words">
+                      {item.lojaCidade || '—'}/{item.lojaUf || '-'} · <span className="text-[#7E22CE] font-bold">{item.industriaNome}</span>{item.industriaStatus === 'inativo' && <strong className="ml-1 rounded bg-rose-100 px-1.5 py-0.5 text-rose-800">Inativa</strong>}
                     </p>
 
-                    <div className="flex flex-wrap items-center gap-3 text-[10px] text-[#5F5F5F]">
+                    <div className="flex flex-col items-start gap-1 text-[10px] text-[#5F5F5F] sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
                       {item.startedAt && (
-                        <span>Check-in: <strong className="text-amber-900">{new Date(item.startedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</strong></span>
+                        <span>Check-in: <strong className="text-amber-900">{new Date(item.startedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' })}</strong></span>
                       )}
                       {item.completedAt && (
                         <span>Concluído: <strong className="text-emerald-900">{new Date(item.completedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</strong></span>
@@ -2538,7 +2547,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                   </div>
 
                   {/* Ação Única e Clara por Cartão */}
-                  <div className="flex items-center gap-2 shrink-0 pt-2 md:pt-0 border-t md:border-t-0 border-[#CFCDC5]">
+                  <div className="flex w-full flex-col items-stretch gap-2 border-t border-[#CFCDC5] pt-2 xl:w-auto xl:shrink-0 xl:items-end xl:border-t-0 xl:pt-0">
                     {isAdminUser ? (
                       <button
                         type="button"
@@ -2599,8 +2608,8 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                       <span role="status" className="text-xs font-bold text-rose-800">Indústria inativa — visita histórica preservada, sem retomada.</span>
                     )}
                     {!isAdminUser && item.status === 'em_andamento' && !item.visitObj?.regularization_status && item.industriaStatus !== 'inativo' && (
-                      <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
-                        {getPromoterOpenVisitAction(item.visitObj || { status: item.status, data_visita: item.dataStr }, new Date()) === 'continue_today' && !isCurrentActive ? <button
+                      <div className="flex flex-wrap items-center justify-start gap-2 w-full xl:w-auto">
+                        {visitAction === 'continue_today' && !isCurrentActive ? <button
                           onClick={() => {
                             if (item.visitObj) {
                               handleResumeStaleVisit(item.visitObj);
@@ -2610,19 +2619,19 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                         >
                           <span className="material-symbols-outlined text-sm">edit_note</span>
                           <span>Continuar atendimento</span>
-                        </button> : <span className="block w-full basis-full text-xs leading-relaxed text-amber-900">Visita antiga: solicite análise e regularização ao administrador ou supervisor.</span>}
-                        {getPromoterOpenVisitAction(item.visitObj || { status: item.status, data_visita: item.dataStr }, new Date()) === 'continue_today' && <button
+                        </button> : isOldOpenVisitCard ? <span className="block w-full basis-full text-xs leading-relaxed text-amber-900">Visita antiga: solicite análise e regularização ao administrador ou supervisor.</span> : null}
+                        {visitAction === 'continue_today' && <button
                           onClick={() => {
                             if (item.visitObj) {
                               setInterruptModalVisit(item.visitObj);
                               setInterruptReason('');
                             }
                           }}
-                          className="px-3 py-2.5 rounded-xl bg-[#F7F6F2] hover:bg-rose-500/20 text-[#171717] hover:text-rose-300 border border-[#CFCDC5] text-xs font-bold cursor-pointer transition-colors"
+                          className="min-h-11 w-full px-3 py-2.5 rounded-xl bg-[#F7F6F2] hover:bg-rose-500/20 text-[#171717] border border-[#CFCDC5] text-xs font-bold cursor-pointer transition-colors xl:w-auto"
                           title="Interromper atendimento desta loja"
                         >
                           <span className="material-symbols-outlined text-sm text-rose-400">close</span>
-                          <span className="hidden sm:inline">Interromper</span>
+                          <span>Interromper</span>
                         </button>}
                       </div>
                     )}
@@ -2706,7 +2715,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
               </h2>
             </div>
             <div className="flex flex-wrap items-center gap-2 sm:justify-end">
-              {activeVisit.data_visita < todayStr && (
+              {isOldOpenVisit(activeVisit, new Date()) && (
                 <span className="px-2.5 py-1 rounded-full bg-purple-100 border border-purple-300 text-purple-950 text-xs font-bold uppercase flex items-center gap-1">
                   <span className="material-symbols-outlined text-xs">schedule</span>
                   Recuperada com Atraso (Orig: {activeVisit.data_visita.split('-').reverse().join('/')})
@@ -2721,7 +2730,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
           <div className="flex flex-col gap-1 text-xs font-mono text-[#5F5F5F] sm:flex-row sm:flex-wrap sm:gap-x-4">
             <span>{activeVisit.loja?.endereco} · {activeVisit.loja?.cidade}/{activeVisit.loja?.uf}</span>
             <span className="text-[#7E22CE]">{activeVisit.industria?.nome || activeVisit.industria_codigo}</span>
-            <span>Check-in {activeVisit.started_at ? new Date(activeVisit.started_at).toLocaleTimeString('pt-BR') : '—'}</span>
+            <span>Check-in {activeVisit.started_at ? new Date(activeVisit.started_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' }) : '—'}</span>
           </div>
 
           {(() => {
