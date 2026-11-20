@@ -222,17 +222,67 @@ BEGIN
      OR NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid='public.industrias'::regclass AND tgname='trigger_set_industria_codigo' AND (tgtype & 2)=2 AND (tgtype & 4)=4 AND (tgtype & 1)=1 AND tgfoid='public.set_industria_codigo_trigger()'::regprocedure) THEN
     RAISE EXCEPTION 'M58_4_INDUSTRY_TRIGGER_DEFINITION_MISMATCH';
   END IF;
-  IF (SELECT count(*) FROM pg_trigger WHERE tgrelid='public.contratos_lojas'::regclass AND NOT tgisinternal) <> 2
-     OR NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid='public.contratos_lojas'::regclass AND tgname='trigger_check_contratos_vigencia_overlap' AND (tgtype & 2)=2 AND tgfoid='public.check_contratos_vigencia_overlap()'::regprocedure)
-     OR NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid='public.contratos_lojas'::regclass AND tgname='trigger_contratos_updated_at' AND (tgtype & 2)=2 AND (tgtype & 16)=16 AND tgfoid='public.handle_contratos_updated_at()'::regprocedure)
-     OR NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid='public.check_contratos_vigencia_overlap()'::regprocedure AND prosecdef AND proconfig @> ARRAY['search_path=pg_catalog, public'])
+  IF (SELECT count(*) FROM pg_trigger WHERE tgrelid='public.contratos_lojas'::regclass AND NOT tgisinternal) <> 2 THEN
+    RAISE EXCEPTION 'M58_4_CONTRACT_TRIGGER_COUNT_MISMATCH';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid='public.contratos_lojas'::regclass AND tgname='trigger_check_contratos_vigencia_overlap' AND (tgtype & 2)=2 AND tgfoid='public.check_contratos_vigencia_overlap()'::regprocedure)
+     OR NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid='public.contratos_lojas'::regclass AND tgname='trigger_contratos_updated_at' AND (tgtype & 2)=2 AND (tgtype & 16)=16 AND tgfoid='public.handle_contratos_updated_at()'::regprocedure) THEN
+    RAISE EXCEPTION 'M58_4_CONTRACT_TRIGGER_DEFINITION_MISMATCH';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid='public.check_contratos_vigencia_overlap()'::regprocedure AND prosecdef AND proconfig @> ARRAY['search_path=pg_catalog, public'])
      OR NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid='public.handle_contratos_updated_at()'::regprocedure AND NOT prosecdef AND proconfig @> ARRAY['search_path=pg_catalog, public'])
-     OR NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid='public.sync_contratos_from_rotas()'::regprocedure AND prosecdef AND proconfig @> ARRAY['search_path=pg_catalog, public'])
-     OR NOT has_function_privilege('authenticated','public.sync_contratos_from_rotas()','EXECUTE')
-     OR has_function_privilege('anon','public.sync_contratos_from_rotas()','EXECUTE')
-     OR has_function_privilege('anon','public.check_contratos_vigencia_overlap()','EXECUTE')
-     OR has_function_privilege('anon','public.handle_contratos_updated_at()','EXECUTE') THEN
-    RAISE EXCEPTION 'M58_4_CONTRACT_TRIGGER_OR_RPC_ACL_MISMATCH';
+     OR NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid='public.sync_contratos_from_rotas()'::regprocedure AND prosecdef AND proconfig @> ARRAY['search_path=pg_catalog, public']) THEN
+    RAISE EXCEPTION 'M58_4_CONTRACT_FUNCTION_SECURITY_MISMATCH';
+  END IF;
+  IF NOT has_function_privilege('authenticated','public.sync_contratos_from_rotas()','EXECUTE') THEN
+    RAISE EXCEPTION 'M58_4_CONTRACT_SYNC_AUTHENTICATED_EXECUTE_MISSING';
+  END IF;
+  IF has_function_privilege('anon','public.sync_contratos_from_rotas()','EXECUTE') THEN
+    RAISE EXCEPTION 'M58_4_CONTRACT_SYNC_ANON_EXECUTE_UNEXPECTED'
+      USING DETAIL = format('effective_anon_execute=true; acl=%s; direct_anon_execute=%s; public_execute=%s; anon_inherits_authenticated=%s',
+        (SELECT proacl::text FROM pg_proc WHERE oid='public.sync_contratos_from_rotas()'::regprocedure),
+        (SELECT EXISTS (SELECT 1 FROM aclexplode(COALESCE(proacl, acldefault('f',proowner))) a
+          WHERE a.grantee=(SELECT oid FROM pg_roles WHERE rolname='anon') AND a.privilege_type='EXECUTE')
+          FROM pg_proc WHERE oid='public.sync_contratos_from_rotas()'::regprocedure),
+        (SELECT EXISTS (SELECT 1 FROM aclexplode(COALESCE(proacl, acldefault('f',proowner))) a
+          WHERE a.grantee=0 AND a.privilege_type='EXECUTE')
+          FROM pg_proc WHERE oid='public.sync_contratos_from_rotas()'::regprocedure),
+        pg_has_role('anon','authenticated','USAGE'));
+  END IF;
+  IF has_function_privilege('service_role','public.sync_contratos_from_rotas()','EXECUTE') THEN
+    RAISE EXCEPTION 'M58_4_CONTRACT_SYNC_SERVICE_ROLE_EXECUTE_UNEXPECTED';
+  END IF;
+  IF has_function_privilege('anon','public.check_contratos_vigencia_overlap()','EXECUTE') THEN
+    RAISE EXCEPTION 'M58_4_CONTRACT_OVERLAP_TRIGGER_ANON_EXECUTE_UNEXPECTED'
+      USING DETAIL = format('effective_anon_execute=true; acl=%s; direct_anon_execute=%s; public_execute=%s; anon_inherits_authenticated=%s',
+        (SELECT proacl::text FROM pg_proc WHERE oid='public.check_contratos_vigencia_overlap()'::regprocedure),
+        (SELECT EXISTS (SELECT 1 FROM aclexplode(COALESCE(proacl, acldefault('f',proowner))) a
+          WHERE a.grantee=(SELECT oid FROM pg_roles WHERE rolname='anon') AND a.privilege_type='EXECUTE')
+          FROM pg_proc WHERE oid='public.check_contratos_vigencia_overlap()'::regprocedure),
+        (SELECT EXISTS (SELECT 1 FROM aclexplode(COALESCE(proacl, acldefault('f',proowner))) a
+          WHERE a.grantee=0 AND a.privilege_type='EXECUTE')
+          FROM pg_proc WHERE oid='public.check_contratos_vigencia_overlap()'::regprocedure),
+        pg_has_role('anon','authenticated','USAGE'));
+  END IF;
+  IF has_function_privilege('authenticated','public.check_contratos_vigencia_overlap()','EXECUTE')
+     OR has_function_privilege('service_role','public.check_contratos_vigencia_overlap()','EXECUTE') THEN
+    RAISE EXCEPTION 'M58_4_CONTRACT_OVERLAP_TRIGGER_API_ROLE_EXECUTE_UNEXPECTED';
+  END IF;
+  IF has_function_privilege('anon','public.handle_contratos_updated_at()','EXECUTE') THEN
+    RAISE EXCEPTION 'M58_4_CONTRACT_UPDATED_AT_TRIGGER_ANON_EXECUTE_UNEXPECTED'
+      USING DETAIL = format('effective_anon_execute=true; acl=%s; direct_anon_execute=%s; public_execute=%s; anon_inherits_authenticated=%s',
+        (SELECT proacl::text FROM pg_proc WHERE oid='public.handle_contratos_updated_at()'::regprocedure),
+        (SELECT EXISTS (SELECT 1 FROM aclexplode(COALESCE(proacl, acldefault('f',proowner))) a
+          WHERE a.grantee=(SELECT oid FROM pg_roles WHERE rolname='anon') AND a.privilege_type='EXECUTE')
+          FROM pg_proc WHERE oid='public.handle_contratos_updated_at()'::regprocedure),
+        (SELECT EXISTS (SELECT 1 FROM aclexplode(COALESCE(proacl, acldefault('f',proowner))) a
+          WHERE a.grantee=0 AND a.privilege_type='EXECUTE')
+          FROM pg_proc WHERE oid='public.handle_contratos_updated_at()'::regprocedure),
+        pg_has_role('anon','authenticated','USAGE'));
+  END IF;
+  IF has_function_privilege('authenticated','public.handle_contratos_updated_at()','EXECUTE')
+     OR has_function_privilege('service_role','public.handle_contratos_updated_at()','EXECUTE') THEN
+    RAISE EXCEPTION 'M58_4_CONTRACT_UPDATED_AT_TRIGGER_API_ROLE_EXECUTE_UNEXPECTED';
   END IF;
 END
 $m58$;

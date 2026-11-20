@@ -4,7 +4,15 @@ const blocked = new Set(['20261009144200', '20261010', '20261011120000', '202610
 const [manifestPath] = process.argv.slice(2);
 if (!manifestPath) throw new Error('USAGE');
 const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
-const versions = manifest.migrations.map((migration) => migration.version).filter((version) => version && !blocked.has(version)).slice(0, 17);
+const versions = [];
+const selected = new Set();
+for (const migration of manifest.migrations) {
+  const version = migration.version;
+  if (!version || blocked.has(version) || selected.has(version)) continue;
+  selected.add(version);
+  versions.push(version);
+  if (versions.length === 17) break;
+}
 if (versions.length !== 17) throw new Error('M58_4_SYNTHETIC_LEDGER_BASELINE_INVALID');
 const rows = versions.map((version) => `('${version}', ARRAY['synthetic baseline only'], 'synthetic_baseline')`).join(',\n');
 process.stdout.write(`INSERT INTO supabase_migrations.schema_migrations(version, statements, name) VALUES\n${rows};\n`);

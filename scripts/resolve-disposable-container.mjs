@@ -146,21 +146,35 @@ export function filterVerifiedContainers(candidates, expectedProjectId, logger =
   return verified[0];
 }
 
-export function verifyDatabaseNonceMatch({ containerId, expectedNonce, targetDatabase = 'postgres', execFn }) {
+const ALLOWED_NONCE_TABLES = new Set([
+  'mk9_backup_restore_nonce',
+  'public.mk9_disposable_nonce',
+]);
+
+export function verifyDatabaseNonceMatch({
+  containerId,
+  expectedNonce,
+  targetDatabase = 'postgres',
+  nonceTable = 'mk9_backup_restore_nonce',
+  execFn,
+}) {
   if (!containerId || !expectedNonce) {
     throw new Error('NONCE_VERIFICATION_PARAMS_MISSING');
   }
+  if (!ALLOWED_NONCE_TABLES.has(nonceTable)) {
+    throw new Error('NONCE_TABLE_NOT_ALLOWED');
+  }
 
-  const query = 'SELECT token FROM mk9_backup_restore_nonce LIMIT 1;';
+  const query = `SELECT token FROM ${nonceTable} LIMIT 1;`;
   let returnedNonce;
   try {
     returnedNonce = execFn(containerId, query, targetDatabase);
-  } catch (err) {
-    throw new Error(`CONTAINER_NONCE_QUERY_FAILED: ${err.message}`);
+  } catch {
+    throw new Error('CONTAINER_NONCE_QUERY_FAILED');
   }
 
   if (!returnedNonce || returnedNonce.trim() !== expectedNonce.trim()) {
-    throw new Error(`CONTAINER_NONCE_MISMATCH: Container ${containerId} returned nonce "${returnedNonce}", expected "${expectedNonce}"`);
+    throw new Error('CONTAINER_NONCE_MISMATCH');
   }
 
   return true;
@@ -168,9 +182,9 @@ export function verifyDatabaseNonceMatch({ containerId, expectedNonce, targetDat
 
 // CLI entrypoint when executed directly from shell
 if (process.argv[1] && process.argv[1].endsWith('resolve-disposable-container.mjs')) {
-  const [,, expectedProjectId, expectedNonce] = process.argv;
+  const [,, expectedProjectId, expectedNonce, nonceTable = 'mk9_backup_restore_nonce'] = process.argv;
   if (!expectedProjectId || !expectedNonce) {
-    console.error('Usage: node scripts/resolve-disposable-container.mjs <expectedProjectId> <expectedNonce>');
+    console.error('Usage: node scripts/resolve-disposable-container.mjs <expectedProjectId> <expectedNonce> [allowedNonceTable]');
     process.exit(1);
   }
 
@@ -227,6 +241,7 @@ if (process.argv[1] && process.argv[1].endsWith('resolve-disposable-container.mj
     verifyDatabaseNonceMatch({
       containerId: selected.id,
       expectedNonce,
+      nonceTable,
       execFn,
     });
   } catch (err) {

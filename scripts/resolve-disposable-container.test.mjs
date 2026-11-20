@@ -89,6 +89,50 @@ test('resolve-disposable-container: cenário 1 - container correto identificado 
   );
 });
 
+test('resolve-disposable-container: preserva tabela legado e permite apenas nonce sintético explícito', () => {
+  const observedQueries = [];
+  const execFn = (_id, query) => {
+    observedQueries.push(query);
+    return 'synthetic-nonce';
+  };
+
+  assert.equal(verifyDatabaseNonceMatch({
+    containerId: 'aabbccddeeff', expectedNonce: 'synthetic-nonce', execFn,
+  }), true);
+  assert.equal(verifyDatabaseNonceMatch({
+    containerId: 'aabbccddeeff', expectedNonce: 'synthetic-nonce',
+    nonceTable: 'public.mk9_disposable_nonce', execFn,
+  }), true);
+  assert.deepEqual(observedQueries, [
+    'SELECT token FROM mk9_backup_restore_nonce LIMIT 1;',
+    'SELECT token FROM public.mk9_disposable_nonce LIMIT 1;',
+  ]);
+  assert.throws(() => verifyDatabaseNonceMatch({
+    containerId: 'aabbccddeeff', expectedNonce: 'synthetic-nonce',
+    nonceTable: 'public.untrusted_table; DROP TABLE visits', execFn,
+  }), /NONCE_TABLE_NOT_ALLOWED/);
+});
+
+test('resolve-disposable-container: falha de nonce não expõe container ou valores do desafio', () => {
+  const expectedNonce = 'private-challenge-value';
+  assert.throws(() => verifyDatabaseNonceMatch({
+    containerId: 'aabbccddeeff', expectedNonce,
+    nonceTable: 'public.mk9_disposable_nonce',
+    execFn: () => 'different-private-value',
+  }), (error) => {
+    assert.equal(error.message, 'CONTAINER_NONCE_MISMATCH');
+    assert.equal(error.message.includes(expectedNonce), false);
+    assert.equal(error.message.includes('different-private-value'), false);
+    assert.equal(error.message.includes('aabbccddeeff'), false);
+    return true;
+  });
+  assert.throws(() => verifyDatabaseNonceMatch({
+    containerId: 'aabbccddeeff', expectedNonce,
+    nonceTable: 'public.mk9_disposable_nonce',
+    execFn: () => { throw new Error(expectedNonce); },
+  }), (error) => error.message === 'CONTAINER_NONCE_QUERY_FAILED' && !error.message.includes(expectedNonce));
+});
+
 test('resolve-disposable-container: cenário 2 - container de outra stack identificado como único candidato', () => {
   const expectedProjectId = 'disposable_stack_a1b2c3d4';
   const otherStackCandidate = {
