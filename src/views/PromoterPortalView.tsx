@@ -263,12 +263,15 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
   } | null>(null);
 
   // Recarregar dados do portal do promotor
-  const loadPortalData = useCallback(async () => {
-    setLoading(true);
-    setLoadError(null);
+  const loadPortalData = useCallback(async (options: { background?: boolean } = {}) => {
+    const background = options.background === true;
+    if (!background) {
+      setLoading(true);
+      setLoadError(null);
+    }
     const db = supabase;
     if (!db) {
-      setLoading(false);
+      if (!background) setLoading(false);
       return;
     }
 
@@ -334,8 +337,6 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
         } catch (err) {
           console.error('Erro na consulta do promotor:', err);
         }
-      } else {
-        setPromoterDetails(null);
       }
 
       const weekDays = getWeekDaysRange(new Date(), weekOffset);
@@ -538,7 +539,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
       const stalesInProgress = allConsolidatedVisits.filter(
         (v) => isUnresolvedVisitInProgress(v) && !isOpenVisitFromToday(v, now)
       );
-      setStaleInProgressVisits(stalesInProgress);
+      if (!background) setStaleInProgressVisits(stalesInProgress);
 
       // 2. Não realizadas de dias anteriores (data < hoje e status = 'nao_realizada')
       // Visita em andamento de HOJE
@@ -569,20 +570,26 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
 
         // Se a visita for do dia de hoje, abre no formulário de atendimento ativo
         if (isOpenVisitFromToday(candidateActive, now)) {
-          setActiveVisit(candidateActive);
-          setGeneralObs(candidateActive.observacao_geral || '');
-
-          setChecklist(createChecklistState(candidateActive.checklist_items));
+          setActiveVisit((current) => {
+            if (current?.id !== candidateActive.id) {
+              if (background) return current;
+              setGeneralObs(candidateActive.observacao_geral || '');
+              setChecklist(createChecklistState(candidateActive.checklist_items));
+              return candidateActive;
+            }
+            // Refresh server fields while retaining the operator's in-progress form state.
+            return { ...candidateActive, ...current, photos: candidateActive.photos ?? current.photos };
+          });
         } else {
           // Se for uma visita de dia anterior, NÃO sequestra o topo como visita ativa do dia
           // O banner dedicado de aviso exibirá os botões: "Continuar Visita" ou "Registrar como Não Realizada"
-          setActiveVisit(null);
+          if (!background) setActiveVisit(null);
         }
-      } else {
+      } else if (!background) {
         setActiveVisit(null);
       }
       lastLoadErrorRef.current = null;
-      setLoadError(null);
+      if (!background) setLoadError(null);
     } catch (err: unknown) {
       const details = err && typeof err === 'object'
         ? err as { code?: unknown; message?: unknown; details?: unknown; hint?: unknown; portalQuery?: unknown }
@@ -591,7 +598,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
       const errorMessage = typeof details.message === 'string' ? details.message : 'Falha desconhecida ao carregar dados do portal.';
       const query = typeof details.portalQuery === 'string' ? details.portalQuery : 'dados do portal';
       const errorKey = `${errorCode}:${errorMessage}`;
-      setLoadError(query);
+      if (!background) setLoadError(query);
       if (lastLoadErrorRef.current !== errorKey) {
         if (import.meta.env.DEV) {
           console.error('[Portal do Promotor] Falha de carregamento:', {
@@ -617,7 +624,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
         lastLoadErrorRef.current = errorKey;
       }
     } finally {
-      setLoading(false);
+      if (!background) setLoading(false);
     }
   }, [promotorMatricula, isAdminUser, weekOffset]);
 
@@ -631,13 +638,10 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
     const channel = client
       .channel('promoter-industry-status')
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'industrias' }, () => {
-        void loadPortalData();
+        void loadPortalData({ background: true });
       })
       .subscribe();
-    const handleFocus = () => { void loadPortalData(); };
-    window.addEventListener('focus', handleFocus);
     return () => {
-      window.removeEventListener('focus', handleFocus);
       void client.removeChannel(channel);
     };
   }, [supabase, isAdminUser, loadPortalData]);
@@ -2198,7 +2202,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
         </div>
 
         <button
-          onClick={loadPortalData}
+          onClick={() => { void loadPortalData(); }}
           disabled={loading}
           className="shrink-0 px-3 py-2 rounded-xl bg-[#F7F6F2] border border-[#CFCDC5] text-xs font-semibold text-[#171717] hover:bg-[#EAE8E2] flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
         >
@@ -2217,7 +2221,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
       {loadError && !loading && (
         <div role="alert" className="rounded-xl border border-rose-300 bg-rose-50 p-4 text-sm font-semibold text-rose-950 space-y-2 shadow-xs">
           <p className="font-bold">Não foi possível carregar {loadError}. Os indicadores e listas abaixo podem não refletir os dados atuais; eles não significam que sua agenda esteja vazia.</p>
-          <button type="button" onClick={loadPortalData} className="underline font-bold text-rose-900 hover:text-rose-950 cursor-pointer">Tentar carregar novamente</button>
+          <button type="button" onClick={() => { void loadPortalData(); }} className="underline font-bold text-rose-900 hover:text-rose-950 cursor-pointer">Tentar carregar novamente</button>
         </div>
       )}
 
