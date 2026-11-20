@@ -2402,16 +2402,16 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
 
         {/* ALERTA CONTEXTUAL DE ATENDIMENTO ATIVO (Etapa 1) */}
         {!isAdminUser && staleInProgressVisits.length > 0 && (
-          <div role="status" className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950">
+          <div role="status" className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm leading-relaxed text-amber-950">
             <strong>{getOldOpenVisitsLabel(staleInProgressVisits.length)}</strong>{' '}
             <span>O servidor bloqueia novos check-ins até a regularização administrativa.</span>
           </div>
         )}
 
         {activeVisit && (
-          <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/40 font-mono text-xs flex flex-col md:flex-row md:items-center justify-between gap-3 shadow-md animate-fadeIn">
-            <div className="space-y-1">
-              <div className="flex items-center gap-2">
+          <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/40 font-mono text-xs flex flex-col lg:flex-row lg:items-center justify-between gap-3 shadow-md animate-fadeIn min-w-0">
+            <div className="space-y-1 min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
                 <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-ping shrink-0" />
                 <span className="text-amber-900 font-extrabold uppercase tracking-wide">
                   Atendimento em Andamento
@@ -2420,7 +2420,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                   {activeVisit.data_visita.split('-').reverse().join('/')}
                 </span>
               </div>
-              <p className="text-[#171717] text-[11px] leading-relaxed">
+              <p className="text-[#171717] text-[11px] leading-relaxed break-words">
                 Você possui uma visita aberta na loja <strong className="text-[#171717]">{activeVisit.loja?.nome || activeVisit.loja_codigo}</strong> ({activeVisit.industria?.nome || activeVisit.industria_codigo}). Conclua o preenchimento ou interrompa com justificativa para iniciar outra rota.
               </p>
             </div>
@@ -2599,7 +2599,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                       <span role="status" className="text-xs font-bold text-rose-800">Indústria inativa — visita histórica preservada, sem retomada.</span>
                     )}
                     {!isAdminUser && item.status === 'em_andamento' && !item.visitObj?.regularization_status && item.industriaStatus !== 'inativo' && (
-                      <div className="flex items-center gap-2 w-full md:w-auto">
+                      <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
                         {getPromoterOpenVisitAction(item.visitObj || { status: item.status, data_visita: item.dataStr }, new Date()) === 'continue_today' && !isCurrentActive ? <button
                           onClick={() => {
                             if (item.visitObj) {
@@ -2610,7 +2610,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
                         >
                           <span className="material-symbols-outlined text-sm">edit_note</span>
                           <span>Continuar atendimento</span>
-                        </button> : <span className="text-xs text-amber-900">Visita antiga: solicite análise e regularização ao administrador ou supervisor.</span>}
+                        </button> : <span className="block w-full basis-full text-xs leading-relaxed text-amber-900">Visita antiga: solicite análise e regularização ao administrador ou supervisor.</span>}
                         {getPromoterOpenVisitAction(item.visitObj || { status: item.status, data_visita: item.dataStr }, new Date()) === 'continue_today' && <button
                           onClick={() => {
                             if (item.visitObj) {
@@ -2698,14 +2698,14 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
       {/* TELA DE FLUXO DA VISITA EM ANDAMENTO (Apenas para promotores em campo) */}
       {!isAdminUser && activeVisit ? (
         <section id="active-visit-section" className="bg-[#F7F6F2] border-2 border-amber-500/50 rounded-2xl p-4 sm:p-6 pb-28 sm:pb-6 shadow-2xl space-y-6">
-          <div id="active-visit-heading" className="flex items-center justify-between border-b border-[#CFCDC5] pb-4">
-            <div className="flex items-center gap-2">
+          <div id="active-visit-heading" className="flex flex-col gap-3 border-b border-[#CFCDC5] pb-4 sm:flex-row sm:items-start sm:justify-between">
+            <div className="flex min-w-0 items-start gap-2">
               <span className="w-3 h-3 rounded-full bg-amber-400 animate-ping"></span>
-              <h2 className="text-base font-bold text-[#171717] font-mono">
+              <h2 className="min-w-0 break-words text-base font-bold text-[#171717] font-mono">
                 Visita em Andamento — Loja: {activeVisit.loja?.nome || activeVisit.loja_codigo}
               </h2>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2 sm:justify-end">
               {activeVisit.data_visita < todayStr && (
                 <span className="px-2.5 py-1 rounded-full bg-purple-100 border border-purple-300 text-purple-950 text-xs font-bold uppercase flex items-center gap-1">
                   <span className="material-symbols-outlined text-xs">schedule</span>
@@ -2718,7 +2718,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
             </div>
           </div>
 
-          <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs font-mono text-[#5F5F5F]">
+          <div className="flex flex-col gap-1 text-xs font-mono text-[#5F5F5F] sm:flex-row sm:flex-wrap sm:gap-x-4">
             <span>{activeVisit.loja?.endereco} · {activeVisit.loja?.cidade}/{activeVisit.loja?.uf}</span>
             <span className="text-[#7E22CE]">{activeVisit.industria?.nome || activeVisit.industria_codigo}</span>
             <span>Check-in {activeVisit.started_at ? new Date(activeVisit.started_at).toLocaleTimeString('pt-BR') : '—'}</span>
@@ -2728,7 +2728,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
             const skuCount = Object.keys(skuChecklist).length;
             const skuPending = Object.values(skuChecklist).filter((item) => !item.conferido && !item.justificativa).length;
             const requiredStages = [
-              { label: 'Checklist operacional', done: findInvalidChecklistQuantity(checklist) === null },
+              { label: 'Checklist operacional', done: DEFAULT_CHECKLIST_ITEMS.every((item) => Boolean(checklist[item.item_key]?.valTxt.trim())) && findInvalidChecklistQuantity(checklist) === null },
               ...(skuCount > 0 ? [{ label: 'Conferência de SKUs', done: skuPending === 0 }] : [])
             ];
             const pendingStages = requiredStages.filter((stage) => !stage.done).map((stage) => stage.label);
@@ -2749,11 +2749,11 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <h3 className="text-xs font-bold text-slate-[#171717] uppercase tracking-wider font-mono flex items-center gap-2">
                 <span className="material-symbols-outlined text-amber-400 text-sm">fact_check</span>
-                Checklist operacional
+                1. Checklist operacional
               </h3>
               <div className="flex items-center gap-2 font-mono text-xs">
                 <span className="px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 font-bold border border-amber-500/30">
-                  {Object.values(checklist).filter((item) => item.answered).length} de {DEFAULT_CHECKLIST_ITEMS.length} respondidos
+                  {DEFAULT_CHECKLIST_ITEMS.filter((item) => Boolean(checklist[item.item_key]?.valTxt.trim())).length} de {DEFAULT_CHECKLIST_ITEMS.length} respondidos
                 </span>
                 {pendingChecklistWrites > 0 && (
                   <span className="text-[10px] text-cyan-400 font-bold flex items-center gap-1 animate-pulse">

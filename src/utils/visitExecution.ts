@@ -50,7 +50,7 @@ export const findInvalidChecklistQuantity = (
 ): string | null => {
   for (const itemKey of CHECKLIST_QUANTITY_KEYS) {
     const value = checklist[itemKey]?.valTxt.trim();
-    if (value && (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)))) {
+    if (!value || !/^\d+$/.test(value) || !Number.isSafeInteger(Number(value))) {
       return DEFAULT_CHECKLIST_ITEMS.find((item) => item.item_key === itemKey)?.item_label || itemKey;
     }
   }

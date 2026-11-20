@@ -38,9 +38,10 @@ describe('visit execution checklist and photo helpers', () => {
 
   it('accepts zero, permits an unanswered quantity, and rejects negative or fractional quantities', () => {
     const state = createChecklistState();
-    assert.equal(findInvalidChecklistQuantity(state), null);
+    assert.equal(findInvalidChecklistQuantity(state), 'Quantidade na área de vendas');
 
     state.qtd_produtos_deposito = { checked: false, answered: true, obs: '', valTxt: '0' };
+    state.qtd_produtos_venda.valTxt = '0';
     assert.equal(findInvalidChecklistQuantity(state), null);
 
     state.qtd_produtos_venda = { checked: false, answered: true, obs: '', valTxt: '-1' };
@@ -48,6 +49,21 @@ describe('visit execution checklist and photo helpers', () => {
 
     state.qtd_produtos_venda.valTxt = '1.5';
     assert.equal(findInvalidChecklistQuantity(state), 'Quantidade na área de vendas');
+  });
+
+  it('keeps the required checklist pending until both quantity fields are answered', () => {
+    const state = createChecklistState([
+      {
+        item_key: 'qtd_produtos_deposito',
+        item_label: 'Quantidade disponível no depósito',
+        checked: false,
+        valor_texto: '1'
+      } as VisitChecklistItem
+    ]);
+
+    assert.equal(findInvalidChecklistQuantity(state), 'Quantidade na área de vendas');
+    state.qtd_produtos_venda.valTxt = '0';
+    assert.equal(findInvalidChecklistQuantity(state), null);
   });
 
   it('plans checklist updates/inserts without deleting unknown historical rows', () => {
