@@ -2377,6 +2377,25 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
         </section>
       )}
 
+      {!isAdminUser && activeVisit && appointmentsTab === 'history' && (
+        <section role="status" aria-label="Atendimento em andamento" className="flex flex-col gap-3 rounded-xl border border-amber-300 bg-amber-50 px-3 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <p className="min-w-0 text-sm leading-relaxed text-amber-950">
+            Atendimento em andamento: <strong>{activeVisit.loja?.nome || activeVisit.loja_codigo}</strong>
+            {' · '}{activeVisit.data_visita.split('-').reverse().join('/')}
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              setAppointmentsTab('today');
+              setTimeout(() => document.getElementById('active-visit-section')?.scrollIntoView({ behavior: 'smooth' }), 250);
+            }}
+            className="min-h-11 shrink-0 rounded-xl bg-amber-500 px-4 py-2 text-sm font-extrabold text-slate-950 shadow-sm hover:bg-amber-400"
+          >
+            Continuar atendimento
+          </button>
+        </section>
+      )}
+
       {/* 2. AGENDA DE HOJE / PROGRAMAÇÃO DE VISITAS */}
       {(!isAdminUser || selectedPromoterMatricula) && (
        appointmentsTab === 'today' && (
@@ -2706,7 +2725,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
 
       {/* TELA DE FLUXO DA VISITA EM ANDAMENTO (Apenas para promotores em campo) */}
       {!isAdminUser && activeVisit ? (
-        <section id="active-visit-section" className="bg-[#F7F6F2] border-2 border-amber-500/50 rounded-2xl p-4 sm:p-6 pb-28 sm:pb-6 shadow-2xl space-y-6">
+        <section id="active-visit-section" hidden={appointmentsTab !== 'today'} className="bg-[#F7F6F2] border-2 border-amber-500/50 rounded-2xl p-4 sm:p-6 pb-28 sm:pb-6 shadow-2xl space-y-6">
           <div id="active-visit-heading" className="flex flex-col gap-3 border-b border-[#CFCDC5] pb-4 sm:flex-row sm:items-start sm:justify-between">
             <div className="flex min-w-0 items-start gap-2">
               <span className="w-3 h-3 rounded-full bg-amber-400 animate-ping"></span>
