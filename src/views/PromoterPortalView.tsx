@@ -4901,16 +4901,15 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
           isOpen={Boolean(editingCompletedVisit)}
           onClose={() => setEditingCompletedVisit(null)}
           onShowToast={onShowToast}
-          onSaveEdit={async ({ visitId, sanitizedPayload, changes, reason }) => {
+          onSaveEdit={async ({ visitId, editToken, payload, reason }) => {
             if (!supabase) return;
 
             // Tentativa de execução atômica via RPC segura
-            const { data: rpcRes, error: rpcErr } = await supabase.rpc('save_completed_visit_edit', {
+            const { error: rpcErr } = await supabase.rpc('save_completed_visit_full_edit', {
               p_visit_id: visitId,
-              p_observacao_geral: sanitizedPayload.observacao_geral ?? null,
-              p_checklist_items: sanitizedPayload.checklist_items ?? [],
+              p_edit_token: editToken,
+              p_payload: payload,
               p_reason: reason,
-              p_changes_summary: changes
             });
 
             if (rpcErr) {
@@ -4923,8 +4922,7 @@ export const PromoterPortalView: React.FC<PromoterPortalViewProps> = ({ onNaviga
             }
 
             // Recarregar portal após atualização segura
-            await loadPortalData();
-            setEditingCompletedVisit(null);
+            void loadPortalData();
           }}
         />
       )}
